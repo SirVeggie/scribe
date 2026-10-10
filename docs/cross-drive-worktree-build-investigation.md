@@ -52,4 +52,15 @@ For an existing Windows worktree, inspect node_modules with `Get-Item` and confi
 
 Pin the affected app commit and package versions. Build it in the main checkout, a cross-drive shared worktree, a same-drive shared worktree, and a cross-drive worktree with local dependencies. Use the same lockfile in all four; inspect resolved runtime paths. Test preserveSymlinks separately if needed. Confirm the main node_modules is intact, installations stay local, and worktree reopen/removal/merge behavior remains safe. Record any unrelated baseline failures separately.
 
-The card goes to blocked / Needs input with a linked findings page and decision form, as requested for investigation-only issues.
+## Follow-up after the user's choice
+
+The user selected isolated-dependency validation followed by an isolation design.
+The minimal fixture in `docs/fixtures/worktree-build` now builds successfully
+with local dependencies (Vite 8.1.3 / SvelteKit 2.55.0). Its README records the
+locked versions, runtime path checks and output. This validates a local control,
+not the affected app's commit and lockfile.
+
+`docs/worktree-dependency-isolation-design.md` records the proposed setting and
+lifecycle behavior. A fresh LLM Chat package read remained outside this thread's
+read scope, so the affected-app test needs its own workspace. No Scribe production
+code changed. The card remains in Needs input until that validation can run.
