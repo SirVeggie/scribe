@@ -1802,9 +1802,9 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   // ---------- file pages (#654) ----------
-  // The board UI only: the content origin cannot reach /api (contentOriginGate), and agents read
-  // and edit files with their own tools. A page asks the board (scribe.file), which calls these for
-  // the page's own file (Tab.file), never a path the page names.
+  // Only the board opens files by path. Agents can read an existing page's file through page access
+  // (#699). A page asks the board (scribe.file), which calls these for the page's own file (Tab.file),
+  // never a path the page names. The content origin cannot reach /api (contentOriginGate).
 
   /** Files and folders in a folder, for Open file / Open folder / Save as. No path: the drives (Windows) or /. */
   app.get("/api/files/list", (req, res) => {

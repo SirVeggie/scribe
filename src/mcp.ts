@@ -7,6 +7,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { writeCheckout } from "./pageCheckout.js";
+import type { FileInfo, FileText } from "./filePages.js";
 import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, pageViewUrl } from "./config.js";
 import { BROWSER_ACTIONS } from "./browserActions.js";
 import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
@@ -35,6 +36,19 @@ import { MAX_INLINE_PAGE_IMAGES, collectStateImages, mcpImageMime } from "./mcpI
 import { pageKey, type Tab, type TabAsset, type TabMeta } from "./types.js";
 
 type ApiError = { error?: string };
+
+/** Read through the daemon's page access check, including in modes with no filesystem access. */
+async function pageSource(tab: Tab): Promise<{ text: string; file?: FileInfo } | { error: string }> {
+  if (!tab.file) return { text: tab.html };
+  const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(tab.id)}/file`);
+  if (status >= 400) return { error: (data as ApiError).error || `HTTP ${status}` };
+  const file = data as FileInfo | FileText;
+  const { text, eol, bom, ...info } = file as FileText;
+  if (typeof text !== "string") {
+    return { error: `${info.name}: ${info.reason || `This is a ${info.kind} file, with no text to return. Use page_screenshot to inspect its rendered page.`}` };
+  }
+  return { text, file: info };
+}
 
 type ScreenshotPayload = {
   mimeType: "image/png" | "image/jpeg";
@@ -742,7 +756,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_read",
-    `Read a page's title and HTML (open or closed, without opening it). The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers; then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks the page out to a temp file to edit and check in with page_patch htmlPath; not in Pages mode, which has no file tools.`,
+    `Read a page's title and HTML (open or closed, without opening it). File pages return the saved file's text instead, through Scribe's page access, even without filesystem access; offset/limit and page_grep work on that text. Images and PDFs can be viewed with page_screenshot. The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers (a file page returns its first lines); then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks an HTML page out to a temp file to edit and check in with page_patch htmlPath; not for file pages or in Pages mode.`,
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -763,6 +777,10 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab & { folder: string | null; pageAssets?: PageAssetUsage };
+      if (toFile && tab.file) return errorResult("File pages cannot be checked out with toFile or changed with page_patch. Read with page_read; editing the file requires filesystem access.");
+      const source = await pageSource(tab);
+      if ("error" in source) return errorResult(source.error);
+      const content = source.text;
       revisions.note(tab);
       const dates = withAgentDates(tab);
       const meta = {
@@ -773,7 +791,9 @@ export async function startMcp(): Promise<void> {
         pinned: tab.pinned,
         open: !tab.closedAt,
         revision: tab.revision,
-        htmlBytes: Buffer.byteLength(tab.html, "utf8"),
+        ...(source.file
+          ? { file: source.file, contentBytes: Buffer.byteLength(content, "utf8"), note: "Saved file content, read through Scribe. page_patch edits HTML pages only; editing this file requires filesystem access." }
+          : { htmlBytes: Buffer.byteLength(content, "utf8") }),
         createdAt: dates.createdAt,
         updatedAt: dates.updatedAt,
         ...(dates.closedAt ? { closedAt: dates.closedAt } : {}),
@@ -811,7 +831,7 @@ export async function startMcp(): Promise<void> {
       if (ranged) {
         let win: LineWindow;
         try {
-          win = readWindow(tab.html, { offset, limit, numbered });
+          win = readWindow(content, { offset, limit, numbered });
         } catch (err) {
           return errorResult((err as Error).message);
         }
@@ -822,8 +842,16 @@ export async function startMcp(): Promise<void> {
             ? { more: `page_read({ key: "${tab.key}", offset: ${win.endLine + 1} }) for the next lines.` }
             : {}),
         };
-      } else if (!full && meta.htmlBytes > FULL_READ_MAX_BYTES) {
-        const { entries, more } = outline(tab.html);
+      } else if (!full && source.file && Buffer.byteLength(content, "utf8") > FULL_READ_MAX_BYTES) {
+        // Keep the automatic preview small even for minified JSON or a single very long line.
+        const win = readWindow(content, { limit: 20, numbered: false });
+        const preview = splitLines(win.text).map(line => line.length > 500 ? `${line.slice(0, 500)}…` : line);
+        return { content: [
+          { type: "text", text: JSON.stringify({ ...meta, lines: { start: win.startLine, end: win.endLine, total: win.totalLines }, preview: "First lines; lines longer than 500 characters are shortened. Read complete lines with offset/limit.", more: `Read a window with page_read({ key: "${tab.key}", offset, limit }), search with page_grep, or use full: true.` }, null, 2) },
+          { type: "text", text: numbered === false ? preview.join("\n") : numberLines(preview, 1) },
+        ] };
+      } else if (!full && Buffer.byteLength(content, "utf8") > FULL_READ_MAX_BYTES) {
+        const { entries, more } = outline(content);
         const landmarks = entries.map((e) => `${e.line}: ${e.text}`).join("\n") || "(no headings, sections or script/style blocks)";
         const result: ToolResult = {
           content: [
@@ -832,7 +860,7 @@ export async function startMcp(): Promise<void> {
               text: JSON.stringify(
                 {
                   ...meta,
-                  totalLines: splitLines(tab.html).length,
+                  totalLines: splitLines(content).length,
                   large: `HTML not returned (over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB). Read a window with page_read({ key: "${tab.key}", offset, limit }), find text with page_grep, then change it with page_patch edits. full: true returns everything.`,
                 },
                 null,
@@ -844,7 +872,7 @@ export async function startMcp(): Promise<void> {
         };
         return tab.templateId ? withGuide(result, tab.id) : result;
       } else {
-        body = numbered ? numberLines(splitLines(tab.html), 1) : tab.html;
+        body = numbered ? numberLines(splitLines(content), 1) : content;
       }
       const result: ToolResult = {
         content: [
@@ -858,7 +886,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_grep",
-    "Find text inside one page's HTML, like grep -n on a file. Returns matching lines with their line numbers (`12:` a match, `11-` context, `--` between hunks), so you can page_read a window around them with offset/limit or copy an exact oldString for page_patch. Leave the number prefix out of oldStrings. pattern is a JavaScript regex unless literal is true. Works on open and closed pages. To find which page has something, use library_search instead.",
+    "Find text inside one page's HTML or a file page's saved text, like grep -n on a file. Returns matching lines with their line numbers (`12:` a match, `11-` context, `--` between hunks), so you can page_read a window around them with offset/limit or copy an exact oldString for page_patch (HTML pages only). Leave the number prefix out of oldStrings. pattern is a JavaScript regex unless literal is true. Works on open and closed pages. To find which page has something, use library_search instead.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -883,10 +911,12 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab;
+      const source = await pageSource(tab);
+      if ("error" in source) return errorResult(source.error);
       revisions.note(tab);
       let found;
       try {
-        found = grepLines(tab.html, pattern, { literal, ignoreCase, context, maxMatches });
+        found = grepLines(source.text, pattern, { literal, ignoreCase, context, maxMatches });
       } catch (err) {
         return errorResult(err instanceof GrepError ? err.message : String(err));
       }
@@ -894,6 +924,7 @@ export async function startMcp(): Promise<void> {
         id: tab.id,
         key: tab.key,
         revision: tab.revision,
+        ...(source.file ? { file: source.file } : {}),
         totalLines: found.totalLines,
         matches: found.matches,
         ...(found.omitted > 0 ? { omitted: `${found.omitted} more matches not shown; raise maxMatches or narrow the pattern.` } : {}),

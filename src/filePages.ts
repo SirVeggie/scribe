@@ -392,7 +392,7 @@ function escapeHtml(text: string): string {
 
 /**
  * What a file page stores as its HTML. The board never shows it (it serves the file viewer
- * instead); agents reading the page see which file it is.
+ * instead); page_read and page_grep fetch the saved text through the page's file route.
  */
 export function filePlaceholderHtml(name: string, file: string): string {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(name)}</title></head><body><p>File page: ${escapeHtml(file)}</p><p>Scribe shows and saves this file; read or edit the file itself.</p></body></html>`;

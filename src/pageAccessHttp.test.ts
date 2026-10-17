@@ -122,6 +122,19 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal(await fromPage(home.id, "GET", `/view/${home.id}`), 200);
     assert.equal(await fromPage(home.id, "GET", `/view/${other.id}`), 302);
     assert.equal(await fromPage(home.id, "GET", "/api/tabs"), 403);
+
+    // A Pages-mode chat can read its file page through Scribe, even outside its file roots.
+    const filePath = path.join(root, "outside-workspace.md");
+    fs.writeFileSync(filePath, "file page content\nsecond line");
+    const filePage = (await call("POST", "/api/files/open", { path: filePath, activate: false })).data.tab;
+    assert.ok(filePage?.id);
+    const fileThread = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: filePage.id } })).data.thread;
+    const fileRoute = `/api/tabs/${filePage.id}/file`;
+    assert.equal((await call("GET", fileRoute, undefined, fileThread.id)).data.text, "file page content\nsecond line");
+    assert.equal((await call("GET", fileRoute, undefined, thread.id)).status, 403);
+    assert.equal((await call("POST", "/api/files/open", { path: filePath }, fileThread.id)).status, 403, "reading a file page does not allow opening arbitrary files");
+    await call("PUT", `/api/tabs/${filePage.id}/access`, { level: "restricted" });
+    assert.equal((await call("GET", fileRoute, undefined, thread.id)).status, 404);
   } finally {
     await fetch(url + "/api/shutdown", { method: "POST" }).catch(() => {});
     await Promise.race([exited, delay(5000)]);
