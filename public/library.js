@@ -1251,22 +1251,17 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const point = pointFor(event);
-    const own = pagesOf(id);
-    const closedHere = own.filter((page) => !host.isOpen(page.id)).length;
-    const openHere = own.length - closedHere;
     openMenu(point, [
-      { label: "Open pages", disabled: closedHere === 0, action: () => openFolderPages(id, own[0]?.id) },
-      openHere > 0 && { label: "Close open tabs", action: () => send("POST", `/api/folders/${encodeURIComponent(id)}/close`) },
-      "sep",
       { label: "New folder inside", action: () => createFolder(id) },
-      { label: "Open file here…", action: () => openDiskFile(id) },
-      { label: "Open folder here…", action: () => openDiskFolder(id) },
+      "sep",
       { label: "Rename", action: () => startRename("folder", id) },
       { label: "Move to…", action: () => openMovePicker({ kind: "folder", id }, point) },
-      { label: "Agent instructions", action: () => editFolderInstructions(folder) },
-      { label: "Agent access…", action: () => editAgentAccess({ kind: "folder", id }) },
+      { label: "Open file here…", action: () => openDiskFile(id) },
+      { label: "Open folder here…", action: () => openDiskFolder(id) },
       "sep",
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
+      { label: "Agent instructions", action: () => editFolderInstructions(folder) },
+      { label: "Agent access…", action: () => editAgentAccess({ kind: "folder", id }) },
       "sep",
       { label: "Delete folder…", danger: true, action: () => deleteFolder(id) },
     ]);
