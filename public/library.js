@@ -1276,7 +1276,6 @@ window.createLibrary = function createLibrary(host) {
     }
     const box = moreBtn.getBoundingClientRect();
     openMenu({ x: box.left, y: box.bottom + 4 }, [
-      { label: "New folder", action: () => createFolder(null) },
       { label: "Open file…", action: () => openDiskFile(null) },
       { label: "Open folder…", action: () => openDiskFolder(null) },
       { label: "Expand all", disabled: model.folders.length === 0, action: () => setAllCollapsed(false) },
