@@ -8,6 +8,7 @@ import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { writeCheckout } from "./pageCheckout.js";
 import type { FileInfo, FileText } from "./filePages.js";
+import type { PdfText } from "./pdfText.js";
 import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, pageViewUrl } from "./config.js";
 import { BROWSER_ACTIONS } from "./browserActions.js";
 import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
@@ -38,7 +39,7 @@ import { pageKey, type Tab, type TabAsset, type TabMeta } from "./types.js";
 type ApiError = { error?: string };
 
 /** Read through the daemon's page access check, including in modes with no filesystem access. */
-async function pageSource(tab: Tab, withImage = true): Promise<{ text: string; file?: FileInfo } | { image: { mimeType: string; data: string }; file: FileInfo } | { error: string }> {
+async function pageSource(tab: Tab, withImage = true, pdfPage?: number, pdfLimit?: number): Promise<{ text: string; file?: FileInfo; pdf?: PdfText["pdf"] } | { image: { mimeType: string; data: string }; file: FileInfo } | { error: string }> {
   if (!tab.file) return { text: tab.html };
   const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(tab.id)}/file`);
   if (status >= 400) return { error: (data as ApiError).error || `HTTP ${status}` };
@@ -53,7 +54,11 @@ async function pageSource(tab: Tab, withImage = true): Promise<{ text: string; f
     if (!image.data) return { error: `${info.name}: the image is not returned (${image.skipped || "not inlined"}).` };
     return { image: { mimeType: mcpImageMime(image.mimeType), data: image.data }, file: info };
   }
-  if (info.kind === "pdf") return { error: `${info.name}: a PDF; reading its text is not supported yet.` };
+  if (info.kind === "pdf") {
+    const got = await api("GET", `/api/tabs/${encodeURIComponent(tab.id)}/file/text?page=${pdfPage ?? 1}&limit=${pdfLimit ?? 1}`);
+    if (got.status >= 400) return { error: (got.data as ApiError).error || `HTTP ${got.status}` };
+    return { ...(got.data as PdfText), file: info };
+  }
   return { error: `${info.name}: ${info.reason || `This is a ${info.kind} file, with no text to return.`}` };
 }
 
@@ -763,18 +768,20 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_read",
-    `Read a page's title and HTML (open or closed, without opening it). File pages return the saved file's text instead, through Scribe's page access, even without filesystem access; offset/limit and page_grep work on that text; an image file page returns its image. PDF text is not readable yet. The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers (a file page returns its first lines); then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks an HTML page out to a temp file to edit and check in with page_patch htmlPath; not for file pages or in Pages mode.`,
+    `Read a page's title and HTML (open or closed, without opening it). File pages return the saved file's text instead, through Scribe's page access, even without filesystem access; offset/limit and page_grep work on that text; an image file page returns its image. PDFs return embedded text with document page markers (no OCR); pdfPage/pdfLimit select a bounded range, defaulting to page 1. Check pdf.nextPage, emptyPages and truncatedPages. Line offsets apply to the selected range. The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers (a file page returns its first lines); then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks an HTML page out to a temp file to edit and check in with page_patch htmlPath; not for file pages or in Pages mode.`,
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
       offset: z.number().int().optional().describe("First line, 1-based, as the outline or page_grep numbers it."),
+      pdfPage: z.number().int().min(1).optional().describe("PDF only: first document page, 1-based. Default 1; returned pdf.nextPage continues."),
+      pdfLimit: z.number().int().min(1).max(5).optional().describe("PDF only: document pages to extract (1–5). Default 1. Embedded text only, at most 20,000 characters per page, even with full: true."),
       limit: z.number().int().optional().describe(`Lines from offset. Default ${DEFAULT_READ_LINES}.`),
       numbered: z.boolean().optional().describe("Prefix lines with their number and a tab. Default true for a window, false for the whole page."),
       full: z.boolean().optional().describe("Return the whole HTML even when it is large; rarely needed."),
       toFile: z.boolean().optional().describe("Write the HTML to a temp file instead; returns path and revision for page_patch htmlPath + expectedRevision."),
     },
     { readOnlyHint: true },
-    async ({ id, key, offset, limit, numbered, full, toFile }) => {
+    async ({ id, key, offset, limit, numbered, full, toFile, pdfPage, pdfLimit }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -785,7 +792,7 @@ export async function startMcp(): Promise<void> {
       }
       const tab = data as Tab & { folder: string | null; pageAssets?: PageAssetUsage };
       if (toFile && tab.file) return errorResult("File pages cannot be checked out with toFile or changed with page_patch. Read with page_read; editing the file requires filesystem access.");
-      const source = await pageSource(tab);
+      const source = await pageSource(tab, true, pdfPage, pdfLimit);
       if ("error" in source) return errorResult(source.error);
       revisions.note(tab);
       const dates = withAgentDates(tab);
@@ -805,6 +812,7 @@ export async function startMcp(): Promise<void> {
         ...(source.file
           ? { file: source.file, contentBytes: Buffer.byteLength(content, "utf8"), note: "Saved file content, read through Scribe. page_patch edits HTML pages only; editing this file requires filesystem access." }
           : { htmlBytes: Buffer.byteLength(content, "utf8") }),
+        ...(source.pdf ? { pdf: source.pdf } : {}),
         createdAt: dates.createdAt,
         updatedAt: dates.updatedAt,
         ...(dates.closedAt ? { closedAt: dates.closedAt } : {}),
@@ -897,11 +905,13 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_grep",
-    "Find text inside one page's HTML or a file page's saved text, like grep -n on a file. Returns matching lines with their line numbers (`12:` a match, `11-` context, `--` between hunks), so you can page_read a window around them with offset/limit or copy an exact oldString for page_patch (HTML pages only). Leave the number prefix out of oldStrings. pattern is a JavaScript regex unless literal is true. Works on open and closed pages. To find which page has something, use library_search instead.",
+    "Find text inside one page's HTML or a file page's saved text, like grep -n on a file. PDFs search embedded text in the selected pdfPage/pdfLimit range (default page 1), with document page markers; check pdf.nextPage and truncatedPages before concluding there are no matches in the document. Returns matching lines with their line numbers (`12:` a match, `11-` context, `--` between hunks), so you can page_read a window around them with offset/limit or copy an exact oldString for page_patch (HTML pages only). Leave the number prefix out of oldStrings. pattern is a JavaScript regex unless literal is true. Works on open and closed pages. To find which page has something, use library_search instead.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
       pattern: z.string().min(1).describe("Regex (JavaScript syntax) matched against each line, or plain text with literal: true."),
+      pdfPage: z.number().int().min(1).optional().describe("PDF only: first document page to search, 1-based. Default 1; returned pdf.nextPage continues."),
+      pdfLimit: z.number().int().min(1).max(5).optional().describe("PDF only: document pages to search (1–5). Default 1. Searches embedded text up to 20,000 characters per page; check pdf.truncatedPages and pdf.nextPage."),
       literal: z.boolean().optional().describe("Match pattern as plain text, not a regex."),
       ignoreCase: z.boolean().optional().describe("Case-insensitive match."),
       context: z.number().int().optional().describe("Lines of context before and after each match (0–20). Default 0."),
@@ -912,7 +922,7 @@ export async function startMcp(): Promise<void> {
         .describe(`Show at most this many matches. Default ${DEFAULT_GREP_MATCHES}; the total is still counted.`),
     },
     { readOnlyHint: true },
-    async ({ id, key, pattern, literal, ignoreCase, context, maxMatches }) => {
+    async ({ id, key, pattern, literal, ignoreCase, context, maxMatches, pdfPage, pdfLimit }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -922,7 +932,7 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab;
-      const source = await pageSource(tab, false);
+      const source = await pageSource(tab, false, pdfPage, pdfLimit);
       if (!("text" in source)) return errorResult("error" in source ? source.error : "no text to search");
       revisions.note(tab);
       let found;
@@ -936,6 +946,7 @@ export async function startMcp(): Promise<void> {
         key: tab.key,
         revision: tab.revision,
         ...(source.file ? { file: source.file } : {}),
+        ...(source.pdf ? { pdf: source.pdf } : {}),
         totalLines: found.totalLines,
         matches: found.matches,
         ...(found.omitted > 0 ? { omitted: `${found.omitted} more matches not shown; raise maxMatches or narrow the pattern.` } : {}),

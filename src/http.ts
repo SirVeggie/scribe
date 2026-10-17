@@ -64,6 +64,7 @@ import { appearanceRouter } from "./appearance.js";
 import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
+import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
 
@@ -1897,6 +1898,18 @@ export async function startHttp(): Promise<http.Server> {
       res.json(readFileForPage(tab.file.path, tab.file.copy));
     } catch (err) {
       res.status(404).json({ error: (err as Error).message, path: tab.file.path });
+    }
+  });
+
+  // The page access middleware protects this route, including for Pages mode chats.
+  app.get("/api/tabs/:id/file/text", async (req, res) => {
+    const tab = store.get(req.params.id);
+    if (!tab?.file) { res.status(404).json({ error: "not a file page" }); return; }
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await readPdfText(tab.file.path, req.query.page === undefined ? 1 : Number(req.query.page), req.query.limit === undefined ? 1 : Number(req.query.limit)));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
     }
   });
 

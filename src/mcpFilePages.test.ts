@@ -30,6 +30,9 @@ test("page tools read saved file content through page access, without local file
         : { error: "file not found" }));
     } else if (req.url === "/api/tabs/t_file/file/image") {
       res.end(JSON.stringify({ mimeType: "image/png", bytes: 4, data: "iVBORw==" }));
+    } else if (req.url?.startsWith("/api/tabs/t_file/file/text?")) {
+      const page = Number(new URL(req.url, "http://localhost").searchParams.get("page"));
+      res.end(JSON.stringify({ text: `[PDF page ${page}]\nEmbedded needle`, pdf: { totalPages: 3, firstPage: page, lastPage: page, nextPage: page + 1, emptyPages: [], truncatedPages: [] } }));
     } else if (req.url?.startsWith("/api/tabs/")) {
       res.end(JSON.stringify({ id: "t_file", key: "scribe:file-test", title: "note.md", html: "placeholder", revision: 1, createdAt: 1, updatedAt: 1, ...(req.url !== "/api/tabs/html" ? { file: { path: "Z:/not-accessible/note.md" } } : {}) }));
     } else {
@@ -92,8 +95,17 @@ test("page tools read saved file content through page access, without local file
     assert.ok(!requests.slice(-2).some(route => route.endsWith("/file/image")), "page_grep does not fetch the image");
     kind = "pdf";
     const pdf = await call("page_read", { key: "file" });
-    assert.equal(pdf.isError, true);
-    assert.match(pdf.content[0].text, /PDF.*not supported/);
+    assert.equal(pdf.isError ?? false, false);
+    assert.match(pdf.content[1].text, /\[PDF page 1\]\nEmbedded needle/);
+    assert.equal(JSON.parse(pdf.content[0].text).pdf.nextPage, 2);
+    const pdfWindow = await call("page_read", { key: "file", pdfPage: 2, pdfLimit: 1, offset: 2, limit: 1 });
+    assert.equal(pdfWindow.content[1].text, "2\tEmbedded needle");
+    assert.ok(requests.includes("/api/tabs/t_file/file/text?page=2&limit=1"));
+    const pdfGrep = await call("page_grep", { key: "file", pdfPage: 3, pdfLimit: 2, pattern: "needle" });
+    assert.match(pdfGrep.content[1].text, /2:Embedded needle/);
+    assert.equal(JSON.parse(pdfGrep.content[0].text).pdf.firstPage, 3);
+    assert.ok(requests.includes("/api/tabs/t_file/file/text?page=3&limit=2"));
+    assert.equal((await call("page_read", { key: "file", pdfLimit: 6 })).isError, true);
     fileStatus = 404;
     assert.match((await call("page_read", { key: "file" })).content[0].text, /file not found/);
     fileStatus = 403;

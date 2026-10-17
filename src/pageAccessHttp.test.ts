@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 import http from "node:http";
+import { pdfFixture } from "./pdfFixture.test.js";
 import { AGENT_CLIENT, CLIENT_HEADER, LOCAL_TOKEN_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER } from "./config.js";
 
 // The daemon's page routes answer a chat's MCP by the chat's Scribe access (#269).
@@ -143,6 +144,19 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal(image.mimeType, "image/png");
     assert.equal(image.data, Buffer.from("89504e470d0a1a0a", "hex").toString("base64"));
     assert.equal((await call("GET", `/api/tabs/${imagePage.id}/file/image`, undefined, thread.id)).status, 403);
+    const pdfPath = path.join(root, "outside-workspace.pdf");
+    fs.writeFileSync(pdfPath, pdfFixture(["PDF page one", "PDF page two"]));
+    const pdfPage = (await call("POST", "/api/files/open", { path: pdfPath, activate: false })).data.tab;
+    const pdfThread = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: pdfPage.id } })).data.thread;
+    const pdfRoute = `/api/tabs/${pdfPage.id}/file/text`;
+    const pdfText = await call("GET", `${pdfRoute}?page=2&limit=1`, undefined, pdfThread.id);
+    assert.equal(pdfText.status, 200);
+    assert.match(pdfText.data.text, /\[PDF page 2\]\nPDF page two/);
+    assert.equal(pdfText.data.pdf.totalPages, 2);
+    assert.equal((await call("GET", `${pdfRoute}?page=0`, undefined, pdfThread.id)).status, 400);
+    assert.equal((await call("GET", pdfRoute, undefined, thread.id)).status, 403);
+    await call("PUT", `/api/tabs/${pdfPage.id}/access`, { level: "restricted" });
+    assert.equal((await call("GET", pdfRoute, undefined, thread.id)).status, 404);
     await call("PUT", `/api/tabs/${filePage.id}/access`, { level: "restricted" });
     assert.equal((await call("GET", fileRoute, undefined, thread.id)).status, 404);
   } finally {
