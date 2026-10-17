@@ -8894,10 +8894,6 @@
       chip.setAttribute("aria-label", `${PROVIDER_LABEL[provider] || provider} plan usage`);
       for (const w of listed) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${quotaPercent(provider, w.utilization)}`));
     }
-    if (provider === "claude") {
-      const stale = Date.now() - limits.at > 5 * 60_000 || limits.windows.some((w) => w.resetsAt && w.resetsAt <= Date.now());
-      if (stale) chip.prepend(el("span", "ag-usage-w", "stale"));
-    }
     bindHoverTip(chip, () => usageTip(provider, thread));
     return chip;
   }
