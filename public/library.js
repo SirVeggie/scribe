@@ -1034,7 +1034,6 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const point = pointFor(event);
-    const open = host.isOpen(id);
     if (tab.key === "welcome") {
       openMenu(point, [
         { label: "Copy key", action: () => host.copyTabKey(id) },
@@ -1043,7 +1042,6 @@ window.createLibrary = function createLibrary(host) {
     }
     const fromStrip = Boolean(event.target.closest?.(".tab"));
     openMenu(point, [
-      !open && { label: "Open", action: () => activatePage(id, true) },
       host.canPopOut?.(id) && { label: "Open in new window", action: () => host.popOut(id) },
       tab.temp
         ? { label: "Keep in Library", action: () => host.keepPage(id) }
