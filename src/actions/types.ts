@@ -144,6 +144,8 @@ export type PageRunInput = { tag: string; data: Record<string, unknown>; merge: 
 
 /** A chat for the daemon to start for the page: handed back to launched with its result. */
 export type PageLaunch = {
+  /** Prefer this existing page chat; a deleted chat falls back to a fresh launch. */
+  resumeThread?: string;
   prompt: string;
   settings: LaunchSettings;
   run: PageRunInput;

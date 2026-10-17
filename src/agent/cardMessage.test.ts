@@ -87,3 +87,32 @@ test("Continue after a form's reply points the agent at the answer on the card",
   assert.match(item.text, /^Continue the work on card #12 with the user's answer: it is the card's newest comment\./);
   assert.deepEqual(item.card, { num: 12, title: "Fix it", resume: true, reply: "scribe:card-12-form" });
 });
+
+test("worker continuation registers a new run before sending into the same page thread", async () => {
+  const calls: string[] = [];
+  const run = { tag: "worker:sol", data: { card: 12 }, merge: true, resumePrompt: "go on" };
+  const fake = {
+    threads: new Map([["old", { id: "old", scope: { kind: "page", ref: "board" } }]]),
+    runInfo: () => ({ exists: true, running: false, run: { phase: "ended" } }),
+    watchPageThread: (id: string, input: any) => { calls.push(`watch:${id}`); assert.equal(input.tag, run.tag); assert.ok(input.after > 0); },
+    send: (id: string, msg: any) => { calls.push(`send:${id}`); assert.equal(msg.text, "Read the card again"); },
+  };
+  const result = await host.launchPageThread.call(fake as any, "board", "Read the card again", {} as any, run, "old");
+  assert.equal(result, "old");
+  assert.deepEqual(calls, ["watch:old", "send:old"]);
+});
+
+test("worker continuation rejects busy chats and falls back for missing or foreign chats", async () => {
+  for (const previous of [undefined, { id: "old", scope: { kind: "page", ref: "other" } }, { id: "old", archived: true, scope: { kind: "page", ref: "board" } }]) {
+    const fake = {
+      threads: new Map(previous ? [["old", previous]] : []),
+      providerStatus: async () => { throw new Error("fresh launch reached"); },
+    };
+    await assert.rejects(host.launchPageThread.call(fake as any, "board", "continue", {} as any, {} as any, "old"), /fresh launch reached/);
+  }
+  const fake = {
+    threads: new Map([["old", { id: "old", scope: { kind: "page", ref: "board" } }]]),
+    runInfo: () => ({ exists: true, running: true }),
+  };
+  await assert.rejects(host.launchPageThread.call(fake as any, "board", "continue", {} as any, {} as any, "old"), /still busy/);
+});

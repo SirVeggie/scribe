@@ -97,6 +97,46 @@ test("a worker waits without a step when nothing is ready, and a failed launch p
   assert.equal(log(failed).at(-1)!.kind, "pause");
 });
 
+test("a returned card continues its previous worker chat and is claimed under the normal lease", () => {
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 1), { thread: "old", threadAssignee: "opus" });
+  const { c } = ctx({ old: ended({ kind: "done", merged: true }) });
+  const out = drive(state, c)!;
+  assert.equal(out.launch?.resumeThread, "old");
+  assert.match(out.launch!.prompt, /Continue the work on card #1/);
+  assert.match(out.launch!.prompt, /Get the card again and read it in full/);
+  const leased = apply(state, out);
+  assert.equal(drive(leased, c), null);
+  const next = applyStateOps(leased, kanbanActions.launched!(leased, out.launch!, { threadId: "old" }, 11_000)!.ops);
+  assert.equal(worker(next).threadId, "old");
+  assert.equal(card(next, 1).col, "work");
+  assert.equal((card(next, 1).claim as { thread: string }).thread, "old");
+  assert.equal(log(next).at(-1)!.kind, "resume");
+});
+
+test("reassigned, unknown-owner and deleted chats start fresh", () => {
+  for (const owner of ["Other", undefined, "Opus"]) {
+    const state = board({ run: { since: 5 } });
+    Object.assign(card(state, 1), { thread: "old", threadAssignee: owner });
+    const { c } = ctx(owner === "Opus" ? {} : { old: ended({ kind: "done" }) });
+    assert.equal(drive(state, c)!.launch?.resumeThread, undefined);
+  }
+});
+
+test("a returned card does not duplicate a busy previous chat or bypass scheduling gates", () => {
+  for (const info of [ended({ kind: "done" }, { running: true }), ended({ kind: "done" }, { run: { phase: "waiting" } })]) {
+    const state = board({ run: { since: 5 } });
+    Object.assign(card(state, 1), { thread: "old", threadAssignee: "Opus" });
+    assert.equal(drive(state, ctx({ old: info as ThreadRunInfo }).c), null);
+  }
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 1), { thread: "old", threadAssignee: "Opus", blockedBy: ["c2"] });
+  assert.equal(drive(state, ctx({ old: ended({ kind: "done" }) }).c)!.launch?.ref.card, 2);
+  const paused = board({ run: { since: 5 } }, { columns: [{ id: "ready", role: "agent", paused: true }] });
+  Object.assign(card(paused, 1), { thread: "old", threadAssignee: "Opus" });
+  assert.equal(drive(paused, ctx({ old: ended({ kind: "done" }) }).c), null);
+});
+
 test("without the board's permission to start chats on its own, the worker pauses with why", () => {
   const { c } = ctx({}, { mayStart: () => "Scribe needs this board's permission" });
   const next = apply(board({ run: { since: 5 } }), drive(board({ run: { since: 5 } }), c));

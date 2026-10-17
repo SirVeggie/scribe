@@ -1147,7 +1147,22 @@ export class AgentHost {
    * leaves out. The caller checked the page's permissions. Resolves with the thread id; throws with
    * a message for the board's worker log.
    */
-  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput): Promise<string> {
+  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput, resumeThread?: string): Promise<string> {
+    const previous = resumeThread ? this.threads.get(resumeThread) : undefined;
+    if (previous && !previous.archived && previous.scope.kind === "page" && previous.scope.ref === pageId) {
+      const info = this.runInfo(previous.id);
+      if (info.exists && (info.running || (info.run && info.run.phase !== "ended"))) throw new Error("The card's previous chat is still busy.");
+      if (this.closed) throw new Error("Scribe is shutting down.");
+      this.watchPageThread(previous.id, { ...run, after: Date.now() });
+      try {
+        this.send(previous.id, { text: prompt, from: "page" });
+      } catch (err) {
+        this.releasePageThread(previous.id);
+        throw err;
+      }
+      if (s.show === "dock" || s.show === "sidebar") this.emit({ type: "agent_page_show", threadId: previous.id, pageId, where: s.show });
+      return previous.id;
+    }
     const setup = (what: string) => new Error(`Check the worker's setup: ${what}.`);
     const status = await this.providerStatus();
     const available = status.filter((x) => x.available).map((x) => x.id);

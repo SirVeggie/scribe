@@ -586,6 +586,10 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
     return plan.outcome();
   }
   const c = nextCard(state, w, skip);
+  const previous = c?.thread && sameName(c.threadAssignee, w.name) ? c.thread : undefined;
+  const previousInfo = previous ? ctx.thread(previous) : undefined;
+  // Never start a second chat while the card's previous chat is still being seen through.
+  if (previousInfo?.exists && (previousInfo.running || (previousInfo.run && previousInfo.run.phase !== "ended"))) return plan.empty ? null : plan.outcome();
   if (!c || atLimit(state, id, ctx.now, ctx.defaultProvider)) {
     plan.patchWorker(id, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since } });
     plan.log(id, "wait", !c ? "Waiting for cards" : "Waiting for a free slot");
@@ -600,7 +604,10 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
   const token = newId("st");
   plan.patchWorker(id, { threadId: null, step: { token, at: ctx.now }, merge: null, wait: null, fix: null });
   return plan.outcome({
-    prompt: workerPrompt(state, ctx.page, w, c),
+    ...(previousInfo?.exists ? { resumeThread: previous } : {}),
+    prompt: previousInfo?.exists
+      ? `Continue the work on card #${c.num}, which was moved back to a ready column. Get the card again and read it in full before you go on. Follow the current worker instructions below.\n\n${workerPrompt(state, ctx.page, w, c)}`
+      : workerPrompt(state, ctx.page, w, c),
     settings,
     run: workerRun(w, id, c.num, false),
     ref: { worker: id, card: c.num, token, since, startedAt: ctx.now },
@@ -668,7 +675,8 @@ export function workerLaunched(state: BoardState, launch: PageLaunch, result: { 
     if (ours) plan.patchWorker(id, { step: null });
     plan.addSolo(id, threadId, { card: cardNum, at: now });
   }
-  plan.log(id, "launch", `Started #${cardNum} ${str(c?.title).slice(0, 80)}`, { card: cardNum, thread: threadId });
+  const resumed = launch.resumeThread === threadId;
+  plan.log(id, resumed ? "resume" : "launch", `${resumed ? "Continued" : "Started"} #${cardNum} ${str(c?.title).slice(0, 80)}`, { card: cardNum, thread: threadId });
   const name = str(w.name).trim() || str(c?.assignee).trim() || "agent";
   if (c && !(c.claim && !c.claim.stale && c.claim.thread !== threadId)) plan.ops.push(...claimOps(state, c, threadId, name, now));
   return plan.outcome();

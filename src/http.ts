@@ -2208,7 +2208,7 @@ function scheduleSweep(delayMs: number): void {
           }
         },
       },
-      (pageId, launch) => host.launchPageThread(pageId, launch.prompt, launch.settings, launch.run)
+      (pageId, launch) => host.launchPageThread(pageId, launch.prompt, launch.settings, launch.run, launch.resumeThread)
     );
   }, delayMs);
   sweepQueued.unref?.();
