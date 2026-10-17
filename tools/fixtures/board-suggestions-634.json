@@ -1,0 +1,356 @@
+{
+  "snapshotAt": "2026-10-17T02:50:56.909Z",
+  "board": "scribe:agent-todo",
+  "labels": [
+    {
+      "id": "lb_muq1tomr73kb3",
+      "name": "Bug",
+      "color": "#ff6b7a"
+    },
+    {
+      "id": "lb_muq1tomr8rwsi",
+      "name": "Feature",
+      "color": "#3dd68c"
+    },
+    {
+      "id": "lb_muq1tomruaf0m",
+      "name": "Task",
+      "color": "#6ea8ff"
+    },
+    {
+      "id": "lb_muqaxn8na9wci",
+      "name": "Question",
+      "color": "#8b95a8"
+    },
+    {
+      "id": "lb_murc7mmll5yfx",
+      "name": "Epic",
+      "color": "#b48cff"
+    },
+    {
+      "id": "lb_murcg7ccovi5n",
+      "name": "Design",
+      "color": "#f178b6"
+    },
+    {
+      "id": "lb_mv1t7q39mmthz",
+      "name": "Security",
+      "color": "#2bc4c4"
+    },
+    {
+      "id": "lb_mv1tboz1gv49y",
+      "name": "UI/Organization",
+      "color": "#b48cff"
+    },
+    {
+      "id": "lb_mv1tesyt89a16",
+      "name": "Performance",
+      "color": "#e0b34a"
+    }
+  ],
+  "excludedLabels": [
+    "By Agent"
+  ],
+  "cards": [
+    {
+      "num": 21,
+      "title": "support classic openai compatible api",
+      "description": "Support for openai compatible api. This means extra handling compared to other agent sdks. No need to support file edits or other similar thing. We should have mcp support and proper board integration though. Would also be nice to have web search/fetch, but that probably needs some account setup, so it can be added later. I'm also interested in using this as a helper AI for things like summarization, title generation, classification, etc.",
+      "labels": [
+        "lb_muq1tomr8rwsi"
+      ],
+      "priority": 1
+    },
+    {
+      "num": 93,
+      "title": "Page guide optimization for agents",
+      "description": "When linking a page to agent or adding it into context, automatically include that page's agent usage guide so the agent knows immediately what they're working with instead of needing to use a tool call to read the page first. This way they might not need to even read the page if it's not relevant to the query. As part of this issue it might be necessary to do some refactor on how page guides work.",
+      "labels": [
+        "lb_muq1tomr8rwsi"
+      ],
+      "priority": 1
+    },
+    {
+      "num": 163,
+      "title": "Page edit surface: line-range patch and building large pages in parts",
+      "description": "Follow-up to #103 (option B landed: page_read offset/limit/numbered + outline for pages over 24 KB, page_grep).\n\nLeft for later, from [[scribe:page-edit-surface-design]]:\n- `page_patch { startLine, endLine, newText }`: replace a numbered region after a windowed read, for big rewrites of one block.\n- Build a new large page in parts: `page_show { append: true }` or a patch insert-at-end / insertAfter anchor.\n- Option A (scratch workspace with fenced file tools for Claude + Cursor in Pages mode), only if B still loses to checkout in practice.\n\nKnown edge: pages stored with CRLF line endings show as plain lines in windows, so a multi-line oldString copied from a window won't match. Rare (pages are usually LF).",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 1
+    },
+    {
+      "num": 313,
+      "title": "Edited Kanban template copies from before #285 keep the old worker loop",
+      "description": "Found while implementing #285. A Kanban template copy edited before #285 still has the old in-page loop for limit waits and merges: it never hands chats to Scribe's agent runs, so it keeps the pre-#285 behavior. That behavior still works because the host's #282 guard and the legacy sweep branch remain. Unedited copies (yours right now) update automatically.\n\nThere is no guided update for such copies yet. Options: show a notice on boards whose template predates runs, or offer a one-click update that replaces only the worker section and keeps the user's other edits. Low priority while no copy is edited.",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 1
+    },
+    {
+      "num": 395,
+      "title": "Image search: the image half of the blended score adds nothing to text queries here",
+      "description": "Found while building #373. Measured with `npm run eval:images` on the real model (30 screenshots on 28 cards; numbers in `docs/semantic-search-index.md`, \"Image eval\").\n\nRank of a card's own image for 20 queries reworded to avoid the card's words:\n\n| Image weight | Top 1 | Top 3 | MRR |\n|---|---|---|---|\n| 1 (image only) | 4 | 7 | 0.364 |\n| 0.5 (what #373 ships, per the design) | 16 | 19 | 0.863 |\n| 0.3 | 17 | 19 | 0.902 |\n| 0 (owner's text only) | 18 | 20 | 0.933 |\n\nThe blend beats image-only by a lot, but the owner's text alone is slightly better than the blend. For text queries the vision vector is noise on app screenshots: every image scores 0.62 to 0.72 against any description.\n\nAn image as the query does work (a cropped, rescaled copy found its original first for 28 of 30).\n\n**To decide**\n- Lower the image weight for text queries to 0.3 or 0, or keep 0.5 until a library with photos or diagrams can be measured. It is one constant (`queryImages` in `src/search/indexer.ts`).\n- The pool is 30 look-alike screenshots and I wrote the queries after seeing the titles, so this is a sanity check, not a benchmark.",
+      "labels": [],
+      "priority": 1
+    },
+    {
+      "num": 461,
+      "title": "Harness statistics: gaps in what threads record, and failure rates worth a look",
+      "description": "Found while building the Agent harness panel (#456). Numbers are over all 418 stored threads.\n\n**Failure rates the panel surfaced**\n- Codex tool calls fail 10% of the time (397 of 4,104); Claude 2%, Cursor under 1%.\n- 12% of Claude turns ended in an error (29 of 244); Codex 5%, Cursor 1%.\n- Cursor averages 65 tool calls a turn, Claude 34, Codex 25.\n\n**What the stored data cannot answer yet**\n- Usage is kept per turn only, summed over every model call in it. There is no count of model calls and no first-call size, so \"what a session starts with\" is inferred from first turns that made no tool call. There are only a handful of those, and none for Claude with usable numbers (the Claude Measure button covers that provider exactly).\n- Providers count input differently: Claude and Native report cached input apart from `inputTokens`, Codex and Cursor inside it. The panel normalizes this (`promptTokens` in `src/agent/harness.ts`); the Cursor reading is inferred from the numbers, not from its docs.\n- Skill use is only visible for Claude (its Skill tool). Other providers read SKILL.md as an ordinary file.\n- Tool names differ per provider (`Bash`, `shell`, `command_execution`, and Codex titles some commands by their text), so the per-tool table is per provider.\n- Only Claude reports a cost.\n\n**Possible follow-ups**\n- Record model calls per turn and the first call's input tokens on the turn.\n- A normalized tool id on tool items, so tools compare across providers.\n- Live context measurement for Codex, Cursor and Native, if their SDKs offer one.",
+      "labels": [],
+      "priority": 1
+    },
+    {
+      "num": 533,
+      "title": "Hook gates on real providers are only tested against fakes",
+      "description": "Found while building #517 (thread hooks).\n\nThe new \"ask the host before this tool call\" gate is wired into four places that the test suite cannot reach, because tests run the fake provider and stub sessions, not the real SDKs:\n\n- Claude: a catch-all `PreToolUse` callback (`gateHooks` in `src/agent/providers/claude.ts`).\n- Native (Pi): the top of the `tool_call` extension gate (`src/agent/providers/pi.ts`).\n- Cursor: the wrapper around its custom tools (`hooked` in `src/agent/providers/cursor.ts`).\n- Codex and Cursor: Scribe's own MCP tools asking from the MCP process (`gateTools` in `src/mcp.ts`). This one has a unit test with an in-memory MCP client, but not with a real Codex session.\n\n**Limitation in the app:** there is no way to run a provider's real SDK session in a test without spending quota, so provider-side wiring like this ships checked by types and by reading only.\n\n**To check by hand** (one rule each, in a throwaway thread): a Block rule on `rm -rf` and an Ask rule on some harmless command, on each provider, with the thread on Full access. Expected: Claude and Native deny or ask before the command runs; Codex and Cursor stop the turn for their built-in shell, and deny `page_show` when a rule blocks it.\n\nAlso unconfirmed: that Codex always reports a command (`item/started`) before it asks approval for it. The host waits 400 ms for that approval request before it falls back to stopping the turn (`HOOK_GRACE_MS`).",
+      "labels": [],
+      "priority": 1
+    },
+    {
+      "num": 547,
+      "title": "Provider limits: Cursor Full access changes still reopen, and turn grants leave native permissions unchanged",
+      "description": "Follow-up from #539. Findings: [[peek:scribe:approval-reconnect-539-findings]].\n\nCursor SDK 1.0.35 exposes autoReview only at agent creation/resume, not per send. Ask/Edits/Auto now reuse the agent where shell tools stay the same, but Full access transitions still reopen it. Reconnect latency for Cursor has not been measured.\n\n“Allow for this turn” restores Scribe host approvals, but cannot change an already-running Codex sandbox or the review setting of an already-open Cursor agent. Codex turn/settings/update supports reviewer changes for future steps, but not sandbox or approval-policy changes; pending approvals retain the original reviewer.\n\nPossible future work: explain the native limitation at the grant, or design an explicit interrupt/restart flow that preserves conversation and pending actions. Do not silently restart or broaden permissions. Revisit Cursor reuse if its SDK gains a per-send review override.",
+      "labels": [],
+      "priority": 1
+    },
+    {
+      "num": 578,
+      "title": "thread_update: workspace change only applies at the end of the turn",
+      "description": "Found while building #577.\n\nA provider session is bound to its folder when it starts (Claude's process cwd, Codex thread options, Cursor and Pi sessions all key on `cwd`), and the paths of running tool calls are resolved against it. So `thread_update` cannot move the workspace in the middle of a turn: the agent has to end its turn, Scribe applies the change and sends it on with a note. That costs one extra turn per switch.\n\nPossible improvements:\n- Claude: grant the new folder mid-turn as an additional directory (the SDK has `additionalDirectories` and an `addDirectories` permission update), so reads and edits there stop asking at once and the cwd follows at the next turn.\n- Codex: add the folder to the turn's writable roots the same way.\n\nRelated limits of the tool as built:\n- A thread in its own git worktree (every board worker chat) cannot change workspace at all.\n- A thread created with a title (board worker chats, helpers) counts as named by the user, so the agent cannot retitle it. `titleLocked` does not tell a user rename apart from a title set at creation.",
+      "labels": [],
+      "priority": 1
+    },
+    {
+      "num": 633,
+      "title": "Search HTTP test expects stale Kanban page title",
+      "description": "Found while validating #569: `src/search/routes.test.ts:103` expects image-hit title `Board`, but receives `Kanban board`. Reproduces with both the original and patched dependency lockfiles, so it is unrelated to the security updates. Investigate whether the fixture or title behavior should change; evidence page to follow.",
+      "labels": [],
+      "priority": 1
+    },
+    {
+      "num": 16,
+      "title": "add more hotkeys",
+      "description": "Add the following hotkeys. if they already exist then ignore them. list the selected hotkeys for each item (new or existing) to a comment. move to needs input after implementation so I can give input for the final hotkeys at some point after I test.\n- open agent sidebar\n- cycle agent mode\n- open thread selection (any chat)\n- start new thread\n- ctrl+up from expanded floating chat or sidebar goes fullscreen\n- ctrl+down from fullscreen goes to whichever was focused when going to fullscreen (if neither applies, go sidebar)\n- up in any chat cancels latest queued or still waiting steered message and brings the message to the input field for editing",
+      "labels": [
+        "lb_muq1tomruaf0m"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 97,
+      "title": "kanban ctrl+enter should focus desc field after opening the card",
+      "description": "",
+      "labels": [],
+      "priority": 2
+    },
+    {
+      "num": 157,
+      "title": "Island orb activity flyout and needs-you toasts",
+      "description": "From #18. Locked spec: [[peek:scribe:multi-thread-ui-spec]] (votes: [[peek:scribe:multi-thread-ui-design]]).\n\n**Flyout.** Hover the island orb (colorful glowing button) — and the top-bar agent button — to list every waiting/running/unread thread. Pointer can move onto the list. Click a row to open it. Waiting approvals have Allow/Deny on the row. Hover a row for a peek of the pending approval or the latest agent message. Orb click stays the model menu; agent-button click stays the sidebar.\n\n**Toasts.** When a thread starts waiting, a dismissible toast with Allow/Deny (or Open). × snoozes it; the flyout still has it. Finish toasts for user-level threads. Don't toast if that thread is already on screen. Don't use the center board-notice — it sits on the island.\n\nTab/palette waiting marks are #155, not this.",
+      "labels": [
+        "lb_muq1tomr8rwsi"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 305,
+      "title": "Keeper: compact list_processes and reword 'list first' (split from #258)",
+      "description": "Split from #258. Keeper is in a separate repo (`S:\\Library\\Projects\\process-manager`), so an agent-board worktree can't change it.\n\n- `list_processes` returned 112 KB (3,917 lines) because each process carries its whole event history. Leave `events` out by default (or keep only the last few), and keep the full history in `get_process`.\n- The server instructions say \"List templates and processes before starting anything\". Agents read that as \"always list first\", even on cards that never start a server. Reword it to: \"Before you *start* a server, list templates and processes…\".",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 321,
+      "title": "Workers panel: edit shared instructions in their own auto-saving modal",
+      "description": "The shared instructions field in the Workers panel is bulky in the panel, yet too small to edit comfortably.\n\n## Change\n- In the Workers panel, replace the shared instructions textarea with a **single compact line**: a word count (e.g. \"142 words\") and an **Edit** link.\n- **Edit** opens the instructions in a **separate modal** over the Workers panel, with a large textarea that **auto-resizes** to its content.\n- **No Save button**: changes save as the user types. Clicking outside the modal (or Escape) closes it, and the summary line shows the new word count.\n\n## Acceptance\n- [ ] Workers panel shows one line (word count + Edit) instead of the textarea\n- [ ] Modal opens on Edit; textarea grows with content and is comfortable to edit\n- [ ] Typing saves to `settings.workerInstructions` live; nothing is lost when the modal is closed by clicking away or Escape\n- [ ] Closing the modal returns to the Workers panel (doesn't close both)",
+      "labels": [
+        "lb_muq1tomr8rwsi",
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 364,
+      "title": "Perf: Kanban re-renders the whole board on every change (~60 ms on Scribe Todo)",
+      "description": "From the #359 profile: [[peek:scribe:359-performance-profile]]\n\nOn Scribe Todo (342 cards on screen, 788 KB of state) each change arriving from elsewhere costs about 60 ms of main thread in the board's frame: 670 ms for 11 changes. The socket message is small (0.24 KB), so the cost is the render: `renderBoard` rebuilds every column and card.\n\nIn that profile (templates/builtin/kanban.html):\n- `shortDate` 106 ms: `toLocaleDateString` with options for every card on every render. One shared `Intl.DateTimeFormat` would remove most of it.\n- `clone` 57 ms: the state is deep-cloned per change.\n- `renderBoard` 148 ms self, `renderCard` 42 ms.\n\nIdeas: reuse a date formatter; re-render only the cards an op touched; skip the Done column's cards beyond what is shown.\n\nCheck with `node tools/perf/profile.mjs --only board --profiles <dir>` (board-remote-update-x10, frame figures).",
+      "labels": [
+        "lb_mv1tesyt89a16"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 429,
+      "title": "UI: shell render scheduler (dirty regions, one flush per frame)",
+      "description": "From the #413 audit: [[peek:scribe:413-ui-systems-review]]\n\n**Problem.** `render()` in `public/app.js` is one function that redraws frames, chrome, tab strip, library and templates. About 25 call sites and most server events call it synchronously, with no coalescing and no record of what changed. N events are N full renders; `library.render()` rebuilds its model and every row even when the sidebar is closed.\n\n**Change.** Replace it with `invalidate(region)` (`tabs`, `chrome`, `frames`, `library`, `templates`, `spaces`) and one flush per animation frame. Each region keeps a signature of what it drew and skips when unchanged (`views.js` pane headers and `newpage.js` already work this way). Hidden regions are marked dirty and drawn when shown.\n\n**Migration.** Keep `render()` as invalidate-all, then convert event handlers one at a time, starting with `tab_upserted`, `spaces` and `folders`. Callers that read the DOM right after `render()` need a synchronous `flush()`.\n\n**Done in #413 already:** no-op `tab_state` renders, the peek header key, and the tab strip scroll are fixed as single cases. This card removes the class.",
+      "labels": [
+        "lb_mv1tesyt89a16"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 485,
+      "title": "Show Claude thread's effective billing source",
+      "description": "Found in #453 (investigation only). Claude queries inherit daemon credentials and load thread settings, but status is global, cached, and prioritizes an email. Show active-query backend/auth source/account metadata, with unknown states; do not imply subscription login proves funding. Keep quota identity scoped to source/account and invalidate unrelated stale reports. Do not expose secrets or silently switch credentials. Evidence and scope form: [[peek:scribe:claude-billing-usage-audit-453]]. Detailed report: docs/claude-billing-usage-audit.md. Await #453 scope decision before implementation.",
+      "labels": [],
+      "priority": 2
+    },
+    {
+      "num": 567,
+      "title": "Audio A: mic and speech-to-text in the chat composer (audio service + Settings → Audio)",
+      "description": "Part of #562. Read `docs/audio-design.md` first (sections \"What the code looks like today\", \"Principles\", \"Architecture\", \"Phase A\"). If it is not on your branch yet: `git show agent/opus-haiku-562-audio-support-in-chat-and:docs/audio-design.md`.\n\n**Goal:** a mic button in the chat composer. Click to start, click to stop; the speech is transcribed and inserted at the caret. This card also builds the shared parts the later audio cards (#564, #565, #566 and the page API card) stand on.\n\n**Daemon: `src/audio/`** (same shape as `src/ml/`)\n- `types.ts`: `AudioSettings`, typed error kinds, `SttEngine` interface (see the doc).\n- `settings.ts`: `audio-settings.json` under the data dir: `stt: { source?, model, language? }`, `input: { sendAfterDictation, pushToTalk }`.\n- Engine: OpenAI-compatible `POST {baseUrl}/audio/transcriptions` (multipart `file` + `model`, plain `fetch`, no new dependency), using one of the user's **existing OpenAI sources** (`src/agent/openaiSources.ts`; the audio service gets a lookup from the agent host). The key stays in the daemon.\n- `service.ts`: `transcribe()` with timeout, one retry on 429/5xx, typed failures (never throws to the caller), usage per day.\n- `routes.ts` at `/api/audio`, **shell-only** (same gate as `shellOnly` in `src/agent/routes.ts`): `GET/PUT /settings`, `POST /transcriptions` (raw body, `Content-Type: audio/*`, limit 25 MB, `?language=&prompt=`) → `{ ok, text }` or `{ ok: false, error }`, `POST /test`. Accept an optional `x-scribe-tab` header and leave a hook for the page permission check (built in the page API card).\n\n**Shell: `public/audio.js`** (`window.scribeAudio`)\n- `capture({ owner, maxMs, onLevel, onState })` → session `{ stop(): Promise<Blob>, cancel() }`: `getUserMedia` with echo cancellation and noise suppression, `MediaRecorder` (opus in webm, else what `isTypeSupported` offers), `AnalyserNode` level meter. Open the stream on start and stop its tracks on stop. One capture at a time; default cap 5 minutes.\n- `transcribe(blob, opts)`, `dictate(opts)` (capture + transcribe), `available()`.\n- `owner` is `{ kind: \"chat\", threadId }` here; the page API card adds `{ kind: \"page\", tabId }`.\n\n**Composer** (`buildComposer()` in `public/agent.js`, icon in `public/agent-render.js`)\n- Mic button in the control bar. States: idle → recording (level ring, elapsed time, Esc cancels) → transcribing (the textarea stays editable) → idle. Errors as the composer's usual notice.\n- Insert at the caret, replacing the selection, adding a space when needed; keep focus. Keep that logic in a pure function with a test. **Do not send** unless \"Send after dictation\" is on.\n- Push-to-talk: hold a shortcut to record, release to stop. Proposed `Ctrl+Shift+Space` in the composer; check it against the shortcut tables in `public/agent.js` and `public/app.js` first.\n- Switching threads or closing the dock cancels the capture. With no source that can transcribe, the button opens Settings → Audio.\n- A blocked or missing microphone gives one clear message.\n\n**Settings → Audio** (new section): speech-to-text source and model, language (auto), Test button, \"Send after dictation\" (off), microphone device (per browser profile, not in the daemon). Follow the `ui-help-text` skill: sparse help.\n\n**Desktop:** check in the Tauri app (WebView2) that the microphone prompt appears and is remembered for `127.0.0.1`. If not, add a `PermissionRequested` handler that allows `microphone` for the board origin only. If you cannot test the desktop app, say so in the hand-in.\n\n**Not in this card:** live partial transcripts, voice activity detection, playback, the page API.\n\n**Check:** `src/audio/` unit tests with a fake engine (limits, typed failures, shell-only gate, source lookup, settings round trip); the insert-at-caret test; `npm test` and `npm run build` pass. Say in the hand-in which parts were tried by hand against a real source and which were not.",
+      "labels": [
+        "lb_muq1tomr8rwsi"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 605,
+      "title": "Thread search performance: synchronous JSON scan and metadata candidates",
+      "description": "Follow-up evidence from #603: message search synchronously scans stored item JSON with leading-wildcard LIKE. A synthetic 50,000-message history (~2 KB/message) takes ~160–310 ms per query after simple matching optimization. Even zero hits require ~160 ms. A query for `x` matches the JSON property name `text`, yielding every searchable row to JavaScript before the actual text filter rejects false candidates.\n\nInvestigate text-only prefiltering, substring indexing that preserves punctuation and single-character terms, and moving/cancelling scans so they do not block the daemon. Preserve matching exclusions, cross-message terms and snippets. The client ranking optimization is implemented in #603; this card concerns the remaining database bottleneck.\n\nMeasurements, limitations and reproduction: [[peek:scribe:thread-search-603-results|#603 investigation and benchmark results]].",
+      "labels": [
+        "lb_mv1tesyt89a16"
+      ],
+      "priority": 2
+    },
+    {
+      "num": 50,
+      "title": "Let agents change one card (or one item) without rewriting the whole state",
+      "description": "Today an agent has to send the whole `cards` array to change one card. On this board that is ~37 KB, too big to pass through `board_set_state`, so a change only works with shell access to the daemon's HTTP API. Reads have the same problem: `board_get_state` returns all ~53 KB.\n\nAdd:\n- **Item operations** on `board_set_state`: change, insert, move or remove one item of a state array by its `id` (also nested, e.g. append a comment to a card).\n- **Partial reads** on `board_get_state`: return just one path (e.g. one card).\n- Update the Kanban and Todo agent guides and the skill to use them.",
+      "labels": [
+        "lb_muq1tomr8rwsi"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 62,
+      "title": "Subagent support for chat",
+      "description": "Agents should be able to kick of subagents and those should be visible and interactable from the UI.",
+      "labels": [
+        "lb_muq1tomr8rwsi"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 69,
+      "title": "Kanban get overwrites comments with a count so agents cannot read them",
+      "description": "`page_action` `get` spreads `summary()` over the card, and summary sets `comments` to a number (plus `lastComment` with only by/at). Agents therefore cannot read comment text from `get` and have to use `page_state` with a path like `cards/num=36`. The action description says get returns comments in full.\n\nFix: keep the comments array on get (or add `comments: true`), and put the count on a different field.",
+      "labels": [
+        "lb_muq1tomr73kb3"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 90,
+      "title": "scribe needs proper browser support for agents so they can test things better",
+      "description": "",
+      "labels": [],
+      "priority": 3
+    },
+    {
+      "num": 129,
+      "title": "kanban board worker setup is missing setting for web mode",
+      "description": "",
+      "labels": [],
+      "priority": 3
+    },
+    {
+      "num": 229,
+      "title": "Check how file access is gated",
+      "description": "Let's review how agent file access is gated. When using code mode, usually the agent has a workspace. Intuitively this means the agent should only be able to read and write (read is debatable, but write definitely) files in that workspace. Then, like other permissions, should be able to ask for permission to access other paths until the end of that thread. This probably needs sandboxing, since agents can use command line to read/write outside files anyway?",
+      "labels": [
+        "lb_murcg7ccovi5n",
+        "lb_mv1t7q39mmthz"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 277,
+      "title": "Show effective worker permissions and detect incompatible launch settings",
+      "description": "Observed on #276: initial Code worker session had effective read-only filesystem and approval policy never. Shell reads, page creation, and board actions were rejected, so the investigation could not be saved or handed in. After the user changed permissions, those same operations succeeded. Root cause of the initial policy selection remains unverified.\n\nExpose effective provider permissions at worker launch and in chat; detect when required report/board lifecycle actions cannot run under the chosen policy. Preserve user restrictions and explain the mismatch before work starts. Check safe board bookkeeping separately from arbitrary page mutations.\n\nInvestigation: [[peek:scribe:codex-limitations-276-investigation]].",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 302,
+      "title": "Worker wrap-up logic in kanban.html has no automated tests",
+      "description": "Found while working on #301. The worker loop's decisions (wrapUp, merge-fix retries, one-card runs, limit waits, blocking cards) all live in the page script `templates/builtin/kanban.html`, so no unit test covers them. The fake provider (#207) can drive them end to end, but only with a test daemon and an open board window, which is slow to set up and has the live-board hazard. So changes like #301 ship checked only by a syntax parse.\n\nIdea: move the wrap-up decision (given the last turn, held cards, and merge result, what to do: go on, block cards X, pause with reason) into a pure function, either a shared module the page loads or a daemon-side action, and unit-test it in `kanban.test.ts`.",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 483,
+      "title": "Claude: approval \"edits\" approves file edits outside the workspace without asking",
+      "description": "Split out of #229 by the #480 triage, because it is a bug with one right fix and does not depend on the open sandbox design (#300, #75).\n\nFrom the #229 investigation ([[peek:scribe:file-access-gating-229]]): with approval set to *edits*, Claude Code asks about an edit **outside** the workspace, and Scribe's `autoApproval` (`src/agent/host.ts`, about line 202 at the time) sees tool kind `edit` and answers yes. Pi handles the same case correctly.\n\n**To do**\n- First confirm it is still so on current master (the code has moved since #229).\n- Auto-approve an edit under *edits* only when its resolved path is inside the thread's workspace (cwd; a worktree thread's own worktree). Anything else goes to the user like any other approval. Resolve symlinks and junctions before comparing, and handle `..` and other drive letters.\n- Full access stays as it is.\n- Tests: inside, outside, a path through the linked `node_modules` junction (counts as outside for writes), and a relative path that escapes.\n\nThis only makes approval stricter. Path grants, Pi's read-only command list and OS sandboxing stay with #229 / #300.",
+      "labels": [
+        "lb_muq1tomr73kb3",
+        "lb_mv1t7q39mmthz"
+      ],
+      "priority": 3
+    },
+    {
+      "num": 574,
+      "title": "Worker merge reported as failed after it had already succeeded (worktree cleanup error)",
+      "description": "Seen on #573. After the card's chat ended, the board sent the chat: \"Scribe could not merge your branch: Could not remove the worktree folder …\\opus-haiku-573-improved-styling-when-usi: fatal: '…' is not a working tree\", and asked for a rebase.\n\nWhat was actually true at that point:\n\n- `master` in the main checkout was already at the card's commit (`4cfa021`), so the merge had gone through.\n- The worktree was no longer in `git worktree list`, and its folder still existed but was empty (no `.git`), so the chat had no repository to rebase in.\n- The branch `agent/opus-haiku-573-improved-styling-when-usi` still exists.\n\nSo a failure in the cleanup step (removing a worktree that was already deregistered) is reported as a merge failure, and the agent is asked to rebase in a folder that is no longer a git repository. It looks like the removal ran twice, or the folder removal ran after `git worktree remove`/prune had already dropped it.\n\nSuggested direction: treat \"is not a working tree\" during cleanup as already cleaned up, and report cleanup errors separately from merge errors so the chat is not sent on a rebase when the merge landed.",
+      "labels": [],
+      "priority": 3
+    },
+    {
+      "num": 1,
+      "title": "make tab close focus tab on right instead of tab on left",
+      "description": "",
+      "labels": [],
+      "priority": 0
+    },
+    {
+      "num": 134,
+      "title": "Investigate OpenAPPA",
+      "description": "Check out [OpenAPPA](https://github.com/archestra-ai/OpenAPPA) and see how it would fit into Scribe.\n\nInvestigation: [[scribe:openappa-investigation]]",
+      "labels": [
+        "lb_murcg7ccovi5n",
+        "lb_mv1t7q39mmthz"
+      ],
+      "priority": 0
+    },
+    {
+      "num": 230,
+      "title": "Built-in template edits need a daemon restart to test",
+      "description": "Split from #208. `src/builtinTemplates.ts` reads `templates/builtin/*.json|html|guide.md` once at daemon start, so every edit to a built-in template (e.g. the Kanban board) needs a test-daemon restart before a page shows it.\n\nIdea: in dev (or behind a flag), watch `templates/builtin` and reload the changed built-in, then flag pages using it the same way a version upgrade does (`builtinUpdate`), or have `template_open` / a reload re-read it from disk.",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 0
+    },
+    {
+      "num": 347,
+      "title": "Create animated mockups of the top bar",
+      "description": "We added a shader animation as a strip below the top bar / tab strip. I also want to see mockups of the background of the bar itself.",
+      "labels": [],
+      "priority": 0
+    },
+    {
+      "num": 457,
+      "title": "File search check: no traversal bug reproduced",
+      "description": "Closed investigation from #239. The initial empty folder searches and successful direct file searches used different patterns. Repeating `showSlash` at both scopes finds the same lines (4408, 4420), and `slash|skills|commands` also returns matches at both scopes. There is no evidence of a folder traversal bug. No implementation needed.",
+      "labels": [
+        "lb_murcg7ccovi5n"
+      ],
+      "priority": 0
+    },
+    {
+      "num": 580,
+      "title": "Kanban: prevent text select on background",
+      "description": "Dragging the background scrolls the page. It can cause text to be selected, at least when there is no scrollbar. User might still try scrolling by dragging and accidentally select text which is annoying.",
+      "labels": [],
+      "priority": 0
+    }
+  ]
+}

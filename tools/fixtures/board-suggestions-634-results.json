@@ -1,0 +1,2680 @@
+{
+  "at": "2026-10-17T02:51:25.447Z",
+  "input": "tools/fixtures/board-suggestions-634.json",
+  "source": {
+    "id": "h2o-lightning-4b",
+    "model": "h2o-lightning-4b",
+    "baseUrl": "http://127.0.0.1:10000"
+  },
+  "labels": [
+    {
+      "id": "lb_muq1tomr73kb3",
+      "name": "Bug",
+      "color": "#ff6b7a"
+    },
+    {
+      "id": "lb_muq1tomr8rwsi",
+      "name": "Feature",
+      "color": "#3dd68c"
+    },
+    {
+      "id": "lb_muq1tomruaf0m",
+      "name": "Task",
+      "color": "#6ea8ff"
+    },
+    {
+      "id": "lb_muqaxn8na9wci",
+      "name": "Question",
+      "color": "#8b95a8"
+    },
+    {
+      "id": "lb_murc7mmll5yfx",
+      "name": "Epic",
+      "color": "#b48cff"
+    },
+    {
+      "id": "lb_murcg7ccovi5n",
+      "name": "Design",
+      "color": "#f178b6"
+    },
+    {
+      "id": "lb_mv1t7q39mmthz",
+      "name": "Security",
+      "color": "#2bc4c4"
+    },
+    {
+      "id": "lb_mv1tboz1gv49y",
+      "name": "UI/Organization",
+      "color": "#b48cff"
+    },
+    {
+      "id": "lb_mv1tesyt89a16",
+      "name": "Performance",
+      "color": "#e0b34a"
+    }
+  ],
+  "thresholds": {
+    "label": 0.75,
+    "priority": 0.6,
+    "maxLabels": 3
+  },
+  "questions": {
+    "label0": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Bug\"?"
+    },
+    "label1": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Feature\"?"
+    },
+    "label2": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Task\"?"
+    },
+    "label3": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Question\"?"
+    },
+    "label4": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Epic\"?"
+    },
+    "label5": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Design\"?"
+    },
+    "label6": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Security\"?"
+    },
+    "label7": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"UI/Organization\"?"
+    },
+    "label8": {
+      "type": "yesno",
+      "instructions": "Should this card have the label \"Performance\"?"
+    },
+    "priority": {
+      "type": "choice",
+      "instructions": "How urgent is the work this card describes?",
+      "options": {
+        "unspecified": "The card does not say how urgent or important it is",
+        "low": "Nice to have; can wait a long time",
+        "medium": "Ordinary work to do in its turn",
+        "high": "Important; should be done soon",
+        "urgent": "Something is broken or blocked and needs attention now"
+      }
+    }
+  },
+  "results": [
+    {
+      "card": {
+        "num": 21,
+        "title": "support classic openai compatible api",
+        "description": "Support for openai compatible api. This means extra handling compared to other agent sdks. No need to support file edits or other similar thing. We should have mcp support and proper board integration though. Would also be nice to have web search/fetch, but that probably needs some account setup, so it can be added later. I'm also interested in using this as a helper AI for things like summarization, title generation, classification, etc.",
+        "labels": [
+          "lb_muq1tomr8rwsi"
+        ],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.05609603051573065
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.6785072338560647
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.3680280980355981
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.2318546034468009
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.37190430707689526
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.07095094347794909
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.06445388722035256
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.22182229936896186
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.06656688034552638
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.31038766062590145,
+              "low": 0.061413586923178415,
+              "medium": 0.3821330367515832,
+              "high": 0.23424970396151312,
+              "urgent": 0.011816011737823788
+            },
+            "confidence": 0.227666295939479
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1894,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 400,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 93,
+        "title": "Page guide optimization for agents",
+        "description": "When linking a page to agent or adding it into context, automatically include that page's agent usage guide so the agent knows immediately what they're working with instead of needing to use a tool call to read the page first. This way they might not need to even read the page if it's not relevant to the query. As part of this issue it might be necessary to do some refactor on how page guides work.",
+        "labels": [
+          "lb_muq1tomr8rwsi"
+        ],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.24000340732226866
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.5862396189692157
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.33426699853426733
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.1813909422600432
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.40114403369807755
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.22175974986395444
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.1463093524995476
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.3834447364096547
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.336530172781619
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.26538033314650067,
+              "low": 0.021059072531901354,
+              "medium": 0.2594234014226645,
+              "high": 0.3826558034463305,
+              "urgent": 0.07148138945260298
+            },
+            "confidence": 0.2283197543079131
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1804,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 220,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 163,
+        "title": "Page edit surface: line-range patch and building large pages in parts",
+        "description": "Follow-up to #103 (option B landed: page_read offset/limit/numbered + outline for pages over 24 KB, page_grep).\n\nLeft for later, from [[scribe:page-edit-surface-design]]:\n- `page_patch { startLine, endLine, newText }`: replace a numbered region after a windowed read, for big rewrites of one block.\n- Build a new large page in parts: `page_show { append: true }` or a patch insert-at-end / insertAfter anchor.\n- Option A (scratch workspace with fenced file tools for Claude + Cursor in Pages mode), only if B still loses to checkout in practice.\n\nKnown edge: pages stored with CRLF line endings show as plain lines in windows, so a multi-line oldString copied from a window won't match. Rare (pages are usually LF).",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.08138205181446119
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.34124219549484214
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.2343588168716388
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.07991188678241312
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.2007422285458549
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.31471296620416045
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.0572989467966204
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.31464561065212143
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.2824938295977608
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.309425067199881,
+              "low": 0.02675392071323134,
+              "medium": 0.38016112082519643,
+              "high": 0.26166634015664564,
+              "urgent": 0.021993551105045483
+            },
+            "confidence": 0.22520140103149552
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2884,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 283,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 313,
+        "title": "Edited Kanban template copies from before #285 keep the old worker loop",
+        "description": "Found while implementing #285. A Kanban template copy edited before #285 still has the old in-page loop for limit waits and merges: it never hands chats to Scribe's agent runs, so it keeps the pre-#285 behavior. That behavior still works because the host's #282 guard and the legacy sweep branch remain. Unedited copies (yours right now) update automatically.\n\nThere is no guided update for such copies yet. Options: show a notice on boards whose template predates runs, or offer a one-click update that replaces only the worker section and keeps the user's other edits. Low priority while no copy is edited.",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.17531473451314705
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.3076104394091787
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5478134344380916
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.4343110430373906
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.14808711071224978
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.14263202966731778
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.13697389445277736
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.533142179584745
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.2824471980023665
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "low",
+            "probabilities": {
+              "unspecified": 0.09580720294622379,
+              "low": 0.6326717984178822,
+              "medium": 0.18643120665626675,
+              "high": 0.06820745591023707,
+              "urgent": 0.01688233606939008
+            },
+            "confidence": 0.5408397480223528
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2484,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 254,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 395,
+        "title": "Image search: the image half of the blended score adds nothing to text queries here",
+        "description": "Found while building #373. Measured with `npm run eval:images` on the real model (30 screenshots on 28 cards; numbers in `docs/semantic-search-index.md`, \"Image eval\").\n\nRank of a card's own image for 20 queries reworded to avoid the card's words:\n\n| Image weight | Top 1 | Top 3 | MRR |\n|---|---|---|---|\n| 1 (image only) | 4 | 7 | 0.364 |\n| 0.5 (what #373 ships, per the design) | 16 | 19 | 0.863 |\n| 0.3 | 17 | 19 | 0.902 |\n| 0 (owner's text only) | 18 | 20 | 0.933 |\n\nThe blend beats image-only by a lot, but the owner's text alone is slightly better than the blend. For text queries the vision vector is noise on app screenshots: every image scores 0.62 to 0.72 against any description.\n\nAn image as the query does work (a cropped, rescaled copy found its original first for 28 of 30).\n\n**To decide**\n- Lower the image weight for text queries to 0.3 or 0, or keep 0.5 until a library with photos or diagrams can be measured. It is one constant (`queryImages` in `src/search/indexer.ts`).\n- The pool is 30 look-alike screenshots and I wrote the queries after seeing the titles, so this is a sanity check, not a benchmark.",
+        "labels": [],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.5380909068109522
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.3987328929614363
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.31005501042085454
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.2475200228918577
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.27967011114342594
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.394276684994312
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.30880734118428754
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.45534991278285675
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.3004021920066309
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.19250235430455703,
+              "low": 0.04971758983493601,
+              "medium": 0.42273306238273095,
+              "high": 0.2722974085741627,
+              "urgent": 0.06274958490361349
+            },
+            "confidence": 0.27841632797841365
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 4864,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 409,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 461,
+        "title": "Harness statistics: gaps in what threads record, and failure rates worth a look",
+        "description": "Found while building the Agent harness panel (#456). Numbers are over all 418 stored threads.\n\n**Failure rates the panel surfaced**\n- Codex tool calls fail 10% of the time (397 of 4,104); Claude 2%, Cursor under 1%.\n- 12% of Claude turns ended in an error (29 of 244); Codex 5%, Cursor 1%.\n- Cursor averages 65 tool calls a turn, Claude 34, Codex 25.\n\n**What the stored data cannot answer yet**\n- Usage is kept per turn only, summed over every model call in it. There is no count of model calls and no first-call size, so \"what a session starts with\" is inferred from first turns that made no tool call. There are only a handful of those, and none for Claude with usable numbers (the Claude Measure button covers that provider exactly).\n- Providers count input differently: Claude and Native report cached input apart from `inputTokens`, Codex and Cursor inside it. The panel normalizes this (`promptTokens` in `src/agent/harness.ts`); the Cursor reading is inferred from the numbers, not from its docs.\n- Skill use is only visible for Claude (its Skill tool). Other providers read SKILL.md as an ordinary file.\n- Tool names differ per provider (`Bash`, `shell`, `command_execution`, and Codex titles some commands by their text), so the per-tool table is per provider.\n- Only Claude reports a cost.\n\n**Possible follow-ups**\n- Record model calls per turn and the first call's input tokens on the turn.\n- A normalized tool id on tool items, so tools compare across providers.\n- Live context measurement for Codex, Cursor and Native, if their SDKs offer one.",
+        "labels": [],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.08311952912804586
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.18066632368940788
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.2363849538833095
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.1144228999858806
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.22857108596718526
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.14770687450040687
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.08051814614832736
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.16149670070038583
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.43300613853455566
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.25115926933949334,
+              "low": 0.08332445153294674,
+              "medium": 0.39818448277209856,
+              "high": 0.24696720664552058,
+              "urgent": 0.020364589709940692
+            },
+            "confidence": 0.24773060346512318
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 5084,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 411,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 533,
+        "title": "Hook gates on real providers are only tested against fakes",
+        "description": "Found while building #517 (thread hooks).\n\nThe new \"ask the host before this tool call\" gate is wired into four places that the test suite cannot reach, because tests run the fake provider and stub sessions, not the real SDKs:\n\n- Claude: a catch-all `PreToolUse` callback (`gateHooks` in `src/agent/providers/claude.ts`).\n- Native (Pi): the top of the `tool_call` extension gate (`src/agent/providers/pi.ts`).\n- Cursor: the wrapper around its custom tools (`hooked` in `src/agent/providers/cursor.ts`).\n- Codex and Cursor: Scribe's own MCP tools asking from the MCP process (`gateTools` in `src/mcp.ts`). This one has a unit test with an in-memory MCP client, but not with a real Codex session.\n\n**Limitation in the app:** there is no way to run a provider's real SDK session in a test without spending quota, so provider-side wiring like this ships checked by types and by reading only.\n\n**To check by hand** (one rule each, in a throwaway thread): a Block rule on `rm -rf` and an Ask rule on some harmless command, on each provider, with the thread on Full access. Expected: Claude and Native deny or ask before the command runs; Codex and Cursor stop the turn for their built-in shell, and deny `page_show` when a rule blocks it.\n\nAlso unconfirmed: that Codex always reports a command (`item/started`) before it asks approval for it. The host waits 400 ms for that approval request before it falls back to stopping the turn (`HOOK_GRACE_MS`).",
+        "labels": [],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.21715678237809516
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.1325748378717394
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.26890950298399424
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.15485667713827306
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.14435808437981776
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.19558313412857317
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.6091543497780875
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.09529198217080379
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.06789135630154228
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.15459809680332642,
+              "low": 0.0303981896410214,
+              "medium": 0.3204869740133385,
+              "high": 0.39409344534412394,
+              "urgent": 0.10042329419818972
+            },
+            "confidence": 0.2426168066801549
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 4674,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 400,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 547,
+        "title": "Provider limits: Cursor Full access changes still reopen, and turn grants leave native permissions unchanged",
+        "description": "Follow-up from #539. Findings: [[peek:scribe:approval-reconnect-539-findings]].\n\nCursor SDK 1.0.35 exposes autoReview only at agent creation/resume, not per send. Ask/Edits/Auto now reuse the agent where shell tools stay the same, but Full access transitions still reopen it. Reconnect latency for Cursor has not been measured.\n\n“Allow for this turn” restores Scribe host approvals, but cannot change an already-running Codex sandbox or the review setting of an already-open Cursor agent. Codex turn/settings/update supports reviewer changes for future steps, but not sandbox or approval-policy changes; pending approvals retain the original reviewer.\n\nPossible future work: explain the native limitation at the grant, or design an explicit interrupt/restart flow that preserves conversation and pending actions. Do not silently restart or broaden permissions. Revisit Cursor reuse if its SDK gains a per-send review override.",
+        "labels": [],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.3061909383052358
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.13905962248134826
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.22141883014646258
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.11492927959886604
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.14138262979908536
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.2890207904140435
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.64912250155195
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.2623255219322914
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.11616459429740261
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.23767528074879546,
+              "low": 0.031442392566643274,
+              "medium": 0.2833582666226987,
+              "high": 0.2510817351257549,
+              "urgent": 0.1964423249361076
+            },
+            "confidence": 0.10419783327837336
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 3084,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 293,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 578,
+        "title": "thread_update: workspace change only applies at the end of the turn",
+        "description": "Found while building #577.\n\nA provider session is bound to its folder when it starts (Claude's process cwd, Codex thread options, Cursor and Pi sessions all key on `cwd`), and the paths of running tool calls are resolved against it. So `thread_update` cannot move the workspace in the middle of a turn: the agent has to end its turn, Scribe applies the change and sends it on with a note. That costs one extra turn per switch.\n\nPossible improvements:\n- Claude: grant the new folder mid-turn as an additional directory (the SDK has `additionalDirectories` and an `addDirectories` permission update), so reads and edits there stop asking at once and the cwd follows at the next turn.\n- Codex: add the folder to the turn's writable roots the same way.\n\nRelated limits of the tool as built:\n- A thread in its own git worktree (every board worker chat) cannot change workspace at all.\n- A thread created with a title (board worker chats, helpers) counts as named by the user, so the agent cannot retitle it. `titleLocked` does not tell a user rename apart from a title set at creation.",
+        "labels": [],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.244048418285314
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.1878788929407441
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.2600520751511542
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.15137718124476465
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.15850184402073306
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.1371343401076362
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.07190932524906946
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.41898539873562696
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.28706432427818107
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.16524758959524832,
+              "low": 0.04770463249033167,
+              "medium": 0.5156332667417055,
+              "high": 0.12876370105324184,
+              "urgent": 0.14265081011947273
+            },
+            "confidence": 0.39454158342713186
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 3574,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 323,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 633,
+        "title": "Search HTTP test expects stale Kanban page title",
+        "description": "Found while validating #569: `src/search/routes.test.ts:103` expects image-hit title `Board`, but receives `Kanban board`. Reproduces with both the original and patched dependency lockfiles, so it is unrelated to the security updates. Investigate whether the fixture or title behavior should change; evidence page to follow.",
+        "labels": [],
+        "priority": 1
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.4616196272247016
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.19029421302868027
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5478958212543049
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.518249685905961
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.11523666779916114
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.13845545160154088
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.05616512426984913
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.4023703280888957
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.12970445311363898
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.20830116167485416,
+              "low": 0.021316025662614535,
+              "medium": 0.44458081389950416,
+              "high": 0.2111347558408086,
+              "urgent": 0.11466724292221853
+            },
+            "confidence": 0.30572601737438015
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1714,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 209,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 16,
+        "title": "add more hotkeys",
+        "description": "Add the following hotkeys. if they already exist then ignore them. list the selected hotkeys for each item (new or existing) to a comment. move to needs input after implementation so I can give input for the final hotkeys at some point after I test.\n- open agent sidebar\n- cycle agent mode\n- open thread selection (any chat)\n- start new thread\n- ctrl+up from expanded floating chat or sidebar goes fullscreen\n- ctrl+down from fullscreen goes to whichever was focused when going to fullscreen (if neither applies, go sidebar)\n- up in any chat cancels latest queued or still waiting steered message and brings the message to the input field for editing",
+        "labels": [
+          "lb_muq1tomruaf0m"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.0654421407049957
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.6131756485445569
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.535217700388441
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.14026999521773278
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.27698904532234425
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.13138357108531423
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.06108277491525156
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.6456512640755843
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.07836728432418504
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.30795588024321163,
+              "low": 0.06671362155565778,
+              "medium": 0.4666866628622371,
+              "high": 0.15063845429069495,
+              "urgent": 0.008005381048198488
+            },
+            "confidence": 0.33335832857779635
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2374,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 247,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 97,
+        "title": "kanban ctrl+enter should focus desc field after opening the card",
+        "description": "",
+        "labels": [],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.6900617736857859
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.5539353786342196
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5366707627671607
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.6261125664514431
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.10810467824818891
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.31917376330222313
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.08537728588332114
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.5323537288577733
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.24854545485824237
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.6822811698290243,
+              "low": 0.06403244151350661,
+              "medium": 0.14117709679364596,
+              "high": 0.052062176812309915,
+              "urgent": 0.06044711505151324
+            },
+            "confidence": 0.6028514622862804
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1054,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 177,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 157,
+        "title": "Island orb activity flyout and needs-you toasts",
+        "description": "From #18. Locked spec: [[peek:scribe:multi-thread-ui-spec]] (votes: [[peek:scribe:multi-thread-ui-design]]).\n\n**Flyout.** Hover the island orb (colorful glowing button) — and the top-bar agent button — to list every waiting/running/unread thread. Pointer can move onto the list. Click a row to open it. Waiting approvals have Allow/Deny on the row. Hover a row for a peek of the pending approval or the latest agent message. Orb click stays the model menu; agent-button click stays the sidebar.\n\n**Toasts.** When a thread starts waiting, a dismissible toast with Allow/Deny (or Open). × snoozes it; the flyout still has it. Finish toasts for user-level threads. Don't toast if that thread is already on screen. Don't use the center board-notice — it sits on the island.\n\nTab/palette waiting marks are #155, not this.",
+        "labels": [
+          "lb_muq1tomr8rwsi"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.14496151281601663
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.4809684954093705
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.23962374560987348
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.2139652712817058
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.2649333747543485
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.46603215739569287
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.2035994999921802
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.41825659600468246
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.17605569931546924
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.5030940834806126,
+              "low": 0.02173878667224014,
+              "medium": 0.22522315059046258,
+              "high": 0.13410982769650587,
+              "urgent": 0.1158341515601788
+            },
+            "confidence": 0.37886760435076566
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 3104,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 295,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 305,
+        "title": "Keeper: compact list_processes and reword 'list first' (split from #258)",
+        "description": "Split from #258. Keeper is in a separate repo (`S:\\Library\\Projects\\process-manager`), so an agent-board worktree can't change it.\n\n- `list_processes` returned 112 KB (3,917 lines) because each process carries its whole event history. Leave `events` out by default (or keep only the last few), and keep the full history in `get_process`.\n- The server instructions say \"List templates and processes before starting anything\". Agents read that as \"always list first\", even on cards that never start a server. Reword it to: \"Before you *start* a server, list templates and processes…\".",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.18095006959865403
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.3352040873102706
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.38637713017128733
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.22447736570092436
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.14881572823126757
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.2225202506287372
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.11407547027440079
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.29593265070143476
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.7399272793556083
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.34387931460899035,
+              "low": 0.03789029891161447,
+              "medium": 0.4500862697298099,
+              "high": 0.14284638193249224,
+              "urgent": 0.025297734817092975
+            },
+            "confidence": 0.31260783716226237
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2574,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 248,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 321,
+        "title": "Workers panel: edit shared instructions in their own auto-saving modal",
+        "description": "The shared instructions field in the Workers panel is bulky in the panel, yet too small to edit comfortably.\n\n## Change\n- In the Workers panel, replace the shared instructions textarea with a **single compact line**: a word count (e.g. \"142 words\") and an **Edit** link.\n- **Edit** opens the instructions in a **separate modal** over the Workers panel, with a large textarea that **auto-resizes** to its content.\n- **No Save button**: changes save as the user types. Clicking outside the modal (or Escape) closes it, and the summary line shows the new word count.\n\n## Acceptance\n- [ ] Workers panel shows one line (word count + Edit) instead of the textarea\n- [ ] Modal opens on Edit; textarea grows with content and is comfortable to edit\n- [ ] Typing saves to `settings.workerInstructions` live; nothing is lost when the modal is closed by clicking away or Escape\n- [ ] Closing the modal returns to the Workers panel (doesn't close both)",
+        "labels": [
+          "lb_muq1tomr8rwsi",
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.10568601772948652
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.48063877242403213
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.1662170375360128
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.11048207521699238
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.24126638818007007
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.3606081621235997
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.09152140841262862
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.636073729720929
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.18683399438962525
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.31017141990712094,
+              "low": 0.054415297855061766,
+              "medium": 0.47478489901458365,
+              "high": 0.1351055652081178,
+              "urgent": 0.025522818015115793
+            },
+            "confidence": 0.34348112376822953
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 3264,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 299,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 364,
+        "title": "Perf: Kanban re-renders the whole board on every change (~60 ms on Scribe Todo)",
+        "description": "From the #359 profile: [[peek:scribe:359-performance-profile]]\n\nOn Scribe Todo (342 cards on screen, 788 KB of state) each change arriving from elsewhere costs about 60 ms of main thread in the board's frame: 670 ms for 11 changes. The socket message is small (0.24 KB), so the cost is the render: `renderBoard` rebuilds every column and card.\n\nIn that profile (templates/builtin/kanban.html):\n- `shortDate` 106 ms: `toLocaleDateString` with options for every card on every render. One shared `Intl.DateTimeFormat` would remove most of it.\n- `clone` 57 ms: the state is deep-cloned per change.\n- `renderBoard` 148 ms self, `renderCard` 42 ms.\n\nIdeas: reuse a date formatter; re-render only the cards an op touched; skip the Done column's cards beyond what is shown.\n\nCheck with `node tools/perf/profile.mjs --only board --profiles <dir>` (board-remote-update-x10, frame figures).",
+        "labels": [
+          "lb_mv1tesyt89a16"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.6605261126833861
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.6085874145375578
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.35515125505365236
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.4317267296833238
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.1221245714328793
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.740728460446091
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.1179244334205715
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.4653297633036692
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.8792338267713056
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.2400289312196933,
+              "low": 0.03035012484598094,
+              "medium": 0.32481136905969055,
+              "high": 0.27645152924497884,
+              "urgent": 0.1283580456296564
+            },
+            "confidence": 0.15601421132461316
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 3734,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 339,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 429,
+        "title": "UI: shell render scheduler (dirty regions, one flush per frame)",
+        "description": "From the #413 audit: [[peek:scribe:413-ui-systems-review]]\n\n**Problem.** `render()` in `public/app.js` is one function that redraws frames, chrome, tab strip, library and templates. About 25 call sites and most server events call it synchronously, with no coalescing and no record of what changed. N events are N full renders; `library.render()` rebuilds its model and every row even when the sidebar is closed.\n\n**Change.** Replace it with `invalidate(region)` (`tabs`, `chrome`, `frames`, `library`, `templates`, `spaces`) and one flush per animation frame. Each region keeps a signature of what it drew and skips when unchanged (`views.js` pane headers and `newpage.js` already work this way). Hidden regions are marked dirty and drawn when shown.\n\n**Migration.** Keep `render()` as invalidate-all, then convert event handlers one at a time, starting with `tab_upserted`, `spaces` and `folders`. Callers that read the DOM right after `render()` need a synchronous `flush()`.\n\n**Done in #413 already:** no-op `tab_state` renders, the peek header key, and the tab strip scroll are fixed as single cases. This card removes the class.",
+        "labels": [
+          "lb_mv1tesyt89a16"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.07903785757465026
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.1797788430545551
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5672490544351815
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.08665248481173697
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.09523629429952385
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.08969066094143754
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.059279046003747726
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.33974338232053647
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.7944019356351172
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.21733209268734233,
+              "low": 0.015445084103316095,
+              "medium": 0.411223612561787,
+              "high": 0.32748480955113096,
+              "urgent": 0.02851440109642372
+            },
+            "confidence": 0.26402951570223376
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 3834,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 334,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 485,
+        "title": "Show Claude thread's effective billing source",
+        "description": "Found in #453 (investigation only). Claude queries inherit daemon credentials and load thread settings, but status is global, cached, and prioritizes an email. Show active-query backend/auth source/account metadata, with unknown states; do not imply subscription login proves funding. Keep quota identity scoped to source/account and invalidate unrelated stale reports. Do not expose secrets or silently switch credentials. Evidence and scope form: [[peek:scribe:claude-billing-usage-audit-453]]. Detailed report: docs/claude-billing-usage-audit.md. Await #453 scope decision before implementation.",
+        "labels": [],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.2558728854936441
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.25694932845154034
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.32522831551821463
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.4007428907621026
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.30750584274188864
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.28450315373837337
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.3102054885313808
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.45944636198595773
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.25963411808987413
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.3821362236379501,
+              "low": 0.01898899555880698,
+              "medium": 0.29583468224433335,
+              "high": 0.22525441578275018,
+              "urgent": 0.0777856827761594
+            },
+            "confidence": 0.22767027954743757
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2244,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 234,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 567,
+        "title": "Audio A: mic and speech-to-text in the chat composer (audio service + Settings → Audio)",
+        "description": "Part of #562. Read `docs/audio-design.md` first (sections \"What the code looks like today\", \"Principles\", \"Architecture\", \"Phase A\"). If it is not on your branch yet: `git show agent/opus-haiku-562-audio-support-in-chat-and:docs/audio-design.md`.\n\n**Goal:** a mic button in the chat composer. Click to start, click to stop; the speech is transcribed and inserted at the caret. This card also builds the shared parts the later audio cards (#564, #565, #566 and the page API card) stand on.\n\n**Daemon: `src/audio/`** (same shape as `src/ml/`)\n- `types.ts`: `AudioSettings`, typed error kinds, `SttEngine` interface (see the doc).\n- `settings.ts`: `audio-settings.json` under the data dir: `stt: { source?, model, language? }`, `input: { sendAfterDictation, pushToTalk }`.\n- Engine: OpenAI-compatible `POST {baseUrl}/audio/transcriptions` (multipart `file` + `model`, plain `fetch`, no new dependency), using one of the user's **existing OpenAI sources** (`src/agent/openaiSources.ts`; the audio service gets a lookup from the agent host). The key stays in the daemon.\n- `service.ts`: `transcribe()` with timeout, one retry on 429/5xx, typed failures (never throws to the caller), usage per day.\n- `routes.ts` at `/api/audio`, **shell-only** (same gate as `shellOnly` in `src/agent/routes.ts`): `GET/PUT /settings`, `POST /transcriptions` (raw body, `Content-Type: audio/*`, limit 25 MB, `?language=&prompt=`) → `{ ok, text }` or `{ ok: false, error }`, `POST /test`. Accept an optional `x-scribe-tab` header and leave a hook for the page permission check (built in the page API card).\n\n**Shell: `public/audio.js`** (`window.scribeAudio`)\n- `capture({ owner, maxMs, onLevel, onState })` → session `{ stop(): Promise<Blob>, cancel() }`: `getUserMedia` with echo cancellation and noise suppression, `MediaRecorder` (opus in webm, else what `isTypeSupported` offers), `AnalyserNode` level meter. Open the stream on start and stop its tracks on stop. One capture at a time; default cap 5 minutes.\n- `transcribe(blob, opts)`, `dictate(opts)` (capture + transcribe), `available()`.\n- `owner` is `{ kind: \"chat\", threadId }` here; the page API card adds `{ kind: \"page\", tabId }`.\n\n**Composer** (`buildComposer()` in `public/agent.js`, icon in `public/agent-render.js`)\n- Mic button in the control bar. States: idle → recording (level ring, elapsed time, Esc cancels) → transcribing (the textarea stays editable) → idle. Errors as the composer's usual notice.\n- Insert at the caret, replacing the selection, adding a space when needed; keep focus. Keep that logic in a pure function with a test. **Do not send** unless \"Send after dictation\" is on.\n- Push-to-talk: hold a shortcut to record, release to stop. Proposed `Ctrl+Shift+Space` in the composer; check it against the shortcut tables in `public/agent.js` and `public/app.js` first.\n- Switching threads or closing the dock cancels the capture. With no source that can transcribe, the button opens Settings → Audio.\n- A blocked or missing microphone gives one clear message.\n\n**Settings → Audio** (new section): speech-to-text source and model, language (auto), Test button, \"Send after dictation\" (off), microphone device (per browser profile, not in the daemon). Follow the `ui-help-text` skill: sparse help.\n\n**Desktop:** check in the Tauri app (WebView2) that the microphone prompt appears and is remembered for `127.0.0.1`. If not, add a `PermissionRequested` handler that allows `microphone` for the board origin only. If you cannot test the desktop app, say so in the hand-in.\n\n**Not in this card:** live partial transcripts, voice activity detection, playback, the page API.\n\n**Check:** `src/audio/` unit tests with a fake engine (limits, typed failures, shell-only gate, source lookup, settings round trip); the insert-at-caret test; `npm test` and `npm run build` pass. Say in the hand-in which parts were tried by hand against a real source and which were not.",
+        "labels": [
+          "lb_muq1tomr8rwsi"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.10200412057863015
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.3348519289069384
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.17998724147325978
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.146583831788915
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.185278917364538
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.2826893464948988
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.12179011872178294
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.1462188470046924
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.12287728349577802
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.1934891054821459,
+              "low": 0.013354652611589902,
+              "medium": 0.37693289185184653,
+              "high": 0.3786642349808505,
+              "urgent": 0.037559115073567205
+            },
+            "confidence": 0.2233302937260631
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 11664,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 956,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 605,
+        "title": "Thread search performance: synchronous JSON scan and metadata candidates",
+        "description": "Follow-up evidence from #603: message search synchronously scans stored item JSON with leading-wildcard LIKE. A synthetic 50,000-message history (~2 KB/message) takes ~160–310 ms per query after simple matching optimization. Even zero hits require ~160 ms. A query for `x` matches the JSON property name `text`, yielding every searchable row to JavaScript before the actual text filter rejects false candidates.\n\nInvestigate text-only prefiltering, substring indexing that preserves punctuation and single-character terms, and moving/cancelling scans so they do not block the daemon. Preserve matching exclusions, cross-message terms and snippets. The client ranking optimization is implemented in #603; this card concerns the remaining database bottleneck.\n\nMeasurements, limitations and reproduction: [[peek:scribe:thread-search-603-results|#603 investigation and benchmark results]].",
+        "labels": [
+          "lb_mv1tesyt89a16"
+        ],
+        "priority": 2
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.08473799642934604
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.1259418995525528
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.34717579158093553
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.09982778332624191
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.13070890811218752
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.11129798273497116
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.059575494886370935
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.08189175001814901
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.8656326942218668
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.16087951075733173,
+              "low": 0.014776535752962588,
+              "medium": 0.24090912636741652,
+              "high": 0.47606860147429825,
+              "urgent": 0.10736622564799092
+            },
+            "confidence": 0.34508575184287277
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2934,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 287,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 50,
+        "title": "Let agents change one card (or one item) without rewriting the whole state",
+        "description": "Today an agent has to send the whole `cards` array to change one card. On this board that is ~37 KB, too big to pass through `board_set_state`, so a change only works with shell access to the daemon's HTTP API. Reads have the same problem: `board_get_state` returns all ~53 KB.\n\nAdd:\n- **Item operations** on `board_set_state`: change, insert, move or remove one item of a state array by its `id` (also nested, e.g. append a comment to a card).\n- **Partial reads** on `board_get_state`: return just one path (e.g. one card).\n- Update the Kanban and Todo agent guides and the skill to use them.",
+        "labels": [
+          "lb_muq1tomr8rwsi"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.15897608014727382
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.8509470428736567
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5211202516844596
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.27442689814361115
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.2971491715153967
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.33327028971902356
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.13195519163768007
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.4022201270348461
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.5236201175537715
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.15380350449489183,
+              "low": 0.018163098272730892,
+              "medium": 0.315367279345444,
+              "high": 0.4149416886443761,
+              "urgent": 0.09772442924255728
+            },
+            "confidence": 0.2686771108054701
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2654,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 274,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 62,
+        "title": "Subagent support for chat",
+        "description": "Agents should be able to kick of subagents and those should be visible and interactable from the UI.",
+        "labels": [
+          "lb_muq1tomr8rwsi"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.13661775771200166
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.7165887801297193
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.37488282770543724
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.17608129369303818
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.3005327348840663
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.24628493698963755
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.07020829327628547
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.41488420398966186
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.08479718683080165
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.41029322273664487,
+              "low": 0.04941243478181231,
+              "medium": 0.3097213257899586,
+              "high": 0.19885972395477322,
+              "urgent": 0.03171329273681106
+            },
+            "confidence": 0.26286652842080604
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1184,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 194,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 69,
+        "title": "Kanban get overwrites comments with a count so agents cannot read them",
+        "description": "`page_action` `get` spreads `summary()` over the card, and summary sets `comments` to a number (plus `lastComment` with only by/at). Agents therefore cannot read comment text from `get` and have to use `page_state` with a path like `cards/num=36`. The action description says get returns comments in full.\n\nFix: keep the comments array on get (or add `comments: true`), and put the count on a different field.",
+        "labels": [
+          "lb_muq1tomr73kb3"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.7658922117691005
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.3610332059211238
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.34082802332748524
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.38710233549876794
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.15047663802838818
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.227409937065401
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.2078518622699964
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.30637989228897994
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.21680274944294134
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "urgent",
+            "probabilities": {
+              "unspecified": 0.0715010241548309,
+              "low": 0.01119222774360193,
+              "medium": 0.10841913545625302,
+              "high": 0.13458982410065432,
+              "urgent": 0.6742977885446599
+            },
+            "confidence": 0.5928722356808249
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2094,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 227,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 90,
+        "title": "scribe needs proper browser support for agents so they can test things better",
+        "description": "",
+        "labels": [],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.5921589018655263
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.38885223202417624
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.32696990572296414
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.28202144780539945
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.32556352806227873
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.1409011344992319
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.06933509337501514
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.3653082435274311
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.16737291608291496
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.3971068573286764,
+              "low": 0.04471886687580087,
+              "medium": 0.23985288827216927,
+              "high": 0.22080723309323003,
+              "urgent": 0.09751415443012355
+            },
+            "confidence": 0.24638357166084549
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1054,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 180,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 129,
+        "title": "kanban board worker setup is missing setting for web mode",
+        "description": "",
+        "labels": [],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.6811137067275109
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.6269663866424762
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.6074034879441139
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.3450969749625336
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.13726868318224333
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.21125580607975625
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.11282110823732597
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.6616099910177478
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.14344506718894923
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.59296269890717,
+              "low": 0.048574602118749456,
+              "medium": 0.18569168517426748,
+              "high": 0.08672108123576554,
+              "urgent": 0.08604993256404757
+            },
+            "confidence": 0.4912033736339625
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1034,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 179,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 229,
+        "title": "Check how file access is gated",
+        "description": "Let's review how agent file access is gated. When using code mode, usually the agent has a workspace. Intuitively this means the agent should only be able to read and write (read is debatable, but write definitely) files in that workspace. Then, like other permissions, should be able to ask for permission to access other paths until the end of that thread. This probably needs sandboxing, since agents can use command line to read/write outside files anyway?",
+        "labels": [
+          "lb_murcg7ccovi5n",
+          "lb_mv1t7q39mmthz"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.0748779196170822
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.22232541662822325
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.37578811690001696
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.3304344302500641
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.18538060907518006
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.24308028100924395
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.7774908860251345
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.10357014758703127
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.056297471623925205
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.3467393411822261,
+              "low": 0.03548386479223079,
+              "medium": 0.37143643375654334,
+              "high": 0.22238447912479295,
+              "urgent": 0.023955881144206628
+            },
+            "confidence": 0.21429554219567915
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1934,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 219,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 277,
+        "title": "Show effective worker permissions and detect incompatible launch settings",
+        "description": "Observed on #276: initial Code worker session had effective read-only filesystem and approval policy never. Shell reads, page creation, and board actions were rejected, so the investigation could not be saved or handed in. After the user changed permissions, those same operations succeeded. Root cause of the initial policy selection remains unverified.\n\nExpose effective provider permissions at worker launch and in chat; detect when required report/board lifecycle actions cannot run under the chosen policy. Preserve user restrictions and explain the mismatch before work starts. Check safe board bookkeeping separately from arbitrary page mutations.\n\nInvestigation: [[peek:scribe:codex-limitations-276-investigation]].",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.2288070130437804
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.5095305221549415
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.3839304429946999
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.09102821293659061
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.21738728995715495
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.09295029141954592
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.48840391013122897
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.4483007834021281
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.06927165872567213
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.14156634737641838,
+              "low": 0.011038154016240757,
+              "medium": 0.1538357785525455,
+              "high": 0.37037075206146386,
+              "urgent": 0.3231889679933315
+            },
+            "confidence": 0.2129634400768298
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2394,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 247,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 302,
+        "title": "Worker wrap-up logic in kanban.html has no automated tests",
+        "description": "Found while working on #301. The worker loop's decisions (wrapUp, merge-fix retries, one-card runs, limit waits, blocking cards) all live in the page script `templates/builtin/kanban.html`, so no unit test covers them. The fake provider (#207) can drive them end to end, but only with a test daemon and an open board window, which is slow to set up and has the live-board hazard. So changes like #301 ship checked only by a syntax parse.\n\nIdea: move the wrap-up decision (given the last turn, held cards, and merge result, what to do: go on, block cards X, pause with reason) into a pure function, either a shared module the page loads or a daemon-side action, and unit-test it in `kanban.test.ts`.",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.23127889565376913
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.35656562337786085
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5960669589332258
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.219378130811674
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.15431607264958305
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.15803002567514257
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.07642875364995697
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.18262495711336862
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.24186503710178786
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.10032406493653044,
+              "low": 0.060667985954529775,
+              "medium": 0.39894862069455905,
+              "high": 0.30112728446628856,
+              "urgent": 0.13893204394809222
+            },
+            "confidence": 0.2486857758681988
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2814,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 285,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 483,
+        "title": "Claude: approval \"edits\" approves file edits outside the workspace without asking",
+        "description": "Split out of #229 by the #480 triage, because it is a bug with one right fix and does not depend on the open sandbox design (#300, #75).\n\nFrom the #229 investigation ([[peek:scribe:file-access-gating-229]]): with approval set to *edits*, Claude Code asks about an edit **outside** the workspace, and Scribe's `autoApproval` (`src/agent/host.ts`, about line 202 at the time) sees tool kind `edit` and answers yes. Pi handles the same case correctly.\n\n**To do**\n- First confirm it is still so on current master (the code has moved since #229).\n- Auto-approve an edit under *edits* only when its resolved path is inside the thread's workspace (cwd; a worktree thread's own worktree). Anything else goes to the user like any other approval. Resolve symlinks and junctions before comparing, and handle `..` and other drive letters.\n- Full access stays as it is.\n- Tests: inside, outside, a path through the linked `node_modules` junction (counts as outside for writes), and a relative path that escapes.\n\nThis only makes approval stricter. Path grants, Pi's read-only command list and OS sandboxing stay with #229 / #300.",
+        "labels": [
+          "lb_muq1tomr73kb3",
+          "lb_mv1t7q39mmthz"
+        ],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.8659494835530112
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.07770978032050171
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.639753750213168
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.11062438020294214
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.08722157044065912
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.08138499281258044
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.4345315941344197
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.12443558500589742
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.06711128848426226
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "high",
+            "probabilities": {
+              "unspecified": 0.08259343535085815,
+              "low": 0.009245023760657844,
+              "medium": 0.3111293956153446,
+              "high": 0.4123907530965835,
+              "urgent": 0.18464139217655579
+            },
+            "confidence": 0.26548844137072936
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 4054,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 371,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 574,
+        "title": "Worker merge reported as failed after it had already succeeded (worktree cleanup error)",
+        "description": "Seen on #573. After the card's chat ended, the board sent the chat: \"Scribe could not merge your branch: Could not remove the worktree folder …\\opus-haiku-573-improved-styling-when-usi: fatal: '…' is not a working tree\", and asked for a rebase.\n\nWhat was actually true at that point:\n\n- `master` in the main checkout was already at the card's commit (`4cfa021`), so the merge had gone through.\n- The worktree was no longer in `git worktree list`, and its folder still existed but was empty (no `.git`), so the chat had no repository to rebase in.\n- The branch `agent/opus-haiku-573-improved-styling-when-usi` still exists.\n\nSo a failure in the cleanup step (removing a worktree that was already deregistered) is reported as a merge failure, and the agent is asked to rebase in a folder that is no longer a git repository. It looks like the removal ran twice, or the folder removal ran after `git worktree remove`/prune had already dropped it.\n\nSuggested direction: treat \"is not a working tree\" during cleanup as already cleaned up, and report cleanup errors separately from merge errors so the chat is not sent on a rebase when the merge landed.",
+        "labels": [],
+        "priority": 3
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.7204237789420742
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.17101762145001892
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.3509766074980322
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.31363313479728594
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.16673048567598034
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.08704293087707979
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.06704422382447293
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.15203793127319107
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.12914595855932556
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.20053125293329604,
+              "low": 0.03961241844272452,
+              "medium": 0.3192904638386763,
+              "high": 0.14865879348498415,
+              "urgent": 0.29190707130031895
+            },
+            "confidence": 0.14911307979834537
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 4104,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 370,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 1,
+        "title": "make tab close focus tab on right instead of tab on left",
+        "description": "",
+        "labels": [],
+        "priority": 0
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.7038258665546687
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.3401459465017848
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5650073030752416
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.4980747795169003
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.1429381470600442
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.17419074606511
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.07932181171845666
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.4315512583061125
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.10947484910299216
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.7268097878677676,
+              "low": 0.05549863847108478,
+              "medium": 0.13761849385082717,
+              "high": 0.04499643207925248,
+              "urgent": 0.03507664773106808
+            },
+            "confidence": 0.6585122348347094
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1044,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 190,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 134,
+        "title": "Investigate OpenAPPA",
+        "description": "Check out [OpenAPPA](https://github.com/archestra-ai/OpenAPPA) and see how it would fit into Scribe.\n\nInvestigation: [[scribe:openappa-investigation]]",
+        "labels": [
+          "lb_murcg7ccovi5n",
+          "lb_mv1t7q39mmthz"
+        ],
+        "priority": 0
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.06911326869963968
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.2986526490702538
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.38426857287966615
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.27345643041953965
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.19860861616288308
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.12132956477780138
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.165105514511721
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.2257343639901173
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.11931769648292911
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.6193845749157262,
+              "low": 0.0724125276354908,
+              "medium": 0.22966845627729962,
+              "high": 0.06542018207559604,
+              "urgent": 0.01311425909588731
+            },
+            "confidence": 0.5242307186446576
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1404,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 202,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 230,
+        "title": "Built-in template edits need a daemon restart to test",
+        "description": "Split from #208. `src/builtinTemplates.ts` reads `templates/builtin/*.json|html|guide.md` once at daemon start, so every edit to a built-in template (e.g. the Kanban board) needs a test-daemon restart before a page shows it.\n\nIdea: in dev (or behind a flag), watch `templates/builtin` and reload the changed built-in, then flag pages using it the same way a version upgrade does (`builtinUpdate`), or have `template_open` / a reload re-read it from disk.",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 0
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.3031513753467567
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.5148074228303947
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5857285853749004
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.1760012345348651
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.14535262003041388
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.13734931388747612
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.06886381340879755
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.27173018410659067
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.15200197189502937
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.20751253703368366,
+              "low": 0.0506392271873669,
+              "medium": 0.3550845072054691,
+              "high": 0.2842711230662586,
+              "urgent": 0.10249260550722172
+            },
+            "confidence": 0.19385563400683634
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 2214,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 242,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 347,
+        "title": "Create animated mockups of the top bar",
+        "description": "We added a shader animation as a strip below the top bar / tab strip. I also want to see mockups of the background of the bar itself.",
+        "labels": [],
+        "priority": 0
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.13050978946981995
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.465263920862993
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5073323356338199
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.39046937013811095
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.3906319548472962
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.8039302726983845
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.15201441858207063
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.6457813473279405
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.21268592653713217
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.6084999222062285,
+              "low": 0.045556206350243246,
+              "medium": 0.26621549456689875,
+              "high": 0.06910142740774401,
+              "urgent": 0.010626949468885349
+            },
+            "confidence": 0.5106249027577856
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1314,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 204,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 457,
+        "title": "File search check: no traversal bug reproduced",
+        "description": "Closed investigation from #239. The initial empty folder searches and successful direct file searches used different patterns. Repeating `showSlash` at both scopes finds the same lines (4408, 4420), and `slash|skills|commands` also returns matches at both scopes. There is no evidence of a folder traversal bug. No implementation needed.",
+        "labels": [
+          "lb_murcg7ccovi5n"
+        ],
+        "priority": 0
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.06497982737947629
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.08474086260020605
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.11422856370204137
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.12136159446449546
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.08424319515813497
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.139452566520825
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.5151504374426398
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.41063117962487233
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.10027968234649716
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "unspecified",
+            "probabilities": {
+              "unspecified": 0.44142606167947107,
+              "low": 0.43095048577865064,
+              "medium": 0.09154488358195294,
+              "high": 0.024873394372939797,
+              "urgent": 0.011205174586985651
+            },
+            "confidence": 0.3017825770993388
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1764,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 226,
+        "cached": false
+      }
+    },
+    {
+      "card": {
+        "num": 580,
+        "title": "Kanban: prevent text select on background",
+        "description": "Dragging the background scrolls the page. It can cause text to be selected, at least when there is no scrollbar. User might still try scrolling by dragging and accidentally select text which is annoying.",
+        "labels": [],
+        "priority": 0
+      },
+      "result": {
+        "ok": true,
+        "answers": {
+          "label0": {
+            "type": "yesno",
+            "yes": 0.41235520453378594
+          },
+          "label1": {
+            "type": "yesno",
+            "yes": 0.08628166735248462
+          },
+          "label2": {
+            "type": "yesno",
+            "yes": 0.5465601848328874
+          },
+          "label3": {
+            "type": "yesno",
+            "yes": 0.13877813282086313
+          },
+          "label4": {
+            "type": "yesno",
+            "yes": 0.12036221264289235
+          },
+          "label5": {
+            "type": "yesno",
+            "yes": 0.26428432140075053
+          },
+          "label6": {
+            "type": "yesno",
+            "yes": 0.08882394212737417
+          },
+          "label7": {
+            "type": "yesno",
+            "yes": 0.43467395562511585
+          },
+          "label8": {
+            "type": "yesno",
+            "yes": 0.15679959018107562
+          },
+          "priority": {
+            "type": "choice",
+            "choice": "medium",
+            "probabilities": {
+              "unspecified": 0.21124321955052716,
+              "low": 0.06448389635649047,
+              "medium": 0.42126221546617704,
+              "high": 0.2513786490210806,
+              "urgent": 0.05163201960572491
+            },
+            "confidence": 0.27657776933272127
+          }
+        },
+        "model": "h2o-lightning-4b",
+        "usage": {
+          "inputTokens": 1384,
+          "outputTokens": 0
+        },
+        "source": "h2o-lightning-4b",
+        "ms": 202,
+        "cached": false
+      }
+    }
+  ]
+}
