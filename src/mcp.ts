@@ -38,16 +38,23 @@ import { pageKey, type Tab, type TabAsset, type TabMeta } from "./types.js";
 type ApiError = { error?: string };
 
 /** Read through the daemon's page access check, including in modes with no filesystem access. */
-async function pageSource(tab: Tab): Promise<{ text: string; file?: FileInfo } | { error: string }> {
+async function pageSource(tab: Tab, withImage = true): Promise<{ text: string; file?: FileInfo } | { image: { mimeType: string; data: string }; file: FileInfo } | { error: string }> {
   if (!tab.file) return { text: tab.html };
   const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(tab.id)}/file`);
   if (status >= 400) return { error: (data as ApiError).error || `HTTP ${status}` };
   const file = data as FileInfo | FileText;
   const { text, eol, bom, ...info } = file as FileText;
-  if (typeof text !== "string") {
-    return { error: `${info.name}: ${info.reason || `This is a ${info.kind} file, with no text to return. Use page_screenshot to inspect its rendered page.`}` };
+  if (typeof text === "string") return { text, file: info };
+  if (info.kind === "image" && !withImage) return { error: `${info.name}: an image file, with no text to search. page_read returns the image.` };
+  if (info.kind === "image") {
+    const got = await api("GET", `/api/tabs/${encodeURIComponent(tab.id)}/file/image`);
+    if (got.status >= 400) return { error: (got.data as ApiError).error || `HTTP ${got.status}` };
+    const image = got.data as { mimeType: string; data?: string; skipped?: string };
+    if (!image.data) return { error: `${info.name}: the image is not returned (${image.skipped || "not inlined"}).` };
+    return { image: { mimeType: mcpImageMime(image.mimeType), data: image.data }, file: info };
   }
-  return { text, file: info };
+  if (info.kind === "pdf") return { error: `${info.name}: a PDF; reading its text is not supported yet.` };
+  return { error: `${info.name}: ${info.reason || `This is a ${info.kind} file, with no text to return.`}` };
 }
 
 type ScreenshotPayload = {
@@ -756,7 +763,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_read",
-    `Read a page's title and HTML (open or closed, without opening it). File pages return the saved file's text instead, through Scribe's page access, even without filesystem access; offset/limit and page_grep work on that text. Images and PDFs can be viewed with page_screenshot. The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers (a file page returns its first lines); then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks an HTML page out to a temp file to edit and check in with page_patch htmlPath; not for file pages or in Pages mode.`,
+    `Read a page's title and HTML (open or closed, without opening it). File pages return the saved file's text instead, through Scribe's page access, even without filesystem access; offset/limit and page_grep work on that text; an image file page returns its image. PDF text is not readable yet. The HTML comes as a second, unescaped text block: copy oldStrings from it verbatim. A page over ${Math.round(FULL_READ_MAX_BYTES / 1000)} KB comes back as its size, line count and an outline with line numbers (a file page returns its first lines); then read a window with offset/limit (leave the line-number prefix out of oldStrings), or find text with page_grep. In Code mode, toFile checks an HTML page out to a temp file to edit and check in with page_patch htmlPath; not for file pages or in Pages mode.`,
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -780,9 +787,13 @@ export async function startMcp(): Promise<void> {
       if (toFile && tab.file) return errorResult("File pages cannot be checked out with toFile or changed with page_patch. Read with page_read; editing the file requires filesystem access.");
       const source = await pageSource(tab);
       if ("error" in source) return errorResult(source.error);
-      const content = source.text;
       revisions.note(tab);
       const dates = withAgentDates(tab);
+      if ("image" in source) {
+        const info = { id: tab.id, key: tab.key, title: tab.title, folder: tab.folder, file: source.file, note: "The saved image file, read through Scribe." };
+        return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }, { type: "image", ...source.image }] };
+      }
+      const content = source.text;
       const meta = {
         id: tab.id,
         key: tab.key,
@@ -911,8 +922,8 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const tab = data as Tab;
-      const source = await pageSource(tab);
-      if ("error" in source) return errorResult(source.error);
+      const source = await pageSource(tab, false);
+      if (!("text" in source)) return errorResult("error" in source ? source.error : "no text to search");
       revisions.note(tab);
       let found;
       try {

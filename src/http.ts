@@ -1917,8 +1917,29 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  /** An image a file page's markdown links to (?src=): relative to the file, an absolute path, or a file: URL. */
+  /** An image file page's image for page_read, like a page asset: base64 data, or why it was skipped. */
+  app.get("/api/tabs/:id/file/image", (req, res) => {
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    try {
+      const { bytes, type } = readFileBytes(tab.file.path);
+      const skipped = skipInlinePageImage(type, bytes.length);
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ mimeType: type, bytes: bytes.length, ...(skipped ? { skipped } : { data: bytes.toString("base64") }) });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  /**
+   * An image a file page's markdown links to (?src=): relative to the file, an absolute path, or a
+   * file: URL. The board's only: for an agent it would read any image on disk.
+   */
   app.get("/api/tabs/:id/file/asset", (req, res) => {
+    if (refuseAgent(req, res)) return;
     const tab = store.get(req.params.id);
     if (!tab?.file) {
       res.status(404).json({ error: "not a file page" });

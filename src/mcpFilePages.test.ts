@@ -28,6 +28,8 @@ test("page tools read saved file content through page access, without local file
       res.end(JSON.stringify(fileStatus === 200
         ? { path: "Z:/not-accessible/note.md", name: "note.md", kind, size: text.length, mtime: 123, ...(kind === "markdown" ? { text, eol: "\n", bom: false } : {}) }
         : { error: "file not found" }));
+    } else if (req.url === "/api/tabs/t_file/file/image") {
+      res.end(JSON.stringify({ mimeType: "image/png", bytes: 4, data: "iVBORw==" }));
     } else if (req.url?.startsWith("/api/tabs/")) {
       res.end(JSON.stringify({ id: "t_file", key: "scribe:file-test", title: "note.md", html: "placeholder", revision: 1, createdAt: 1, updatedAt: 1, ...(req.url !== "/api/tabs/html" ? { file: { path: "Z:/not-accessible/note.md" } } : {}) }));
     } else {
@@ -78,10 +80,20 @@ test("page tools read saved file content through page access, without local file
     assert.ok(minified.content[1].text.length < 1000, "automatic preview bounds long lines");
     assert.equal((await call("page_read", { key: "file", offset: 1, limit: 1, numbered: false })).content[1].text, text);
 
+    kind = "image";
+    const image = await call("page_read", { key: "file" }) as unknown as { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> };
+    assert.equal(image.content[1].type, "image");
+    assert.equal(image.content[1].data, "iVBORw==");
+    assert.equal(image.content[1].mimeType, "image/png");
+    assert.equal(JSON.parse(image.content[0].text!).file.kind, "image");
+    const imageGrep = await call("page_grep", { key: "file", pattern: "x" });
+    assert.equal(imageGrep.isError, true);
+    assert.match(imageGrep.content[0].text, /image file.*page_read/);
+    assert.ok(!requests.slice(-2).some(route => route.endsWith("/file/image")), "page_grep does not fetch the image");
     kind = "pdf";
     const pdf = await call("page_read", { key: "file" });
     assert.equal(pdf.isError, true);
-    assert.match(pdf.content[0].text, /pdf.*page_screenshot/);
+    assert.match(pdf.content[0].text, /PDF.*not supported/);
     fileStatus = 404;
     assert.match((await call("page_read", { key: "file" })).content[0].text, /file not found/);
     fileStatus = 403;

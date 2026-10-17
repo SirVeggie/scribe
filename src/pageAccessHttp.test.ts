@@ -133,6 +133,16 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal((await call("GET", fileRoute, undefined, fileThread.id)).data.text, "file page content\nsecond line");
     assert.equal((await call("GET", fileRoute, undefined, thread.id)).status, 403);
     assert.equal((await call("POST", "/api/files/open", { path: filePath }, fileThread.id)).status, 403, "reading a file page does not allow opening arbitrary files");
+    assert.equal((await call("GET", `${fileRoute}/asset?src=${encodeURIComponent(filePath)}`, undefined, fileThread.id)).status, 403, "an agent cannot read linked images by path");
+    assert.equal((await call("POST", `/api/tabs/${filePage.id}/screenshot`, {}, fileThread.id)).status, 400);
+    const imagePath = path.join(root, "outside-workspace.png");
+    fs.writeFileSync(imagePath, Buffer.from("89504e470d0a1a0a", "hex"));
+    const imagePage = (await call("POST", "/api/files/open", { path: imagePath, activate: false })).data.tab;
+    const imageThread = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: imagePage.id } })).data.thread;
+    const image = (await call("GET", `/api/tabs/${imagePage.id}/file/image`, undefined, imageThread.id)).data;
+    assert.equal(image.mimeType, "image/png");
+    assert.equal(image.data, Buffer.from("89504e470d0a1a0a", "hex").toString("base64"));
+    assert.equal((await call("GET", `/api/tabs/${imagePage.id}/file/image`, undefined, thread.id)).status, 403);
     await call("PUT", `/api/tabs/${filePage.id}/access`, { level: "restricted" });
     assert.equal((await call("GET", fileRoute, undefined, thread.id)).status, 404);
   } finally {

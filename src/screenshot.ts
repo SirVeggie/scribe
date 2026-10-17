@@ -65,6 +65,10 @@ export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotRe
   if (!tab) {
     throw new Error(`tab not found: ${input.idOrKey}`);
   }
+  // The file viewer reads its file through the board (scribe.file), which a headless capture has not.
+  if (tab.file) {
+    throw new Error("file pages cannot be captured; page_read returns a text file's text or an image file's image");
+  }
 
   const width = clamp(input.width ?? DEFAULT_WIDTH, MIN_VIEWPORT, MAX_VIEWPORT);
   const height = clamp(input.height ?? DEFAULT_HEIGHT, MIN_VIEWPORT, MAX_VIEWPORT);
@@ -157,6 +161,9 @@ export async function closeScreenshotBrowser(): Promise<void> {
 export function screenshotHttpStatus(message: string): number {
   if (message.startsWith("tab not found")) {
     return 404;
+  }
+  if (message.startsWith("file pages cannot be captured")) {
+    return 400;
   }
   if (
     message.startsWith("selector not found") ||
