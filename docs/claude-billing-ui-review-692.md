@@ -2,7 +2,7 @@
 
 Investigated 2026-10-17 from the two card screenshots, current source, and
 commit `bf8ee7d` (Fix Claude billing source, extra usage and cumulative accounting).
-No product changes or live account probes. Decision form: Scribe page
+Initial investigation used no product changes or live account probes. Decision form: Scribe page
 `scribe:claude-billing-review-692`, linked from #692.
 
 ## Recommendation
@@ -16,7 +16,13 @@ Remove the routine route prefix from an available Claude quota chip; keep its
 percentage. Source metadata can remain in the turn estimate's intentional cost
 detail without repeating email/organization in routine quota UI.
 
-This proposal awaits the user's scope choice; nothing has been removed yet.
+The user chose “Simplify; keep concrete spend and active overage” on 2026-10-17.
+Implemented in the quota hover, chip and settings meters. Routine source metadata
+and enabled/disabled/unknown billing notes are removed. Settings display useful
+amounts and warnings directly, without a billing disclosure. Available quota
+chips retain percentages and stale status without the route prefix. Unavailable
+quota chips still identify API/cloud routes. Turn estimate detail retains source
+metadata; backend accounting and quota isolation are unchanged.
 
 ## What the change actually does
 
@@ -61,5 +67,11 @@ syntax check. Removing all extra-usage UI is also feasible without reverting
 those correctness fixes.
 
 This review used source inspection; it does not establish actual charges or
-validate a live account's reported amounts. No runtime tests were run because
-this branch changes documentation only.
+validate a live account's reported amounts.
+
+Implementation validation: the focused headless Chromium UI test passed, covering
+routine text removal, zero spend, cap-only amounts, recent versus stale overage,
+stale quota chips, API/cloud quota isolation, and preserved cost estimate detail.
+`node --check public/agent.js` and `git diff --check` passed. The first test launch
+was blocked by the shell sandbox's child-process restriction; the approved
+unsandboxed retry passed.

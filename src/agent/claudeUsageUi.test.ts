@@ -32,9 +32,18 @@ test("Claude meters isolate thread quotas and distinguish period spend, live ove
       const tip = usageTip("claude", { claudeLimits: subscription }).textContent;
       const staleTip = usageTip("claude", { claudeLimits: { ...subscription, at: now - 600000, overage: true, overageAt: now - 600000 } }).textContent;
       const liveTip = usageTip("claude", { claudeLimits: { ...subscription, overage: false, overageAt: now } }).textContent;
+      const paidTip = usageTip("claude", { claudeLimits: { ...subscription, overage: true, overageAt: now } }).textContent;
+      const routine = { ...subscription, windows: [{ ...subscription.windows[0], resetsAt: now + 3600000 }],
+        extraUsage: { enabled: false, at: now - 600000 }, overage: false, overageAt: now };
+      const routineTip = usageTip("claude", { claudeLimits: routine }).textContent;
+      const compact = usageChip("claude", true, null, { claudeLimits: routine });
+      const staleChip = usageChip("claude", true, null, { claudeLimits: subscription });
+      const zeroTip = usageTip("claude", { claudeLimits: { ...routine, extraUsage: { usedCredits: 0, currency: "USD" } } }).textContent;
+      const capTip = usageTip("claude", { claudeLimits: { ...routine, extraUsage: { monthlyLimit: 10000, currency: "USD", at: now - 600000 } } }).textContent;
       const footer = ChatView.prototype.renderTurnFooter.call({}, { status: "done", threadId: "fixture", model: "sonnet", usage: { costUsd: 0.5, estimatedCostUsd: 0.5, billingSource: api.claudeLimits.billingSource } }, []);
       document.body.append(cloudChip, apiChip, footer);
-      return { cloud: cloudChip.textContent, api: apiChip.textContent, tip, staleTip, liveTip,
+      return { cloud: cloudChip.textContent, api: apiChip.textContent, tip, staleTip, liveTip, paidTip, routineTip, zeroTip, capTip,
+        compact: compact.textContent, staleChip: staleChip.textContent,
         expired: planLimits("claude", { claudeLimits: subscription }).windows[0].utilization,
         unknown: planLimits("claude", {}), footer: footer.textContent, estimate: footer.querySelector("[aria-description]")?.getAttribute("aria-description"),
         settings: usageMeters("claude").textContent };
@@ -43,16 +52,24 @@ test("Claude meters isolate thread quotas and distinguish period spend, live ove
     assert.match(result.api, /API.*quota unavailable/);
     assert.doesNotMatch(result.cloud, /60%/);
     assert.match(result.tip, /Billing-period spend: \$25\.00 \/ \$100\.00 cap/);
-    assert.match(result.tip, /Current paid-credit use unknown/);
+    assert.doesNotMatch(result.tip, /paid-credit use unknown|Console API|sub@example|Token|extra usage: enabled/);
     assert.doesNotMatch(result.tip, /Last request: using/);
     assert.match(result.staleTip, /snapshot is stale/);
     assert.doesNotMatch(result.staleTip, /Last request: using/);
-    assert.match(result.liveTip, /Last request: not using subscription extra usage/);
+    assert.doesNotMatch(result.liveTip, /Last request:/);
+    assert.match(result.paidTip, /Last request: using subscription extra usage/);
+    assert.doesNotMatch(result.routineTip, /Anthropic|Token|sub@example|extra usage|paid-credit|Console|snapshot is stale/);
+    assert.equal(result.compact, "60%");
+    assert.match(result.staleChip, /stale/);
+    assert.match(result.zeroTip, /Billing-period spend: \$0\.00/);
+    assert.match(result.capTip, /Billing-period cap: \$100\.00/);
+    assert.match(result.capTip, /Extra-usage snapshot is stale/);
     assert.equal(result.expired, 0.6);
     assert.equal(result.unknown, null);
     assert.match(result.footer, /Estimated \$0\.50/);
     assert.match(result.estimate, /API key \(env\)/);
     assert.match(result.estimate, /SDK estimate/);
-    assert.match(result.settings, /Billing source and extra usage/);
+    assert.doesNotMatch(result.settings, /Billing source and extra usage|Default query|sub@example|Console API/);
+    assert.match(result.settings, /Billing-period spend: \$25\.00 \/ \$100\.00 cap/);
   } finally { await browser.close(); }
 });

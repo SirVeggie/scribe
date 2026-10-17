@@ -8366,12 +8366,11 @@
   }
 
   function claudeQuotaNotes(limits) {
-    const notes = [claudeSourceLabel(limits.billingSource)];
+    const notes = [];
     if (limits.availability === "unavailable") notes.push(limits.detail || "Claude quota unavailable");
     if (Date.now() - limits.at > 5 * 60_000) notes.push("Quota snapshot is stale");
     const e = limits.extraUsage;
-    if (e) {
-      notes.push(`Subscription extra usage: ${e.enabled === true ? "enabled" : e.enabled === false ? "disabled" : "enabled state unknown"}`);
+    if (e && (e.usedCredits !== undefined || e.monthlyLimit !== undefined)) {
       const amount = (n) => {
         if (!e.currency) return `${n} minor units (currency unavailable)`;
         try {
@@ -8380,14 +8379,13 @@
           return formatter.format(n / 10 ** digits);
         } catch { return `${n} minor units (${e.currency})`; }
       };
-      if (e.usedCredits !== undefined) notes.push(`Billing-period spend: ${amount(e.usedCredits)}${e.monthlyLimit !== undefined ? ` / ${amount(e.monthlyLimit)} cap` : " · cap unavailable"}`);
-      else if (e.monthlyLimit !== undefined) notes.push(`Billing-period cap: ${amount(e.monthlyLimit)} · spend unavailable`);
+      if (e.usedCredits !== undefined) notes.push(`Billing-period spend: ${amount(e.usedCredits)}${e.monthlyLimit !== undefined ? ` / ${amount(e.monthlyLimit)} cap` : ""}`);
+      else notes.push(`Billing-period cap: ${amount(e.monthlyLimit)}`);
       if (e.at && Date.now() - e.at > 5 * 60_000) notes.push(`Extra-usage snapshot is stale · reported ${R.timeAgo(e.at)}`);
     }
-    if (limits.overageAt && Date.now() - limits.overageAt <= 5 * 60_000) {
-      notes.push(`Last request: ${limits.overage ? "using subscription extra usage" : "not using subscription extra usage"}`);
-    } else notes.push("Current paid-credit use unknown");
-    notes.push("Console API credit balances are unavailable");
+    if (limits.overage && limits.overageAt && Date.now() - limits.overageAt <= 5 * 60_000) {
+      notes.push("Last request: using subscription extra usage");
+    }
     return notes;
   }
 
@@ -8765,11 +8763,8 @@
       for (const w of listed) chip.append(el("span", `ag-usage-w lvl-${usageLevel(w.utilization)}`, `${planWindowShort(w)} ${quotaPercent(provider, w.utilization)}`));
     }
     if (provider === "claude") {
-      const s = limits.billingSource || {};
-      const route = s.apiProvider && s.apiProvider !== "firstParty" ? s.apiProvider : s.apiKeySource && s.apiKeySource !== "none" ? "API" : s.tokenSource && s.tokenSource !== "none" ? "Token" : "Source unknown";
       const stale = Date.now() - limits.at > 5 * 60_000 || limits.windows.some((w) => w.resetsAt && w.resetsAt <= Date.now());
-      chip.prepend(el("span", "ag-usage-w", `${route}${stale ? " · stale" : ""}`));
-      chip.setAttribute("aria-description", claudeSourceLabel(s));
+      if (stale) chip.prepend(el("span", "ag-usage-w", "stale"));
     }
     bindHoverTip(chip, () => usageTip(provider, thread));
     return chip;
@@ -8803,13 +8798,7 @@
       box.append(row);
     }
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
-    if (provider === "claude") {
-      const details = el("details", "ag-muted ag-meter-none");
-      details.append(el("summary", null, "Billing source and extra usage"));
-      details.append(el("p", null, "Default query · thread queries can use different credentials"));
-      for (const note of claudeQuotaNotes(limits)) details.append(el("p", null, note));
-      box.append(details);
-    }
+    if (provider === "claude") for (const note of claudeQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
     return box;
   }
 
