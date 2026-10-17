@@ -190,12 +190,23 @@ unsafe fn fulfill(cdp: &ICoreWebView2_11, session: &str, request_id: &str, statu
     });
 }
 
-/// The board and its tab pages (127.0.0.1 and 127.0.0.2 on the board port).
+/// The board and its tab pages (127.0.0.1, 127.0.0.2 and each page's own <label>.localhost, on the board port).
 fn is_board_page(url: &str, board_port: u16) -> bool {
     let Ok(url) = tauri::Url::parse(url) else {
         return false;
     };
-    matches!(url.host_str(), Some("127.0.0.1" | "127.0.0.2")) && url.port_or_known_default() == Some(board_port)
+    let board_host = match url.host_str() {
+        Some("127.0.0.1" | "127.0.0.2") => true,
+        Some(host) => host.strip_suffix(".localhost").is_some_and(is_page_label),
+        None => false,
+    };
+    board_host && url.port_or_known_default() == Some(board_port)
+}
+
+/// A page host's label, as the daemon names it (src/config.ts pageHost): t-<hex> or x<hex>.
+fn is_page_label(label: &str) -> bool {
+    let hex = label.strip_prefix("t-").or_else(|| label.strip_prefix('x')).unwrap_or_default();
+    !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// The response headers without anything that forbids framing, or None when nothing did.
@@ -322,6 +333,9 @@ mod tests {
     fn board_pages_are_only_the_board_port_on_loopback() {
         assert!(is_board_page("http://127.0.0.1:4747/", 4747));
         assert!(is_board_page("http://127.0.0.2:4747/t/abc", 4747));
+        assert!(is_board_page("http://t-ab12cd34.localhost:4747/view/t_ab12cd34", 4747));
+        assert!(!is_board_page("http://t-ab12cd34.localhost:8188/", 4747));
+        assert!(!is_board_page("http://app.localhost:4747/", 4747));
         assert!(!is_board_page("http://127.0.0.1:8188/", 4747));
         assert!(!is_board_page("https://github.com/", 4747));
     }

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Browser, Page } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 import { allowCaptureFraming } from "./captureFraming.js";
-import { MAX_LOCAL_STATE_BYTES, contentBaseUrl } from "./config.js";
+import { MAX_LOCAL_STATE_BYTES, pageViewUrl } from "./config.js";
 import { embedUrlFromHtml } from "./embed.js";
 import { store } from "./store.js";
 import { isPlainObject, type BoardState } from "./types.js";
@@ -197,7 +197,7 @@ export function screenshotUrl(tab: { id: string; html: string }, shotId?: string
   if (embed) {
     return embed;
   }
-  const view = `${contentBaseUrl()}/view/${encodeURIComponent(tab.id)}`;
+  const view = pageViewUrl(tab.id);
   return shotId ? `${view}?shot=${shotId}` : view;
 }
 

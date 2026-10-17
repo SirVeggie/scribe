@@ -8,7 +8,7 @@ export const VERSION = "3.0.4";
 /** The install (checkout) this process runs from: the folder above src/ or dist/. */
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 export const HOST = "127.0.0.1";
-/** Loopback origin for tab pages so they get localStorage without sharing the chrome origin. */
+/** Loopback origin for data-free shared files (tooltip, vendor libraries) and blobs; pages run on their own (pageHost). */
 export const CONTENT_HOST = "127.0.0.2";
 export const PORT = Number(process.env.SCRIBE_PORT || 4747);
 export const MAX_HTML_BYTES = 2 * 1024 * 1024;
@@ -62,6 +62,37 @@ export function shellOrigins(): string[] {
 
 export function contentBaseUrl(): string {
   return `http://${CONTENT_HOST}:${PORT}`;
+}
+
+/**
+ * Each tab page runs on an origin of its own (#660): t-ab12cd34.localhost for t_ab12cd34. Pages on
+ * one shared origin could reach each other's frames, so a per-frame token would not hold. Browsers
+ * resolve *.localhost to loopback, where the board listens. Ids outside t_<hex> use x<hex of the id>.
+ */
+export const PAGE_HOST_SUFFIX = ".localhost";
+
+export function pageHost(id: string): string {
+  const label = /^t_[0-9a-f]+$/.test(id) ? `t-${id.slice(2)}` : `x${Buffer.from(id, "utf8").toString("hex")}`;
+  return label + PAGE_HOST_SUFFIX;
+}
+
+/** The tab id a page host names, or undefined for any other host. */
+export function pageIdFromHost(hostname: string): string | undefined {
+  const host = hostname.toLowerCase();
+  if (!host.endsWith(PAGE_HOST_SUFFIX)) return undefined;
+  const label = host.slice(0, -PAGE_HOST_SUFFIX.length);
+  if (/^t-[0-9a-f]{1,61}$/.test(label)) return `t_${label.slice(2)}`;
+  if (/^x(?:[0-9a-f]{2}){1,31}$/.test(label)) return Buffer.from(label.slice(1), "hex").toString("utf8");
+  return undefined;
+}
+
+export function pageOrigin(id: string): string {
+  return `http://${pageHost(id)}:${PORT}`;
+}
+
+/** The page on its own origin, outside the board's frame. */
+export function pageViewUrl(id: string): string {
+  return `${pageOrigin(id)}/view/${encodeURIComponent(id)}`;
 }
 
 export function dataDir(): string {

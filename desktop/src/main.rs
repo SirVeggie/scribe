@@ -265,7 +265,7 @@ fn main() {
             board::write_registration(open_from_agents);
 
             let base = board::base_url();
-            // Only the board's own origin gets IPC. Tab pages (127.0.0.2) and embedded sites do not.
+            // Only the board's own origin gets IPC. Tab pages (each on its own *.localhost origin) and embedded sites do not.
             app.add_capability(
                 CapabilityBuilder::new("scribe")
                     .remote(format!("{base}/*"))

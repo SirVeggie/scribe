@@ -80,7 +80,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       let views: any;
       const select = (id: string) => { views.onSelect(id); active = id; views.layout(); };
       const host = {
-        mainEl, contentOrigin: () => location.origin,
+        mainEl, isPageOrigin: (origin) => origin === location.origin,
         tabs: () => [...pages.values()], closed: () => [],
         findAnyTab: (id: string) => pages.get(id) || (draft?.id === id ? draft : null),
         activeId: () => active, activeTab: () => pages.get(active!) || (draft?.id === active ? draft : null),
@@ -265,7 +265,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const libraryShown = () => false, setSidebarTab = () => {}, setSideOpen = () => {};
       const select = id => { views.onSelect(id); state.activeId=id; views.layout(); };
       const renderTabs = () => { for(const tab of state.tabs) tabsEl.appendChild(tabEls.get(tab.id)); };
-      const views = window.createViews({mainEl,startPaneDrag,contentOrigin:()=>location.origin,
+      const views = window.createViews({mainEl,startPaneDrag,isPageOrigin:(origin)=>origin===location.origin,
         tabs:()=>state.tabs,closed:()=>[],activeId:()=>state.activeId,activeTab:()=>state.tabs.find(t=>t.id===state.activeId),
         findAnyTab,isBlank,draftId:()=>null,
         spaceId:()=> 'pointer-test',spaceIds:()=>['pointer-test'],activate:select,selectTab:select,
@@ -579,7 +579,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const evictOverflow = () => {}, touchFrame = () => {}, cancelPageAudio = () => {};
       ${ensureFrameSource}
       ${loadFrameSource}
-      const views = window.createViews({mainEl,contentOrigin:()=>location.origin,
+      const views = window.createViews({mainEl,isPageOrigin:(origin)=>origin===location.origin,
         tabs:()=>tabs,closed:()=>[],activeId:()=> 'primary',activeTab:()=>tabs[0],findAnyTab:id=>tabs.find(t=>t.id===id),
         isBlank:()=>false,draftId:()=>null,spaceId:()=> 'cold-test',spaceIds:()=>['cold-test'],
         frame:id=>frames.get(id),frameIds:()=>[...frames.keys()],ensureFrame,discardFrame:()=>{},
@@ -634,7 +634,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const render = () => renderFrames();
       ${newPageSource}
       ${renderFramesSource}
-      const views = window.createViews({mainEl,contentOrigin:()=>location.origin,
+      const views = window.createViews({mainEl,isPageOrigin:(origin)=>origin===location.origin,
         tabs:()=>tabs,closed:()=>[],activeId:()=>state.activeId,activeTab,
         findAnyTab:id=>tabs.find(tab=>tab.id===id) || (state.draft?.id===id ? state.draft : null),
         isBlank,draftId:()=>state.draft?.id,spaceId:()=> 'active-split-test',spaceIds:()=>['active-split-test'],
@@ -709,7 +709,7 @@ test("a split holds more than two panes: stored two-pane splits migrate, drops a
       let views: any;
       const select = (id: string) => { views.onSelect(id); active = id; views.layout(); };
       const host = {
-        mainEl, contentOrigin: () => location.origin,
+        mainEl, isPageOrigin: (origin) => origin === location.origin,
         tabs: () => [...pages.values()], closed: () => [],
         findAnyTab: (id: string) => pages.get(id) || null,
         activeId: () => active, activeTab: () => pages.get(active!) || null,

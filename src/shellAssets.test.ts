@@ -36,7 +36,11 @@ test("content origin serves the injected tooltip script while rejecting other sh
     for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {
       assert.equal((await fetch(base + "/tooltip.js?v=3", { method })).status, 403, method);
     }
-    assert.equal((await fetch(base + "/view/test-page")).status, 200);
+    // Pages run on their own origins (#660); the shared one sends a page there.
+    const moved = await fetch(base + "/view/t_ab12cd34?viewer=v1", { redirect: "manual" });
+    assert.equal(moved.status, 302);
+    assert.equal(moved.headers.get("location"), `http://t-ab12cd34.localhost:${new URL(base).port}/view/t_ab12cd34?viewer=v1`);
+    assert.equal((await fetch(base + "/api/tabs/t_ab12cd34/state")).status, 403, "page routes answer on page origins only");
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
@@ -77,4 +81,57 @@ test("shell cache versions follow bytes, compress responses, and revalidate unve
     await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/** A request on a page's own origin: loopback with that page's Host, as a browser sends it. */
+function onHost(port: number, host: string, route: string, options: { method?: string; headers?: Record<string, string> } = {}): Promise<{ status: number; location?: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path: route, method: options.method ?? "GET", headers: { host: `${host}:${port}`, ...options.headers } }, (res) => {
+      res.resume();
+      resolve({ status: res.statusCode ?? 0, location: res.headers.location });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("a page's origin serves only that page, and its routes answer only its own script (#660)", async () => {
+  const app = express();
+  app.use(contentOriginGate);
+  app.use((_req, res) => { res.status(200).send("passed gate"); });
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const own = "t-ab12cd34.localhost";
+  try {
+    assert.equal((await onHost(port, own, "/view/t_ab12cd34")).status, 200);
+    assert.equal((await onHost(port, own, "/view/t_ab12cd34/asset/a.png")).status, 200);
+    const other = await onHost(port, own, "/view/t_00000001");
+    assert.equal(other.status, 302, "another page is never served on this origin");
+    assert.equal(other.location, `http://t-00000001.localhost:${port}/view/t_00000001`);
+    assert.equal((await onHost(port, own, "/api/tabs/t_ab12cd34/state", { headers: { "sec-fetch-site": "same-origin" } })).status, 200);
+    assert.equal((await onHost(port, own, "/api/tabs/t_ab12cd34/state", { method: "PUT", headers: { origin: `http://${own}:${port}` } })).status, 200);
+    assert.equal((await onHost(port, own, "/api/tabs/t_ab12cd34/state", { headers: { "sec-fetch-site": "same-site" } })).status, 403, "another page's script");
+    assert.equal((await onHost(port, own, "/api/tabs/t_ab12cd34/events", { method: "POST", headers: { origin: `http://t-00000001.localhost:${port}` } })).status, 403);
+    assert.equal((await onHost(port, own, "/api/tabs/t_ab12cd34/file")).status, 403, "only the page runtime's routes");
+    assert.equal((await onHost(port, own, "/api/tabs")).status, 403);
+    assert.equal((await onHost(port, own, "/blob/pa_1")).status, 200);
+    assert.equal((await onHost(port, own, "/tooltip.js")).status, 200);
+    assert.equal((await onHost(port, "app.localhost", "/api/tabs")).status, 403, "other *.localhost names are not the board");
+    // The board's own API: no other origin writes through it, and a rebound DNS name is refused.
+    assert.equal((await onHost(port, "127.0.0.1", "/api/tabs", { method: "POST", headers: { origin: `http://${own}:${port}` } })).status, 403);
+    assert.equal((await onHost(port, "127.0.0.1", "/api/tabs", { method: "POST", headers: { origin: `http://127.0.0.1:${port}`, "sec-fetch-site": "same-origin" } })).status, 200);
+    assert.equal((await onHost(port, "127.0.0.1", "/api/tabs", { method: "POST" })).status, 200, "local tools send no Origin");
+    assert.equal((await onHost(port, "evil.example", "/api/tabs")).status, 403);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test("page hosts map to tab ids and back", async () => {
+  const { pageHost, pageIdFromHost } = await import("./config.js");
+  assert.equal(pageHost("t_ab12cd34"), "t-ab12cd34.localhost");
+  assert.equal(pageIdFromHost("T-AB12CD34.localhost"), "t_ab12cd34");
+  for (const id of ["t_ab12cd34", "Odd_Id-1", "test-page"]) assert.equal(pageIdFromHost(pageHost(id)), id);
+  for (const host of ["localhost", "app.localhost", "t-xyz.localhost", "x1.localhost", "127.0.0.2"]) assert.equal(pageIdFromHost(host), undefined, host);
 });

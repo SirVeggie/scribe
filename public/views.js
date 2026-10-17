@@ -265,7 +265,7 @@ window.createViews = function createViews(host) {
     }
     try {
       const url = new URL(text);
-      if (url.origin === location.origin || url.origin === host.contentOrigin()) {
+      if (url.origin === location.origin || host.isPageOrigin(url.origin)) {
         return null;
       }
       return url.href;

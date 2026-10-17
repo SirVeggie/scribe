@@ -8,7 +8,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, baseUrl, contentBaseUrl } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
@@ -16,7 +16,7 @@ import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { checkPermission, isPermissionValue, permissionViews } from "./pagePermissions.js";
-import { isAccessLevel, normalizeTarget, pageReach, reachMessage, type PageReader, type Reach } from "./pageAccess.js";
+import { frameReach, isAccessLevel, normalizeTarget, pageReach, reachMessage, type PageReader, type Reach } from "./pageAccess.js";
 import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, matchRecord, qualityLabel } from "./pageSearch.js";
@@ -61,7 +61,7 @@ import { AudioService } from "./audio/service.js";
 import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
-import { PDFJS_PATH, contentOriginGate, isContentHost } from "./contentOrigin.js";
+import { PDFJS_PATH, boardSocketAllowed, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
@@ -188,6 +188,11 @@ export async function startHttp(): Promise<http.Server> {
     // It covers Restricted (agentHidden) too: a chat on that page, or one the user @mentioned it in, gets in.
     const tab = store.get(id);
     if (tab && !checkReach(req, res, tab)) return;
+    // A page's script reaches its own page and what that page was granted (#660).
+    if (isContentHost(req) && (!tab || !reachedByFrame(req, tab))) {
+      res.status(404).json({ error: `tab not found: ${id}` });
+      return;
+    }
     next();
   });
 
@@ -2018,7 +2023,8 @@ export async function startHttp(): Promise<http.Server> {
   const server = http.createServer(app);
   server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
   const contentServer = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  // A page's script or a website must not read every page off the board's socket (#660).
+  const wss = new WebSocketServer({ server, path: "/ws", verifyClient: ({ req }: { req: http.IncomingMessage }) => boardSocketAllowed(req.headers.origin, req.headers.host) });
 
   wss.on("connection", (socket) => {
     sockets.add(socket);
@@ -2101,7 +2107,7 @@ export async function startHttp(): Promise<http.Server> {
   await listen(contentServer, PORT, CONTENT_HOST);
   void prebuildEditorBundle();
 
-  log(`Scribe listening on ${baseUrl()} (tab pages on ${contentBaseUrl()})`);
+  log(`Scribe listening on ${baseUrl()} (tab pages on their own *${PAGE_HOST_SUFFIX} origins)`);
   agentHost?.resumeInterrupted();
   return server;
 }
@@ -2605,6 +2611,18 @@ function reachFor(req: express.Request): ((tab: Tab) => Reach) | null {
   const reader: PageReader = (thread && agentHost?.pageReader(thread)) || { scope: { kind: "global", ref: null }, trusted: false, grants: [] };
   const lookup = store.accessLookup();
   return (tab) => pageReach(reader, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, lookup);
+}
+
+/**
+ * Whether the page whose origin the request came in on may reach tab (#660). Grants let a page's
+ * script read another page; it writes only its own, where its writes count as the user's.
+ */
+function reachedByFrame(req: express.Request, tab: Tab): boolean {
+  const from = framePageId(req);
+  if (!from) return false;
+  if (from === tab.id) return true;
+  if (req.method !== "GET") return false;
+  return frameReach(from, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, store.accessLookup());
 }
 
 /** Only the pages the agent may reach, for listings and searches. */

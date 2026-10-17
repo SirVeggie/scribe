@@ -686,10 +686,18 @@ ${POINTER_DRAG_JS}
     } catch (err) {
       return null;
     }
-    if (url.origin === location.origin || url.origin === boardOrigin) {
+    if (url.origin === location.origin || url.origin === boardOrigin || isScribeOrigin(url)) {
       return null;
     }
     return url.href;
+  }
+
+  /** Another page's origin (#660) or the shared content origin, on the board's port. */
+  function isScribeOrigin(url) {
+    if (url.protocol !== location.protocol || url.port !== location.port) {
+      return false;
+    }
+    return url.hostname === "127.0.0.2" || /^(t-[0-9a-f]+|x[0-9a-f]+)\\.localhost$/.test(url.hostname);
   }
 
   /** A file on disk ("file:///C:/a.png"): the board opens it as a temporary page (#655). */

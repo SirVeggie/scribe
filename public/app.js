@@ -397,7 +397,7 @@
     startPaneDrag,
     solo: Boolean(childId),
     mainEl,
-    contentOrigin,
+    isPageOrigin,
     tabs: () => state.tabs,
     closed: () => state.closed,
     findAnyTab: (id) => findAnyTab(id) || (state.draft?.id === id ? state.draft : null),
@@ -1151,7 +1151,7 @@
     if (tab.embedUrl) {
       return tab.embedUrl;
     }
-    return `${contentOrigin()}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}&viewer=${viewerId()}`;
+    return `${pageOrigin(tab.id)}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}&viewer=${viewerId()}`;
   }
 
   /** Names this app or browser to pages, so scribe.local keeps one copy per place you view them from. */
@@ -1164,9 +1164,30 @@
     return id;
   }
 
+  /** Shared, data-free files and blobs; pages themselves run on pageOrigin. */
   function contentOrigin() {
     const port = location.port ? `:${location.port}` : "";
     return `${location.protocol}//127.0.0.2${port}`;
+  }
+
+  /** Each page runs on an origin of its own (#660), as src/config.ts pageHost names it. */
+  function pageOrigin(id) {
+    const port = location.port ? `:${location.port}` : "";
+    const label = /^t_[0-9a-f]+$/.test(id) ? `t-${id.slice(2)}` : `x${Array.from(new TextEncoder().encode(id), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+    return `${location.protocol}//${label}.localhost${port}`;
+  }
+
+  /** Whether a URL's origin is one of the board's page origins or the shared content origin. */
+  function isPageOrigin(origin) {
+    if (origin === contentOrigin()) {
+      return true;
+    }
+    try {
+      const url = new URL(origin);
+      return url.protocol === location.protocol && url.port === location.port && /^(t-[0-9a-f]+|x[0-9a-f]+)\.localhost$/.test(url.hostname);
+    } catch {
+      return false;
+    }
   }
 
   function setSideOpen(open) {
@@ -4577,7 +4598,7 @@
         label: "Select all",
         action: () => {
           frame.el.focus();
-          frame.el.contentWindow?.postMessage({ type: "scribe-select-all" }, contentOrigin());
+          frame.el.contentWindow?.postMessage({ type: "scribe-select-all" }, pageOrigin(id));
         },
       },
       "sep",
@@ -5520,11 +5541,12 @@
     openSettings,
     /** Tell a page's frame (when it has one) about something, e.g. one of its agent threads changing. */
     postToPage: (id, message) => {
-      frames.get(id)?.el.contentWindow?.postMessage({ ...message, id }, contentOrigin());
+      frames.get(id)?.el.contentWindow?.postMessage({ ...message, id }, pageOrigin(id));
     },
   };
   window.addEventListener("message", (event) => {
-    if (event.origin !== contentOrigin() || !frameByWindow(event.source)) {
+    const frameId = frameIdByWindow(event.source);
+    if (!frameId || event.origin !== pageOrigin(frameId)) {
       return;
     }
     if (event.data?.type === "scribe-download") {

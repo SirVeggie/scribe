@@ -7,7 +7,7 @@ import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sd
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
 import { writeCheckout } from "./pageCheckout.js";
-import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, contentBaseUrl } from "./config.js";
+import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, pageViewUrl } from "./config.js";
 import { BROWSER_ACTIONS } from "./browserActions.js";
 import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
 import { SCANNED_TOOLS } from "./agent/injection.js";
@@ -2076,7 +2076,7 @@ function boardUrl(id?: string): string {
 
 /** The tab page on its own, outside the board's iframe, so a browser tool can drive it. */
 function viewUrl(id: string): string {
-  return `${contentBaseUrl()}/view/${encodeURIComponent(id)}`;
+  return pageViewUrl(id);
 }
 
 function stripBom(text: string): string {

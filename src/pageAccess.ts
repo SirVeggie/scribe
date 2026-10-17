@@ -6,8 +6,7 @@ import { isPlainObject, type AccessLevel, type AccessTarget, type FolderAccess, 
  * or folder can be stricter (Ask always, Trusted only, Restricted; strictest up the tree wins), and a
  * page the user @mentioned in the chat is reachable whatever its level.
  *
- * This decides for the MCP's requests (the thread header). It is not a boundary against page
- * scripts (#660) or local processes that leave the header out (#682).
+ * This decides for agents' requests. Page scripts are decided by frameReach (#660).
  */
 
 /** allow: read and change it. ask: its title shows, page_access can ask for it. hidden: as if it did not exist. */
@@ -127,6 +126,17 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
     if (homeGrants(scope, lookup).some((g) => targetCovers(g, page, lookup))) return "allow";
   }
   return "ask";
+}
+
+/**
+ * Whether a page's own script, on its own origin, may reach another page (#660): its own page, and
+ * Open pages its page or folders were granted (the grants its chats inherit). Ask always, Trusted
+ * only and Restricted pages need a chat's own grant or the user, so no page script reaches them.
+ */
+export function frameReach(fromPageId: string, page: AccessPage, lookup: AccessLookup): boolean {
+  if (page.id === fromPageId) return true;
+  if (effectiveLevel(page, lookup) !== "open") return false;
+  return homeGrants({ kind: "page", ref: fromPageId }, lookup).some((g) => targetCovers(g, page, lookup));
 }
 
 /** Why a page is out of reach, for the agent. */
