@@ -128,7 +128,7 @@ UI preferences (theme, link mode, sidebar and chat layout) are kept in `localSto
 
 Reuse the same `key` when updating a topic. Pass a full HTML document, or a fragment (it gets a readable dark template). In Code mode, pass `htmlPath` to a local file instead of inline `html` when the page is large (`page_show` creates or replaces; `page_patch` does not create). For a small change to an existing page, `page_patch` with exact `oldString`/`newString` edits instead of sending the whole document again. For a large existing page, `page_read` with `toFile: true`, edit the file, then `page_patch` with `htmlPath` and `expectedRevision`.
 
-`page_show`, `page_patch`, and `page_read` also return `viewUrl`: the tab page on its own (`http://127.0.0.2:4747/view/<id>`), outside Scribe's iframe, so a browser tool can click, drag, and run scripts in it.
+`page_show`, `page_patch`, and `page_read` also return `viewUrl`: the tab page on its own (`http://t-<hex>.localhost:4747/view/t_<hex>`, its own origin), outside Scribe's iframe, so a browser tool can click, drag, and run scripts in it.
 
 ### Images
 
@@ -138,7 +138,7 @@ Reuse the same `key` when updating a topic. Pass a full HTML document, or a frag
 <img src="asset:hero.png" alt="Hero">
 ```
 
-png, jpg, gif, webp, svg, ico, and avif. 8 MB per file, 16 files / 32 MB per tab. These do not count toward the 2 MB HTML cap. Re-showing a key without `assets` keeps files already attached. Workspace-relative `<img src>` and `file://` URLs do not work — tab pages are served from `http://127.0.0.2` and cannot see the disk.
+png, jpg, gif, webp, svg, ico, and avif. 8 MB per file, 16 files / 32 MB per tab. These do not count toward the 2 MB HTML cap. Re-showing a key without `assets` keeps files already attached. Workspace-relative `<img src>` and `file://` URLs do not work — tab pages are served from their own `*.localhost` origins and cannot see the disk.
 
 `page_screenshot` loads the tab's content page in a headless Chromium browser (Edge, Chrome, or Brave — not the Scribe UI) and returns an image. Pair it with `page_show(..., background: true)` so a design loop does not steal window focus. Default viewport is 1280×800; pass `selector` for one element or `fullPage` for a tall page.
 
@@ -307,4 +307,6 @@ Port: `4747` (override with `SCRIBE_PORT`). Bound to localhost only.
 
 Start a test daemon with `SCRIBE_FAKE_AGENTS=1` (plus its own `SCRIBE_PORT` and `SCRIBE_HOME`) and every chat, whatever provider it picks, runs a fake agent: no model, tools, MCP or account calls. A turn goes running, waits `SCRIBE_FAKE_AGENT_DELAY` ms (default 2000), and ends. Given a board worker's prompt, it claims its card, waits, and finishes it through the board's actions as its own thread, so worker start, step, wrap-up, merge and max parallel run for real. Directives anywhere in the message (a card title works) change a turn: `[fake:delay=5000]`, `[fake:error]`, `[fake:hang]` (runs until stopped), `[fake:nofinish]` (keeps the claim), `[fake:commit]` (commits a file in the thread's worktree, never outside one), `[fake:limit=30]` (the chat's first turn hits a plan usage limit that resets in 30 seconds; the turn Scribe resumes it with goes on with the card, as long as the daemon wasn't restarted in between). Combine them as `[fake:commit,delay=500]`.
 
-Tab pages load in an iframe from **http://127.0.0.2:4747** so they can use `localStorage` without accessing Scribe chrome or API. Refresh Scribe after upgrading so the new iframe sandbox takes effect.
+Each tab page loads in an iframe from an origin of its own, **http://t-<hex>.localhost:4747** for page `t_<hex>` (browsers resolve `*.localhost` to loopback), so a page's script cannot reach Scribe's chrome and API or another page's frame, state, assets or view. It reaches its own page, and reads Open pages its page or folders were granted. `http://127.0.0.2:4747` serves only shared, data-free files and blobs, and sends `/view/<id>` to the page's own origin.
+
+Agent requests are identified by token, not by header (#690): each chat's MCP gets `SCRIBE_THREAD_TOKEN` for its thread. An MCP outside a Scribe chat, and a local tool that should act as the user, send the `local-token` file from Scribe's data folder as `x-scribe-local-token`. A caller with neither reaches no pages and none of the board's own routes. A process that reads Scribe's data folder can still get past this, as it can read `scribe.sqlite` itself.

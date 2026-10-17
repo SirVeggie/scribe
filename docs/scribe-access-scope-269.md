@@ -1,6 +1,6 @@
 # Scribe access scope (#269)
 
-The design was agreed with the user on 17 October 2026; phase 1 is implemented. The Scribe page `scribe:269-scribe-access-scope` holds the full design. This replaces the earlier investigation report.
+The design was agreed with the user on 17 October 2026; phases 1–3 are implemented (phase 1 in #269, phases 2–3 in #690). The Scribe page `scribe:269-scribe-access-scope` holds the full design. This replaces the earlier investigation report.
 
 ## Model
 
@@ -34,10 +34,16 @@ A link to an Open page that the user adds on a page bound to a built-in template
 
 ## Enforcement and limits
 
-Phase 1 is enforced in the daemon for MCP requests, keyed on the thread header: page routes (`app.param("id")`), listings, word and semantic search, `page_show` by key, `page_ask` and `replyTo`. It guards against accidental access. It does not stop page scripts (#660, phase 2) or local processes that leave out or forge the header (#682, phase 3).
+Phase 1 is enforced in the daemon for agent requests: page routes (`app.param("id")`), listings, word and semantic search, `page_show` by key, `page_ask` and `replyTo`.
 
-Accepted gaps: a trusted chat can copy protected content into Open pages; an agent can paste content into a helper brief; grants are not tied to the link that created them.
+**Phase 2 (page scripts).** Each page runs on an origin of its own, `t-<hex>.localhost` for `t_<hex>` (`pageHost` in `src/config.ts`). A per-frame token on one shared origin would not hold, since same-origin frames can reach into each other. On its origin a page's script reaches its own page, and can read Open pages its page or folders were granted (`frameReach`, the same grant table chats inherit); it writes only its own page, and those writes count as the user's. `/view/<id>` is served only on that page's origin. The page routes answer only to the page's own script (`Sec-Fetch-Site` / `Origin`). The board's origin refuses writes and WebSocket joins from other origins and unknown `Host` names. `127.0.0.2` keeps the shared, data-free files and blobs.
+
+**Phase 3 (local callers).** Identity comes from `src/callers.ts`. A chat's MCP sends its thread id with `SCRIBE_THREAD_TOKEN`, an HMAC of the id under `agent-secret` in the data folder, so a forged thread id counts for nothing. An MCP with no chat sends the data folder's `local-token` and keeps the external client's reach (Open pages, untrusted). The board UI is a browser on the board's origin. A local tool with the local token is the user. Anything else is an anonymous agent: it reaches no pages and none of the board's own routes (`/api/agent`, export, import, trash, undo, folder writes, settings). So leaving the token out never reaches more than sending it.
+
+What this does not stop: a process with the user's file access can read the token files, or `scribe.sqlite` itself, and can pose as a browser.
+
+Accepted gaps: a trusted chat can copy protected content into Open pages; an agent can paste content into a helper brief; grants are not tied to the link that created them; local processes with the user's file access (above).
 
 ## Code
 
-`src/pageAccess.ts` (rules), `src/http.ts` (`reachFor`, `checkReach`, access routes, `/api/page-access`), `src/store.ts` (levels, grants, link grants), `src/agent/host.ts` (`pageReader`, `requestPageAccess`, `notePageReached`, `approveTaintedHelper`), `src/mcp.ts` (`page_access`), `public/library.js` (Agent access dialog), `public/agent.js` (Trusted flag on native sources, model switch warning).
+`src/pageAccess.ts` (rules, `frameReach`), `src/callers.ts` (who is calling), `src/contentOrigin.ts` (page origins), `src/http.ts` (`reachFor`, `checkReach`, `reachedByFrame`, access routes, `/api/page-access`), `src/store.ts` (levels, grants, link grants), `src/agent/host.ts` (`pageReader`, `requestPageAccess`, `notePageReached`, `approveTaintedHelper`), `src/mcp.ts` (`page_access`), `public/library.js` (Agent access dialog), `public/agent.js` (Trusted flag on native sources, model switch warning).

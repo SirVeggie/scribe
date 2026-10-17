@@ -1,5 +1,15 @@
 # Migrations
 
+## Page origins and caller tokens (#690, protocol `3.1.0`)
+
+- **What changed:** Each tab page runs on an origin of its own, `http://t-<hex>.localhost:<port>` for `t_<hex>` (other ids: `x<hex of the id>`). `/view/:id` and the page routes answer only there; `127.0.0.2` redirects `/view` there and serves only shared files and blobs. Agent identity is a token: chats' MCPs get `SCRIBE_THREAD_TOKEN` (sent as `x-scribe-token`), and the data folder gets two new secret files, `agent-secret` and `local-token` (sent as `x-scribe-local-token` by MCPs outside a chat and by local tools acting as the user).
+- **Why the version bump:** The shell checks frame messages against each page's origin and loads frames from it; an old shell and a new daemon (or the reverse) disagree on where pages live. `VERSION` and `BOARD_VERSION` are `3.1.0`, so open windows reload.
+- **Data:** none. Pages' `localStorage` was on `127.0.0.2` and is not carried over (pages are told not to use it).
+- **Callers to update:** scripts that call the daemon without the MCP now count as anonymous agents (no pages, no board routes). Send `x-scribe-local-token` with the `local-token` file's contents, as `tools/perf/*.mjs`, `tools/eval-rerank.mjs` and `tools/probe-*.ts` do.
+- **Where:** `src/config.ts` (`pageHost`), `src/contentOrigin.ts`, `src/callers.ts`, `src/pageAccess.ts` (`frameReach`), `src/http.ts`, `src/daemon.ts`, the providers in `src/agent/providers/`, `public/app.js`, `public/views.js`, `src/bridge.ts`, `desktop/src/embeds.rs`.
+- **How to verify:** `src/shellAssets.test.ts`, `src/pageAccess.test.ts`, `src/pageAccessHttp.test.ts`.
+- **When to remove:** Keep.
+
 ## `tabs.access` and `folders.access` columns (additive, schema still 3)
 
 - **What changed:** Scribe access scopes page reach (#269). A page's or folder's agent access is stored as JSON in a new `access TEXT` column: `level` (`ask`, `trusted`; folders also `restricted`), the grants chats on it hold (`grants: [{ kind: "page" | "folder", id }]`), and for a page its `origin` (the page or folder of the chat that created it). A page's Restricted level stays `tabs.agent_hidden` (was Hide from agent). Threads (`agent.sqlite`, JSON) gain `pageGrants`, `formerScopes` and `tainted`; native model sources gain `trusted`.
