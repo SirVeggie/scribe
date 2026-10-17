@@ -142,17 +142,24 @@ test("a remote change repaints only the cards it touched, in place", async (t) =
     await frame.locator("#mClose").click();
     assert.equal(await frame.locator('.cards[data-col="done"] .card').first().getAttribute("data-id"), "b");
 
-    // A drag into Done follows the drop position, even on first completion.
-    const source = await frame.locator('.card[data-id="c"] .card-title').boundingBox();
-    const target = await frame.locator('.cards[data-col="done"] .card').last().boundingBox();
-    assert.ok(source && target);
-    await page.mouse.move(source.x + 20, source.y + 8);
-    await page.mouse.down();
-    await page.mouse.move(target.x + 30, target.y + target.height - 2, { steps: 12 });
-    await page.mouse.up();
-    assert.equal(await frame.locator('.cards[data-col="done"] .card').last().getAttribute("data-id"), "c");
+    const dragToDoneBottom = async () => {
+      const source = await frame.locator('.card[data-id="c"] .card-title').boundingBox();
+      const target = await frame.locator('.cards[data-col="done"] .card').last().boundingBox();
+      assert.ok(source && target);
+      await page.mouse.move(source.x + 20, source.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(target.x + 30, target.y + target.height - 2, { steps: 12 });
+      await page.mouse.up();
+    };
+    // First completion goes to the top, even when dropped at the bottom.
+    await dragToDoneBottom();
+    assert.equal(await frame.locator('.cards[data-col="done"] .card').first().getAttribute("data-id"), "c");
     const moved = await frame.evaluate(() => (window as any).scribe.state.cards.find((c: any) => c.id === "c"));
     assert.ok(moved.doneAt);
+    // Once completed, manual ordering within Done still follows the drop.
+    await dragToDoneBottom();
+    assert.equal(await frame.locator('.cards[data-col="done"] .card').last().getAttribute("data-id"), "c");
+    assert.equal(await frame.evaluate(() => (window as any).scribe.state.cards.find((c: any) => c.id === "c").doneAt), moved.doneAt);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

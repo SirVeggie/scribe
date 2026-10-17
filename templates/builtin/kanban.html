@@ -2921,8 +2921,10 @@
     var moving = Object.assign({}, cards[from]);
     var fromCol = moving.col;
     cards.splice(from, 1);
+    var col = column(colId);
+    var top = Boolean(col && col.role === "done" && !moving.doneAt);
     enterColumn(moving, colId, Date.now());
-    setCards(insertCard(cards, moving, colId, beforeId, false));
+    setCards(insertCard(cards, moving, colId, beforeId, top));
     afterMove(id, fromCol, colId);
     if (fromCol !== colId) askAssigneeAfterMove(id, colId);
   }
