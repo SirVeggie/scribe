@@ -1528,6 +1528,17 @@
     var col = colOf(c);
     return Boolean(col && col.role === "done");
   }
+  function continuationText(c) {
+    if (!c.continuation) return "";
+    var blockers = arr(c.blockedBy).map(card).filter(function (b) {
+      var col = b && colOf(b);
+      return b && !b.archived && (!col || (col.role !== "done" && col.role !== "review"));
+    });
+    if (blockers.length) return "Continuation waiting for " + blockers.map(function (b) { return "#" + b.num; }).join(", ");
+    var origin = colOf(c), from = column(c.from);
+    if ((!origin || origin.role !== "agent") && (!from || from.role !== "agent")) return "Move to a ready inbox to continue";
+    return "Continuation waiting for worker";
+  }
   function firstRole(role) {
     var cols = columns();
     for (var i = 0; i < cols.length; i++) if (cols[i].role === role) return cols[i];
@@ -2444,7 +2455,9 @@
     var waitingRow = waitingHint(waiting === undefined ? waitingInfo(c, col) : waiting);
     if (waitingRow) li.appendChild(waitingRow);
 
-    if (c.status && str(c.status.text || c.status.kind).trim()) {
+    if (c.continuation) {
+      li.appendChild(el("div", "status info", continuationText(c)));
+    } else if (c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind === "working" ? "working" : "info";
       var st = el("div", "status " + kind);
       if (kind === "working") {
@@ -3136,7 +3149,7 @@
 
     var feed = c.status && c.status.kind === "working" ? cardSteps(c) : [];
     renderFeed(c, feed);
-    region(mStatus, [c.id, c.status, feed.length > 0], function () { buildModalStatus(c, feed); });
+    region(mStatus, [c.id, c.status, continuationText(c), feed.length > 0], function () { buildModalStatus(c, feed); });
 
     region(mdPreview, [c.id, c.description, c.images, scribe.state.cards, editingDesc], function () {
       if (editingDesc) return;
@@ -3159,7 +3172,7 @@
 
     // comments: rebuilt only when what they show changed, so open (unfolded) comments and their images stay put
     if (expandedFor !== c.id) { expandedFor = c.id; expandedComments = {}; commentsEl._sig = null; }
-    var commentsSig = JSON.stringify([c.id, c.title, c.thread, workerIdFor(c.assignee), defaultAskWorker(), imagesSig, c.comments.map(function (cm) {
+    var commentsSig = JSON.stringify([c.id, c.title, c.thread, c.continuation, workerIdFor(c.assignee), defaultAskWorker(), imagesSig, c.comments.map(function (cm) {
       return [cm.id, cm.by, cm.text, ago(cm.at) + commentFate(cm), cm.followUp, cm.askThread];
     })]);
     if (commentsEl._sig !== commentsSig) renderComments(c, commentsSig);
@@ -3172,7 +3185,10 @@
   }
 
   function buildModalStatus(c, feed) {
-    if (feed.length) {
+    if (c.continuation) {
+      mStatus.className = "m-status";
+      mStatus.replaceChildren(el("span", null, continuationText(c)));
+    } else if (feed.length) {
       mStatus.className = "m-status hidden";
     } else if (c.status && str(c.status.text || c.status.kind).trim()) {
       var kind = c.status.kind === "blocked" ? "blocked" : c.status.kind;
@@ -3682,6 +3698,7 @@
     var asking = cm.followUp === "askOffer" || !workerIdFor(c.assignee);
     var go = el("button", "primary", asking ? "Ask" : "Continue");
     go.type = "button";
+    if (!asking && c.continuation) { go.textContent = "Requested"; go.disabled = true; }
     if (!asking) go.dataset.tooltip = "Resume worker";
     var skip = el("button", "", "Dismiss");
     skip.type = "button";
@@ -3696,29 +3713,22 @@
         });
         return;
       }
-      if (assigned && changedCommentWorker(c, assigned)) {
-        runSolo(c.id, assigned, true).then(function (ok) {
-          if (ok) setComment(c.id, cm.id, { followUp: "continued" });
-          else go.disabled = skip.disabled = false;
-        });
-        return;
-      }
-      var sentAt = Date.now();
-      scribe.agent.card(c.thread, { card: c.num, title: plainLinks(c.title), resume: true }).then(function (r) {
-        if (r && r.ok && r.delivered) {
-          setComment(c.id, cm.id, { followUp: "continued" });
-          claimForAgent(c, c.thread, null);
-          mergeWhenDone(c, c.thread, sentAt);
-          setHint((r.delivered === "queued" ? "Queued #" : "Sent #") + c.num + " back to its agent.");
+      scribe.action("continue", { card: c.num, comment: cm.id }).then(function (r) {
+        if (r && r.deferred) {
+          setHint("Continuation requested for #" + c.num + ".");
         } else {
           go.disabled = skip.disabled = false;
-          setHint(r && r.error === "not_found" ? "The chat that worked on #" + c.num + " is gone." : "Could not continue the agent (" + (r && r.error) + ").", true);
+          setHint("Could not request continuation.", true);
         }
+      }).catch(function (err) {
+        go.disabled = skip.disabled = false;
+        setHint(str(err.message || err), true);
       });
     });
     skip.addEventListener("click", function (e) {
       e.stopPropagation();
       setComment(c.id, cm.id, { followUp: "dismissed" });
+      if (c.continuation) scribe.action("continue", { card: c.num, dismiss: true });
     });
     row.appendChild(go);
     row.appendChild(skip);

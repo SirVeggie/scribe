@@ -120,6 +120,8 @@ export type ActionSet = {
   drive?(state: BoardState, ctx: DriveContext): DriveOutcome | null;
   /** How a launch from drive went: ops to record the new chat (or why it didn't start). */
   launched?(state: BoardState, launch: PageLaunch, result: { threadId: string } | { error: string }, now: number): ActionOutcome | null;
+  /** Rechecked immediately before dispatch, after asynchronous provider setup. */
+  launchAllowed?(state: BoardState, launch: PageLaunch, now: number): boolean;
 };
 
 /** A new agent chat's settings, as a page's scribe.agent.start would pass them. */

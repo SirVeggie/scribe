@@ -97,12 +97,16 @@ function workerCards(state: BoardState, w: Worker): Card[] {
   if (!str(w.name).trim()) return [];
   const cols = columns(state);
   const known = new Set(cols.map((c) => c.id));
-  const out: Card[] = [];
+  const out: Card[] = liveCards(state).filter((c) => {
+    if (!c.continuation || !sameName(c.assignee, w.name) || !sameName(c.continuation.assignee, w.name)) return false;
+    const origin = isReady(colOf(state, c)) ? colOf(state, c) : columnById(state, str(c.from));
+    return isReady(origin) && !origin?.paused;
+  });
   for (const col of cols) {
     if (!isReady(col) || col.paused) continue;
     for (const c of liveCards(state)) {
       const here = c.col === col.id || (!known.has(c.col) && cols[0]?.id === col.id);
-      if (here && sameName(c.assignee, w.name)) out.push(c);
+      if (here && !c.continuation && sameName(c.assignee, w.name)) out.push(c);
     }
   }
   return out;
@@ -111,7 +115,7 @@ function workerCards(state: BoardState, w: Worker): Card[] {
 /** Whether a worker would take the card now: not held, not blocked unanswered, not waiting on unfinished cards. */
 function cardTakeable(state: BoardState, c: Card): boolean {
   if (c.claim && !c.claim.stale) return false;
-  if (c.status?.kind === "blocked") {
+  if (!c.continuation && c.status?.kind === "blocked") {
     const last = arr<Comment>(c.comments).at(-1);
     if (!last || last.by !== "user") return false;
   }
@@ -586,10 +590,16 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
     return plan.outcome();
   }
   const c = nextCard(state, w, skip);
-  const previous = c?.thread && sameName(c.threadAssignee, w.name) ? c.thread : undefined;
+  const previous = c?.continuation?.thread || (c?.thread && sameName(c.threadAssignee, w.name) ? c.thread : undefined);
   const previousInfo = previous ? ctx.thread(previous) : undefined;
   // Never start a second chat while the card's previous chat is still being seen through.
-  if (previousInfo?.exists && (previousInfo.running || (previousInfo.run && previousInfo.run.phase !== "ended"))) return plan.empty ? null : plan.outcome();
+  if (previousInfo?.exists && (previousInfo.running || (previousInfo.run && previousInfo.run.phase !== "ended"))) {
+    if (c?.continuation && previousInfo.run?.data?.continuation === c.continuation.id) {
+      // Delivery was accepted before a crash or before its result reached the board.
+      return workerLaunched(state, { prompt: "", settings: workerSettings(w, c), run: workerRun(w, id, c.num, false), ref: { worker: id, card: c.num, token: w.step?.token, continuation: c.continuation.id, since } }, { threadId: previous! }, ctx.now);
+    }
+    return plan.empty ? null : plan.outcome();
+  }
   if (!c || atLimit(state, id, ctx.now, ctx.defaultProvider)) {
     plan.patchWorker(id, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since } });
     plan.log(id, "wait", !c ? "Waiting for cards" : "Waiting for a free slot");
@@ -598,6 +608,7 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
   const settings = workerSettings(w, c);
   const denied = ctx.mayStart(settings);
   if (denied) {
+    if (c.continuation) return plan.empty ? null : plan.outcome();
     plan.endRun(id, denied, true);
     return plan.outcome();
   }
@@ -606,16 +617,25 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
   return plan.outcome({
     ...(previousInfo?.exists ? { resumeThread: previous } : {}),
     prompt: previousInfo?.exists
-      ? `Continue the work on card #${c.num}, which was moved back to a ready column. Get the card again and read it in full before you go on. Follow the current worker instructions below.\n\n${workerPrompt(state, ctx.page, w, c)}`
+      ? `Continue the work on card #${c.num}. Get the card again and read it in full, including all submitted answers, before you go on. Follow the current worker instructions below.\n\n${workerPrompt(state, ctx.page, w, c)}`
       : workerPrompt(state, ctx.page, w, c),
     settings,
-    run: workerRun(w, id, c.num, false),
-    ref: { worker: id, card: c.num, token, since, startedAt: ctx.now },
+    run: { ...workerRun(w, id, c.num, false), data: { ...workerRun(w, id, c.num, false).data, ...(c.continuation ? { continuation: c.continuation.id } : {}) } },
+    ref: { worker: id, card: c.num, token, since, startedAt: ctx.now, ...(c.continuation ? { continuation: c.continuation.id } : {}) },
   });
 }
 
 /** The daemon's next step for the board's workers, or null when none has one to take. */
 export function driveWorkers(state: BoardState, ctx: DriveContext): DriveOutcome | null {
+  // Assignment changes and archiving cancel requests rather than reviving them later.
+  const cancelled = cards(state).filter((c) => c.continuation && (c.archived || !sameName(c.assignee, c.continuation.assignee) || !workerList(state).some(([, w]) => sameName(w.name, c.assignee))));
+  if (cancelled.length) return { ops: cancelled.map((c) => ({ op: "merge", path: cardPath(c), value: { continuation: null } })), result: null };
+  const idleClaim = cards(state).find((c) => {
+    if (!c.continuation || !c.claim?.thread || c.claim.thread !== c.continuation.thread) return false;
+    const info = ctx.thread(c.claim.thread);
+    return !info.exists || (!info.running && (!info.run || info.run.phase === "ended"));
+  });
+  if (idleClaim) return { ops: [{ op: "merge", path: cardPath(idleClaim), value: { claim: null } }], result: null };
   const ids = workerIds(state);
   for (const id of ids) {
     const w = workerOf(state, id);
@@ -628,6 +648,17 @@ export function driveWorkers(state: BoardState, ctx: DriveContext): DriveOutcome
     if (out) return out;
   }
   return null;
+}
+
+/** A pending dispatch must still own its lease and satisfy current board conditions. */
+export function workerLaunchAllowed(state: BoardState, launch: PageLaunch, now: number): boolean {
+  if (!launch.ref.continuation) return true;
+  const w = workerOf(state, str(launch.ref.worker));
+  const c = cards(state).find((c) => c.num === launch.ref.card);
+  return Boolean(w?.run && !w.stop && w.step?.token === launch.ref.token && c &&
+    c.continuation?.id === launch.ref.continuation && !c.archived &&
+    workerCards(state, w).some((candidate) => candidate.id === c.id) &&
+    cardTakeable(state, c) && !atLimit(state, str(launch.ref.worker), now));
 }
 
 /** The claim worker_claim makes: the card held by the new chat under the worker's name, in the working column. */
@@ -662,6 +693,10 @@ export function workerLaunched(state: BoardState, launch: PageLaunch, result: { 
   const cardNum = Number(launch.ref.card) || undefined;
   const ours = w.step?.token === launch.ref.token;
   if ("error" in result) {
+    if (ours && launch.ref.continuation && result.error.startsWith("Worker conditions changed")) {
+      plan.patchWorker(id, { step: null });
+      return plan.outcome();
+    }
     // A worker stopped meanwhile keeps its state.
     if (ours && w.run) plan.endRun(id, result.error, true);
     return plan.empty ? null : plan.outcome();
@@ -679,6 +714,12 @@ export function workerLaunched(state: BoardState, launch: PageLaunch, result: { 
   plan.log(id, resumed ? "resume" : "launch", `${resumed ? "Continued" : "Started"} #${cardNum} ${str(c?.title).slice(0, 80)}`, { card: cardNum, thread: threadId });
   const name = str(w.name).trim() || str(c?.assignee).trim() || "agent";
   if (c && !(c.claim && !c.claim.stale && c.claim.thread !== threadId)) plan.ops.push(...claimOps(state, c, threadId, name, now));
+  if (c?.continuation && c.continuation.id === launch.ref.continuation) {
+    if (c.continuation.comment && arr<Comment>(c.comments).some((cm) => cm.id === c.continuation!.comment)) {
+      plan.ops.push({ op: "merge", path: `${cardPath(c)}/comments/id=${c.continuation.comment}`, value: { followUp: "continued" } });
+    }
+    plan.ops.push({ op: "merge", path: cardPath(c), value: { continuation: null } });
+  }
   return plan.outcome();
 }
 

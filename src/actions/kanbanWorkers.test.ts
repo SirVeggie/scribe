@@ -56,6 +56,100 @@ const ended = (outcome: Record<string, unknown>, extra: Record<string, unknown> 
   ...extra,
 });
 
+function answer(state: State, num = 1): State {
+  const out = kanbanActions.reply!(state, {
+    from: { id: "form", key: "scribe:form", title: "Answers" },
+    card: num, summary: "Ready to proceed", data: { approach: "A" },
+  }, { caller: { by: "user" }, now: 9000, values: {} });
+  assert.equal(out.deliver, undefined);
+  return applyStateOps(state, out.ops);
+}
+
+test("form answers wait on dependencies outside ready, then resume once under the worker lease", () => {
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 1), { col: "in", from: "ready", thread: "old", threadAssignee: "Opus", blockedBy: ["c2"] });
+  card(state, 2).assignee = "Someone";
+  const pending = answer(answer(state));
+  const c = ctx({ old: ended({ kind: "done" }) }).c;
+  assert.equal(card(pending, 1).col, "in");
+  assert.equal(card(pending, 1).claim, undefined);
+  assert.equal((card(pending, 1).comments as unknown[]).length, 2);
+  assert.equal(drive(pending, c), null);
+  card(pending, 2).col = "rev";
+  const out = drive(pending, c)!;
+  assert.equal(out.launch?.resumeThread, "old");
+  assert.equal(out.launch?.ref.card, 1);
+  const leased = apply(pending, out);
+  assert.equal(drive(leased, c), null);
+  assert.equal(kanbanActions.launchAllowed!(leased, out.launch!, c.now), true);
+  const done = applyStateOps(leased, kanbanActions.launched!(leased, out.launch!, { threadId: "old" }, 11000)!.ops);
+  assert.equal(card(done, 1).continuation, undefined);
+  assert.equal(card(done, 1).col, "work");
+  assert.equal((card(done, 1).claim as { thread: string }).thread, "old");
+});
+
+test("pending continuations respect stop, pause, ownership, origin and permission gates", () => {
+  for (const gate of ["stopped", "stop", "pause", "claim", "origin", "permission"]) {
+    const state = board({ run: { since: 5 } });
+    (state.cards as Card[]).splice(1);
+    Object.assign(card(state, 1), { col: "in", from: "ready" });
+    const pending = answer(state);
+    if (gate === "stopped") worker(pending).run = null;
+    if (gate === "stop") worker(pending).stop = true;
+    if (gate === "pause") (pending.columns as State[])[1].paused = true;
+    if (gate === "claim") card(pending, 1).claim = { holder: "Other", thread: "foreign" };
+    if (gate === "origin") delete card(pending, 1).from;
+    const out = drive(pending, ctx({}, { mayStart: () => gate === "permission" ? "denied" : null }).c);
+    assert.equal(out?.launch, undefined, gate);
+    assert.ok(card(apply(pending, out), 1).continuation, gate);
+  }
+});
+
+test("pending requests use global/provider capacity and recheck blockers before dispatch", () => {
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 1), { col: "in", from: "ready" });
+  card(state, 2).assignee = "Other";
+  const pending = answer(state);
+  const settings = pending.settings as State;
+  (settings.workers as State).busy = { name: "Other", run: { since: 1 }, threadId: "busy" };
+  settings.maxWorkers = 1;
+  assert.equal(drive(pending, ctx({ busy: ended({}, { running: true }) }).c), null);
+  settings.maxWorkers = 0;
+  // Per-provider defaults to one even when the global cap is unlimited.
+  assert.equal(drive(pending, ctx({ busy: ended({}, { running: true }) }).c), null);
+  settings.maxWorkersPerProvider = 0;
+  const out = drive(pending, ctx({ busy: ended({}, { running: true }) }).c)!;
+  const leased = apply(pending, out);
+  card(leased, 1).blockedBy = ["c2"];
+  assert.equal(kanbanActions.launchAllowed!(leased, out.launch!, 10001), false);
+  const retry = applyStateOps(leased, kanbanActions.launched!(leased, out.launch!, { error: "Worker conditions changed before dispatch" }, 10002)!.ops);
+  assert.ok(worker(retry).run);
+  assert.ok(card(retry, 1).continuation);
+  assert.equal(worker(retry).step, undefined);
+});
+
+test("deleted chats start fresh; reassignment, archive and dismissal cancel pending requests", () => {
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 1), { col: "in", from: "ready", thread: "gone" });
+  const pending = answer(state);
+  assert.equal(drive(pending, ctx().c)!.launch?.resumeThread, undefined);
+  for (const field of ["assignee", "archived"]) {
+    const changed = structuredClone(pending);
+    card(changed, 1)[field] = field === "assignee" ? "Other" : true;
+    const after = apply(changed, drive(changed, ctx().c));
+    assert.equal(card(after, 1).continuation, undefined);
+  }
+  const dismissed = applyStateOps(pending, kanbanActions.actions.continue.run(pending, { card: 1, dismiss: true }, { caller: { by: "user" }, values: {}, now: 1 }).ops);
+  assert.equal(card(dismissed, 1).continuation, undefined);
+});
+
+test("a persisted pending request can be scheduled after a board reload", () => {
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 1), { col: "in", from: "ready" });
+  const reloaded = JSON.parse(JSON.stringify(answer(state)));
+  assert.equal(drive(reloaded, ctx().c)!.launch?.ref.card, 1);
+});
+
 test("a running worker with no chat gets its first ready card launched, under a step lease", () => {
   const { c } = ctx();
   const state = board({ run: { since: 5 } });

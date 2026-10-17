@@ -959,6 +959,7 @@ test("a reply goes into the running turn of the card's holder, and records how",
   const start = board();
   card(start, 2).claim = { holder: "Opus", thread: "th1", at: 1 };
   card(start, 2).thread = "th1";
+  card(start, 2).threadAssignee = "Opus";
   const outcome = kanbanActions.reply!(start, reply(), userCtx(threads({ th1: running })));
   assert.equal(outcome.deliver?.thread, "th1");
   assert.equal(outcome.deliver?.resume, false);
@@ -969,28 +970,26 @@ test("a reply goes into the running turn of the card's holder, and records how",
   assert.equal(card(done, 2).col, "ready");
 });
 
-test("a reply on a card whose chat is idle continues that chat and claims the card for it", () => {
+test("a reply saves a durable continuation without starting, claiming or moving the card", () => {
   const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
   card(start, 2).col = "rev";
   card(start, 2).thread = "th1";
+  card(start, 2).threadAssignee = "Opus";
   card(start, 2).assignee = "Opus";
   const outcome = kanbanActions.reply!(start, reply(), userCtx(threads({ th1: idle })));
-  assert.equal(outcome.deliver?.resume, true);
+  assert.equal(outcome.deliver, undefined);
   const state = applyStateOps(start, outcome.ops);
-  const done = applyStateOps(state, kanbanActions.replyDelivered!(state, outcome.deliver!, "started", userCtx())!.ops);
-  const c = card(done, 2);
-  assert.equal(c.col, "work");
-  assert.equal((c.claim as { thread: string }).thread, "th1");
+  const c = card(state, 2);
+  assert.equal(c.col, "rev");
+  assert.equal(c.claim, undefined);
   assert.equal(c.assignee, "Opus");
-  assert.equal((c.comments as Array<{ followUp?: string }>)[0].followUp, "continued");
-
-  // Not sent (the chat went away meanwhile): the board's Continue button instead.
-  const missed = applyStateOps(state, kanbanActions.replyDelivered!(state, outcome.deliver!, null, userCtx())!.ops);
-  assert.equal((card(missed, 2).comments as Array<{ followUp?: string }>)[0].followUp, "offer");
-  assert.equal(card(missed, 2).col, "rev");
+  const request = c.continuation as { id: string; thread: string; comment: string };
+  assert.ok(request.id);
+  assert.equal(request.thread, "th1");
+  assert.equal(request.comment, (c.comments as Array<{ id: string }>)[0].id);
 });
 
-test("a reply waits for a chat on a plan limit, and offers Continue for a chat that is gone", () => {
+test("a reply never directly starts a waiting or missing chat", () => {
   const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
   card(start, 2).assignee = "Opus";
   card(start, 2).thread = "th1";
@@ -1000,7 +999,7 @@ test("a reply waits for a chat on a plan limit, and offers Continue for a chat t
   const gone = kanbanActions.reply!(start, reply(), userCtx(threads({})));
   assert.equal(gone.deliver, undefined);
   const state = applyStateOps(start, gone.ops);
-  assert.equal((card(state, 2).comments as Array<{ followUp?: string }>)[0].followUp, "offer");
+  assert.ok(card(state, 2).continuation);
 });
 
 test("a form reply on a person's card offers Ask without resuming or claiming the old chat", () => {

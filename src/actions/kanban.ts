@@ -15,7 +15,7 @@ import {
   type ThreadRunInfo,
 } from "./types.js";
 import { applyStateOps } from "../stateOps.js";
-import { claimOps, driveWorkers, workerLaunched, workerReady, workerStartOps } from "./kanbanWorkers.js";
+import { claimOps, driveWorkers, workerLaunched, workerLaunchAllowed, workerReady, workerStartOps } from "./kanbanWorkers.js";
 
 /** Rules the Kanban page follows too: done time, column order, card numbers, claims. Keep them in step. */
 
@@ -45,6 +45,8 @@ export type Card = {
   claim?: Claim;
   /** Last in-app agent thread that claimed the card; kept after the claim ends. */
   thread?: string;
+  /** A saved request to continue, dispatched by the daemon under normal worker gates. */
+  continuation?: { id: string; assignee: string; thread?: string; comment?: string };
   /** Last worker chat's token totals (set by the page when that chat ends). */
   usage?: UsageTotals & {
     at?: number;
@@ -70,6 +72,14 @@ export const columns = (state: BoardState) => arr<Column>(state.columns);
 const labels = (state: BoardState) => arr<Label>(state.labels);
 export const cards = (state: BoardState) => arr<Card>(state.cards);
 export const cardPath = (card: Card) => `cards/id=${card.id}`;
+
+function continuationRequest(state: BoardState, card: Card, comment?: string): NonNullable<Card["continuation"]> {
+  if (!str(card.assignee).trim() || !workerList(state).some(([, w]) => str(w.name).trim().toLowerCase() === str(card.assignee).trim().toLowerCase())) {
+    throw new ActionError("This card is not assigned to a worker");
+  }
+  const sameWorker = str(card.threadAssignee).trim().toLowerCase() === str(card.assignee).trim().toLowerCase();
+  return { id: newId("ct"), assignee: str(card.assignee), ...(card.thread && sameWorker ? { thread: card.thread } : {}), ...(comment ? { comment } : {}) };
+}
 
 /** The blocked status a card shows while its agent waits on the user. */
 function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }>["asking"]>): string {
@@ -612,6 +622,18 @@ export const kanbanActions: ActionSet = {
     return state;
   },
   actions: {
+    continue: {
+      description: "Request continuation when worker conditions permit, or dismiss a pending request.",
+      args: "{ card, comment?, dismiss? }",
+      run(state, args, ctx) {
+        if (ctx.caller.by !== "user") throw new ActionError("Continue is for the board page itself");
+        const card = findCard(state, args.card);
+        const comment = str(args.comment);
+        if (comment && !arr<Comment>(card.comments).some((cm) => cm.id === comment && cm.by === "user")) throw new ActionError("User comment not found");
+        const continuation = args.dismiss ? null : continuationRequest(state, card, comment || undefined);
+        return { ops: [{ op: "merge", path: cardPath(card), value: { continuation } }], result: { deferred: !args.dismiss } };
+      },
+    },
     list: {
       description:
         "Compact rows for the board's cards (no descriptions or comment text), plus the columns and the agent workers (stopRequested: true on one the user asked to stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Rows follow board column order. With no column, done-role cards are omitted unless done: true (only that role) or q (search still finds them). Archived cards only with archived: true.",
@@ -976,8 +998,8 @@ export const kanbanActions: ActionSet = {
   /**
    * A form page's scribe.reply about one of the cards (#320): a comment by the user, sent on to the
    * card's chat like a comment from the board's own box. Into its running turn when it works on the
-   * card; else Continue for the chat that holds or last worked on it, unless that chat waits on a
-   * plan limit (its resume reads the card again anyway).
+   * card; otherwise persist a continuation for the worker scheduler, unless that chat waits on a
+   * plan limit (its lifecycle resume reads the card again anyway).
    */
   reply(state: BoardState, reply: InboundReply, ctx: ActionContext): ReplyOutcome {
     if (reply.card === undefined) throw new ActionError("This reply names no card");
@@ -993,6 +1015,10 @@ export const kanbanActions: ActionSet = {
     if (holder && holderInfo?.exists && holderInfo.running) {
       return { ops, result: { num: card.num }, events, deliver: { thread: holder, num: card.num, title, text, resume: false, ref: { card: card.id, comment: id } } };
     }
+    // A limit-waiting run already owns the work and reads saved answers on its
+    // lifecycle resume. Do not schedule a second turn behind that same answer.
+    const lastInfo = holderInfo ?? (card.thread ? ctx.thread?.(card.thread) : undefined);
+    if (lastInfo?.exists && lastInfo.run?.phase === "waiting") return { ops, result: { num: card.num }, events };
     // A form answer on a person's/unassigned card must not restart its old worker and claim it.
     // The page offers Ask using the default worker, just as it does for a typed comment.
     const assignedWorker = str(card.assignee).trim() && workerList(state).some(([, w]) => str(w.name).trim().toLowerCase() === str(card.assignee).trim().toLowerCase());
@@ -1001,14 +1027,9 @@ export const kanbanActions: ActionSet = {
       if (workerMap(state)[defaultId]) ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
       return { ops, result: { num: card.num }, events };
     }
-    const last = holder || str(card.thread);
-    const info = last ? ctx.thread?.(last) : undefined;
-    if (last && info?.exists && !info.running && info.run?.phase !== "waiting") {
-      return { ops, result: { num: card.num }, events, deliver: { thread: last, num: card.num, title, text, resume: true, ref: { card: card.id, comment: id } } };
-    }
-    // No chat to send it to: the board's Continue button, as for any comment, when there was one.
-    if (last) ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
-    return { ops, result: { num: card.num }, events };
+    ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
+    ops.push({ op: "merge", path: cardPath(card), value: { continuation: continuationRequest(state, card, id) } });
+    return { ops, result: { num: card.num, deferred: true }, events };
   },
   replyDelivered(state, deliver, delivered, ctx) {
     const card = cards(state).find((c) => c.id === deliver.ref?.card);
@@ -1125,6 +1146,7 @@ export const kanbanActions: ActionSet = {
   drive(state, ctx) {
     return driveWorkers(state, ctx);
   },
+  launchAllowed: workerLaunchAllowed,
   launched(state, launch, result, now) {
     return workerLaunched(state, launch, result, now);
   },

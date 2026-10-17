@@ -1,6 +1,32 @@
 # Worker trigger conditions (#688)
 
-Investigation, 2026-10-17. Proposal only; no runtime behavior changed.
+Investigation and implementation, 2026-10-17. The user selected deferred automatic
+continuation through the decision form.
+
+## Implemented
+
+Form replies save a card-level continuation request and user comment. The daemon
+selects requests through the existing worker scheduler, including outside ready
+columns when the card records its originating ready inbox. Dependencies, worker
+stop state, inbox pause, live claims, capacity and page permissions gate dispatch.
+The request remains pending while these conditions prevent work.
+
+Dispatch rechecks current state after asynchronous provider setup. Accepted
+requests carry their ID in persisted run data for retry deduplication. Deleted
+chats fall back to fresh chats; archive, reassignment and Dismiss cancel pending
+requests. Continue uses the same action, and the host intercepts older boards'
+direct card-message resumes. Current templates show waiting state and Dismiss.
+
+Running-holder feedback is still delivered immediately. Existing plan-limit
+waits retain their lifecycle ownership and read saved answers when they resume;
+they do not get another pending continuation. This change does not interrupt or
+reschedule already-owned runs when blockers are added during them.
+
+Cards without a recorded ready inbox need to be moved to an eligible ready inbox
+before dispatch. Setup/provider failures keep the request and pause the worker
+using the existing error handling; restarting the worker retries it.
+
+The sections below retain the original investigation and design rationale.
 
 ## Cause
 
@@ -99,8 +125,9 @@ intent while respecting the board's conditions.
   behavior above; current running-turn feedback and person-card Ask still work.
 - Explicit Continue and older saved HTML cannot bypass the server check.
 
-## Decision requested
+## Decision
 
-Choose durable deferred continuation (recommended), the smaller manual approach,
-or leave notes to revise the proposal. Implementation can follow as a separate
-step after this design decision.
+The user chose durable deferred continuation. Regression coverage includes
+closed-board persistence and restart, dependency transitions, leases, worker
+gates, missing chats, cancellation, older board dispatch and request retry
+deduplication.

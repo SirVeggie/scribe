@@ -116,3 +116,42 @@ test("worker continuation rejects busy chats and falls back for missing or forei
   };
   await assert.rejects(host.launchPageThread.call(fake as any, "board", "continue", {} as any, {} as any, "old"), /still busy/);
 });
+
+test("older boards' direct Continue calls persist requests without sending or claiming", () => {
+  const { tab } = store.openFromTemplate("builtin:kanban", { title: "Deferred", preset: "agent" });
+  const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: tab.id } });
+  store.writeState(tab.id, { ops: [
+    { op: "set", path: "settings", value: { workers: { sol: { name: "Sol" } } } },
+    { op: "set", path: "cards", value: [{ id: "pending", num: 12, col: "todo", title: "Blocked", assignee: "Sol", thread: thread.id, threadAssignee: "Sol", blockedBy: ["other"] }] },
+  ] });
+  assert.deepEqual(host.cardMessage(thread.id, { ...card, resume: true }, ""), { delivered: null, deferred: true });
+  const saved = (store.get(tab.id)!.state.cards as any[])[0];
+  assert.ok(saved.continuation);
+  assert.equal(saved.claim, undefined);
+  assert.equal(saved.col, "todo");
+  assert.equal(userItems(thread.id).length, 0);
+});
+
+test("accepted continuation retries return the existing run without another message", async () => {
+  const run = { tag: "worker:sol", data: { continuation: "request" }, merge: true, resumePrompt: "go on" };
+  let sends = 0;
+  const fake = {
+    threads: new Map([["old", { id: "old", scope: { kind: "page", ref: "board" } }]]),
+    runInfo: () => ({ exists: true, running: true, run: { phase: "running", data: run.data } }),
+    send: () => { sends++; },
+  };
+  assert.equal(await host.launchPageThread.call(fake as any, "board", "go", {} as any, run, "old"), "old");
+  assert.equal(sends, 0);
+});
+
+test("dispatch validation can stop continuation before any message is sent", async () => {
+  let sent = false;
+  const fake = {
+    threads: new Map([["old", { id: "old", scope: { kind: "page", ref: "board" } }]]),
+    runInfo: () => ({ exists: true, running: false }),
+    send: () => { sent = true; },
+    watchPageThread: () => { throw new Error("must not watch"); },
+  };
+  await assert.rejects(host.launchPageThread.call(fake as any, "board", "go", {} as any, { data: {} } as any, "old", () => { throw new Error("conditions changed"); }), /conditions changed/);
+  assert.equal(sent, false);
+});

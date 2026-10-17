@@ -4,6 +4,68 @@ import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
+test("Continue requests work through the daemon and shows a dismissible waiting state", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Kanban Continue test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.setContent(`<script>
+      window.calls = [];
+      window.scribe = {
+        id: 'board', title: 'Board', local: {},
+        state: {
+          columns: [{ id: 'ready', title: 'Ready', role: 'agent' }, { id: 'input', title: 'Needs input' }], labels: [], nextNum: 3,
+          settings: { workers: { sol: { name: 'Sol', mode: 'board' } } },
+          cards: [
+            { id: 'c1', num: 1, col: 'input', from: 'ready', title: 'Work', assignee: 'Sol', thread: 'old', threadAssignee: 'Sol', blockedBy: ['c2'],
+              comments: [{ id: 'cm1', by: 'user', at: 1, text: 'Proceed', followUp: 'offer' }], createdAt: 1, movedAt: 1 },
+            { id: 'c2', num: 2, col: 'input', title: 'Blocker', comments: [], createdAt: 1, movedAt: 1 }
+          ]
+        },
+        set(patch) { this.state = { ...this.state, ...patch }; this.wrote(); },
+        setLocal(patch) { Object.assign(this.local, patch); },
+        onChange(fn) { this.changed = fn; },
+        wrote() { if (this.changed) queueMicrotask(() => this.changed(this.state, { source: 'local' })); },
+        signal() {},
+        action: async function(name, args) {
+          window.calls.push({ name, args });
+          this.state = { ...this.state, cards: this.state.cards.map(c => c.num === args.card ? { ...c, continuation: args.dismiss ? null : { id: 'request', assignee: 'Sol', comment: 'cm1' } } : c) };
+          this.wrote();
+          return { deferred: !args.dismiss };
+        },
+        agent: {
+          options: async () => ({ ok: true, providers: [] }), get: async () => ({ ok: true, thread: { status: 'idle' } }),
+          onChange() {}, onSteps() {}, steps: async () => ({ ok: true, steps: [] }),
+          card: async () => { throw new Error('must use the scheduler'); },
+          start: async () => { throw new Error('must not start a chat'); }
+        }
+      };
+    </script>` + templateHtml("kanban"));
+    await page.locator('.card[data-id="c1"] .card-title').click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Requested", exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Requested", exact: true }).isDisabled(), true);
+    assert.match(await page.locator("#mStatus").textContent() || "", /waiting for #2/);
+    assert.equal(await page.evaluate(() => (window as any).scribe.state.cards[0].claim), undefined);
+    await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await page.waitForFunction(() => !(window as any).scribe.state.cards[0].continuation);
+    assert.deepEqual(await page.evaluate(() => (window as any).calls.map((c: any) => c.name)), ["continue", "continue"]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("Ask is gated by the default worker and leaves the card workflow intact", async (t) => {
   let browser;
   try {

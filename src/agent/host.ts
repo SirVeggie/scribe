@@ -1147,12 +1147,21 @@ export class AgentHost {
    * leaves out. The caller checked the page's permissions. Resolves with the thread id; throws with
    * a message for the board's worker log.
    */
-  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput, resumeThread?: string): Promise<string> {
+  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput, resumeThread?: string, validate?: () => void): Promise<string> {
+    if (run.data?.continuation) {
+      // Persisted runs make retries idempotent, including after a daemon restart.
+      for (const t of this.threads.values()) {
+        if (t.scope.kind !== "page" || t.scope.ref !== pageId) continue;
+        const info = this.runInfo(t.id);
+        if (info.exists && info.run?.data?.continuation === run.data.continuation) return t.id;
+      }
+    }
     const previous = resumeThread ? this.threads.get(resumeThread) : undefined;
     if (previous && !previous.archived && previous.scope.kind === "page" && previous.scope.ref === pageId) {
       const info = this.runInfo(previous.id);
       if (info.exists && (info.running || (info.run && info.run.phase !== "ended"))) throw new Error("The card's previous chat is still busy.");
       if (this.closed) throw new Error("Scribe is shutting down.");
+      validate?.();
       this.watchPageThread(previous.id, { ...run, after: Date.now() });
       try {
         this.send(previous.id, { text: prompt, from: "page" });
@@ -1190,6 +1199,7 @@ export class AgentHost {
     const folder = mode === "code" || mode === "plan";
     if (folder && !s.cwd) throw setup("it needs a folder");
     if (this.closed) throw new Error("Scribe is shutting down.");
+    validate?.();
     const thread = this.createThread(
       {
         provider,
@@ -2119,7 +2129,15 @@ export class AgentHost {
    * when the provider cannot steer) and is not sent when the thread is idle: the board offers
    * Continue instead. Continue sends the host's own note telling the agent to read the card again.
    */
-  cardMessage(threadId: string, card: CardRef, text: string): { delivered: "steered" | "queued" | "started" | null } {
+  cardMessage(threadId: string, card: CardRef, text: string): { delivered: "steered" | "queued" | "started" | null; deferred?: boolean } {
+    const thread = this.threads.get(threadId);
+    const page = thread?.scope.kind === "page" && thread.scope.ref ? store.get(thread.scope.ref) : undefined;
+    if (card.resume && page && store.drives(page)) {
+      // Covers older saved board HTML too: it must not start the chat and claim
+      // the card before the daemon checks its current worker conditions.
+      store.runAction(page.id, "continue", { card: card.num }, { by: "user" }, (id) => this.runInfo(id));
+      return { delivered: null, deferred: true };
+    }
     if (!card.resume) {
       if (!this.runs.has(threadId)) return { delivered: null };
       if (!text.trim()) throw new Error("Empty comment");

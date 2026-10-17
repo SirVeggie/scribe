@@ -702,7 +702,7 @@ export class BoardStore extends EventEmitter {
    * window on it: step until there is none left. A step's launch goes to `launch`, and its result
    * back to the page's launched hook.
    */
-  driveActions(ctx: Omit<DriveContext, "page" | "mayStart">, launch: (pageId: string, launch: PageLaunch) => Promise<string>): void {
+  driveActions(ctx: Omit<DriveContext, "page" | "mayStart">, launch: (pageId: string, launch: PageLaunch, validate: () => void) => Promise<string>): void {
     for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
       const set = this.actionsFor(tab);
       if (!set?.drive) continue;
@@ -730,8 +730,15 @@ export class BoardStore extends EventEmitter {
     return Boolean(this.actionsFor(tab)?.drive);
   }
 
-  private launchFor(pageId: string, item: PageLaunch, launch: (pageId: string, launch: PageLaunch) => Promise<string>): void {
-    void launch(pageId, item)
+  private launchFor(pageId: string, item: PageLaunch, launch: (pageId: string, launch: PageLaunch, validate: () => void) => Promise<string>): void {
+    const validate = () => {
+      const current = this.locate(pageId)?.tab;
+      const set = current ? this.actionsFor(current) : undefined;
+      if (!current || this.mayStartAgent(pageId, item.settings) || set?.launchAllowed?.(current.state, item, Date.now()) === false) {
+        throw new Error("Worker conditions changed before dispatch; continuation remains pending.");
+      }
+    };
+    void launch(pageId, item, validate)
       .then((threadId) => ({ threadId }), (err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }))
       .then((result) => {
         const tab = this.locate(pageId)?.tab;

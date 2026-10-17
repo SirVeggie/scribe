@@ -6,6 +6,12 @@ Work on this board with `page_action`. Actions read the latest state and apply t
 
 {{actions}}
 
+Form answers and Continue requests are saved before scheduling. They wait for dependencies,
+the assigned worker to be running, an unpaused originating ready inbox, a free slot and
+page permissions. The daemon resumes the previous chat (or starts a fresh one if it is gone)
+and claims the card only when it dispatches. Dismiss cancels a pending request. Replies to
+an already running holder still enter its current turn.
+
 Columns are named by role (`agent`, `working`, `review`, `done`), id, or title. Match by role: the user renames columns. If several columns share a role (two agent inboxes), `list` includes all of them; `move`, `create`, and `release` need an id or title.
 
 ## Working a card

@@ -38,6 +38,43 @@ function titles(store: BoardStore): string[] {
   return store.list().map((tab) => tab.title);
 }
 
+test("closed boards retain blocked form continuations across restart and dispatch after blockers clear", async () => {
+  const store = loaded();
+  const { tab } = store.openFromTemplate("builtin:kanban", { title: "Deferred", preset: "agent" });
+  store.writeState(tab.id, { ops: [
+    { op: "set", path: "columns", value: [{ id: "ready", role: "agent" }, { id: "input" }, { id: "work", role: "working" }, { id: "done", role: "done" }] },
+    { op: "set", path: "settings", value: { workerInstructions: "Do the work", workers: { sol: { name: "Sol", mode: "board", run: { since: 1 } } } } },
+    { op: "set", path: "cards", value: [
+      { id: "c1", num: 1, title: "Work", col: "input", from: "ready", assignee: "Sol", comments: [], blockedBy: ["c2"] },
+      { id: "c2", num: 2, title: "Blocker", col: "input" },
+    ] },
+  ] });
+  store.setPagePermission(tab.id, "agent.unattended", "allow");
+  const { tab: form } = store.upsert({ title: "Decision", html: "<p>Answers</p>" });
+  store.setReplyTo(form.id, { page: tab.id, card: 1 });
+  assert.equal(store.receiveReply(form.id, { data: { choice: "A" } }).deliver, undefined);
+  store.closeTab(tab.id);
+  store.closeDb();
+  const again = loaded();
+  const launches: unknown[] = [];
+  const context = { now: Date.now(), thread: () => ({ exists: false as const }), sessionSeenAt: () => undefined, watch: () => false, release: () => {} };
+  const launch = async (_page: string, item: unknown, validate: () => void) => { validate(); launches.push(item); return "new"; };
+  again.driveActions(context, launch);
+  assert.equal(launches.length, 0);
+  again.runAction(tab.id, "move", { card: 2, to: "done" }, { by: "user" });
+  again.driveActions(context, launch);
+  // Another simultaneous pass sees the lease and cannot launch it again.
+  again.driveActions(context, launch);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(launches.length, 1);
+  const saved = (again.get(tab.id)!.state.cards as any[]).find(c => c.num === 1);
+  assert.equal(saved.col, "work");
+  assert.equal(saved.continuation, undefined);
+  assert.equal(saved.claim.thread, "new");
+  assert.match(saved.comments[0].text, /choice/);
+  again.closeDb();
+});
+
 test("open tabs sort pinned first, then strip_seq", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });

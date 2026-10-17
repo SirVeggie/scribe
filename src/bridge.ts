@@ -1312,7 +1312,8 @@ ${POINTER_DRAG_JS}
      * About a Kanban card: { ok, delivered: "steered" | "queued" | "started" | null }. With text, a
      * comment for the thread working on the card: steered into its running turn, or queued behind it
      * when the provider cannot steer; not sent (delivered null) when the thread is idle. With
-     * resume: true, Continue: the thread is told to read the card again and go on. Any of the user's
+     * resume: true, Continue: Kanban saves a request and returns deferred: true, delivered: null
+     * until the daemon's worker conditions permit dispatch. Other pages tell the thread to read the card again. Any of the user's
      * threads, e.g. the one that claimed the card; one that isn't this page's needs a click.
      * opts: { card: number, title, text, resume }.
      */
