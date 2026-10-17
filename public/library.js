@@ -1037,20 +1037,13 @@ window.createLibrary = function createLibrary(host) {
     const open = host.isOpen(id);
     if (tab.key === "welcome") {
       openMenu(point, [
-        { label: "Close tab", action: () => host.closeTab(id) },
         { label: "Copy key", action: () => host.copyTabKey(id) },
       ]);
       return;
     }
     const fromStrip = Boolean(event.target.closest?.(".tab"));
-    const madeThread = tab.provenance?.created?.thread;
     openMenu(point, [
-      open
-        ? { label: "Close tab", action: () => host.closeTab(id) }
-        : { label: "Open", action: () => activatePage(id, true) },
-      !open && { label: "Open in background", action: () => activatePage(id, false) },
-      host.activeId() !== id && { label: "Peek", action: () => host.openIn(id, "peek") },
-      host.canSplit(id) && { label: "Open in split", action: () => host.openIn(id, "split") },
+      !open && { label: "Open", action: () => activatePage(id, true) },
       host.canPopOut?.(id) && { label: "Open in new window", action: () => host.popOut(id) },
       tab.temp
         ? { label: "Keep in Library", action: () => host.keepPage(id) }
@@ -1066,14 +1059,6 @@ window.createLibrary = function createLibrary(host) {
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: tab.workspace ? "Change workspace…" : "Set workspace…", action: () => host.pickPageWorkspace(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
-      madeThread && {
-        label: "Open thread",
-        action: () => {
-          if (host.openThread?.(madeThread) === false) {
-            host.showNotice?.("That thread is gone.");
-          }
-        },
-      },
       "sep",
       { label: "Delete", danger: true, action: () => deletePage(id) },
     ]);
