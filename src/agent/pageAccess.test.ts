@@ -93,16 +93,30 @@ test("page_access: this thread, always for its page, or deny; Ask always pages o
   assert.equal((await asked).allowed, true);
 });
 
-test("Trusted only and Restricted pages are not found by an untrusted chat, and it cannot ask", async () => {
+test("an untrusted chat asks for a Trusted only page by key, for this thread only; full access does not answer", async () => {
+  const home = page("trq-home");
+  const secret = page("trq-secret");
+  store.setPageAccessLevel(secret.id, "trusted");
+  const chat = host.createThread({ provider: "claude", mode: "board", approval: "full", scope: { kind: "page", ref: home.id } });
+  running(chat.id);
+  assert.equal(reach(chat.id, secret.id), "request");
+  const asked = host.requestPageAccess(chat.id, { page: secret.key });
+  const card = await answer(chat.id, "thread");
+  assert.ok(card.kind === "approval");
+  assert.deepEqual(card.options.map((o) => o.id), ["thread", "deny"]);
+  assert.equal((await asked).allowed, true);
+  assert.equal(reach(chat.id, secret.id), "allow");
+});
+
+test("Restricted pages are not found by a chat, and it cannot ask; full access changes nothing", async () => {
   const board = page("tr-board");
   const secret = page("tr-secret");
-  store.setPageAccessLevel(secret.id, "trusted");
-  const chat = host.createThread({ provider: "claude", mode: "board", scope: { kind: "global", ref: null } });
+  const chat = host.createThread({ provider: "claude", mode: "board", approval: "full", scope: { kind: "global", ref: null } });
   running(chat.id);
+  store.setPageAccessLevel(secret.id, "restricted");
   assert.equal(reach(chat.id, secret.id), "hidden");
   assert.deepEqual(await host.requestPageAccess(chat.id, { page: secret.key }), { allowed: false, message: `tab not found: ${secret.key}` });
   assert.equal(pendingApprovals(chat.id).length, 0);
-  store.setPageAccessLevel(secret.id, "restricted");
   assert.equal(store.get(secret.id)?.agentHidden, true);
   const own = host.createThread({ provider: "claude", mode: "board", scope: { kind: "page", ref: secret.id } });
   assert.equal(reach(own.id, secret.id), "allow", "a chat on the page itself");

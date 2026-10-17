@@ -73,6 +73,8 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     const other = await show("other-page");
     const secret = await show("secret-page");
     assert.equal((await call("PUT", `/api/tabs/${secret.id}/access`, { level: "restricted" })).status, 200);
+    const vault = await show("vault-page");
+    assert.equal((await call("PUT", `/api/tabs/${vault.id}/access`, { level: "trusted" })).status, 200);
     const thread = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: home.id } })).data.thread;
     assert.ok(thread?.id);
 
@@ -82,10 +84,15 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.match(outside.data.error, /page_access/);
     assert.equal((await call("PUT", `/api/tabs/${other.id}/state`, { ops: [{ op: "set", path: "x", value: 1 }] }, thread.id)).status, 403);
     assert.equal((await call("GET", `/api/tabs/${secret.id}`, undefined, thread.id)).status, 404);
+    // Trusted only, for an untrusted model: askable by key, but the answer does not give its title.
+    const vaulted = await call("GET", `/api/tabs/${vault.id}`, undefined, thread.id);
+    assert.equal(vaulted.status, 403);
+    assert.match(vaulted.data.error, /page_access/);
+    assert.doesNotMatch(vaulted.data.error, /"vault-page"/);
 
     const listed = await call("GET", "/api/library?query=page", undefined, thread.id);
     assert.deepEqual(listed.data.tabs.map((t: { key: string }) => t.key), ["scribe:home-page"]);
-    assert.deepEqual(listed.data.outside.map((t: { key: string }) => t.key), ["scribe:other-page"], "titles only, and never the Restricted page");
+    assert.deepEqual(listed.data.outside.map((t: { key: string }) => t.key), ["scribe:other-page"], "titles only, and never the Restricted or Trusted only page");
     assert.equal(listed.data.outside[0].snippet, undefined);
 
     // Agents cannot change access; the user (board UI) can, and an MCP with no Scribe chat sees open pages only.

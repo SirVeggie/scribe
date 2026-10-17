@@ -2563,8 +2563,9 @@ export class AgentHost {
    * page_access from the thread's MCP: ask the user to let the thread reach a page outside its Scribe
    * access, or the page's folder. Allow for this thread grants it for the rest of the thread; Always
    * allow grants it to the thread's page or folder, for every chat there (not on Ask always pages, and
-   * not for a global thread, which has no page or folder to keep it on). Pages the thread cannot see
-   * (Trusted only for an untrusted model, Restricted) are not found: only the user's @mention gets those.
+   * not for a global thread, which has no page or folder to keep it on). A Trusted only page an
+   * untrusted model asks for by key can only be allowed for this thread, like Ask always. Restricted
+   * pages are not found: only the user's @mention gets those. Full access answers none of this.
    */
   async requestPageAccess(
     threadId: string,
@@ -2585,7 +2586,8 @@ export class AgentHost {
     const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
     const home: AccessTarget | null = thread.scope.ref && (thread.scope.kind === "page" || thread.scope.kind === "folder") ? { kind: thread.scope.kind, id: thread.scope.ref } : null;
     const homeName = home ? (home.kind === "page" ? store.get(home.id)?.title || "this page" : store.folderPath(home.id) ?? "this folder") : null;
-    const always = Boolean(home && homeName && level !== "ask" && !sameTarget(home, target));
+    const untrusted = reach === "request";
+    const always = Boolean(home && homeName && level !== "ask" && !untrusted && !sameTarget(home, target));
     const options: ApprovalOption[] = [
       { id: "thread", label: "Allow for this thread", kind: "allow_once" },
       ...(always ? [{ id: "always", label: `Always allow for ${homeName}`, description: `Every chat on ${homeName} can reach it without asking.`, kind: "allow_always" as const }] : []),
@@ -2595,6 +2597,7 @@ export class AgentHost {
     const detail = [
       `The agent asks to read and change ${what}, outside this chat's Scribe access. Importance: ${importance}.`,
       level === "ask" ? "That page asks every chat, so it can only be allowed for this thread." : undefined,
+      untrusted ? "It is Trusted only and this chat's model is not trusted, so it can only be allowed for this thread." : undefined,
       opts.reason?.trim(),
       waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
     ]

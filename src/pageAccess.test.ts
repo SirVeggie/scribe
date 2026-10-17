@@ -74,11 +74,12 @@ test("Ask always takes a grant for the thread itself, whatever the scope or home
   assert.equal(pageReach(reader({ scope: { kind: "page", ref: "plan" } }), plan, l), "allow", "its own chat");
 });
 
-test("Trusted only hides the page from untrusted chats, grants or not", () => {
+test("Trusted only: untrusted chats cannot find it, but can ask by key and use their own grant", () => {
   const l = lookup({ folders: { secret: { level: "trusted" } } });
   const global = { scope: { kind: "global" as const, ref: null } };
-  assert.equal(pageReach(reader({ ...global }), pages.diary, l), "hidden");
-  assert.equal(pageReach(reader({ ...global, grants: [{ kind: "page", id: "diary" }] }), pages.diary, l), "hidden");
+  assert.equal(pageReach(reader({ ...global }), pages.diary, l), "request");
+  assert.equal(pageReach(reader({ scope: { kind: "folder", ref: "secret" } }), pages.diary, l), "request", "its home does not open it");
+  assert.equal(pageReach(reader({ ...global, grants: [{ kind: "page", id: "diary" }] }), pages.diary, l), "allow");
   assert.equal(pageReach(reader({ ...global, trusted: true }), pages.diary, l), "allow");
   assert.equal(pageReach(reader({ trusted: true }), pages.diary, l), "ask", "trusted, but outside its scope");
 });

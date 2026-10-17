@@ -4,13 +4,18 @@ import { isPlainObject, type AccessLevel, type AccessTarget, type FolderAccess, 
  * Which pages a chat's agent may reach (#269). A chat reaches the pages in its Scribe scope, pages
  * created from there (origin), and what it or its page/folder was granted; past that it asks. A page
  * or folder can be stricter (Ask always, Trusted only, Restricted; strictest up the tree wins), and a
- * page the user @mentioned in the chat is reachable whatever its level.
+ * page the user @mentioned in the chat is reachable whatever its level. The thread's approval level
+ * (full access included) plays no part here: only the user's answer or @mention opens a stricter page.
  *
  * This decides for agents' requests. Page scripts are decided by frameReach (#660).
  */
 
-/** allow: read and change it. ask: its title shows, page_access can ask for it. hidden: as if it did not exist. */
-export type Reach = "allow" | "ask" | "hidden";
+/**
+ * allow: read and change it. ask: its title shows, page_access can ask for it. request: not listed or
+ * found by search, but a chat that knows its key or id can ask for it with page_access (a Trusted only
+ * page for an untrusted model). hidden: as if it did not exist.
+ */
+export type Reach = "allow" | "ask" | "request" | "hidden";
 
 /** A grant a chat holds for itself. mention: the user @mentioned it in the composer, which beats every level. */
 export type ThreadPageGrant = AccessTarget & { mention?: true };
@@ -113,9 +118,10 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
   const scopes = [reader.scope, ...(reader.formerScopes ?? [])].filter((s) => s.kind !== "workspace");
   const ownPage = scopes.some((s) => s.kind === "page" && s.ref === page.id);
   if (level === "restricted") return ownPage ? "allow" : "hidden";
-  if (level === "trusted" && !reader.trusted) return "hidden";
-  if (ownPage) return "allow";
   const threadGranted = reader.grants.some((g) => targetCovers(g, page, lookup));
+  // Untrusted: only the user's answer for this thread opens it, never its home's grants or origin.
+  if (level === "trusted" && !reader.trusted) return threadGranted ? "allow" : "request";
+  if (ownPage) return "allow";
   if (level === "ask") return threadGranted ? "allow" : "ask";
   if (threadGranted) return "allow";
   if (reader.thread && page.createdBy === reader.thread) return "allow";
@@ -144,6 +150,8 @@ export function reachMessage(reach: Reach, page: { key: string; title: string })
   if (reach === "ask") {
     return `${page.key} ("${page.title}") is outside this chat's Scribe access. Ask for it with page_access (key, reason), then try again.`;
   }
+  // No title: the caller knew the key, and that is all it learns.
+  if (reach === "request") return `${page.key} is outside this chat's Scribe access. Ask for it with page_access (key, reason), then try again.`;
   return `tab not found: ${page.key}`;
 }
 

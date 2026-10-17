@@ -335,7 +335,7 @@ export async function startHttp(): Promise<http.Server> {
       // Refuse a bad target before the page is made or replaced.
       const reach = reachFor(req);
       const replyPage = replyTo ? store.get(replyTo.page, "agent") : undefined;
-      if (replyTo && (!replyPage || (reach && reach(replyPage) === "hidden"))) {
+      if (replyTo && (!replyPage || (reach && (reach(replyPage) === "hidden" || reach(replyPage) === "request")))) {
         throw new Error(`replyTo page not found: ${replyTo.page}`);
       }
       // Replacing a page by its key is a write to that page (#269).
@@ -2662,7 +2662,8 @@ function checkReach(req: express.Request, res: express.Response, tab: Tab): bool
     if (thread && agentHost && viewerOf(req) === "agent" && !isContentHost(req)) agentHost.notePageReached(thread, tab);
     return true;
   }
-  res.status(reach === "ask" ? 403 : 404).json({ error: reachMessage(reach, tab), ...(reach === "ask" ? { access: "ask" } : {}) });
+  const askable = reach === "ask" || reach === "request";
+  res.status(askable ? 403 : 404).json({ error: reachMessage(reach, tab), ...(askable ? { access: "ask" } : {}) });
   return false;
 }
 

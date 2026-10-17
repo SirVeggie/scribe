@@ -11,14 +11,15 @@ A chat reaches the pages in its Scribe scope plus anything it has been granted. 
 - **Access levels** (page or folder; the strictest up the tree wins):
   - **Open:** the normal rules.
   - **Ask always:** only a grant for the thread itself counts, so every new chat asks, global ones included.
-  - **Trusted only:** untrusted model sources can neither see nor ask for the page.
+  - **Trusted only:** untrusted model sources do not find the page in listings or search, and its home's grants and origin do not open it for them. One that knows its key or id can still ask with `page_access` (403 without the title), and the user can allow it for that thread only.
   - **Restricted:** only a chat on that exact page. This replaces Hide from agent and is still stored as `agentHidden`.
+- **Approval level plays no part.** Full access does not answer `page_access` or open Ask always, Trusted only or Restricted pages; only the user's answer or @mention does.
 - **User intent overrides everything.** An `@page` or `@folder` the user types in the composer grants that page or folder to the thread at any level. A `#thread` mention grants that transcript. Page, helper, hook and card messages grant nothing.
 - **Titles** of pages that need asking are listed as `outside` (title only, no snippet) in `page_list` and `library_search`. Hidden pages are not listed or counted.
 
 ## Ask card
 
-**Allow for this thread** (primary) · **Always allow for <home>** · **Deny**, in the order the other approval cards use. Always stores a grant on the chat's page or folder. It is not offered to global chats or for Ask always pages. `page_access` takes `folder: true` to ask for the page's folder.
+**Allow for this thread** (primary) · **Always allow for <home>** · **Deny**, in the order the other approval cards use. Always stores a grant on the chat's page or folder. It is not offered to global chats, for Ask always pages, or for a Trusted only page an untrusted model asks for. `page_access` takes `folder: true` to ask for the page's folder.
 
 ## Grants from the user's edits
 
