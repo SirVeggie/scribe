@@ -5294,7 +5294,7 @@
       }
       const meter = usageChip(s.provider, this.variant !== "full", s.model, this.thread());
       const mic = button("", "ag-pill ag-mic", () => this.audioComposer.toggle(), "Dictate (Ctrl+Shift+Space)", false);
-      mic.append(icon("mic"), el("span"));
+      mic.append(icon("mic"), el("span", "ag-mic-status"));
       mic.setAttribute("aria-label", "Dictate (Ctrl+Shift+Space)");
       bar.append(mic);
       if (meter) bar.append(meter);

@@ -5,12 +5,13 @@
     let held = false, releasePending = false;
     const paint = () => {
       const button = view.bar.querySelector(".ag-mic"); if (!button) return;
+      button.hidden = state === "idle" && !window.scribeAudio.available().stt;
       const label = state === "recording" ? "Stop dictation (Esc cancels)" : state === "transcribing" ? "Transcribing…" : state === "starting" ? "Opening microphone…" : "Dictate (Ctrl+Shift+Space)";
       button.dataset.state = state; button.dataset.tooltip = label; button.setAttribute("aria-label", label);
       button.setAttribute("aria-pressed", String(state === "recording"));
       button.disabled = state === "starting" || state === "transcribing";
       button.style.setProperty("--mic-level", level);
-      button.querySelector("span").textContent = state === "recording" ? `${Math.floor((Date.now() - started) / 1000)}s` : state === "transcribing" ? "…" : "";
+      button.querySelector(".ag-mic-status").textContent = state === "recording" ? `${Math.floor((Date.now() - started) / 1000)}s` : state === "transcribing" ? "…" : "";
     };
     const keyup = event => { if (held && (event.code === "Space" || event.key === "Control" || event.key === "Shift")) { held = false; stop(); } };
     const escape = event => { if (event.key === "Escape" && state !== "idle") { event.preventDefault(); event.stopImmediatePropagation(); cancel(); view.focus(); } };

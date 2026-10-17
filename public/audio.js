@@ -8,6 +8,9 @@
     const res = await fetch("/api/audio/settings");
     if (!res.ok) throw new Error("Cannot read Audio settings. Restart Scribe after updating.");
     view = await res.json();
+    document.querySelectorAll(".ag-mic").forEach(button => {
+      button.hidden = !view.available && (!button.dataset.state || button.dataset.state === "idle");
+    });
     return view;
   }
   function available() {
@@ -122,4 +125,5 @@
   window.scribeAudio = { capture, transcribe, dictate, available, refresh, settings: () => view,
     device, setDevice, insertAtCaret, cancel: owner => { if (!owner || active?.owner === owner) active?.cancel(); } };
   window.addEventListener("pagehide", () => active?.cancel());
+  void refresh().catch(() => {});
 })();

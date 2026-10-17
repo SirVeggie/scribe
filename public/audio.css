@@ -1,4 +1,5 @@
 .ag-mic { position: relative; }
+.ag-mic[hidden] { display: none; }
 .ag-mic[data-state="recording"] {
   color: var(--danger, #ef7373);
   box-shadow: 0 0 0 calc(1px + var(--mic-level, 0) * 4px) currentColor;
@@ -8,7 +9,7 @@
   content: ""; width: 10px; height: 10px; border: 2px solid currentColor;
   border-right-color: transparent; border-radius: 50%; animation: audio-spin 1s linear infinite;
 }
-.ag-mic span:empty { display: none; }
+.ag-mic-status:empty { display: none; }
 @keyframes audio-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ag-mic[data-state="transcribing"]::before { animation: none; } }
 /* The shell owns this marker and stop control, outside the page's frame. */
