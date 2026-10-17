@@ -5,6 +5,7 @@ import type { PageRunView } from "./pageRuns.js";
 import type { GrantRow } from "./grants.js";
 import type { WebAccess, WebGrants } from "./webAccess.js";
 import type { ThreadGrants } from "./threadAccess.js";
+import type { ThreadPageGrant } from "../pageAccess.js";
 import type { BrowserView } from "../browser.js";
 
 export type { WebAccess };
@@ -69,6 +70,15 @@ export type Thread = {
   webGrants?: WebGrants;
   /** Other threads the user let this one read (thread_list, thread_read), by scope. */
   threadGrants?: ThreadGrants;
+  /** Pages and folders this thread may reach outside its scope (#269): a page_access answer, a previous home, or the user's @mention. */
+  pageGrants?: ThreadPageGrant[];
+  /** Scopes the thread had before it followed a page it showed: they keep counting for page access (#269). */
+  formerScopes?: ThreadScope[];
+  /**
+   * Read a Trusted only or Restricted page without the user @mentioning it (#269). Its transcript then
+   * counts as trusted content: untrusted models and helpers need the user's say-so to see it.
+   */
+  tainted?: boolean;
   /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
   helperOf?: string;
   /** The user let this thread's agent start helpers (agent_run) without asking again: Allow for this thread, or a board worker set to use helpers unasked. */

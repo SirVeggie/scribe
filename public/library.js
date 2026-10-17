@@ -1062,7 +1062,7 @@ window.createLibrary = function createLibrary(host) {
       fromStrip && !tab.temp && { label: "Show in Library", action: () => reveal(id) },
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
-      { label: tab.agentHidden ? "Show to agent" : "Hide from agent", action: () => host.setAgentHidden(id, !tab.agentHidden) },
+      { label: "Agent access…", action: () => editAgentAccess({ kind: "page", id }) },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: tab.workspace ? "Change workspace…" : "Set workspace…", action: () => host.pickPageWorkspace(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
@@ -1145,6 +1145,121 @@ window.createLibrary = function createLibrary(host) {
     fields[0].input.focus();
   }
 
+  const ACCESS_LEVELS = [
+    { id: "open", label: "Open", detail: "Chats in scope reach it; others ask." },
+    { id: "ask", label: "Ask always", detail: "Every chat asks, even global ones." },
+    { id: "trusted", label: "Trusted only", detail: "Only chats on trusted model sources." },
+    { id: "restricted", label: "Restricted", detail: "Only chats on this exact page." },
+  ];
+  const LEVEL_RANK = { open: 0, ask: 1, trusted: 2, restricted: 3 };
+
+  /** The strictest level among a folder and its parents (#269). */
+  function inheritedLevel(folderId) {
+    let level = "open";
+    const seen = new Set();
+    for (let at = folderId ? model.folderById.get(folderId) : null; at && !seen.has(at.id); at = at.parentId ? model.folderById.get(at.parentId) : null) {
+      seen.add(at.id);
+      const own = at.access?.level || "open";
+      if (LEVEL_RANK[own] > LEVEL_RANK[level]) level = own;
+    }
+    return level;
+  }
+
+  function folderPathOf(id) {
+    const names = [];
+    const seen = new Set();
+    for (let at = model.folderById.get(id); at && !seen.has(at.id); at = at.parentId ? model.folderById.get(at.parentId) : null) {
+      seen.add(at.id);
+      names.unshift(at.name);
+    }
+    return names.join("/") || id;
+  }
+
+  /** A page's or folder's agent access (#269): its level, where it came from, and the grants chats on it hold. */
+  function editAgentAccess(target) {
+    const current = () => (target.kind === "page" ? host.findAny(target.id) : model.folderById.get(target.id));
+    if (!current()) return;
+    const el = (tag, cls, text) => {
+      const node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const nameOf = (t) => (t.kind === "page" ? `“${host.findAny(t.id)?.title || t.id}”` : `${folderPathOf(t.id)}/`);
+    const dlg = el("dialog", "confirm permissions agent-access");
+    const form = el("form");
+    form.method = "dialog";
+    const head = el("h2", "", "Agent access");
+    const rows = el("div", "permissions-rows");
+    const actions = el("div", "confirm-actions");
+    const done = el("button", "", "Done");
+    done.type = "submit";
+    actions.append(done);
+    form.append(head, rows, actions);
+    dlg.append(form);
+
+    const save = async (body) => {
+      const url = target.kind === "page" ? `/api/tabs/${encodeURIComponent(target.id)}/access` : `/api/folders/${encodeURIComponent(target.id)}/access`;
+      const res = await send("PUT", url, body);
+      if (!res.ok) {
+        host.showNotice((await res.json().catch(() => ({}))).error || "Could not change agent access");
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (target.kind === "folder" && data.folder) model.folderById.set(target.id, { ...current(), ...data.folder, access: data.folder.access });
+      render(data.tab);
+    };
+
+    const render = (fresh) => {
+      const item = fresh || current();
+      if (!item) return;
+      rows.replaceChildren();
+      const own = target.kind === "page" ? (item.agentHidden ? "restricted" : item.access?.level || "open") : item.access?.level || "open";
+      const inherited = inheritedLevel(target.kind === "page" ? item.folderId : item.parentId);
+      const row = el("div", "permission-row");
+      const text = el("div", "permission-text");
+      const levels = target.kind === "page" ? ACCESS_LEVELS : ACCESS_LEVELS.map((l) => (l.id === "restricted" ? { ...l, detail: "Only chats on each page itself." } : l));
+      // A stricter parent folder decides; say that instead of what this level alone would do.
+      const detail = LEVEL_RANK[inherited] > LEVEL_RANK[own]
+        ? `A parent folder makes it ${levels.find((l) => l.id === inherited).label}.`
+        : levels.find((l) => l.id === own)?.detail || "";
+      text.append(el("div", "permission-label", target.kind === "page" ? item.title : folderPathOf(target.id)), el("div", "permission-detail", detail));
+      const select = el("select");
+      select.setAttribute("aria-label", "Agent access level");
+      for (const level of levels) {
+        const opt = el("option", "", level.label);
+        opt.value = level.id;
+        select.append(opt);
+      }
+      select.value = own;
+      select.addEventListener("change", () => save({ level: select.value }));
+      row.append(text, window.createSelect ? window.createSelect(select) : select);
+      rows.append(row);
+      const origin = target.kind === "page" ? item.access?.origin : null;
+      if (origin) rows.append(el("div", "permission-detail agent-access-origin", `Created from ${nameOf(origin)}`));
+      const grants = item.access?.grants || [];
+      if (grants.length) {
+        rows.append(el("div", "permission-label agent-access-head", "Chats here also reach"));
+        const list = el("div", "permission-folders");
+        for (const grant of grants) {
+          const line = el("div", "permission-folder");
+          const remove = el("button", "permission-remove", "Remove");
+          remove.type = "button";
+          remove.addEventListener("click", () => save({ removeGrants: [grant] }));
+          line.append(el("span", "permission-path", nameOf(grant)), remove);
+          list.append(line);
+        }
+        rows.append(list);
+      }
+    };
+
+    render();
+    document.body.append(dlg);
+    dlg.addEventListener("close", () => dlg.remove(), { once: true });
+    dlg.showModal();
+    done.focus();
+  }
+
   function folderMenu(event, id) {
     event.preventDefault();
     event.stopPropagation();
@@ -1166,6 +1281,7 @@ window.createLibrary = function createLibrary(host) {
       { label: "Rename", action: () => startRename("folder", id) },
       { label: "Move to…", action: () => openMovePicker({ kind: "folder", id }, point) },
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
+      { label: "Agent access…", action: () => editAgentAccess({ kind: "folder", id }) },
       "sep",
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
       "sep",

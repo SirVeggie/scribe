@@ -392,3 +392,19 @@ test("background launches overlap and steering or an aborted wait keeps helpers 
     hanging = false;
   }
 });
+
+test("a tainted thread is asked before an untrusted helper, even with full access", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent("full");
+  const thread = host.getThread(id)!;
+  thread.tainted = true;
+  await assert.rejects(host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" }), /Trusted only content/);
+  running(id);
+  const denied = assert.rejects(host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" }), /kept this thread's trusted content/);
+  host.resolveApproval((await approvalFor(id)).itemId, "deny");
+  await denied;
+  const allowed = host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" });
+  host.resolveApproval((await approvalFor(id)).itemId, "allow");
+  assert.equal((await allowed).status, "done");
+  (host as unknown as Internals).runs.delete(id);
+});

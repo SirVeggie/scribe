@@ -241,6 +241,19 @@ export function ensureFileColumn(db: DatabaseSync): void {
 }
 
 /**
+ * Boards created before access levels (#269) have no tabs.access or folders.access.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureAccessColumns(db: DatabaseSync): void {
+  for (const table of ["tabs", "folders"]) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "access")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN access TEXT`);
+    }
+  }
+}
+
+/**
  * Boards created before temporary pages (#655) have no tabs.temp.
  * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
  */

@@ -1,5 +1,15 @@
 # Migrations
 
+## `tabs.access` and `folders.access` columns (additive, schema still 3)
+
+- **What changed:** Scribe access scopes page reach (#269). A page's or folder's agent access is stored as JSON in a new `access TEXT` column: `level` (`ask`, `trusted`; folders also `restricted`), the grants chats on it hold (`grants: [{ kind: "page" | "folder", id }]`), and for a page its `origin` (the page or folder of the chat that created it). A page's Restricted level stays `tabs.agent_hidden` (was Hide from agent). Threads (`agent.sqlite`, JSON) gain `pageGrants`, `formerScopes` and `tainted`; native model sources gain `trusted`.
+- **Why no version bump:** Existing rows read as null: open, no grants, no origin, which is today's reach for global chats. `ensureAccessColumns` checks `PRAGMA table_info` before `ALTER TABLE`. Thread and source fields are optional JSON. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged; access stays on this PC (grants and origins name local ids).
+- **Protocol:** additive: `access` on tab meta and folders; `PUT /api/tabs/:id/access` and `PUT /api/folders/:fid/access` (board UI only); `POST /api/page-access` for MCP `page_access`; `outside` lists on `GET /api/tabs` and `GET /api/library` for agents. Agent requests to a page outside their reach now answer 403 (ask with `page_access`) or 404 (Trusted only for an untrusted model, Restricted). `VERSION` stays `3.0.0`.
+- **Where:** `src/pageAccess.ts`, `src/schema.ts`, `src/dbMigrate.ts` (`ensureAccessColumns`), `src/db.ts`, `src/types.ts`, `src/store.ts`, `src/http.ts`, `src/search/routes.ts`, `src/mcp.ts`, `src/agent/host.ts`, `src/agent/grants.ts`, `src/agent/openaiSources.ts`, `public/library.js`, `public/agent.js`.
+- **How to verify:** `src/pageAccess.test.ts`, `src/pageAccessHttp.test.ts`, `src/agent/pageAccess.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `thread_stats` table and `hiddenWorkspaces` pref (`agent.sqlite`, additive, schema still 1)
 
 - **What changed:** A workspace can be hidden or deleted from the thread list (#507). Hidden workspace folders are kept in the saved `prefs` setting as `hiddenWorkspaces: string[]`. Deleting a workspace deletes its threads for good, after writing one row per thread to a new `thread_stats` table: `id` (the thread's id), `deleted_at`, `workspace`, and `data` (JSON `ThreadStats`: settings, dates, token and cost totals, per-turn usage, tool call counts, message and character counts; no titles, messages, tool input or output, file names or page ids).

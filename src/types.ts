@@ -169,6 +169,35 @@ export type Folder = {
   pos: number;
   createdAt: number;
   updatedAt: number;
+  /** Agent access level and grants (#269); see pageAccess.ts. Omitted when open with no grants. */
+  access?: FolderAccess;
+};
+
+/** A page or folder, as an access grant's target or a page's origin. */
+export type AccessTarget = { kind: "page" | "folder"; id: string };
+
+/**
+ * How agents reach pages (#269). open: chats in scope, plus grants; ask: only a grant for the chat
+ * itself (every chat asks); trusted: trusted model sources only; restricted: only a chat on that
+ * exact page. A user's @mention gets past all of them. The strictest level up the folder tree wins.
+ */
+export type AccessLevel = "open" | "ask" | "trusted" | "restricted";
+
+/** A folder's access level and the pages and folders chats on it may reach without asking. */
+export type FolderAccess = {
+  level?: Exclude<AccessLevel, "open">;
+  grants?: AccessTarget[];
+};
+
+/**
+ * A page's access settings beside agentHidden (which stays its Restricted flag): its level, where
+ * it came from, and what chats on it may reach without asking.
+ */
+export type PageAccess = {
+  level?: "ask" | "trusted";
+  /** The page or folder of the chat that created it; set once. Chats there reach it like their own. */
+  origin?: AccessTarget;
+  grants?: AccessTarget[];
 };
 
 export type Tab = {
@@ -204,8 +233,13 @@ export type Tab = {
   templateStateVersion?: number;
   templateCompatible?: boolean;
   templateIncompatibleReason?: string;
-  /** Only the board UI can set this. Agent requests treat the tab as nonexistent. */
+  /**
+   * Restricted (#269, was Hide from agent). Only the board UI can set this. Agent requests treat
+   * the tab as nonexistent, except from a chat on this page or one the user @mentioned it in.
+   */
   agentHidden?: boolean;
+  /** Agent access level, origin and grants (#269). Only the board UI changes level and grants. */
+  access?: PageAccess;
   /** Which in-app agent created the page and last changed it. Omitted until an agent writes. */
   provenance?: PageProvenance;
   /**
@@ -257,6 +291,8 @@ export type PageActor = {
   title?: string;
   /** The thread's workspace folder at write time. A page it creates takes it; provenance does not keep it. */
   workspace?: string;
+  /** The thread's page or folder at write time. A page it creates keeps it as its access origin (#269). */
+  origin?: AccessTarget;
   at: number;
 };
 
@@ -439,6 +475,8 @@ export type StateWriteInput = {
   assets?: PageAssetFile[];
   /** In-app or external agent that made this write. User writes leave it unset. */
   actor?: PageActor;
+  /** The user's own edit through the page (not an agent, a reply or the board's bookkeeping): links it adds can grant access (#269). */
+  byUser?: boolean;
 };
 
 export type EventInput = {
@@ -481,6 +519,7 @@ export function toMeta(tab: Tab): TabMeta {
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
     assets: tab.assets,
     ...(tab.agentHidden ? { agentHidden: true } : {}),
+    ...(tab.access ? { access: tab.access } : {}),
     ...(tab.provenance ? { provenance: tab.provenance } : {}),
     ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
     ...(tab.workspace ? { workspace: tab.workspace } : {}),
@@ -579,6 +618,9 @@ export function noteAgentWrite(tab: Tab, actor: PageActor | undefined, created =
   tab.provenance = provenance;
   if (created && !tab.workspace && actor?.workspace) {
     tab.workspace = actor.workspace;
+  }
+  if (created && actor?.origin && !tab.access?.origin) {
+    tab.access = { ...(tab.access ?? {}), origin: { kind: actor.origin.kind, id: actor.origin.id } };
   }
 }
 

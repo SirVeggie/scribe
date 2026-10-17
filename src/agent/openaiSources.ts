@@ -19,6 +19,8 @@ export type OpenAISource = {
   reasoning?: boolean;
   /** Exact model IDs; absence means Automatic. */
   pricing?: Record<string, ModelPrice>;
+  /** The user trusts this source with Trusted only pages (#269). Off unless set. */
+  trusted?: boolean;
 };
 
 /** What the board UI gets: no key, only whether there is one. */
@@ -65,6 +67,7 @@ export function normalizeSource(input: unknown, previous: OpenAISource | undefin
       : previous?.models ?? [];
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : previous?.apiKey ?? "";
   const reasoning = typeof body.reasoning === "boolean" ? body.reasoning : previous?.reasoning ?? false;
+  const trusted = typeof body.trusted === "boolean" ? body.trusted : previous?.trusted ?? false;
   const endpointChanged = previous && baseUrl !== previous.baseUrl;
   if (endpointChanged && Object.keys(previous.pricing ?? {}).length && body.pricing === undefined) throw new Error("Endpoint changed: reconfirm or clear model prices");
   const pricing = body.pricing === undefined ? previous?.pricing : normalizePrices(body.pricing, endpointChanged ? {} : previous?.pricing);
@@ -76,6 +79,7 @@ export function normalizeSource(input: unknown, previous: OpenAISource | undefin
     ...(apiKey ? { apiKey } : {}),
     models,
     ...(reasoning ? { reasoning: true } : {}),
+    ...(trusted ? { trusted: true } : {}),
     ...(pricing && Object.keys(pricing).length ? { pricing } : {}),
   };
 }

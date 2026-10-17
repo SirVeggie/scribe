@@ -230,6 +230,15 @@ export function scanTools(server: McpServer, env = process.env, scan: (tool: str
   };
 }
 
+/** Pages outside the chat's Scribe access whose titles matched (#269): title only, to ask for with page_access. */
+function outsideOf(outside: TabMeta[] | undefined): { outside?: Array<{ id: string; key: string; title: string }>; outsideNote?: string } {
+  if (!outside?.length) return {};
+  return {
+    outside: outside.map((tab) => ({ id: tab.id, key: tab.key, title: tab.title })),
+    outsideNote: "Outside this chat's Scribe access: titles only. Ask for one with page_access if you need it.",
+  };
+}
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
@@ -257,6 +266,44 @@ export async function startMcp(): Promise<void> {
       { title: z.string().max(200).describe("The new page's title, as you will pass it to page_show.") },
       { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       async () => jsonResult({ ok: true })
+    );
+
+    // Page access (#269): a page outside the chat's Scribe access answers with a pointer here.
+    pageTool(
+      "page_access",
+      "Ask the user to let this chat read and change a page outside its Scribe access. Page tools answer such a page with \"outside this chat's Scribe access\"; search lists them under outside, by title only. Say why you need it. The user can allow it for this chat, always for this chat's page or folder, or deny it. folder: true asks for the page's whole folder instead. importance sets how long a chat run by a board worker waits for an answer: necessary waits until answered, important about 2 hours, useful 15 minutes, trivial 2 minutes. When it is refused, carry on without the page. Returns allowed and a message.",
+      {
+        key: z.string().optional().describe("Page key, e.g. scribe:design-notes."),
+        id: z.string().optional().describe("Tab id, instead of key."),
+        folder: z.boolean().optional().describe("Ask for the page's folder (and everything in it) instead of the one page."),
+        importance: z.enum(["necessary", "important", "useful", "trivial"]).optional().describe("How much you need it. Default useful."),
+        reason: z.string().optional().describe("One or two lines on why you need it, shown to the user."),
+      },
+      { readOnlyHint: true },
+      async ({ key, id, folder, importance, reason }, extra) => {
+        const page = id || key;
+        if (!page) return errorResult("Pass key or id.");
+        const progressToken = extra._meta?.progressToken;
+        const startedAt = Date.now();
+        const heartbeat =
+          progressToken === undefined
+            ? undefined
+            : setInterval(() => {
+                const seconds = Math.round((Date.now() - startedAt) / 1000);
+                extra
+                  .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `Waiting for the user to allow page access (${seconds}s)` } })
+                  .catch(() => {});
+              }, WAIT_HEARTBEAT_MS);
+        try {
+          const { status, data } = await api("POST", "/api/page-access", { page, folder, importance, reason }, { signal: extra.signal });
+          if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+          return jsonResult(data);
+        } catch (err) {
+          return errorResult((err as Error).message || "page_access failed");
+        } finally {
+          clearInterval(heartbeat);
+        }
+      }
     );
   }
 
@@ -487,6 +534,7 @@ export async function startMcp(): Promise<void> {
         returned?: number;
         remaining?: number;
         openCount?: number;
+        outside?: TabMeta[];
       };
       const closedCount = payload.closedCount ?? 0;
       const searched = Boolean(query?.trim());
@@ -497,6 +545,7 @@ export async function startMcp(): Promise<void> {
         }),
         activeId: payload.activeId,
         closedCount,
+        ...outsideOf(payload.outside),
         ...(searched
           ? {
               returned: payload.returned,
@@ -593,6 +642,7 @@ export async function startMcp(): Promise<void> {
         remaining: number;
         matchCount: number;
         total: number;
+        outside?: TabMeta[];
       };
       const searched = Boolean(query?.trim());
       // No word match: say so when the search by meaning could find it.
@@ -612,6 +662,7 @@ export async function startMcp(): Promise<void> {
         remaining: payload.remaining,
         matchCount: payload.matchCount,
         total: payload.total,
+        ...outsideOf(payload.outside),
         note:
           (payload.matchCount === payload.total
             ? `Returned ${payload.returned} of ${payload.total} pages; ${payload.remaining} after this page.`

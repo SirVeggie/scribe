@@ -10,7 +10,8 @@ import { log } from "../log.js";
 import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
-import { isBlankPage, type PageEvent } from "../types.js";
+import { isBlankPage, type AccessTarget, type PageEvent, type Tab } from "../types.js";
+import { addTargets, effectiveLevel, pageReach, sameTarget, type AccessPage, type PageReader, type Reach, type ThreadPageGrant } from "../pageAccess.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
@@ -29,7 +30,7 @@ import { HOOKS_FEATURE, HookPipeline, OBSERVE_DEADLINE_MS, earlyEnd, holdsAll, i
 import { mlService } from "../ml/service.js";
 import type { SendKind } from "../ml/types.js";
 import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
-import { normalizeSource, sourceView, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
+import { normalizeSource, sourceView, splitModelId, type OpenAISource, type OpenAISourceView } from "./openaiSources.js";
 import type {
   AgentProvider,
   ApprovalDecision,
@@ -175,6 +176,8 @@ export function openWorktree(thread: Thread): ThreadWorktree | null {
 
 /** Code and Plan threads in a workspace can have a worktree; Pages and Ask never edit files. */
 /** Helpers one thread may have working at once. */
+/** How long a tainted thread's request for an untrusted helper waits for the user before it is denied (#269). */
+const TAINTED_HELPER_WAIT_MS = 15 * 60_000;
 const MAX_HELPERS = 10;
 
 function wantsWorktree(thread: Thread): boolean {
@@ -1537,7 +1540,11 @@ export class AgentHost {
       if (this.loadTurns(id).length) throw new Error("A worktree can only be turned on before the first message. Start a new thread to use one.");
       next.useWorktree = patch.useWorktree;
     }
-    if (patch.scope) next.scope = patch.scope;
+    if (patch.scope) {
+      // The user picking a scope sets what the chat reaches; homes it followed pages from no longer count.
+      if (JSON.stringify(patch.scope) !== JSON.stringify(thread.scope)) delete next.formerScopes;
+      next.scope = patch.scope;
+    }
     if (patch.scope?.kind === "page" && patch.scope.ref) store.promoteDraft(patch.scope.ref, { activate: false });
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
     if (typeof patch.archived === "boolean") next.archived = patch.archived;
@@ -1576,7 +1583,15 @@ export class AgentHost {
     if (!store.get(pageId)) return false;
     if (pageOwned(this.loadItems(threadId))) return false;
     if (thread.scope.kind === "page" && thread.scope.ref === pageId) return false;
+    // The page it came from still counts for page access, so following a report does not cut it off (#269).
+    const former = [...(thread.formerScopes ?? [])];
+    if (thread.scope.kind !== "workspace" && !former.some((s) => s.kind === thread.scope.kind && s.ref === thread.scope.ref)) former.push({ ...thread.scope });
     this.updateThread(threadId, { scope: { kind: "page", ref: pageId } });
+    const moved = this.threads.get(threadId);
+    if (moved && former.length) {
+      moved.formerScopes = former.slice(-20);
+      this.db.saveThread(moved);
+    }
     return true;
   }
 
@@ -1587,6 +1602,7 @@ export class AgentHost {
     if (!next) throw new Error("This thread has no such permission.");
     thread.webGrants = next.webGrants;
     thread.threadGrants = next.threadGrants;
+    if (next.pageGrants) thread.pageGrants = next.pageGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
     this.sessions.get(id)?.update(thread);
@@ -1725,7 +1741,7 @@ export class AgentHost {
     const activity = threadActivity(items, status, unread, this.helperLookup);
     if (activity) this.activitySent.set(thread.id, activityKey(activity));
     else this.activitySent.delete(thread.id);
-    const grants = grantRows(thread, this.scopeLookup());
+    const grants = grantRows(thread, this.scopeLookup(), { page: (id) => store.get(id)?.title ?? null, folder: (id) => store.folderPath(id) });
     const usage = sumThreadUsage(turns);
     const pageRun = this.pageRuns.get(thread.id);
     return {
@@ -2071,6 +2087,14 @@ export class AgentHost {
       thread.threadGrants = grantScopes(thread.threadGrants, tagged.map((chip) => ({ kind: "thread" as const, id: chip.id })));
       this.db.saveThread(thread);
       this.emitThread(threadId);
+    }
+    // A page or folder the user @mentions is theirs to show: the thread reaches it whatever its access level (#269).
+    if (!input.from) {
+      const mentioned = supplied.flatMap((chip): ThreadPageGrant[] =>
+        chip.kind === "page" && typeof chip.id === "string" && store.get(chip.id) ? [{ kind: "page", id: store.get(chip.id)!.id, mention: true }]
+        : chip.kind === "folder" && typeof chip.id === "string" && store.folderPath(chip.id) ? [{ kind: "folder", id: chip.id, mention: true }]
+        : []);
+      this.grantPages(threadId, mentioned);
     }
     if (!input.from && thread.draft) {
       // The user sent what they had left in the composer.
@@ -2436,6 +2460,158 @@ export class AgentHost {
     };
   }
 
+  // ---------- page access (#269) ----------
+
+  /** Whether a model comes from a source the user trusts with Trusted only pages. Only native sources can be trusted. */
+  modelTrusted(provider: ProviderId, model: string): boolean {
+    if (provider !== "pi") return false;
+    const source = splitModelId(model)?.source;
+    const id = source?.startsWith("src-") ? source.slice(4) : null;
+    return Boolean(id && this.modelSources().find((s) => s.id === id)?.trusted);
+  }
+
+  /** A thread is trusted when its model is, and a helper no more than the thread that started it. */
+  threadTrusted(thread: Thread): boolean {
+    const seen = new Set<string>();
+    for (let t: Thread | undefined = thread; t && !seen.has(t.id); t = t.helperOf ? this.threads.get(t.helperOf) : undefined) {
+      seen.add(t.id);
+      if (!this.modelTrusted(t.provider, t.model)) return false;
+    }
+    return true;
+  }
+
+  /** What a thread's agent may reach among pages; null for an unknown thread. A helper shares its parent's grants. */
+  pageReader(threadId: string): PageReader | null {
+    const thread = this.threads.get(threadId);
+    if (!thread) return null;
+    const parent = thread.helperOf ? this.threads.get(thread.helperOf) : undefined;
+    return {
+      thread: thread.id,
+      scope: thread.scope,
+      ...(thread.formerScopes?.length ? { formerScopes: thread.formerScopes } : {}),
+      trusted: this.threadTrusted(thread),
+      grants: addTargets<ThreadPageGrant>(thread.pageGrants, parent?.pageGrants ?? []),
+    };
+  }
+
+  /**
+   * A thread's agent reached a page. Trusted only or Restricted content it reached without the user's
+   * @mention taints the thread and the threads it reports to: their transcripts now hold that content.
+   */
+  notePageReached(threadId: string, tab: Tab): void {
+    const lookup = store.accessLookup();
+    const level = effectiveLevel(tab, lookup);
+    if (level !== "trusted" && level !== "restricted") return;
+    const seen = new Set<string>();
+    for (let t = this.threads.get(threadId); t && !seen.has(t.id); t = t.helperOf ? this.threads.get(t.helperOf) : undefined) {
+      seen.add(t.id);
+      if (t.id === threadId && (t.pageGrants ?? []).some((g) => g.mention && (g.kind === "page" ? g.id === tab.id : lookup.folderChain(tab.folderId).includes(g.id)))) return;
+      if (t.tainted) continue;
+      t.tainted = true;
+      this.db.saveThread(t);
+      this.emitThread(t.id);
+    }
+  }
+
+  private reachOf(threadId: string, tab: Tab): Reach {
+    const reader = this.pageReader(threadId);
+    return reader ? pageReach(reader, this.accessPage(tab), store.accessLookup()) : "hidden";
+  }
+
+  /**
+   * A page as page access judges it. Pages made before origins were recorded take the home of the
+   * thread that created them: its first home if it followed pages since, so a board worker's old
+   * reports stay reachable from its board.
+   */
+  accessPage(tab: Tab): AccessPage {
+    const createdBy = tab.provenance?.created?.thread;
+    if (tab.access?.origin || !createdBy) return { ...tab, createdBy };
+    const creator = this.threads.get(createdBy);
+    const home = creator?.formerScopes?.[0] ?? creator?.scope;
+    const origin: AccessTarget | undefined = home?.ref && (home.kind === "page" || home.kind === "folder") && home.ref !== tab.id ? { kind: home.kind, id: home.ref } : undefined;
+    return { ...tab, createdBy, ...(origin ? { access: { ...(tab.access ?? {}), origin } } : {}) };
+  }
+
+  /** A page or folder as the user reads it on the access card. */
+  private targetName(target: AccessTarget): string {
+    if (target.kind === "folder") return `folder “${store.folderPath(target.id) ?? target.id}”`;
+    return `“${store.get(target.id)?.title || target.id}”`;
+  }
+
+  /**
+   * page_access from the thread's MCP: ask the user to let the thread reach a page outside its Scribe
+   * access, or the page's folder. Allow for this thread grants it for the rest of the thread; Always
+   * allow grants it to the thread's page or folder, for every chat there (not on Ask always pages, and
+   * not for a global thread, which has no page or folder to keep it on). Pages the thread cannot see
+   * (Trusted only for an untrusted model, Restricted) are not found: only the user's @mention gets those.
+   */
+  async requestPageAccess(
+    threadId: string,
+    opts: { page: string; folder?: boolean; importance?: WebImportance; reason?: string; signal?: AbortSignal }
+  ): Promise<{ allowed: boolean; message: string }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("page_access only works in Scribe chat threads.");
+    const tab = store.get(opts.page);
+    const reach = tab ? this.reachOf(threadId, tab) : "hidden";
+    if (!tab || reach === "hidden") return { allowed: false, message: `tab not found: ${opts.page}` };
+    const lookup = store.accessLookup();
+    const level = effectiveLevel(tab, lookup);
+    const target: AccessTarget = opts.folder && tab.folderId ? { kind: "folder", id: tab.folderId } : { kind: "page", id: tab.id };
+    if (reach === "allow" && target.kind === "page") return { allowed: true, message: "Already allowed." };
+    const run = this.runs.get(threadId);
+    if (!run) return { allowed: false, message: "With no turn running the user cannot be asked." };
+    const importance = opts.importance ?? "useful";
+    const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const home: AccessTarget | null = thread.scope.ref && (thread.scope.kind === "page" || thread.scope.kind === "folder") ? { kind: thread.scope.kind, id: thread.scope.ref } : null;
+    const homeName = home ? (home.kind === "page" ? store.get(home.id)?.title || "this page" : store.folderPath(home.id) ?? "this folder") : null;
+    const always = Boolean(home && homeName && level !== "ask" && !sameTarget(home, target));
+    const options: ApprovalOption[] = [
+      { id: "thread", label: "Allow for this thread", kind: "allow_once" },
+      ...(always ? [{ id: "always", label: `Always allow for ${homeName}`, description: `Every chat on ${homeName} can reach it without asking.`, kind: "allow_always" as const }] : []),
+      { id: "deny", label: "Deny", kind: "reject_once" },
+    ];
+    const what = this.targetName(target);
+    const detail = [
+      `The agent asks to read and change ${what}, outside this chat's Scribe access. Importance: ${importance}.`,
+      level === "ask" ? "That page asks every chat, so it can only be allowed for this thread." : undefined,
+      opts.reason?.trim(),
+      waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    this.closeBlocks(run);
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", title: `Page access: ${what}`.slice(0, 300), detail, options, status: "pending" });
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    opts.signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer = waitMs === null ? null : setTimeout(() => { timedOut = true; abort.abort(); }, waitMs);
+    try {
+      const decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", item.id, abort.signal);
+      if (decision.optionId === "deny") return { allowed: false, message: decision.note ? `The user denied access to ${what}: ${decision.note}` : `The user denied access to ${what}. Carry on without it.` };
+      if (decision.optionId === "always" && home) store.changeAccessGrants(home, { add: [target] });
+      else this.grantPages(threadId, [target]);
+      return { allowed: true, message: `Allowed: ${what}. Make the call again.` };
+    } catch {
+      return { allowed: false, message: timedOut ? "Nobody answered in time. Carry on without that page." : "The request was cancelled." };
+    } finally {
+      if (timer) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** Grant pages or folders to a thread for the rest of the thread. */
+  private grantPages(threadId: string, targets: ThreadPageGrant[]): void {
+    const t = this.threads.get(threadId);
+    if (!t || !targets.length) return;
+    const next = addTargets<ThreadPageGrant>(t.pageGrants, targets);
+    if (JSON.stringify(next) === JSON.stringify(t.pageGrants ?? [])) return;
+    t.pageGrants = next;
+    this.db.saveThread(t);
+    this.sessions.get(threadId)?.update(t);
+    this.emitThread(threadId);
+  }
+
   /**
    * Ask the user to let a thread read other threads in its scopes (its workspace, its page or folder;
    * any thread for a global thread). Grants last for the rest of the thread; only narrows the ask to
@@ -2647,7 +2823,10 @@ export class AgentHost {
       reader = this.threads.get(readerId) ?? reader;
     }
     const lookup = this.scopeLookup();
-    const threads = [...this.threads.values()].filter((t) => canReadThread(reader, t, lookup));
+    // A tainted transcript holds trusted content (#269): an untrusted reader only gets it from the user's #tag.
+    const trusted = this.threadTrusted(reader);
+    const tagged = (t: Thread) => (reader.threadGrants ?? []).some((s) => s.kind === "thread" && s.id === t.id);
+    const threads = [...this.threads.values()].filter((t) => canReadThread(reader, t, lookup) && (!t.tainted || trusted || tagged(t)));
     return { reader, threads, lookup };
   }
 
@@ -2717,6 +2896,12 @@ export class AgentHost {
     if (!target) {
       const outside = this.threads.has(opts.thread) && opts.thread !== readerId;
       throw new Error(outside ? "That thread is outside the scopes this thread may read; thread_access asks for the rest of its scopes." : `No readable thread ${opts.thread}. thread_list shows the ones you can read.`);
+    }
+    const self = this.threads.get(readerId);
+    if (target.tainted && self && !self.tainted) {
+      self.tainted = true;
+      this.db.saveThread(self);
+      this.emitThread(readerId);
     }
     const words = queryWords(opts.q);
     const kinds = opts.kinds?.length ? new Set(opts.kinds) : null;
@@ -2935,6 +3120,39 @@ export class AgentHost {
     }
   }
 
+  /**
+   * A tainted thread (#269) handing work to an untrusted model: its brief can carry trusted content,
+   * so the user says yes each time, whatever the approval level. Nobody answering denies it after
+   * TAINTED_HELPER_WAIT_MS, so a board worker does not wait for ever.
+   */
+  private async approveTaintedHelper(parent: Thread, what: string, signal?: AbortSignal): Promise<void> {
+    const run = this.runs.get(parent.id);
+    if (!run) throw new Error("This thread has read Trusted only content, and with no turn running the user cannot be asked to share it with an untrusted helper. Do the work yourself.");
+    const options: ApprovalOption[] = [
+      { id: "allow", label: "Allow", kind: "allow_once" },
+      { id: "deny", label: "Deny", kind: "reject_once" },
+    ];
+    this.closeBlocks(run);
+    const until = new Date(Date.now() + TAINTED_HELPER_WAIT_MS).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const detail = `This thread has read Trusted only or Restricted pages. ${what} is not a trusted model, and the brief may carry that content to it.\nRefused if not answered by ${until}.`;
+    const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Untrusted helper: ${what}`.slice(0, 300), detail, options, status: "pending" });
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; abort.abort(); }, TAINTED_HELPER_WAIT_MS);
+    let decision: ApprovalDecision;
+    try {
+      decision = await this.waitPending<ApprovalDecision>(parent.id, run, "approval", item.id, abort.signal);
+    } catch {
+      throw new Error(timedOut ? "Nobody allowed sharing this thread's trusted content with an untrusted helper in time. Do the work yourself, or use a trusted model." : "The request to start a helper was cancelled.");
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+    if (decision.optionId === "deny") throw new Error(decision.note ? `The user kept trusted content from the untrusted helper: ${decision.note}` : "The user kept this thread's trusted content from the untrusted helper. Do the work yourself, or use a trusted model.");
+  }
+
   /** Pages has a different tool boundary; file modes can only be reduced: Code -> Plan -> Ask. */
   private helperMode(parent: Thread, requested: string | undefined): ThreadMode {
     if (requested === undefined) return parent.mode;
@@ -2975,6 +3193,7 @@ export class AgentHost {
       if (working && task) throw new Error("That helper is still working on its last task. Pass thread with no task to wait for its report.");
       if (!task && !this.loadTurns(existing.id).length) throw new Error("That helper has not run yet. Pass a task.");
       if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
+      if (task && this.threads.get(threadId)?.tainted && !this.modelTrusted(existing.provider, existing.model)) await this.approveTaintedHelper(parent, existing.title.replace(/^Helper: /, ""), opts.signal);
       helper = existing;
     } else {
       const title = opts.title?.replace(/\s+/g, " ").trim();
@@ -2990,7 +3209,9 @@ export class AgentHost {
       }
       const busy = [...this.threads.values()].filter((t) => t.helperOf === threadId && this.runs.has(t.id)).length;
       if (busy >= MAX_HELPERS) throw new Error(`This thread already has ${busy} helpers working. Wait for one to finish.`);
-      await this.approveHelper(parent, `${status.label}${model ? ` (${model.label})` : ""}`, task, mode, opts.signal);
+      const what = `${status.label}${model ? ` (${model.label})` : ""}`;
+      if (parent.tainted && !this.modelTrusted(provider, model?.id ?? this.prefs().models[provider] ?? "default")) await this.approveTaintedHelper(parent, what, opts.signal);
+      await this.approveHelper(parent, what, task, mode, opts.signal);
       if (opts.signal?.aborted) throw new Error("cancelled");
       // Other calls can have started while this one waited for approval.
       if ([...this.threads.values()].filter((t) => t.helperOf === threadId && (this.runs.has(t.id) || this.queues.get(t.id)?.length || this.resuming.has(t.id))).length >= MAX_HELPERS) {

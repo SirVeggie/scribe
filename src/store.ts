@@ -40,6 +40,8 @@ import {
 } from "./pageAssets.js";
 import { checkPermission, normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionNeed, type PermissionValue } from "./pagePermissions.js";
 import { normalizeSignalName } from "./signal.js";
+import { addTargets, effectiveLevel, sameTarget, type AccessLookup } from "./pageAccess.js";
+import type { AccessLevel, AccessTarget } from "./types.js";
 import { applyOps, deepEqual } from "./stateOps.js";
 import { jsonBytes } from "./stateSize.js";
 import { normalizeEvents } from "./events.js";
@@ -117,6 +119,14 @@ import {
 import { wrapHtml } from "./wrapHtml.js";
 import { embedPageHtml, embedUrlFromHtml, safeEmbedUrl } from "./embed.js";
 import { removeCopies, safeFileName, samePath, scanFolder, storeCopy, filePlaceholderHtml, type FolderEntry } from "./filePages.js";
+
+/** How long a link the user added must stay before it grants access (#269). */
+const LINK_GRANT_DELAY_MS = 60_000;
+
+/** Page keys (scribe:some-page) mentioned anywhere in a page's state. */
+function pageKeysIn(state: unknown): string[] {
+  return [...JSON.stringify(state ?? {}).matchAll(/scribe:[a-z0-9._:-]+/gi)].map((m) => m[0].toLowerCase().replace(/[.:-]+$/, ""));
+}
 
 type Located = { tab: Tab; where: "open" | "closed" };
 
@@ -293,28 +303,29 @@ export class BoardStore extends EventEmitter {
     };
   }
 
-  list(viewer: Viewer = "user"): TabMeta[] {
-    return this.listOpenTabs(viewer).map(toMeta);
+  list(viewer: Viewer = "user", see?: (tab: Tab) => boolean): TabMeta[] {
+    return this.listOpenTabs(viewer, see).map(toMeta);
   }
 
-  closedCount(viewer: Viewer = "user"): number {
+  closedCount(viewer: Viewer = "user", see?: (tab: Tab) => boolean): number {
     let count = 0;
     for (const tab of this.closed.values()) {
-      if (visibleTo(tab, viewer) && !isAppTab(tab)) {
+      if ((see ? see(tab) : visibleTo(tab, viewer)) && !isAppTab(tab)) {
         count += 1;
       }
     }
     return count;
   }
 
-  listOpenTabs(viewer: Viewer = "user"): Tab[] {
+  /** see, when given, decides alone which pages show (an agent's page access, #269, which has its own take on Restricted). */
+  listOpenTabs(viewer: Viewer = "user", see?: (tab: Tab) => boolean): Tab[] {
     return this.order
       .map((id) => this.tabs.get(id)!)
-      .filter((tab) => tab && visibleTo(tab, viewer));
+      .filter((tab) => tab && (see ? see(tab) : visibleTo(tab, viewer)));
   }
 
-  listClosedTabs(viewer: Viewer = "user"): Tab[] {
-    return [...this.closed.values()].filter((tab) => visibleTo(tab, viewer) && !isAppTab(tab)).sort(byClosedDesc);
+  listClosedTabs(viewer: Viewer = "user", see?: (tab: Tab) => boolean): Tab[] {
+    return [...this.closed.values()].filter((tab) => (see ? see(tab) : visibleTo(tab, viewer)) && !isAppTab(tab)).sort(byClosedDesc);
   }
 
   listFolders(): Folder[] {
@@ -353,12 +364,12 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Every folder as a path, depth-first in Library order, with its own page count (not subfolders'). */
-  folderTree(viewer: Viewer = "user"): Array<{ id: string; path: string; pages: number; description?: string }> {
+  folderTree(viewer: Viewer = "user", see?: (tab: Tab) => boolean): Array<{ id: string; path: string; pages: number; description?: string }> {
     const out: Array<{ id: string; path: string; pages: number; description?: string }> = [];
     const walk = (parentId: string | null, prefix: string) => {
       for (const folder of this.foldersIn(parentId)) {
         const path = prefix ? `${prefix}/${folder.name}` : folder.name;
-        const pages = this.pagesIn(folder.id).filter((tab) => visibleTo(tab, viewer)).length;
+        const pages = this.pagesIn(folder.id).filter((tab) => (see ? see(tab) : visibleTo(tab, viewer))).length;
         out.push({ id: folder.id, path, pages, ...(folder.description ? { description: folder.description } : {}) });
         walk(folder.id, path);
       }
@@ -367,20 +378,20 @@ export class BoardStore extends EventEmitter {
     return out;
   }
 
-  searchOpen(query: string, viewer: Viewer = "user"): LibrarySearchResult {
-    const tabs = this.listOpenTabs(viewer);
+  searchOpen(query: string, viewer: Viewer = "user", see?: (tab: Tab) => boolean): LibrarySearchResult {
+    const tabs = this.listOpenTabs(viewer, see);
     return rankLibrary(tabs, query, 0, Math.max(tabs.length, 1));
   }
 
   /** Every page, open or closed, in Library tree order unless a query ranks them. */
   searchLibrary(
     query: string,
-    opts: { offset?: number; limit?: number; folderId?: string | null; viewer?: Viewer } = {}
+    opts: { offset?: number; limit?: number; folderId?: string | null; viewer?: Viewer; see?: (tab: Tab) => boolean } = {}
   ): LibrarySearchResult {
     const viewer = opts.viewer ?? "user";
     const off = Math.max(0, Math.floor(opts.offset ?? 0));
     const lim = Math.max(1, Math.floor(opts.limit ?? LIBRARY_PAGE_DEFAULT));
-    let pages = this.treeOrder().filter((tab) => visibleTo(tab, viewer));
+    let pages = this.treeOrder().filter((tab) => (opts.see ? opts.see(tab) : visibleTo(tab, viewer)));
     if (opts.folderId !== undefined) {
       const scope = opts.folderId === null ? null : this.subtreeFolderIds(opts.folderId);
       pages = pages.filter((tab) => (scope === null ? !tab.folderId : Boolean(tab.folderId && scope.has(tab.folderId))));
@@ -388,8 +399,8 @@ export class BoardStore extends EventEmitter {
     return rankLibrary(pages, query, off, lim);
   }
 
-  searchPages(query: string, limit?: number, viewer: Viewer = "user"): PageSearchResult {
-    return rankPages(this.listOpenTabs(viewer), this.listClosedTabs(viewer), query, limit ?? PAGE_SEARCH_DEFAULT);
+  searchPages(query: string, limit?: number, viewer: Viewer = "user", see?: (tab: Tab) => boolean): PageSearchResult {
+    return rankPages(this.listOpenTabs(viewer, see), this.listClosedTabs(viewer, see), query, limit ?? PAGE_SEARCH_DEFAULT);
   }
 
   listTemplates(viewer: Viewer = "user"): TemplateMeta[] {
@@ -412,6 +423,104 @@ export class BoardStore extends EventEmitter {
     this.persistSoon();
     this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
     return tab;
+  }
+
+  /**
+   * Links to pages the user adds by hand on a built-in template's page (a card on a board) grant the
+   * page they edited access to those pages (#269), when they are Open. Only once the link has stayed
+   * for LINK_GRANT_DELAY_MS, so a wrong link removed right away grants nothing. A built-in's code
+   * only writes what the user does, so an agent cannot launder its own links through it.
+   */
+  private noteUserLinks(tab: Tab, before: BoardState, after: BoardState): void {
+    const template = tab.templateId ? this.templates.get(tab.templateId) : undefined;
+    if (!template?.source?.builtin) return;
+    const had = new Set(pageKeysIn(before));
+    for (const key of new Set(pageKeysIn(after))) {
+      if (had.has(key)) continue;
+      const timer = setTimeout(() => {
+        const page = this.locate(tab.id)?.tab;
+        const target = this.locate(key)?.tab;
+        if (!page || !target || target.id === page.id || !pageKeysIn(page.state).includes(key)) return;
+        if (effectiveLevel({ ...target, createdBy: undefined }, this.accessLookup()) !== "open") return;
+        this.changeAccessGrants({ kind: "page", id: page.id }, { add: [{ kind: "page", id: target.id }] });
+      }, LINK_GRANT_DELAY_MS);
+      timer.unref?.();
+    }
+  }
+
+  /** Board lookups for agent page access (#269). */
+  accessLookup(): AccessLookup {
+    return {
+      folderChain: (folderId) => this.folderAncestors(folderId ?? null).filter((id): id is string => Boolean(id)).reverse(),
+      folderAccess: (id) => this.folders.get(id)?.access,
+      pageFolder: (id) => this.locate(id)?.tab.folderId,
+      pageAccess: (id) => this.locate(id)?.tab.access,
+    };
+  }
+
+  /** A page's agent access level (#269). Restricted is agentHidden. Board UI only. */
+  setPageAccessLevel(idOrKey: string, level: AccessLevel): Tab {
+    const tab = this.requireAny(idOrKey);
+    const hidden = level === "restricted";
+    const next = level === "ask" || level === "trusted" ? level : undefined;
+    if (Boolean(tab.agentHidden) === hidden && tab.access?.level === next) return tab;
+    if (hidden) tab.agentHidden = true;
+    else delete tab.agentHidden;
+    tab.access = this.trimAccess({ ...(tab.access ?? {}), level: next });
+    if (!tab.access) delete tab.access;
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return tab;
+  }
+
+  setFolderAccessLevel(id: string, level: AccessLevel): Folder {
+    const folder = this.requireFolder(id);
+    const next = level === "open" ? undefined : level;
+    if (folder.access?.level === next) return folder;
+    folder.access = this.trimAccess({ ...(folder.access ?? {}), level: next });
+    if (!folder.access) delete folder.access;
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    return folder;
+  }
+
+  /**
+   * Add or remove grants on a page or folder (#269): chats on it reach those targets without asking.
+   * Returns false when nothing changed.
+   */
+  changeAccessGrants(home: AccessTarget, change: { add?: AccessTarget[]; remove?: AccessTarget[] }): boolean {
+    const edit = (grants: AccessTarget[] | undefined): AccessTarget[] | undefined => {
+      let out = addTargets(grants, (change.add ?? []).filter((t) => !sameTarget(t, home)));
+      for (const r of change.remove ?? []) out = out.filter((t) => !sameTarget(t, r));
+      return out.length ? out : undefined;
+    };
+    if (home.kind === "folder") {
+      const folder = this.requireFolder(home.id);
+      const grants = edit(folder.access?.grants);
+      if (JSON.stringify(grants ?? []) === JSON.stringify(folder.access?.grants ?? [])) return false;
+      folder.access = this.trimAccess({ ...(folder.access ?? {}), grants });
+      if (!folder.access) delete folder.access;
+      this.foldersDirty = true;
+      this.persistSoon();
+      this.emitFolders();
+      return true;
+    }
+    const tab = this.requireAny(home.id);
+    const grants = edit(tab.access?.grants);
+    if (JSON.stringify(grants ?? []) === JSON.stringify(tab.access?.grants ?? [])) return false;
+    tab.access = this.trimAccess({ ...(tab.access ?? {}), grants });
+    if (!tab.access) delete tab.access;
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: false });
+    return true;
+  }
+
+  private trimAccess<T extends object>(access: T): T | undefined {
+    const out = Object.fromEntries(Object.entries(access).filter(([, v]) => v !== undefined && !(Array.isArray(v) && !v.length))) as T;
+    return Object.keys(out).length ? out : undefined;
   }
 
   /**
@@ -551,7 +660,7 @@ export class BoardStore extends EventEmitter {
       ...(thread ? { thread } : {}),
     });
     if (outcome.ops.length) {
-      const write = this.writeState(tab.id, { ops: outcome.ops, actor: actorFromCaller(caller) });
+      const write = this.writeState(tab.id, { ops: outcome.ops, actor: actorFromCaller(caller), byUser: caller.by === "user" });
       if (!write.ok) {
         throw new Error("the page changed while the action ran; try again");
       }
@@ -1784,6 +1893,7 @@ export class BoardStore extends EventEmitter {
       throw new Error(`state would be too large (${bytes} bytes, max ${MAX_STATE_BYTES})`);
     }
     const assets = attached ? this.insertPageAssetDrafts(tab, attached.drafts) : undefined;
+    if (input.byUser && !input.actor) this.noteUserLinks(tab, tab.state, result.state);
     tab.state = result.state;
     tab.stateRevision += 1;
     tab.stateUpdatedAt = Date.now();
@@ -1981,7 +2091,7 @@ export class BoardStore extends EventEmitter {
       data = JSON.parse(text);
     }
     const write = input.ops?.length
-      ? this.writeState(located.tab.id, { ops: input.ops, lenient: true, client: input.client, writeId: input.writeId, actor: input.actor })
+      ? this.writeState(located.tab.id, { ops: input.ops, lenient: true, client: input.client, writeId: input.writeId, actor: input.actor, byUser: input.by === "user" })
       : undefined;
     const tab = located.tab;
     tab.eventSeq += 1;

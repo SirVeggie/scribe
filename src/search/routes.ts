@@ -6,6 +6,7 @@ import { searchEmbedder } from "./embedder.js";
 import { refreshSearchIndex, searchIndex, setSearchPackReplacing } from "./service.js";
 import { installSearchPack, MAX_PACK_ZIP_BYTES } from "./install.js";
 import { store } from "../store.js";
+import type { Tab } from "../types.js";
 import { AGENT_CLIENT, CLIENT_HEADER } from "../config.js";
 import { assetUrl } from "../assets.js";
 import { pageAssetUrl } from "../pageAssets.js";
@@ -20,7 +21,10 @@ const MAX_QUERY_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_HITS = 30;
 let installingPack = false;
 
-export function searchRouter(ml: () => MlService = mlService): Router {
+/** Pages a request may see beyond the agent-hidden check (#269: an agent's page access); undefined for all of them. */
+export type SearchSee = (req: express.Request) => ((tab: Tab) => boolean) | undefined;
+
+export function searchRouter(ml: () => MlService = mlService, seeOf: SearchSee = () => undefined): Router {
   const router = Router();
   /** What the classifier reads for each hit: page, folder, the section or item, then the passage's own text (the index keeps a snippet only). */
   const passages = (viewer: "agent" | "user") => {
@@ -41,8 +45,9 @@ export function searchRouter(ml: () => MlService = mlService): Router {
   };
   const viewerOf = (req: express.Request) => req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" as const : "user" as const;
   /** A hit as the palette and agents see it. An image hit carries its URL and the card, item or section it sits on. */
-  const hitView = (hit: ScoredHit | ImageHit, viewer: "agent" | "user") => {
-    const tab = store.get(hit.tab_id, viewer);
+  const hitView = (hit: ScoredHit | ImageHit) => {
+    // The query already kept to the pages this request may see.
+    const tab = store.get(hit.tab_id);
     if (!tab) return [];
     const view = { id: tab.id, key: tab.key, title: tab.title, folder: store.folderPath(tab.folderId), kind: hit.kind, anchor: hit.anchor, headingId: hit.heading_id, label: hit.label, snippet: hit.snippet };
     if (!("ownerRow" in hit) || !hit.anchor) return [view];
@@ -66,23 +71,25 @@ export function searchRouter(ml: () => MlService = mlService): Router {
       refreshSearchIndex();
       if (!searchIndex.status().enabled) { res.status(503).json({ error: "Semantic search is unavailable", ...status() }); return; }
       const viewer = viewerOf(req);
-      let visible = (id: string) => !!store.get(id, viewer);
+      const see = seeOf(req);
+      const seen = (id: string) => { const tab = see ? store.get(id) : store.get(id, viewer); return Boolean(tab && (!see || see(tab))); };
+      let visible = seen;
       if (folderPath) {
         const folderId = folderPath === "/" ? null : store.findFolderPath(folderPath);
         if (folderId === undefined) { res.status(404).json({ error: `folder not found: ${folderPath}` }); return; }
-        const inFolder = new Set(store.searchLibrary("", { folderId, viewer, limit: Number.MAX_SAFE_INTEGER }).hits.map(hit => hit.tab.id));
+        const inFolder = new Set(store.searchLibrary("", { folderId, viewer, see, limit: Number.MAX_SAFE_INTEGER }).hits.map(hit => hit.tab.id));
         visible = id => inFolder.has(id);
       }
       if (scope === "images") {
         const hits = await searchIndex.queryImages(q, visible, limit);
-        res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() }); return;
+        res.json({ hits: hits.flatMap(hit => hitView(hit)), index: searchIndex.status() }); return;
       }
       // rerank=0 asks for the vector ranking alone (the eval compares the two).
       const rerank = req.query.rerank !== "0" && ml().ready(RERANK_FEATURE, ["toolResults"]);
       const found = await searchIndex.query(q, scope as "pages" | "chunks", visible, rerank ? Math.max(limit, RERANK_TOP_K) : limit);
       let hits = found, info: RerankInfo | undefined;
       if (rerank && found.length) ({ hits, info } = await rerankHits(q, found, passages(viewer), (...args) => ml().decide(...args), { timeoutMs: RERANK_BUDGET_MS[viewer] }));
-      res.json({ hits: hits.slice(0, limit).flatMap(hit => hitView(hit, viewer)), index: searchIndex.status(), ...(info ? { rerank: info } : {}) });
+      res.json({ hits: hits.slice(0, limit).flatMap(hit => hitView(hit)), index: searchIndex.status(), ...(info ? { rerank: info } : {}) });
     } catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   /** An image as the query: the body is its bytes. Returns the indexed images that look most like it. */
@@ -95,8 +102,9 @@ export function searchRouter(ml: () => MlService = mlService): Router {
       refreshSearchIndex();
       if (!searchIndex.status().enabled) { res.status(503).json({ error: "Semantic search is unavailable", ...status() }); return; }
       const viewer = viewerOf(req);
-      const hits = await searchIndex.queryImages(req.body, id => !!store.get(id, viewer), limit);
-      res.json({ hits: hits.flatMap(hit => hitView(hit, viewer)), index: searchIndex.status() });
+      const see = seeOf(req);
+      const hits = await searchIndex.queryImages(req.body, id => { const tab = see ? store.get(id) : store.get(id, viewer); return Boolean(tab && (!see || see(tab))); }, limit);
+      res.json({ hits: hits.flatMap(hit => hitView(hit)), index: searchIndex.status() });
     } catch (err) { res.status(503).json({ error: (err as Error).message }); }
   });
   router.post("/settings", (req, res) => {

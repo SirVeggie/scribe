@@ -3,8 +3,9 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureAccessColumns, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
+import { normalizeFolderAccess, normalizePageAccess } from "./pageAccess.js";
 import { normalizeEvents } from "./events.js";
 import { FOLDERS_TABLE_SQL, TABS_TABLE_SQL } from "./schema.js";
 import {
@@ -48,6 +49,7 @@ type FolderRow = {
   updated_at: number;
   deleted_at: number | null;
   deleted_batch: string | null;
+  access: string | null;
 };
 
 type TemplateRow = {
@@ -121,6 +123,7 @@ type TabRow = {
   workspace: string | null;
   file: string | null;
   temp: number;
+  access: string | null;
 };
 
 type LegacyPersisted = {
@@ -173,12 +176,12 @@ INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
   revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
-  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to, workspace, file, temp
+  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to, workspace, file, temp, access
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -208,12 +211,13 @@ ON CONFLICT(id) DO UPDATE SET
   reply_to = excluded.reply_to,
   workspace = excluded.workspace,
   file = excluded.file,
-  temp = excluded.temp
+  temp = excluded.temp,
+  access = excluded.access
 `;
 
 const INSERT_FOLDER_SQL = `
-INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch, description, instructions)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch, description, instructions, access)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const UPSERT_TEMPLATE_SQL = `
@@ -303,6 +307,7 @@ export class BoardDb {
       ensureWorkspaceColumn(db);
       ensureFileColumn(db);
       ensureTempColumn(db);
+      ensureAccessColumns(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -650,6 +655,7 @@ export class BoardDb {
       ensureWorkspaceColumn(db);
       ensureFileColumn(db);
       ensureTempColumn(db);
+      ensureAccessColumns(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -743,6 +749,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.workspace ?? null,
     tab.file ? JSON.stringify(tab.file) : null,
     tab.temp ? 1 : 0,
+    tab.access ? JSON.stringify(tab.access) : null,
   ];
 }
 
@@ -759,7 +766,18 @@ function folderToParams(stored: StoredFolder): SQLInputValue[] {
     deletedAt !== undefined ? (deletedBatch ?? null) : null,
     folder.description ?? "",
     folder.instructions ?? "",
+    folder.access ? JSON.stringify(folder.access) : null,
   ];
+}
+
+function folderAccessOf(raw: string | null | undefined): { access?: Folder["access"] } {
+  if (!raw) return {};
+  try {
+    const access = normalizeFolderAccess(JSON.parse(raw) as unknown);
+    return access ? { access } : {};
+  } catch {
+    return {};
+  }
 }
 
 function rowToFolder(row: FolderRow): StoredFolder {
@@ -773,6 +791,7 @@ function rowToFolder(row: FolderRow): StoredFolder {
       pos: Number(row.pos) || 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      ...folderAccessOf(row.access),
     },
     ...(row.deleted_at !== null ? { deletedAt: row.deleted_at } : {}),
     ...(row.deleted_batch ? { deletedBatch: row.deleted_batch } : {}),
@@ -856,6 +875,16 @@ function rowToStored(row: TabRow): StoredTab {
   }
   if (row.workspace) {
     tab.workspace = row.workspace;
+  }
+  if (row.access) {
+    try {
+      const access = normalizePageAccess(JSON.parse(row.access) as unknown);
+      if (access) {
+        tab.access = access;
+      }
+    } catch {
+      /* ignore */
+    }
   }
   if (row.file) {
     try {

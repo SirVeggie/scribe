@@ -5,9 +5,12 @@ import type { Thread } from "./types.js";
  * What the user granted a thread while it ran (web requests, thread access), as rows the chat
  * can list and take back one by one. key names the grant for a revoke.
  */
-export type GrantRow = { kind: "web" | "threads" | "helpers"; key: string; label: string };
+export type GrantRow = { kind: "web" | "threads" | "helpers" | "pages"; key: string; label: string };
 
-type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed">;
+type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants">;
+
+/** Names for page grants: a page's title, a folder's path. */
+export type PageNames = { page(id: string): string | null; folder(id: string): string | null };
 
 function scopeKey(scope: AccessScope): string {
   if (scope.kind === "all") return "threads:all";
@@ -15,8 +18,8 @@ function scopeKey(scope: AccessScope): string {
   return `threads:${scope.kind}:${scope.id}`;
 }
 
-/** The thread's grants that are in effect: web first (any site, then domains), then readable thread scopes, then helper agents. */
-export function grantRows(thread: GrantThread, lookup?: ScopeLookup): GrantRow[] {
+/** The thread's grants that are in effect: web first (any site, then domains), then readable thread scopes, then pages and folders (#269), then helper agents. */
+export function grantRows(thread: GrantThread, lookup?: ScopeLookup, names?: PageNames): GrantRow[] {
   const rows: GrantRow[] = [];
   if (thread.webGrants?.all) rows.push({ kind: "web", key: "web:*", label: "Any website" });
   for (const domain of thread.webGrants?.domains ?? []) rows.push({ kind: "web", key: `web:${domain}`, label: domain });
@@ -24,12 +27,22 @@ export function grantRows(thread: GrantThread, lookup?: ScopeLookup): GrantRow[]
     const label = scopeLabel(scope, lookup);
     rows.push({ kind: "threads", key: scopeKey(scope), label: label.charAt(0).toUpperCase() + label.slice(1) });
   }
+  for (const grant of thread.pageGrants ?? []) {
+    const name = grant.kind === "page" ? names?.page(grant.id) : names?.folder(grant.id);
+    const label = grant.kind === "page" ? `Page "${name ?? grant.id}"` : `Folder "${name ?? grant.id}"`;
+    rows.push({ kind: "pages", key: `pages:${grant.kind}:${grant.id}`, label: grant.mention ? `${label} (mentioned)` : label });
+  }
   if (thread.helpersAllowed) rows.push({ kind: "helpers", key: "helpers", label: "Start helpers without asking" });
   return rows;
 }
 
 /** The thread's grant fields without the one key names; null when nothing matches. */
-export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed"> | null {
+export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants"> | null {
+  if (key.startsWith("pages:")) {
+    const grants = thread.pageGrants ?? [];
+    const kept = grants.filter((g) => `pages:${g.kind}:${g.id}` !== key);
+    return kept.length === grants.length ? null : { webGrants: thread.webGrants, threadGrants: thread.threadGrants, pageGrants: kept };
+  }
   if (key === "helpers") {
     return thread.helpersAllowed ? { webGrants: thread.webGrants, threadGrants: thread.threadGrants, helpersAllowed: false } : null;
   }

@@ -28,7 +28,8 @@ CREATE TABLE tabs (
   reply_to TEXT,
   workspace TEXT,
   file TEXT,
-  temp INTEGER NOT NULL DEFAULT 0
+  temp INTEGER NOT NULL DEFAULT 0,
+  access TEXT
 );
 CREATE INDEX idx_tabs_status_closed ON tabs(status, closed_at DESC);
 CREATE INDEX idx_tabs_status_deleted ON tabs(status, deleted_at DESC);
@@ -76,7 +77,8 @@ CREATE TABLE IF NOT EXISTS folders (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
-  deleted_batch TEXT
+  deleted_batch TEXT,
+  access TEXT
 );
 `;
 

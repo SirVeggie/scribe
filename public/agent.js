@@ -2165,6 +2165,11 @@
     reasoningBox.checked = Boolean(source?.reasoning);
     const reasoning = el("label", "ag-check");
     reasoning.append(reasoningBox, el("span", null, "Offer reasoning levels (sent as reasoning_effort)"));
+    const trustedBox = el("input");
+    trustedBox.type = "checkbox";
+    trustedBox.checked = Boolean(source?.trusted);
+    const trusted = el("label", "ag-check");
+    trusted.append(trustedBox, el("span", null, "Trusted: its models may read Trusted only pages"));
     const priceRows = [];
     const priceList = el("div");
     function priceRow(model = "", saved) {
@@ -2200,7 +2205,7 @@
     const error = el("p", "ag-source-error");
     error.hidden = true;
     const save = async () => {
-      const body = { name: name.value, baseUrl: baseUrl.value, models: models.value, reasoning: reasoningBox.checked };
+      const body = { name: name.value, baseUrl: baseUrl.value, models: models.value, reasoning: reasoningBox.checked, trusted: trustedBox.checked };
       if (key.value.trim()) body.apiKey = key.value.trim();
       try {
         const pricing = {};
@@ -2251,6 +2256,7 @@
       field("API key", key, source?.hasKey ? "Leave empty to keep the saved key." : "Leave empty for local servers that need none."),
       field("Models", models),
       reasoning,
+      trusted,
       helpHeading("Model prices · USD per 1M tokens", "Automatic uses available catalog prices; verification dates and tariff discounts are unknown. Custom fixed prices replace the whole rate set. Unknown disables estimation. Removing an entry restores Automatic. Changes apply on the next turn; recorded estimates keep their original rates."),
       priceList,
       button("Add model price", "ag-btn", () => priceRow()),
@@ -2700,8 +2706,24 @@
       };
     }
 
-    async updateSettings(patch) {
+    /** Whether patch moves a tainted thread (#269: it read Trusted only or Restricted pages) to a model the user does not trust. */
+    async untrustedSwitch(t, patch) {
+      if (!t?.tainted || !(patch.provider || patch.model)) return false;
+      const provider = patch.provider || t.provider;
+      const model = patch.model || prefs().models?.[provider] || "default";
+      if (provider === t.provider && model === t.model) return false;
+      const source = provider === "pi" ? model.split("/")[0] : "";
+      if (!source.startsWith("src-")) return true;
+      const sources = (await api("GET", "/model-sources").catch(() => ({}))).sources || [];
+      return !sources.some((s) => s.id === source.slice(4) && s.trusted);
+    }
+
+    async updateSettings(patch, checked = false) {
       const t = this.thread();
+      if (!checked && (await this.untrustedSwitch(t, patch))) {
+        const ok = await app()?.confirm?.("This thread has read Trusted only or Restricted pages. The new model is not trusted and will see that content.", "Switch");
+        if (!ok) return;
+      }
       if (t && (this.pendingFork || (patch.provider && patch.provider !== t.provider && t.stats.turns > 0))) {
         const pending = this.pendingFork || { settings: {}, archive: false };
         Object.assign(pending.settings, patch);
@@ -2716,7 +2738,7 @@
         }
         if (pending.settings.provider === t.provider) {
           this.pendingFork = null;
-          return this.updateSettings(pending.settings);
+          return this.updateSettings(pending.settings, true);
         }
         this.pendingFork = pending;
         this.renderComposerBar();
@@ -3258,7 +3280,7 @@
       const row = (g) => ({
         label: g.label,
         detail: "Remove",
-        icon: g.kind === "web" ? "globe" : g.kind === "helpers" ? "task" : "shield",
+        icon: g.kind === "web" ? "globe" : g.kind === "helpers" ? "task" : g.kind === "pages" ? "page" : "shield",
         run: () =>
           api("PATCH", `/threads/${encodeURIComponent(t.id)}`, { revokeGrant: g.key })
             .then(() => notice(`Removed: ${g.label}`))
@@ -3267,11 +3289,13 @@
       const web = t.grants.filter((g) => g.kind === "web");
       const threads = t.grants.filter((g) => g.kind === "threads");
       const helpers = t.grants.filter((g) => g.kind === "helpers");
+      const pages = t.grants.filter((g) => g.kind === "pages");
       openMenu(
         anchor,
         [
           ...(web.length ? [{ header: "Web access" }, ...web.map(row)] : []),
           ...(threads.length ? [{ header: "Can read other threads" }, ...threads.map(row)] : []),
+          ...(pages.length ? [{ header: "Pages outside its Scribe access" }, ...pages.map(row)] : []),
           ...(helpers.length ? [{ header: "Helper agents" }, ...helpers.map(row)] : []),
         ],
         { width: 320 }

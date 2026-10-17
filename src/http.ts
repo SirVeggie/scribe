@@ -16,12 +16,13 @@ import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { checkPermission, isPermissionValue, permissionViews } from "./pagePermissions.js";
+import { isAccessLevel, normalizeTarget, pageReach, reachMessage, type PageReader, type Reach } from "./pageAccess.js";
 import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, matchRecord, qualityLabel } from "./pageSearch.js";
 import { chunkPage } from "./search/chunker.js";
 import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } from "./store.js";
-import { isBlankPage, isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
+import { isBlankPage, isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type AccessTarget, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import type { SpacesView } from "./spaces.js";
 import { ViewerHub } from "./viewers.js";
 import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
@@ -166,7 +167,7 @@ export async function startHttp(): Promise<http.Server> {
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use(express.json({ limit: "6mb" }));
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
-  app.use("/api/search", searchRouter());
+  app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
   app.use("/api/audio", audioRouter(new AudioService({ sources: () => agentHost?.modelSources() ?? [] }), new PageAudio(id => store.pagePermissions(id))));
   app.use(noteAgentSession);
@@ -177,10 +178,14 @@ export async function startHttp(): Promise<http.Server> {
     express.static(path.join(publicDir, "..", "node_modules", "pdfjs-dist"), { fallthrough: false, index: false }));
 
   app.param("id", (req, res, next, id: string) => {
-    if (!req.path.startsWith("/api/templates/") && store.get(id) && !store.get(id, viewerOf(req))) {
-      res.status(404).json({ error: `tab not found: ${id}` });
+    if (req.path.startsWith("/api/templates/") || req.path.startsWith("/api/folders/")) {
+      next();
       return;
     }
+    // An agent's page access (#269): out of reach answers like a missing page, or says to ask.
+    // It covers Restricted (agentHidden) too: a chat on that page, or one the user @mentioned it in, gets in.
+    const tab = store.get(id);
+    if (tab && !checkReach(req, res, tab)) return;
     next();
   });
 
@@ -208,24 +213,31 @@ export async function startHttp(): Promise<http.Server> {
 
   app.get("/api/tabs", (req, res) => {
     const viewer = viewerOf(req);
+    const see = reachable(req);
     const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
+    const activeId = store.getActiveId(viewer);
+    const active = activeId && (!see || see(store.get(activeId)!)) ? activeId : null;
     if (query) {
-      const result = store.searchOpen(query, viewer);
+      const result = store.searchOpen(query, viewer, see);
+      const outside = outsideTitles(req, store.listOpenTabs(viewer), query);
       res.json({
         tabs: result.hits.map((hit) => ({ ...libraryMeta(hit.tab), snippet: hit.snippet })),
         returned: result.returned,
         remaining: result.remaining,
         matchCount: result.matchCount,
         openCount: result.total,
-        activeId: store.getActiveId(viewer),
-        closedCount: store.closedCount(viewer),
+        activeId: active,
+        closedCount: store.closedCount(viewer, see),
+        ...(outside.length ? { outside } : {}),
       });
       return;
     }
+    const outside = outsideTitles(req, store.listOpenTabs(viewer), "", 50);
     res.json({
-      tabs: store.listOpenTabs(viewer).map(libraryMeta),
-      activeId: store.getActiveId(viewer),
-      closedCount: store.closedCount(viewer),
+      tabs: store.listOpenTabs(viewer, see).map(libraryMeta),
+      activeId: active,
+      closedCount: store.closedCount(viewer, see),
+      ...(outside.length ? { outside } : {}),
     });
   });
 
@@ -242,13 +254,16 @@ export async function startHttp(): Promise<http.Server> {
         return;
       }
     }
-    const result = store.searchLibrary(query, { offset, limit, folderId, viewer: viewerOf(req) });
+    const see = reachable(req);
+    const result = store.searchLibrary(query, { offset, limit, folderId, viewer: viewerOf(req), see });
+    const outside = see && query.trim() && offset === 0 ? outsideTitles(req, store.searchLibrary("", { folderId, viewer: viewerOf(req), limit: Number.MAX_SAFE_INTEGER }).hits.map((hit) => hit.tab), query) : [];
     res.json({
       tabs: result.hits.map((hit) => ({ ...libraryMeta(hit.tab), snippet: hit.snippet })),
       returned: result.returned,
       remaining: result.remaining,
       matchCount: result.matchCount,
       total: result.total,
+      ...(outside.length ? { outside } : {}),
     });
   });
 
@@ -265,7 +280,7 @@ export async function startHttp(): Promise<http.Server> {
   app.get("/api/search", (req, res) => {
     const query = typeof req.query.query === "string" ? req.query.query : "";
     const limit = optionalNumber(req.query.limit);
-    const result = store.searchPages(query, limit, viewerOf(req));
+    const result = store.searchPages(query, limit, viewerOf(req), reachable(req));
     res.json({
       tabs: result.hits.map((hit) => ({
         ...libraryMeta(hit.tab),
@@ -299,9 +314,15 @@ export async function startHttp(): Promise<http.Server> {
       const rawRevision = req.body?.expectedRevision;
       const replyTo = parseReplyTo(req.body?.replyTo);
       // Refuse a bad target before the page is made or replaced.
-      if (replyTo && !store.get(replyTo.page, "agent")) {
+      const reach = reachFor(req);
+      const replyPage = replyTo ? store.get(replyTo.page, "agent") : undefined;
+      if (replyTo && (!replyPage || (reach && reach(replyPage) === "hidden"))) {
         throw new Error(`replyTo page not found: ${replyTo.page}`);
       }
+      // Replacing a page by its key is a write to that page (#269).
+      const key = optionalString(req.body?.key);
+      const existing = key ? store.get(key, viewerOf(req)) : undefined;
+      if (existing && !checkReach(req, res, existing)) return;
       const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
@@ -536,6 +557,7 @@ export async function startHttp(): Promise<http.Server> {
         writeId: optionalString(req.body?.writeId),
         resolveIncompatibility: req.body?.resolveIncompatibility === true,
         actor: actorOf(req),
+        byUser: viewerOf(req) !== "agent",
       });
       if (!result.ok) {
         res.status(409).json({ error: "stale expectedRevision", conflict: true, stateRevision: result.stateRevision });
@@ -848,6 +870,8 @@ export async function startHttp(): Promise<http.Server> {
       res.status(400).json({ error: "page is required" });
       return;
     }
+    const asked = store.get(page, viewerOf(req));
+    if (asked && !checkReach(req, res, asked)) return;
     const timeoutMs = clampWaitMs(body.timeoutMs);
     req.setTimeout(timeoutMs + 10_000);
     res.setTimeout(timeoutMs + 10_000);
@@ -1018,6 +1042,42 @@ export async function startHttp(): Promise<http.Server> {
     res.on("close", onClientGone);
     agentHost
       .preRequestWeb(thread, call, { importance, ...(typeof body.reason === "string" ? { reason: body.reason.slice(0, 1000) } : {}), signal: abort.signal })
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
+  /** page_access from a Scribe chat's MCP (#269): ask the user for a page outside the chat's access; waits for the answer. */
+  app.post("/api/page-access", (req, res) => {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "page_access only works in Scribe chat threads." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    const page = typeof body.page === "string" ? body.page.trim() : "";
+    if (!page) {
+      res.status(400).json({ error: "page is required: the page's key or id" });
+      return;
+    }
+    const importance = parseWebImportance(body.importance);
+    if (body.importance !== undefined && !importance) {
+      res.status(400).json({ error: "importance must be necessary, important, useful or trivial" });
+      return;
+    }
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .requestPageAccess(thread, { page, folder: body.folder === true, importance, ...(typeof body.reason === "string" ? { reason: body.reason.slice(0, 1000) } : {}), signal: abort.signal })
       .then((result) => {
         if (!res.writableEnded) res.json(result);
       })
@@ -1227,7 +1287,7 @@ export async function startHttp(): Promise<http.Server> {
         agentHost?.followToPage(threadId, tab.id);
         requestAgentFocus(tab.id, threadId);
       }
-      res.json({ tab: libraryMeta(tab), closedCount: store.closedCount(viewerOf(req)) });
+      res.json({ tab: libraryMeta(tab), closedCount: store.closedCount(viewerOf(req), reachable(req)) });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
@@ -1273,7 +1333,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.get("/api/folders/tree", (req, res) => {
-    res.json({ folders: store.folderTree(viewerOf(req)) });
+    res.json({ folders: store.folderTree(viewerOf(req), reachable(req)) });
   });
 
   app.post("/api/folders", (req, res) => {
@@ -1419,6 +1479,37 @@ export async function startHttp(): Promise<http.Server> {
       res.status(404).json({ error: (err as Error).message });
     }
   });
+
+  /**
+   * A page's or folder's agent access (#269): its level, and grants to remove. Board UI only; the
+   * Restricted level is the page's agentHidden flag.
+   */
+  for (const kind of ["page", "folder"] as const) {
+    app.put(kind === "page" ? "/api/tabs/:id/access" : "/api/folders/:fid/access", (req, res) => {
+      if (viewerOf(req) === "agent") {
+        res.status(403).json({ error: "Only the board UI can change agent access" });
+        return;
+      }
+      const level = req.body?.level;
+      const remove = Array.isArray(req.body?.removeGrants) ? req.body.removeGrants.map(normalizeTarget).filter((t: AccessTarget | undefined): t is AccessTarget => Boolean(t)) : [];
+      if (level !== undefined && !isAccessLevel(level)) {
+        res.status(400).json({ error: "level must be open, ask, trusted or restricted" });
+        return;
+      }
+      try {
+        const params = req.params as Record<string, string>;
+        const id = kind === "page" ? params.id : params.fid;
+        if (level !== undefined) {
+          if (kind === "page") store.setPageAccessLevel(id, level);
+          else store.setFolderAccessLevel(id, level);
+        }
+        if (remove.length) store.changeAccessGrants({ kind, id: kind === "page" ? store.get(id)?.id ?? id : id }, { remove });
+        res.json(kind === "page" ? { tab: toMeta(store.get(id)!) } : { folder: store.listFolders().find((f) => f.id === id) });
+      } catch (err) {
+        sendStoreError(res, err);
+      }
+    });
+  }
 
   app.post("/api/tabs/:id/workspace", (req, res) => {
     if (viewerOf(req) === "agent") {
@@ -2150,7 +2241,9 @@ function actorOf(req: express.Request): PageActor | undefined {
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const title = chat?.title?.trim().slice(0, 120);
   const workspace = chat && agentHost ? agentHost.threadFolder(chat) : null;
-  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}), ...(workspace ? { workspace } : {}) };
+  const scope = chat?.scope;
+  const origin = scope?.ref && (scope.kind === "page" || scope.kind === "folder") ? { kind: scope.kind, id: scope.ref } : undefined;
+  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}), ...(workspace ? { workspace } : {}), ...(origin ? { origin } : {}) };
 }
 
 /** The page of the chat thread making this request, when that page is still blank: a new page it shows fills it. */
@@ -2474,6 +2567,50 @@ function refuseAgent(req: express.Request, res: express.Response): boolean {
 
 function viewerOf(req: express.Request): Viewer {
   return req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" : "user";
+}
+
+/**
+ * Which pages an agent's request may reach (#269): its chat thread's, or for an MCP client with no
+ * Scribe chat, a global untrusted chat's. Null for the board UI and page code, which this does not cover (#660).
+ */
+function reachFor(req: express.Request): ((tab: Tab) => Reach) | null {
+  if (isContentHost(req) || viewerOf(req) !== "agent") return null;
+  const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+  const reader: PageReader = (thread && agentHost?.pageReader(thread)) || { scope: { kind: "global", ref: null }, trusted: false, grants: [] };
+  const lookup = store.accessLookup();
+  return (tab) => pageReach(reader, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, lookup);
+}
+
+/** Only the pages the agent may reach, for listings and searches. */
+function reachable(req: express.Request): ((tab: Tab) => boolean) | undefined {
+  const reach = reachFor(req);
+  return reach ? (tab) => reach(tab) === "allow" : undefined;
+}
+
+/** Open the way to a page for the request, or answer for it: out of reach is not found, or a pointer to page_access. */
+function checkReach(req: express.Request, res: express.Response, tab: Tab): boolean {
+  const reach = reachFor(req)?.(tab) ?? "allow";
+  if (reach === "allow") {
+    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    if (thread && agentHost && viewerOf(req) === "agent" && !isContentHost(req)) agentHost.notePageReached(thread, tab);
+    return true;
+  }
+  res.status(reach === "ask" ? 403 : 404).json({ error: reachMessage(reach, tab), ...(reach === "ask" ? { access: "ask" } : {}) });
+  return false;
+}
+
+/**
+ * Pages outside the agent's access whose titles match the query, for a search to list after its hits:
+ * titles only, no text, so the agent can ask for the right one (#269).
+ */
+function outsideTitles(req: express.Request, tabs: Tab[], query: string, limit = 10): Array<ReturnType<typeof libraryMeta> & { outside: true }> {
+  const reach = reachFor(req);
+  if (!reach) return [];
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return tabs
+    .filter((tab) => reach(tab) === "ask" && (!words.length || words.every((w) => `${tab.title} ${tab.key}`.toLowerCase().includes(w))))
+    .slice(0, limit)
+    .map((tab) => ({ ...libraryMeta(tab), outside: true as const }));
 }
 
 function importFilename(req: express.Request): string {
