@@ -28,8 +28,8 @@ export function fakeAnswer(q: MlQuestion): MlAnswer {
   }
   return {
     type: "score",
-    score: 1,
-    probabilities: Object.fromEntries(q.levels.map((_, i) => [String(i + 1), i === 0 ? 1 : 0])),
+    score: 0,
+    probabilities: Object.fromEntries(q.levels.map((_, i) => [String(i), i === 0 ? 1 : 0])),
     confidence: 1,
   };
 }

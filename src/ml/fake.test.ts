@@ -16,12 +16,12 @@ test("scripted fake answers exercise probabilities, choice and score; missing id
   const { answers } = await decide(JSON.stringify({
     label0: { noul: 0.9 },
     priority: { choice: "high", probabilities: { unspecified: 0.2, high: 0.8 }, confidence: 0.7 },
-    risk: { score: 1.8, probabilities: { "1": 0.2, "2": 0.8 }, confidence: 0.7 },
+    risk: { score: 0.8, probabilities: { "0": 0.2, "1": 0.8 }, confidence: 0.7 },
   }));
   assert.deepEqual(answers.label0, { type: "yesno", yes: 0.9 });
   assert.deepEqual(answers.label1, { type: "yesno", yes: 0.5 });
   assert.equal(answers.priority.type === "choice" && answers.priority.choice, "high");
-  assert.equal(answers.risk.type === "score" && answers.risk.score, 1.8);
+  assert.equal(answers.risk.type === "score" && answers.risk.score, 0.8);
   const adapter = fakeAdapter({ script: '{"label0":{"noul":0.9}}' });
   adapter.answers.label0 = { type: "yesno", yes: 0.1 };
   assert.deepEqual((await adapter.decide(source, {}, questions, new AbortController().signal)).answers.label0, { type: "yesno", yes: 0.1 });

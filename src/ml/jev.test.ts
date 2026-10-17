@@ -34,7 +34,7 @@ const goodReply = {
   answers: {
     q1: { noul: 0.8 },
     q2: { choice: "b", probabilities: { a: 0.2, b: 0.8 }, confidence: 0.9 },
-    q3: { score: 2, probabilities: { low: 0.3, high: 0.7 }, confidence: 0.6 },
+    q3: { score: 0.7, probabilities: { "0": 0.3, "1": 0.7 }, confidence: 0.6 },
   },
   usage: { input_tokens: 120, output_tokens: 7 },
 };
@@ -90,7 +90,22 @@ test("jevAnswer rejects an answer that is not an object or has the wrong fields"
   invalid(pick, { choice: "a" });
   invalid(pick, { choice: "a", probabilities: { a: -0.1 } });
   invalid(scale, { probabilities: { low: 1 } });
-  invalid(scale, { score: Number.NaN, probabilities: { low: 1 } });
+  invalid(scale, { score: Number.NaN, probabilities: { "0": 1, "1": 0 } });
+});
+
+test("jevAnswer keeps 0-based score levels and rejects any other numbering", () => {
+  const invalid = (raw: unknown) =>
+    assert.throws(() => jevAnswer("q", scale, raw), (e) => e instanceof MlError && e.kind === "invalid_response");
+  // As H2O (llama.cpp) and Jev answered the first and last of two levels.
+  assert.deepEqual(jevAnswer("q", scale, { score: 0.07, probabilities: { "0": 0.94, "1": 0.06 }, confidence: 0.9 }), {
+    type: "score", score: 0.07, probabilities: { "0": 0.94, "1": 0.06 }, confidence: 0.9,
+  });
+  assert.equal((jevAnswer("q", scale, { score: 1 + 1e-9, probabilities: { "0": 0, "1": 1 } }) as { score: number }).score, 1);
+  invalid({ score: 2, probabilities: { "1": 0, "2": 1 } });
+  invalid({ score: 1.5, probabilities: { "0": 0.5, "1": 0.5 } });
+  invalid({ score: -0.5, probabilities: { "0": 1, "1": 0 } });
+  invalid({ score: 0.5, probabilities: { "0": 0.5, "1": 0.5, "2": 0 } });
+  invalid({ score: 0.5, probabilities: { low: 0.5, high: 0.5 } });
 });
 
 test("the request goes to the source's systemone endpoint as a POST with the key", async () => {
@@ -129,7 +144,7 @@ test("a successful reply maps every answer, the model and the usage", async () =
   const reply = await jevAdapter({ fetch, backoffMs: noWait }).decide(source, "s", questions, new AbortController().signal);
   assert.deepEqual(reply.answers.q1, { type: "yesno", yes: 0.8 });
   assert.deepEqual(reply.answers.q2, { type: "choice", choice: "b", probabilities: { a: 0.2, b: 0.8 }, confidence: 0.9 });
-  assert.deepEqual(reply.answers.q3, { type: "score", score: 2, probabilities: { low: 0.3, high: 0.7 }, confidence: 0.6 });
+  assert.deepEqual(reply.answers.q3, { type: "score", score: 0.7, probabilities: { "0": 0.3, "1": 0.7 }, confidence: 0.6 });
   assert.equal(reply.model, "jev-latest-2026");
   assert.deepEqual(reply.usage, { inputTokens: 120, outputTokens: 7 });
 });

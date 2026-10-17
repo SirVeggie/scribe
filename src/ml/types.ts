@@ -23,7 +23,10 @@ export type MlAnswer =
   | { type: "yesno"; yes: number }
   /** `confidence` comes from the whole distribution; it is not the probability of `choice`. */
   | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number }
-  /** `score` is probability-weighted, so it can fall between levels (1 is the first level). */
+  /**
+   * `score` is probability-weighted, so it can fall between levels. 0 is the first level, as are the
+   * keys of `probabilities` ("0" to levels − 1).
+   */
   | { type: "score"; score: number; probabilities: Record<string, number>; confidence: number };
 
 export type MlAnswers = Record<string, MlAnswer>;

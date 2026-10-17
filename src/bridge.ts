@@ -1495,7 +1495,8 @@ ${POINTER_DRAG_JS}
     /**
      * Ask questions about state (text, or a small object or array): { ok, answers, cached, ms }, with
      * answers under the question ids: { type: "yesno", yes } | { type: "choice", choice,
-     * probabilities, confidence } | { type: "score", score, probabilities, confidence }. Never
+     * probabilities, confidence } | { type: "score", score (0 is the first level), probabilities,
+     * confidence }. Never
      * rejects: a failure is { ok: false, error, message } and the page carries on without an answer.
      * request: { state, questions: { id: { type: "yesno", instructions, criteria? } | { type:
      * "choice", instructions, options: { name: description | null } } | { type: "score",

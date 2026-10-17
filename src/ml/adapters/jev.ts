@@ -5,6 +5,9 @@ const ATTEMPTS = 3;
 const BACKOFF_MS = 300;
 const MAX_BACKOFF_MS = 4000;
 
+/** Rounding a backend may leave on a score at either end of the scale. */
+const SCORE_SLACK = 1e-6;
+
 type Fetch = typeof fetch;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,7 +58,18 @@ export function jevAnswer(id: string, q: MlQuestion, raw: unknown): MlAnswer {
   if (typeof raw.score !== "number" || !Number.isFinite(raw.score)) {
     throw new MlError("invalid_response", `Answer "${id}" has no score`);
   }
-  return { type: "score", score: raw.score, probabilities: probabilities(raw.probabilities, id), confidence };
+  // Levels count from 0 in both the score and the probability keys (llama.cpp and Jev agree); check
+  // that rather than pass a reply on another numbering through one level off.
+  const last = q.levels.length - 1;
+  const levels = probabilities(raw.probabilities, id);
+  const keys = Object.keys(levels);
+  if (keys.length !== q.levels.length || q.levels.some((_, i) => !Object.hasOwn(levels, String(i)))) {
+    throw new MlError("invalid_response", `Answer "${id}" does not give a probability for each level 0 to ${last}`);
+  }
+  if (raw.score < -SCORE_SLACK || raw.score > last + SCORE_SLACK) {
+    throw new MlError("invalid_response", `Answer "${id}" has a score outside 0 to ${last}`);
+  }
+  return { type: "score", score: Math.min(Math.max(raw.score, 0), last), probabilities: levels, confidence };
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
