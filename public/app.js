@@ -4302,8 +4302,8 @@
         reply({ ok: true, view: fileView(tab.file.path, data.view) });
       } else if (data.op === "read") {
         reply(await call("GET", url));
-      } else if (data.op === "image") {
-        const res = await fetch(`${url}/raw`);
+      } else if (data.op === "image" || data.op === "asset") {
+        const res = await fetch(data.op === "image" ? `${url}/raw` : `${url}/asset?src=${encodeURIComponent(String(data.src ?? ""))}`);
         if (!res.ok) {
           const json = await res.json().catch(() => ({}));
           reply({ ok: false, error: String(json.error || `HTTP ${res.status}`) });

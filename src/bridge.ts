@@ -1592,7 +1592,8 @@ ${POINTER_DRAG_JS}
   /**
    * A file page's file (#654). The board reads and writes the file on this page's tab; the page
    * cannot name another. read() resolves { ok, file } (text kinds carry text, eol, bom), image()
-   * { ok, buffer, type }. save(text, { mtime, eol, bom, force }) and saveAs(text, { eol, bom }) need a
+   * { ok, buffer, type }, and asset(src) the same for an image the file links to (#658: a path
+   * relative to the file, an absolute path, or a file: URL). save(text, { mtime, eol, bom, force }) and saveAs(text, { eol, bom }) need a
    * click or key press; save resolves { ok: false, conflict: true, mtime } when the file changed
    * on disk, saveAs { ok: false, error: "cancelled" } when the user closes the dialog.
    * view() resolves { ok, view } with what view(value) last kept for this file (a PDF's zoom), so it
@@ -1601,6 +1602,7 @@ ${POINTER_DRAG_JS}
   var fileApi = {
     read: function () { return askBoard({ type: "scribe-file", op: "read" }, 60000); },
     image: function () { return askBoard({ type: "scribe-file", op: "image" }, 120000); },
+    asset: function (src) { return askBoard({ type: "scribe-file", op: "asset", src: String(src) }, 60000); },
     view: function (value) {
       return askBoard(value === undefined ? { type: "scribe-file", op: "view" } : { type: "scribe-file", op: "view", view: value }, 10000);
     },

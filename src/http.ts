@@ -59,9 +59,10 @@ import { audioRouter } from "./audio/routes.js";
 import { PageAudio } from "./audio/page.js";
 import { AudioService } from "./audio/service.js";
 import { shellAssets } from "./shellAssets.js";
+import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { PDFJS_PATH, contentOriginGate, isContentHost } from "./contentOrigin.js";
-import { FileConflictError, fileViewerHtml, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
+import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
 
@@ -139,6 +140,7 @@ export async function startHttp(): Promise<http.Server> {
     "/vendor/marked.js": path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js"),
     "/vendor/purify.js": path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js"),
     "/vendor/highlight.js": () => highlightBundle ??= highlightScript(),
+    "/vendor/editor.js": editorBundle,
   }));
   agentHost = new AgentHost((event) => {
     broadcast(event);
@@ -1898,6 +1900,29 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  /** An image a file page's markdown links to (?src=): relative to the file, an absolute path, or a file: URL. */
+  app.get("/api/tabs/:id/file/asset", (req, res) => {
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    const target = linkedImagePath(tab.file.path, String(req.query.src ?? ""));
+    if (!target) {
+      res.status(415).json({ error: "not an image" });
+      return;
+    }
+    try {
+      const { bytes, type } = readFileBytes(target);
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+      res.type(type).send(bytes);
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
   /** Save: { text, mtime, eol, bom, force }. 409 { conflict, mtime } when the file changed on disk since mtime. */
   app.put("/api/tabs/:id/file", (req, res) => {
     if (refuseAgent(req, res)) return;
@@ -2074,6 +2099,7 @@ export async function startHttp(): Promise<http.Server> {
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
+  void prebuildEditorBundle();
 
   log(`Scribe listening on ${baseUrl()} (tab pages on ${contentBaseUrl()})`);
   agentHost?.resumeInterrupted();

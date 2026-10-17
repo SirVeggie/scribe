@@ -13,7 +13,7 @@ const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/
 const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
 const BLOB_PATH = /^\/blob\/[^/]+$/;
-const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify)\.js$/;
+const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify|editor)\.js$/;
 /** The parts of pdfjs-dist a PDF file page loads, under /vendor/pdfjs. */
 export const PDFJS_PATH = /^\/(build\/pdf(\.worker)?\.min\.mjs|(cmaps|standard_fonts|wasm)\/[\w.-]+)$/;
 

@@ -185,6 +185,31 @@ export function readFileForPage(file: string, copy?: boolean): FileText | FileIn
   return { ...info, ...named, text: raw.replace(/\r\n/g, "\n"), eol, bom };
 }
 
+/**
+ * The image a markdown file links to with src: a path relative to the file's folder, an absolute
+ * path, or a file: URL, without its ?query or #hash. Null when it is a web URL or not an image.
+ */
+export function linkedImagePath(file: string, src: string): string | null {
+  let target = src.trim();
+  if (!target || /^(?:https?|data|blob):/i.test(target) || target.startsWith("//")) return null;
+  if (/^file:/i.test(target)) {
+    try {
+      target = fileURLToPath(target);
+    } catch {
+      return null;
+    }
+  } else {
+    target = target.replace(/[?#].*$/, "");
+    try {
+      target = decodeURIComponent(target);
+    } catch {
+      /* a literal % */
+    }
+  }
+  const resolved = path.isAbsolute(target) ? path.normalize(target) : path.resolve(path.dirname(file), target);
+  return imageType(resolved) ? resolved : null;
+}
+
 /** An image's or PDF's bytes, for the viewer to draw. */
 export function readFileBytes(file: string): { bytes: Buffer; type: string } {
   const type = imageType(file) ?? (isPdfFile(file) ? "application/pdf" : undefined);

@@ -118,53 +118,13 @@
   main { flex: 1 1 auto; position: relative; min-height: 0; }
   .pane { position: absolute; inset: 0; }
 
-  /* editor: a textarea over a highlighted copy, with line numbers beside it */
-  .editor { display: flex; background: var(--code-bg); }
-  .gutter {
-    flex: none;
-    overflow: hidden;
-    padding: 10px 10px 40vh 12px;
-    color: #55555d;
-    text-align: right;
-    font: 13px/20px var(--mono);
-    white-space: pre;
-    user-select: none;
-    border-right: 1px solid var(--border);
-    min-width: 44px;
-  }
-  .code { position: relative; flex: 1 1 auto; min-width: 0; }
-  .code pre, .code textarea {
-    position: absolute;
-    inset: 0;
-    margin: 0;
-    padding: 10px 14px 40vh;
-    border: 0;
-    font: 13px/20px var(--mono);
-    tab-size: 4;
-    white-space: pre;
-    overflow-wrap: normal;
-    letter-spacing: 0;
-  }
-  .code pre {
-    overflow: hidden;
-    pointer-events: none;
-    color: var(--text);
-  }
-  .code pre code { font: inherit; display: block; }
-  .code textarea {
-    width: 100%;
-    height: 100%;
-    resize: none;
-    outline: none;
-    background: transparent;
-    color: var(--text);
-    caret-color: var(--text);
-    overflow: auto;
-  }
-  .code.highlighted textarea { color: transparent; -webkit-text-fill-color: transparent; }
-  .code textarea::selection { background: rgba(130, 170, 255, 0.3); -webkit-text-fill-color: transparent; }
-  .code:not(.highlighted) textarea::selection { -webkit-text-fill-color: var(--text); }
+  /* editor: CodeMirror (templates/file-editor.js), loaded when a text file opens */
+  .editor { background: var(--code-bg); }
+  .editor .cm-editor { height: 100%; }
+  button.toggle.on { background: rgba(255, 255, 255, 0.14); color: var(--text); }
+  button.toggle { color: var(--muted); }
 
+  /* highlight.js: code blocks in rendered markdown */
   .hljs-keyword, .hljs-selector-tag, .hljs-doctag { color: var(--hl-keyword); }
   .hljs-string, .hljs-regexp, .hljs-template-tag, .hljs-selector-attr { color: var(--hl-string); }
   .hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--hl-number); }
@@ -311,6 +271,7 @@
         <button type="button" id="zoomFit">Fit</button>
         <button type="button" id="zoomOne">1:1</button>
       </div>
+      <button type="button" class="toggle hidden" id="wrapBtn" aria-pressed="false" data-tooltip="Word wrap (Alt+Z)">Wrap</button>
       <button type="button" class="hidden" id="prettify">Prettify</button>
       <button type="button" class="hidden" id="save">Save</button>
       <button type="button" class="hidden" id="saveAs">Save as</button>
@@ -320,16 +281,12 @@
     <span class="grow" id="bannerText"></span>
     <button type="button" id="bannerReload">Reload</button>
     <button type="button" id="bannerOverwrite">Overwrite</button>
+    <button type="button" id="bannerUndo">Undo</button>
+    <button type="button" id="bannerClose" aria-label="Dismiss">×</button>
   </div>
   <main id="main">
     <div class="pane message" id="loading"><p>Opening…</p></div>
-    <div class="pane editor hidden" id="editorPane">
-      <div class="gutter" id="gutter" aria-hidden="true">1</div>
-      <div class="code" id="code">
-        <pre aria-hidden="true"><code id="hl"></code></pre>
-        <textarea id="ta" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="File text" wrap="off"></textarea>
-      </div>
-    </div>
+    <div class="pane editor hidden" id="editorPane"></div>
     <div class="pane md hidden" id="mdPane"><div class="md-doc" id="mdDoc"></div></div>
     <div class="pane htmlview hidden" id="htmlPane"></div>
     <div class="pane imgview hidden" id="imgPane"><img id="img" alt=""></div>
@@ -349,11 +306,10 @@
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  var ta = $("ta"), hl = $("hl"), code = $("code"), gutter = $("gutter");
+  var editorPane = $("editorPane");
+  var editor = null;     // ScribeEditor's handle, once a text file opened
   var mdDoc = $("mdDoc"), mdPane = $("mdPane");
 
-  // Highlighting a big file on each key press gets slow; past this the editor shows plain text.
-  var HIGHLIGHT_MAX = 200 * 1024;
   // Unsaved text survives a reload in this viewer's local state, up to its size limit.
   var DRAFT_MAX = 48 * 1024;
   var LANG_LABEL = { text: "Plain text", markdown: "Markdown", json: "JSON", html: "HTML", image: "Image", pdf: "PDF" };
@@ -388,8 +344,8 @@
   }
   function textKind() { return file && file.kind !== "image" && file.kind !== "pdf" && file.kind !== "unsupported"; }
   function zoomKind() { return file && (file.kind === "image" || file.kind === "pdf"); }
-  function current() { return ta.value; }
-  function isDirty() { return textKind() && current() !== saved; }
+  function current() { return editor ? editor.text() : saved; }
+  function isDirty() { return Boolean(textKind() && editor && editor.isDirty()); }
 
   // ---------- header ----------
   function showHeader() {
@@ -427,7 +383,7 @@
   }
 
   // ---------- load ----------
-  function load(keepCaret) {
+  function load() {
     return scribe.file.read().then(function (res) {
       if (!res || !res.ok) {
         var err = (res && res.error) || "error";
@@ -449,30 +405,50 @@
         openPdf();
         return;
       }
-      openText(file.text, keepCaret);
+      openText(file.text);
     });
   }
 
-  function openText(text, keepCaret) {
+  var editorLoad = null;
+  function loadEditor() {
+    if (window.ScribeEditor) return Promise.resolve();
+    editorLoad = editorLoad || new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "/vendor/editor.js";
+      script.onload = function () { if (window.ScribeEditor) resolve(); else reject(new Error("The editor did not load.")); };
+      script.onerror = function () { editorLoad = null; reject(new Error("The editor could not be loaded.")); };
+      document.head.append(script);
+    });
+    return editorLoad;
+  }
+
+  /**
+   * Show text that was read from disk. An open editor takes it as one undoable change, so carets,
+   * folds and history survive a reload, and Ctrl+Z goes back to what was there before.
+   */
+  function openText(text) {
     saved = text;
-    var sel = keepCaret ? [ta.selectionStart, ta.selectionEnd, ta.scrollTop, ta.scrollLeft] : null;
-    var draft = scribe.local.draft;
-    // A draft from before a reload, for this same version of the file.
-    if (!keepCaret && draft && draft.mtime === file.mtime && typeof draft.text === "string" && draft.text !== text) {
-      text = draft.text;
-    }
-    ta.value = text;
-    if (sel) {
-      ta.setSelectionRange(Math.min(sel[0], text.length), Math.min(sel[1], text.length));
-      ta.scrollTop = sel[2];
-      ta.scrollLeft = sel[3];
-    }
-    code.classList.toggle("highlighted", false);
-    refresh(true);
-    var stored = scribe.local.mode;
-    mode = file.kind === "markdown" || file.kind === "html" ? (stored === "source" || stored === "render" ? stored : "render") : "source";
-    applyMode();
-    markDirty();
+    return loadEditor().then(function () {
+      var opts = { kind: file.kind, lang: file.lang, name: file.name, indent: indentUnit() };
+      if (!editor) {
+        editor = ScribeEditor.create(Object.assign({ parent: editorPane, doc: text, wrap: wrapDefault(), onUpdate: onEditorUpdate, onWrap: onWrap }, opts));
+        // A draft from before a reload, for this same version of the file: undo goes back to the file.
+        var draft = scribe.local.draft;
+        if (draft && draft.mtime === file.mtime && typeof draft.text === "string" && draft.text !== text) editor.setText(draft.text, "input.draft");
+      } else {
+        editor.setSaved(text);
+        editor.configure(opts);
+        editor.setText(text, "reload");
+      }
+      editor.setSaved(text);
+      showWrap(editor.wrap());
+      var stored = scribe.local.mode;
+      mode = file.kind === "markdown" || file.kind === "html" ? (stored === "source" || stored === "render" ? stored : "render") : "source";
+      applyMode();
+      markDirty();
+    }, function (err) {
+      showMessage("Could not open the editor", String((err && err.message) || err), "");
+    });
   }
 
   // ---------- modes ----------
@@ -487,9 +463,10 @@
       show("htmlPane");
     } else {
       show("editorPane");
-      syncScroll();
       focusEditor();
     }
+    $("wrapBtn").classList.toggle("hidden", !textKind() || mode !== "source");
+    updatePos();
   }
   $("modeSeg").addEventListener("click", function (event) {
     var b = event.target.closest("button[data-mode]");
@@ -501,115 +478,56 @@
   });
 
   // ---------- editor ----------
-  var hlTimer = null;
-  var lastLines = 0;
-  function highlightable() {
-    return (file.kind === "code" || file.kind === "json" || file.kind === "html" || file.kind === "markdown") &&
-      window.hljs && file.lang && hljs.getLanguage(file.lang) && ta.value.length <= HIGHLIGHT_MAX;
-  }
-  function refresh(now) {
-    var text = ta.value;
-    var lines = 1;
-    for (var i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) lines++;
-    if (lines !== lastLines) {
-      lastLines = lines;
-      var nums = new Array(lines);
-      for (var n = 0; n < lines; n++) nums[n] = n + 1;
-      gutter.textContent = nums.join("\n") + "\n";
-    }
-    clearTimeout(hlTimer);
-    if (!highlightable()) {
-      code.classList.remove("highlighted");
-      hl.textContent = "";
-      return;
-    }
-    var run = function () {
-      // A trailing newline needs a character after it, or the copy is one line short.
-      hl.innerHTML = hljs.highlight(ta.value + "\n ", { language: file.lang, ignoreIllegals: true }).value;
-      code.classList.add("highlighted");
-      syncScroll();
-    };
-    if (now) run();
-    else hlTimer = setTimeout(run, ta.value.length > 50000 ? 120 : 16);
-  }
-  function syncScroll() {
-    hl.parentNode.scrollTop = ta.scrollTop;
-    hl.parentNode.scrollLeft = ta.scrollLeft;
-    gutter.scrollTop = ta.scrollTop;
-  }
-  ta.addEventListener("scroll", syncScroll);
   var draftTimer = null;
-  ta.addEventListener("input", function () {
-    refresh(false);
-    markDirty();
-    setError("");
-    clearTimeout(draftTimer);
-    draftTimer = setTimeout(saveDraft, 400);
-  });
+  var dirtyFrame = 0;
+  function onEditorUpdate(update) {
+    if (update.docChanged) {
+      // Comparing a big file with the saved text on every key press adds up: once a frame.
+      if (!dirtyFrame) dirtyFrame = requestAnimationFrame(function () { dirtyFrame = 0; markDirty(); });
+      setError("");
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(saveDraft, 400);
+      // The note after a reload goes once the text changes again (an edit, or the undo it offers).
+      if (banner === "undo" && update.transactions.some(function (tr) { return tr.docChanged && !tr.isUserEvent("reload"); })) hideBanner();
+    }
+    if (update.docChanged || update.selectionSet) updatePos();
+  }
   function saveDraft() {
-    if (!file) return;
-    var text = current();
-    if (text === saved || text.length > DRAFT_MAX) {
+    if (!file || !editor) return;
+    if (editor.length() > DRAFT_MAX || !editor.isDirty()) {
       if (scribe.local.draft) scribe.setLocal({ draft: null });
       return;
     }
-    scribe.setLocal({ draft: { mtime: file.mtime, text: text } });
+    scribe.setLocal({ draft: { mtime: file.mtime, text: current() } });
   }
   function updatePos() {
-    if (!textKind() || mode !== "source") {
-      $("stPos").textContent = "";
+    if (!editor || !textKind() || mode !== "source") {
+      if (textKind()) $("stPos").textContent = "";
       return;
     }
-    var before = ta.value.slice(0, ta.selectionStart);
-    var line = before.split("\n").length;
-    var col = ta.selectionStart - before.lastIndexOf("\n");
-    var len = Math.abs(ta.selectionEnd - ta.selectionStart);
-    $("stPos").textContent = "Ln " + line + ", Col " + col + (len ? " (" + len + " selected)" : "");
+    var p = editor.position();
+    $("stPos").textContent = "Ln " + p.line + ", Col " + p.col +
+      (p.ranges > 1 ? " (" + p.ranges + " selections)" : p.selected ? " (" + p.selected + " selected)" : "");
   }
-  document.addEventListener("selectionchange", updatePos);
-  ta.addEventListener("keyup", updatePos);
 
-  /** Type text where the selection is, as one undoable edit. */
-  function insert(text) {
-    if (!document.execCommand("insertText", false, text)) {
-      ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
-      ta.dispatchEvent(new Event("input"));
-    }
+  // Word wrap: per viewer, on by default for prose.
+  function wrapDefault() {
+    var stored = scribe.local.wrap;
+    return typeof stored === "boolean" ? stored : file.kind === "markdown" || file.kind === "text";
   }
-  function lineStart(text, pos) { return text.lastIndexOf("\n", pos - 1) + 1; }
-
-  ta.addEventListener("keydown", function (event) {
-    if (event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      event.preventDefault();
-      var text = ta.value, s = ta.selectionStart, e = ta.selectionEnd;
-      var multi = text.slice(s, e).indexOf("\n") !== -1;
-      if (!multi && !event.shiftKey) {
-        insert(indentUnit());
-        return;
-      }
-      // Indent or outdent the selected lines.
-      var from = lineStart(text, s);
-      var to = e > s && text[e - 1] === "\n" ? e - 1 : e;
-      var block = text.slice(from, to);
-      var unit = indentUnit();
-      var next = event.shiftKey
-        ? block.replace(/^(\t| {1,4})/gm, function (m) { return unit === "\t" ? m.replace(/^\t/, "") : m.slice(Math.min(m.length, unit.length)); })
-        : block.replace(/^/gm, unit);
-      ta.setSelectionRange(from, to);
-      insert(next);
-      ta.setSelectionRange(from, from + next.length);
-      return;
-    }
-    if (event.key === "Enter" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
-      // Keep the line's indent.
-      var t = ta.value, start = lineStart(t, ta.selectionStart);
-      var indent = /^[\t ]*/.exec(t.slice(start, ta.selectionStart))[0];
-      if (indent) {
-        event.preventDefault();
-        insert("\n" + indent);
-      }
-    }
+  function showWrap(on) {
+    var b = $("wrapBtn");
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  }
+  function onWrap(on) {
+    scribe.setLocal({ wrap: on });
+    showWrap(on);
+  }
+  $("wrapBtn").addEventListener("click", function () {
+    if (editor) editor.toggleWrap();
   });
+
   function indentUnit() {
     var m = /^( +|\t)\S/m.exec(saved);
     if (m && m[1] === "\t") return "\t";
@@ -617,17 +535,17 @@
   }
 
   function focusEditor() {
-    if (!textKind() || mode !== "source") return;
-    if (document.activeElement !== ta) ta.focus({ preventScroll: true });
+    if (!editor || !textKind() || mode !== "source") return;
+    editor.focus();
   }
   // The editor keeps focus: clicks on the bar or empty space go back to it.
   document.addEventListener("mousedown", function (event) {
     if (event.target.closest("button") && mode === "source" && textKind()) event.preventDefault();
   });
   window.addEventListener("focus", function () { setTimeout(focusEditor, 0); checkDisk(); });
-  ta.addEventListener("blur", function () {
+  editorPane.addEventListener("focusout", function () {
     setTimeout(function () {
-      if (document.hasFocus() && !document.activeElement.closest(".blk-edit") && document.activeElement !== ta && document.activeElement === document.body) focusEditor();
+      if (document.hasFocus() && document.activeElement === document.body) focusEditor();
     }, 0);
   });
 
@@ -635,12 +553,44 @@
   var blocks = [];    // { start, end } offsets of each rendered block in the text
   var editing = null; // { el, start, end, ta }
 
+  // An image the file links to by a local path loads through scribe.file.asset: the page runs on
+  // Scribe's content origin, where a relative src means nothing. Its src waits in data-local-src.
+  var localImages = new Map();  // src -> Promise of a blob URL (or "")
+  if (window.DOMPurify) {
+    DOMPurify.addHook("afterSanitizeAttributes", function (node) {
+      if (node.tagName !== "IMG") return;
+      var src = node.getAttribute("src");
+      if (!src || /^(?:https?|data|blob):/i.test(src) || src.indexOf("//") === 0) return;
+      node.setAttribute("data-local-src", src);
+      node.removeAttribute("src");
+    });
+  }
+  function loadLocalImages(root) {
+    if (!scribe.file.asset) return;
+    root.querySelectorAll("img[data-local-src]").forEach(function (img) {
+      var src = img.getAttribute("data-local-src");
+      if (!localImages.has(src)) {
+        localImages.set(src, scribe.file.asset(src).then(function (res) {
+          return res && res.ok ? URL.createObjectURL(new Blob([res.buffer], { type: res.type || "image/png" })) : "";
+        }, function () { return ""; }));
+      }
+      localImages.get(src).then(function (url) {
+        if (url) img.src = url;
+        else img.alt = img.alt || src;
+      });
+    });
+  }
+  function forgetLocalImages() {
+    localImages.forEach(function (pending) { pending.then(function (url) { if (url) URL.revokeObjectURL(url); }); });
+    localImages.clear();
+  }
+
   function sanitize(html) {
     return window.DOMPurify ? DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed"], FORBID_ATTR: ["style"] }) : "";
   }
   function renderMarkdown() {
     editing = null;
-    var text = ta.value;
+    var text = current();
     mdDoc.replaceChildren();
     blocks = [];
     if (!window.marked) {
@@ -661,6 +611,7 @@
       el.className = "blk";
       el.innerHTML = sanitize(marked.parser(one, { gfm: true }));
       el.querySelectorAll("pre code").forEach(highlightBlock);
+      loadLocalImages(el);
       // A block's own trailing newlines stay outside its editor.
       var raw = tok.raw.replace(/\n+$/, "");
       el.dataset.start = String(at);
@@ -699,7 +650,7 @@
       if (!el) return;
       end = Number(el.dataset.end);
     }
-    var text = ta.value;
+    var text = current();
     var area = document.createElement("textarea");
     area.className = "blk-edit";
     area.spellcheck = false;
@@ -713,10 +664,10 @@
     area.setSelectionRange(at, at);
     area.addEventListener("input", function () {
       autosize(area);
-      // The block's text goes into the whole file as it is typed, so Save always has it.
-      var t = ta.value;
+      // The block's text goes into the whole file as it is typed, so Save always has it, and the
+      // source view's undo steps through it.
       var delta = area.value.length - (editing.end - editing.start);
-      ta.value = t.slice(0, editing.start) + area.value + t.slice(editing.end);
+      editor.replaceRange(editing.start, editing.end, area.value);
       editing.end = editing.start + area.value.length;
       // Blocks after this one move with it, so a click on one edits the right text.
       blocks.forEach(function (blk) {
@@ -725,10 +676,6 @@
           blk.dataset.end = String(Number(blk.dataset.end) + delta);
         }
       });
-      refresh(false);
-      markDirty();
-      clearTimeout(draftTimer);
-      draftTimer = setTimeout(saveDraft, 400);
     });
     area.addEventListener("keydown", function (event) {
       if (event.key === "Escape") {
@@ -741,6 +688,18 @@
         event.preventDefault();
         if (!event.shiftKey) document.execCommand("insertText", false, "  ");
       }
+      // Up on the first line or Down on the last goes on to the block before or after.
+      if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey &&
+          area.selectionStart === area.selectionEnd) {
+        var up = event.key === "ArrowUp";
+        var caret = area.selectionStart;
+        var edge = up ? area.value.lastIndexOf("\n", caret - 1) === -1 : area.value.indexOf("\n", caret) === -1;
+        var next = edge && neighbourBlock(up);
+        if (next) {
+          event.preventDefault();
+          editBlock(next, Number(next.dataset.start), Number(next.dataset.end), up);
+        }
+      }
     });
     area.addEventListener("blur", function () {
       setTimeout(function () {
@@ -750,6 +709,16 @@
         }
       }, 0);
     });
+  }
+  function neighbourBlock(up) {
+    var best = null;
+    blocks.forEach(function (blk) {
+      if (blk === editing.el) return;
+      var start = Number(blk.dataset.start);
+      if (up ? start < editing.start && (!best || start > Number(best.dataset.start))
+             : start > editing.start && (!best || start < Number(best.dataset.start))) best = blk;
+    });
+    return best;
   }
   function commitBlock() {
     if (!editing) return;
@@ -775,13 +744,10 @@
     }
     if (event.target.closest(".md-end")) {
       // New text at the end, after a blank line.
-      var text = ta.value;
+      var text = current();
       var pad = !text ? "" : /\n\n$/.test(text) ? "" : /\n$/.test(text) ? "\n" : "\n\n";
-      if (pad) {
-        ta.value = text + pad;
-        markDirty();
-      }
-      editBlock(null, ta.value.length, ta.value.length, true);
+      if (pad) editor.replaceRange(text.length, text.length, pad);
+      editBlock(null, editor.length(), editor.length(), true);
     }
   });
 
@@ -793,13 +759,13 @@
     // No allow-same-origin: the file's scripts run in an origin of their own, away from Scribe's.
     frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
     frame.setAttribute("title", file.name);
-    frame.srcdoc = ta.value;
+    frame.srcdoc = current();
     pane.append(frame);
   }
 
   // ---------- json ----------
   $("prettify").addEventListener("click", function () {
-    var text = ta.value;
+    var text = current();
     var value;
     try {
       value = JSON.parse(text);
@@ -810,24 +776,24 @@
     var unit = indentUnit();
     var pretty = JSON.stringify(value, null, unit === "\t" ? "\t" : unit.length || 2) + (/\n$/.test(text) ? "\n" : "");
     if (pretty === text) return;
-    ta.focus();
-    ta.select();
-    insert(pretty);
-    ta.setSelectionRange(0, 0);
-    ta.scrollTop = 0;
+    editor.setText(pretty, "input.format");
+    editor.select(0);
+    editor.view.scrollDOM.scrollTop = 0;
+    focusEditor();
   });
 
   // ---------- save ----------
   function afterSave(res) {
     file = Object.assign({}, file, res.file);
     saved = current();
+    editor.setSaved(saved);
     scribe.setLocal({ draft: null });
     showHeader();
     setError("");
     hideBanner();
   }
   function save(force) {
-    if (!textKind() || busy) return;
+    if (!textKind() || busy || !editor) return;
     if (!isDirty() && !force) return;
     busy = true;
     var text = current();
@@ -838,19 +804,20 @@
         else {
           file = Object.assign({}, file, res.file);
           saved = text;
+          editor.setSaved(text);
           markDirty();
         }
         return;
       }
       if (res && res.conflict) {
-        showBanner("The file changed on disk since it was opened.", true);
+        showBanner("The file changed on disk since it was opened.", "conflict");
         return;
       }
       setError("Not saved: " + ((res && res.error) || "error"));
     }, function () { busy = false; });
   }
   function saveAs() {
-    if (!textKind() || busy) return;
+    if (!textKind() || busy || !editor) return;
     busy = true;
     var text = current();
     scribe.file.saveAs(text, { eol: file.eol, bom: file.bom }).then(function (res) {
@@ -858,11 +825,11 @@
       if (res && res.ok) {
         file = Object.assign({}, file, res.file, { copy: false });
         saved = text;
+        editor.setSaved(text);
         scribe.setLocal({ draft: null });
         showHeader();
         // A new name can mean a new kind (notes.txt saved as notes.md).
-        lastLines = 0;
-        refresh(true);
+        editor.configure({ kind: file.kind, lang: file.lang, name: file.name, indent: indentUnit() });
         if (file.kind !== "markdown" && file.kind !== "html") mode = "source";
         applyMode();
       } else if (res && res.error && res.error !== "cancelled") {
@@ -874,10 +841,20 @@
   $("save").addEventListener("click", function () { save(false); });
   $("saveAs").addEventListener("click", saveAs);
 
-  // Registered before Scribe's own page keys, so Ctrl+S saves the file instead of downloading the page.
+  // Registered before Scribe's own page keys: Ctrl+S saves the file instead of downloading the page,
+  // and in the editor Ctrl+D (next occurrence) and Ctrl+H (replace) go to it instead of Scribe's
+  // palette and help.
   window.addEventListener("keydown", function (event) {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "s") return;
-    if (!textKind()) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    var key = event.key.toLowerCase();
+    if ((key === "d" || key === "h") && !event.shiftKey) {
+      if (!editor || mode !== "source" || !editor.view.dom.contains(event.target)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      editor.runKey(event);
+      return;
+    }
+    if (key !== "s" || !textKind()) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (event.shiftKey) saveAs();
@@ -885,21 +862,38 @@
   }, true);
 
   // ---------- changes on disk ----------
-  function showBanner(text, conflict) {
+  var banner = "";  // "conflict": Reload / Overwrite; "undo": the reload that replaced unsaved changes
+  function showBanner(text, kind) {
+    banner = kind;
     $("bannerText").textContent = text;
-    $("bannerOverwrite").classList.toggle("hidden", !conflict);
+    $("bannerReload").classList.toggle("hidden", kind !== "conflict");
+    $("bannerOverwrite").classList.toggle("hidden", kind !== "conflict");
+    $("bannerUndo").classList.toggle("hidden", kind !== "undo");
+    $("bannerClose").classList.toggle("hidden", kind !== "undo");
     $("banner").classList.remove("hidden");
   }
-  function hideBanner() { $("banner").classList.add("hidden"); }
+  function hideBanner() {
+    banner = "";
+    $("banner").classList.add("hidden");
+  }
   $("bannerReload").addEventListener("click", function () {
     hideBanner();
-    scribe.setLocal({ draft: null });
-    load(true);
+    load();
   });
   $("bannerOverwrite").addEventListener("click", function () {
     hideBanner();
     save(true);
   });
+  $("bannerUndo").addEventListener("click", function () {
+    hideBanner();
+    if (mode !== "source") {
+      mode = "source";
+      applyMode();
+    }
+    if (editor) editor.undo();
+    focusEditor();
+  });
+  $("bannerClose").addEventListener("click", hideBanner);
   var checking = false;
   function checkDisk() {
     if (!file || checking || busy) return;
@@ -912,17 +906,18 @@
         showHeader();
         if (file.kind === "pdf") openPdf();
         else if (file.kind === "image") openImage();
-        else load(false);
+        else load();
         return;
       }
       if (!textKind()) return;
-      if (isDirty()) {
-        showBanner("The file changed on disk. Reload it, or keep your changes and overwrite it when you save.", true);
-        return;
-      }
+      // Unsaved changes give way to the file on disk as one undoable step, so nothing is lost.
+      var dirty = isDirty();
       file = res.file;
       showHeader();
-      openText(res.file.text, true);
+      forgetLocalImages();
+      openText(res.file.text).then(function () {
+        if (dirty && !isDirty()) showBanner("The file changed on disk and was reloaded. Undo brings back your unsaved changes.", "undo");
+      });
     }, function () { checking = false; });
   }
   document.addEventListener("visibilitychange", function () {
@@ -1200,7 +1195,7 @@
     if (file && file.kind === "pdf" && pdfView.fit && pdfDoc) pdfZoom(null);
   }).observe(pdfPane);
 
-  load(false);
+  load();
 })();
 </script>
 </body>

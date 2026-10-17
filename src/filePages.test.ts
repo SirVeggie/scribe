@@ -6,6 +6,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import {
   FileConflictError,
   kindByName,
+  linkedImagePath,
   listFolder,
   looksLikeText,
   readFileBytes,
@@ -16,6 +17,8 @@ import {
   type FileText,
 } from "./filePages.js";
 import { BoardStore } from "./store.js";
+import { editorBundle } from "./editorBundle.js";
+import { pathToFileURL } from "node:url";
 
 let dir = "";
 let work = "";
@@ -342,4 +345,23 @@ test("openTempUrl makes one temporary embed page per site (#403)", () => {
   assert.equal(store.openTempUrl("https://example.com/a").tab.id, first.tab.id);
   assert.throws(() => store.openTempUrl("javascript:alert(1)"));
   store.closeDb();
+});
+
+test("a markdown file's image links resolve beside the file, by absolute path, or by file: URL", () => {
+  const md = path.join(dir, "docs", "notes.md");
+  assert.equal(linkedImagePath(md, "img/shot.png"), path.join(dir, "docs", "img", "shot.png"));
+  assert.equal(linkedImagePath(md, "../logo%20big.svg?raw=1#x"), path.join(dir, "logo big.svg"));
+  const abs = path.join(dir, "elsewhere", "a.jpg");
+  assert.equal(linkedImagePath(md, abs), abs);
+  assert.equal(linkedImagePath(md, pathToFileURL(abs).href), abs);
+  assert.equal(linkedImagePath(md, "https://example.com/a.png"), null);
+  assert.equal(linkedImagePath(md, "//example.com/a.png"), null);
+  assert.equal(linkedImagePath(md, "data:image/png;base64,AAAA"), null);
+  assert.equal(linkedImagePath(md, "../secrets.txt"), null);
+});
+
+test("the file editor bundles into one script that defines ScribeEditor", () => {
+  const code = editorBundle();
+  assert.ok(code.length > 100_000);
+  assert.match(code, /ScribeEditor/);
 });
