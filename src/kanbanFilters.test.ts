@@ -304,6 +304,38 @@ test("Kanban filters cycle, combine includes, and give exclusions precedence", a
     const clear = () => page.locator("#clearFilter").click();
     assert.deepEqual(await shown(), ["1", "2", "3", "4"]);
 
+    await page.evaluate(() => {
+      const scribe = (window as any).scribe;
+      scribe.state.cards = scribe.state.cards.map((c: any, i: number) => ({ ...c,
+        comments: [{ id: 'cm' + i, by: i === 3 ? 'user' : 'Sol', at: 100, text: 'Update' }],
+        seenAt: i === 1 ? 100 : 0
+      }));
+      scribe.changed();
+    });
+    await filter("fUpdates").click();
+    await option("Unread updates").click();
+    assert.deepEqual(await shown(), ["1", "3"]);
+    assert.equal(await page.locator("#meta").innerText(), "2 of 4 cards");
+    await filter("fLabel").click();
+    await option("Beta: off").click();
+    assert.deepEqual(await shown(), ["3"]);
+    await clear();
+    await filter("fUpdates").click();
+    await option("Read updates").click();
+    assert.deepEqual(await shown(), ["2", "4"]);
+    await filter("fUpdates").click();
+    await option("Unread updates").click();
+    await page.evaluate(() => {
+      const scribe = (window as any).scribe;
+      scribe.state.cards = scribe.state.cards.map((c: any) => c.id === '1' ? { ...c, seenAt: 100 } : c);
+      scribe.changed();
+    });
+    await page.waitForFunction(() => document.querySelectorAll('.cards .card').length === 1);
+    assert.deepEqual(await shown(), ["3"]);
+    await clear();
+    assert.deepEqual(await shown(), ["1", "2", "3", "4"]);
+    assert.equal(await filter("fUpdates").innerText(), "Any updates");
+
     // Worker updates must leave every unchanged open option connected and hovered.
     for (const [id, name] of [["fLabel", "Alpha: off"], ["fPriority", "High: off"], ["fAssignee", "Sol: off"]]) {
       await filter(id).click();

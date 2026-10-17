@@ -1095,6 +1095,11 @@
         <option value="soon">Due in 7 days</option>
         <option value="none">No due date</option>
       </select>
+      <select class="field" id="fUpdates" aria-label="Filter by updates">
+        <option value="">Any updates</option>
+        <option value="unread">Unread updates</option>
+        <option value="read">Read updates</option>
+      </select>
       <button class="tool hidden" id="clearFilter" type="button">Clear filter</button>
       <span class="spacer"></span>
       <button class="tool workers-btn" id="workersBtn" type="button" aria-haspopup="dialog">Workers</button>
@@ -1335,6 +1340,7 @@
   var boardEl = $("board"), metaEl = $("meta");
   var searchEl = $("search"), fLabel = $("fLabel"), fPriority = $("fPriority"), fAssignee = $("fAssignee"), fDue = $("fDue");
   var clearFilterBtn = $("clearFilter"), labelsBtn = $("labelsBtn"), archiveBtn = $("archiveBtn");
+  var fUpdates = $("fUpdates");
   var overlay = $("overlay"), modal = $("modal");
   var mNum = $("mNum"), mTitle = $("mTitle"), mTitleInput = $("mTitleInput"), mStatus = $("mStatus"), mFeed = $("mFeed");
   var mdPreview = $("mdPreview"), mdEditor = $("mdEditor");
@@ -1750,7 +1756,7 @@
   }
   function filterActive() {
     var v = view();
-    return Boolean(v.q || v.due || ["label", "priority", "assignee"].some(function (key) {
+    return Boolean(v.q || v.due || v.updates || ["label", "priority", "assignee"].some(function (key) {
       var choice = filterChoice(key);
       return choice.include.length || choice.exclude.length;
     }));
@@ -1763,6 +1769,8 @@
   }
   function matches(c) {
     var v = view();
+    if (v.updates === "unread" && !hasUnread(c)) return false;
+    if (v.updates === "read" && hasUnread(c)) return false;
     if (v.q) {
       var words = str(v.q).toLowerCase().replace(/^#/, "").split(/\s+/).filter(Boolean);
       var hay = searchHay(c);
@@ -2102,6 +2110,8 @@
     fillSelect(fAssignee, [["", "Anyone"], ["__none", "Unassigned"]].concat(assigneeNames().map(function (n) { return [n, n]; })), v.assignee);
     fDue.value = str(v.due);
     syncSelect(fDue);
+    fUpdates.value = str(v.updates);
+    syncSelect(fUpdates);
     clearFilterBtn.classList.toggle("hidden", !filterActive());
     var live = liveCards();
     var shown = filterActive() ? live.filter(matches) : live;
@@ -6694,6 +6704,7 @@
     searchTimer = setTimeout(function () { setView({ q: searchEl.value }); }, 150);
   });
   fDue.addEventListener("change", function () { setView({ due: fDue.value }); });
+  fUpdates.addEventListener("change", function () { setView({ updates: fUpdates.value }); });
   clearFilterBtn.addEventListener("click", function () {
     searchEl.value = "";
     scribe.setLocal({ view: {} });
