@@ -176,8 +176,8 @@ export function nextRefreshAt(limits: PlanLimits | undefined): number | null {
   return Math.min(...times);
 }
 
-/** Claude's wording when a plan limit stops a turn ("Claude AI usage limit reached|<unix>", "5-hour limit reached ∙ resets 2am", "You've hit your limit · resets 9pm"). */
-const LIMIT_ERROR = /usage limit|limit reached|hit your( usage)? limit|out of (extra )?usage/i;
+/** Claude's wording when a plan limit stops a turn, including "You've hit your session limit · resets 9am". */
+const LIMIT_ERROR = /usage limit|limit reached|hit your( usage| session)? limit|out of (extra )?usage/i;
 /** How long to wait before trying again when a limit stopped a turn but no reset time is known. */
 export const UNKNOWN_RESET_RETRY_MS = 30 * 60 * 1000;
 

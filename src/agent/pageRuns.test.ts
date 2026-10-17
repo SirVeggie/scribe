@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MAX_LIMIT_WAITS, MAX_MERGE_FIXES, MAX_RESUME_TRIES, NO_TURN_MS, PageRuns, RESUME_DELAY_MS, type PageRun, type RunDeps, type RunNote } from "./pageRuns.js";
 import type { Turn } from "./types.js";
+import { usageLimitResetsAt, UNKNOWN_RESET_RETRY_MS } from "./planLimits.js";
 
 /** A thread whose turns the test sets, and a record of what the runs did with it. */
 function harness(opts: { worktree?: boolean } = {}) {
@@ -128,6 +129,29 @@ test("a plan limit waits for the reset, then for the provider's confirmation, th
   turn({});
   await runs.check("th");
   assert.equal(runs.get("th")!.outcome?.kind, "done");
+});
+
+test("Claude's session limit keeps the run waiting and resumes the same chat (#701)", async () => {
+  const { state, runs, turn } = harness();
+  runs.register("th", "page1", { tag: "worker:w1", data: { worker: "w1", card: 12 }, resumePrompt: "Go on with #12." });
+  const error = "You've hit your session limit · resets 9am (Europe/Helsinki)";
+  // The host derives this field from the provider's error, even without a quota report.
+  turn({ status: "error", error, limitResetsAt: usageLimitResetsAt(error, undefined, state.now, state.now) });
+  await runs.check("th");
+  const run = runs.get("th")!;
+  assert.equal(run.phase, "waiting");
+  assert.equal(run.outcome, undefined);
+  assert.equal(run.wait?.until, state.now + UNKNOWN_RESET_RETRY_MS + RESUME_DELAY_MS);
+  assert.equal(state.merges, 0);
+  assert.deepEqual(state.sent, []);
+  state.now = run.wait!.until;
+  await runs.check("th");
+  assert.equal(run.phase, "running");
+  assert.deepEqual(state.sent, ["Go on with #12."]);
+  state.now += 1000;
+  turn({});
+  await runs.check("th");
+  assert.equal(run.outcome?.kind, "done");
 });
 
 test("failed sends after a reset back off, then end the run", async () => {

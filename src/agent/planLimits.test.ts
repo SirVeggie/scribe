@@ -167,6 +167,11 @@ test("usageLimitResetsAt tells a plan limit from other failures and finds when i
   assert.equal(usageLimitResetsAt("Claude AI usage limit reached|1759339200", undefined, 1000, 2000), 1759339200 * 1000);
   // The exhausted window's reset, not the soonest one.
   assert.equal(usageLimitResetsAt("You've hit your limit · resets 3pm", limits, 1000, 2000), 9000);
+  // Claude's session-limit wording must wait for usage recovery too (#701).
+  const sessionError = "You've hit your session limit · resets 9am (Europe/Helsinki)";
+  assert.equal(usageLimitResetsAt(sessionError, { ...limits, status: "allowed" }, 1000, 2000), 9000);
+  assert.equal(usageLimitResetsAt(sessionError, undefined, 1000, 2000), 2000 + UNKNOWN_RESET_RETRY_MS);
+  assert.equal(usageLimitResetsAt("Session expired. Please log in again.", undefined, 1000, 2000), undefined);
   // A rejected rate_limit_event during the turn is enough, whatever the error says.
   assert.equal(usageLimitResetsAt("Claude reported an error", limits, 1000, 2000), 9000);
   // ...but not one from an earlier turn.
