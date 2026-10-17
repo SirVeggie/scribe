@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, INSTALL_ROOT, SESSION_HEADER, THREAD_HEADER, VERSION, baseUrl } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, INSTALL_ROOT, LOCAL_TOKEN_HEADER, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, baseUrl, dataDir } from "./config.js";
 
 /** Identifies this MCP process to the daemon, so claims can tell a live agent from one that stopped. */
 const SESSION_ID = randomBytes(6).toString("hex");
@@ -13,6 +14,16 @@ export function setAgentLabel(label: string): void {
   agentLabel = label.replace(/[^\x20-\x7e]/g, "").slice(0, 60);
 }
 import { log } from "./log.js";
+
+/** The data folder's local token (src/callers.ts), read each time: the daemon makes it when it starts. */
+function localHeader(): Record<string, string> {
+  try {
+    const token = fs.readFileSync(path.join(dataDir(), "local-token"), "utf8").trim();
+    return /^[0-9a-f]{64}$/.test(token) ? { [LOCAL_TOKEN_HEADER]: token } : {};
+  } catch {
+    return {};
+  }
+}
 
 type Health = {
   ok: boolean;
@@ -116,6 +127,9 @@ export async function api(
           [CLIENT_HEADER]: AGENT_CLIENT,
           [SESSION_HEADER]: SESSION_ID,
           ...(process.env.SCRIBE_THREAD ? { [THREAD_HEADER]: process.env.SCRIBE_THREAD } : {}),
+          ...(process.env.SCRIBE_THREAD_TOKEN ? { [THREAD_TOKEN_HEADER]: process.env.SCRIBE_THREAD_TOKEN } : {}),
+          // An MCP with no Scribe chat proves it runs as the user's own client (#682).
+          ...(process.env.SCRIBE_THREAD ? {} : localHeader()),
           ...(agentLabel ? { [AGENT_LABEL_HEADER]: agentLabel } : {}),
           ...(payload === undefined
             ? {}

@@ -29,6 +29,7 @@ import { SqliteCursorStore } from "./cursorStore.js";
 import { McpBridge } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
+import { threadToken } from "../../callers.js";
 
 /**
  * Cursor through @cursor/sdk, in this process: one local SDK agent per thread, kept in a store under
@@ -410,7 +411,7 @@ class BoardTools {
 
   private async open(): Promise<Record<string, SDKCustomTool>> {
     const client = new Client({ name: "scribe-cursor", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "cursor", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }), ...this.toolsOff };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_THREAD_TOKEN: threadToken(this.threadId), SCRIBE_PROVIDER: "cursor", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }), ...this.toolsOff };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();

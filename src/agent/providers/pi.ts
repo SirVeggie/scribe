@@ -16,6 +16,7 @@ import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, web
 import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
+import { threadToken } from "../../callers.js";
 
 type Model = PiModel<Api>;
 
@@ -380,7 +381,7 @@ class BoardTools {
 
   private async open(): Promise<ToolDefinition[]> {
     const client = new Client({ name: "scribe-pi", version: "1" });
-    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_PROVIDER: "pi", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }), ...this.toolsOff };
+    const env = { ...(process.env as Record<string, string>), ...this.spec.env, SCRIBE_THREAD: this.threadId, SCRIBE_THREAD_TOKEN: threadToken(this.threadId), SCRIBE_PROVIDER: "pi", ...(this.pages ? {} : { SCRIBE_PAGES: "off" }), ...this.toolsOff };
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();

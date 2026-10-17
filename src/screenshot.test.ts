@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { launchChromium } from "./chromium.js";
 import { allowCaptureFraming, captureFrameHeaders } from "./captureFraming.js";
 import { BOARD_BRIDGE_JS } from "./bridge.js";
-import { contentBaseUrl } from "./config.js";
+import { pageOrigin } from "./config.js";
 import {
   beginCaptureBoot,
   captureBootOf,
@@ -35,8 +35,9 @@ test("screenshotUrl loads embed pages at the embedded URL", () => {
 
 test("screenshotUrl points ordinary pages at /view/:id, with a shot query when seeded", () => {
   const tab = { id: "t_abc", html: "<p>hi</p>" };
-  assert.equal(screenshotUrl(tab), `${contentBaseUrl()}/view/t_abc`);
-  assert.equal(screenshotUrl(tab, "deadbeef0123"), `${contentBaseUrl()}/view/t_abc?shot=deadbeef0123`);
+  // Each page on its own origin (#660).
+  assert.equal(screenshotUrl(tab), `${pageOrigin("t_abc")}/view/t_abc`);
+  assert.equal(screenshotUrl(tab, "deadbeef0123"), `${pageOrigin("t_abc")}/view/t_abc?shot=deadbeef0123`);
 });
 
 test("capture boot is readable until ended, and junk ids miss", () => {

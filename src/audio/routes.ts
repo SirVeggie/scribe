@@ -1,6 +1,7 @@
 import express, { Router } from "express";
 import fs from "node:fs/promises";
-import { AGENT_CLIENT, CLIENT_HEADER, shellOrigins } from "../config.js";
+import { identify } from "../callers.js";
+import { shellOrigins } from "../config.js";
 import { AudioService, MAX_AUDIO_BYTES } from "./service.js";
 import type { PageAudio } from "./page.js";
 
@@ -22,7 +23,7 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
     const tab = req.get("x-scribe-tab");
     try {
       if (tab) {
-        const gate = req.get(CLIENT_HEADER) === AGENT_CLIENT || !pagePermission ? { ok: false, error: "denied", permission: "audio.transcribe" }
+        const gate = identify(req).viewer === "agent" || !pagePermission ? { ok: false, error: "denied", permission: "audio.transcribe" }
           : pagePermission.check(tab);
         if (!gate.ok) { res.status(403).json(gate); return; }
       }

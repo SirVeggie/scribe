@@ -7,7 +7,7 @@ import { refreshSearchIndex, searchIndex, setSearchPackReplacing } from "./servi
 import { installSearchPack, MAX_PACK_ZIP_BYTES } from "./install.js";
 import { store } from "../store.js";
 import type { Tab } from "../types.js";
-import { AGENT_CLIENT, CLIENT_HEADER } from "../config.js";
+import { identify } from "../callers.js";
 import { assetUrl } from "../assets.js";
 import { pageAssetUrl } from "../pageAssets.js";
 import type { ImageHit, ScoredHit } from "./indexer.js";
@@ -43,7 +43,7 @@ export function searchRouter(ml: () => MlService = mlService, seeOf: SearchSee =
     const { pack: manifest, ...view } = pack;
     return { ...view, version: manifest?.version, model: manifest?.model, dtype: manifest?.dtype, enabled: searchEnabled() && pack.status === "ready" };
   };
-  const viewerOf = (req: express.Request) => req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" as const : "user" as const;
+  const viewerOf = (req: express.Request) => identify(req).viewer;
   /** A hit as the palette and agents see it. An image hit carries its URL and the card, item or section it sits on. */
   const hitView = (hit: ScoredHit | ImageHit) => {
     // The query already kept to the pages this request may see.

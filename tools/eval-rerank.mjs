@@ -8,6 +8,7 @@
 // the page (or the card on it) the query should find. Each query is searched twice, with rerank=0
 // and without, so its text and the start of its closest results go to the classifier source.
 import fs from "node:fs";
+import path from "node:path";
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
@@ -17,11 +18,18 @@ const limit = Number(option("--limit", "8"));
 const verbose = args.includes("--verbose");
 const queries = JSON.parse(fs.readFileSync(file, "utf8"));
 
+// The daemon treats requests without this token as an anonymous agent.
+function localToken() {
+  const home = process.env.SCRIBE_HOME || path.join(process.env.LOCALAPPDATA || process.env.HOME || process.cwd(), "scribe");
+  try { return fs.readFileSync(path.join(home, "local-token"), "utf8").trim(); } catch { return ""; }
+}
+const token = localToken();
+
 async function search(query, rerank) {
   const params = new URLSearchParams({ q: query.q, scope: query.card ? "chunks" : "pages", limit: String(limit) });
   if (!rerank) params.set("rerank", "0");
   const started = Date.now();
-  const res = await fetch(`${url}/api/search/semantic?${params}`);
+  const res = await fetch(`${url}/api/search/semantic?${params}`, { headers: { "x-scribe-local-token": token } });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Search failed (${res.status}): ${body.error || "no answer"}. Is Search by meaning on in the Scribe at ${url}?`);
   return { hits: body.hits, info: body.rerank, ms: Date.now() - started };

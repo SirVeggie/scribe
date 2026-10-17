@@ -120,14 +120,3 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
 }
 
 const BOARD_HOSTS = new Set(["127.0.0.1", "localhost"]);
-
-/** Whether a WebSocket upgrade may join the board: local tools (no Origin) or the board UI itself. */
-export function boardSocketAllowed(origin: string | undefined, host: string | undefined): boolean {
-  if (!origin) return true;
-  try {
-    const url = new URL(origin);
-    return url.host === host && BOARD_HOSTS.has(url.hostname);
-  } catch {
-    return false;
-  }
-}

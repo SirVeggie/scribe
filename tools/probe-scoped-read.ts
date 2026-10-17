@@ -25,6 +25,11 @@ const daemon = spawn(process.execPath, ["--import", "tsx", "src/index.ts", "--da
 let daemonErrors = "";
 daemon.stderr.on("data", (chunk: Buffer) => { daemonErrors = (daemonErrors + chunk.toString()).slice(-2000); });
 const base = `http://127.0.0.1:${port}`;
+// The daemon treats requests without this token as an anonymous agent. It is read from the scratch
+// data folder once the daemon is up, because the daemon creates the file at startup.
+async function localToken(home: string): Promise<string> {
+  return (await fs.readFile(path.join(home, "local-token"), "utf8").catch(() => "")).trim();
+}
 let rpc: CodexRpc | undefined;
 try {
   let ready = false;
@@ -35,7 +40,7 @@ try {
   }
   assert.ok(ready, `Scratch daemon failed: ${daemonErrors}`);
   const response = await fetch(`${base}/api/agent/threads`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", "x-scribe-local-token": await localToken(path.join(root, "data")) },
     body: JSON.stringify({ provider: "codex", mode: "ask", approval: "ask", cwd,
       scope: { kind: "workspace", ref: cwd }, useWorktree: false, remember: false }),
   });
@@ -95,7 +100,7 @@ try {
   } finally { clearTimeout(timer); }
 } finally {
   rpc?.close();
-  try { await fetch(`${base}/api/shutdown`, { method: "POST" }); } catch { /* already stopped */ }
+  try { await fetch(`${base}/api/shutdown`, { method: "POST", headers: { "x-scribe-local-token": await localToken(path.join(root, "data")) } }); } catch { /* already stopped */ }
   daemon.kill();
   // Scratch directory is left for inspection. Never touch the user's production daemon or data.
   console.log(`Scratch evidence: ${root}`);

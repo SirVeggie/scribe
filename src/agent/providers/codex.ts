@@ -23,6 +23,7 @@ import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type
 import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
 import { McpBridge, type BridgeAsk, type BridgedTool } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
+import { threadToken } from "../../callers.js";
 
 /**
  * Codex interactive sessions use app-server; the SDK spawns `codex exec` for summaries. Sessions resume by
@@ -488,6 +489,7 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
         env: {
           ...ctx.boardMcp.env,
           SCRIBE_THREAD: threadId,
+          SCRIBE_THREAD_TOKEN: threadToken(threadId),
           SCRIBE_PROVIDER: "codex",
           ...(pages ? {} : { SCRIBE_PAGES: "off" }),
           ...toolsOff,

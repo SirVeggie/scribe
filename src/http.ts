@@ -8,7 +8,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, CONTENT_HOST, SESSION_HEADER, THREAD_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl } from "./config.js";
+import { AGENT_LABEL_HEADER, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
@@ -61,7 +61,8 @@ import { AudioService } from "./audio/service.js";
 import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
-import { PDFJS_PATH, boardSocketAllowed, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
+import { identify, prepareSecrets, socketAllowed } from "./callers.js";
+import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
@@ -101,6 +102,7 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
+  prepareSecrets();
   refreshSearchIndex();
   if (builtinWatchEnabled()) {
     watchBuiltinTemplates(() => {
@@ -136,6 +138,16 @@ export async function startHttp(): Promise<http.Server> {
   const app = express();
   app.disable("x-powered-by");
   app.use(contentOriginGate);
+  // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
+  // directly could answer its own access request or move a folder into its scope.
+  app.use(["/api/agent", "/api/export", "/api/import", "/api/trash", "/api/undo", "/api/library/cleanup", "/api/settings/index", "/api/folders", "/api/ml/settings", "/api/audio/settings"], (req, res, next) => {
+    const read = req.method === "GET" && (req.baseUrl === "/api/folders" || req.baseUrl.endsWith("/settings"));
+    if (read || viewerOf(req) !== "agent") {
+      next();
+      return;
+    }
+    res.status(403).json({ error: "Only the board UI can do this" });
+  });
   app.use(shellAssets(publicDir, {
     "/vendor/marked.js": path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js"),
     "/vendor/purify.js": path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js"),
@@ -470,7 +482,7 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     const guide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!guide || !thread || req.query.deliver !== "1") {
       res.json({ guide });
       return;
@@ -799,7 +811,7 @@ export async function startHttp(): Promise<http.Server> {
     tabs: browserTabs,
   };
   app.post("/api/browser/:op", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread) {
       res.status(403).json({ error: "The agent browser is only available in Scribe chat threads." });
       return;
@@ -824,7 +836,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** page_open's file (#655): a file the agent's thread may read, opened as a page for the user. */
   app.post("/api/agent-open-file", async (req, res) => {
-    const id = req.get(THREAD_HEADER);
+    const id = threadOf(req);
     const thread = id && agentHost ? agentHost.getThread(id) : null;
     if (!thread) { res.status(403).json({ error: "Opening a file needs a Scribe chat thread with file access." }); return; }
     try {
@@ -837,7 +849,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.post("/api/read-file", async (req, res) => {
-    const id = req.get(THREAD_HEADER);
+    const id = threadOf(req);
     const thread = id && agentHost ? agentHost.getThread(id) : null;
     if (!thread) { res.status(403).json({ error: "read_file requires a current Scribe chat thread." }); return; }
     try {
@@ -849,7 +861,7 @@ export async function startHttp(): Promise<http.Server> {
 
   for (const grep of [false, true]) {
     app.post(grep ? "/api/grep-files" : "/api/list-files", async (req, res) => {
-      const id = req.get(THREAD_HEADER);
+      const id = threadOf(req);
       const thread = id && agentHost ? agentHost.getThread(id) : null;
       if (!thread) { res.status(403).json({ error: "File search requires a current Scribe chat thread." }); return; }
       try { res.json(await searchScopedFiles(thread, isPlainObject(req.body) ? req.body : {}, grep)); }
@@ -859,7 +871,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** page_ask from a Scribe chat's MCP: the thread's turn shows the page as a question and waits on its submit event. */
   app.post("/api/ask", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "page_ask only works in Scribe chat threads. Use page_wait instead." });
       return;
@@ -907,7 +919,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** ask_user from a Scribe chat's MCP: Scribe's own question card in the thread's turn, answered in the chat. */
   app.post("/api/question", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "ask_user only works in Scribe chat threads." });
       return;
@@ -953,7 +965,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** settings_show from a Scribe chat's MCP: the rows as a card in the thread's turn, to change there. */
   app.post("/api/settings/show", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "settings_show only works in Scribe chat threads." });
       return;
@@ -974,7 +986,7 @@ export async function startHttp(): Promise<http.Server> {
    * hooks may deny the call or have the user approve it first. Anything that goes wrong lets it run.
    */
   app.post("/api/tool-gate", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     const body = isPlainObject(req.body) ? req.body : {};
     const tool = typeof body.tool === "string" ? body.tool.slice(0, 100) : "";
     if (!thread || !agentHost || !tool) {
@@ -1003,7 +1015,7 @@ export async function startHttp(): Promise<http.Server> {
    * the thread's hooks may have a note to put in front of it. Anything that goes wrong returns none.
    */
   app.post("/api/tool-scan", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     const body = isPlainObject(req.body) ? req.body : {};
     const tool = typeof body.tool === "string" ? body.tool.slice(0, 100) : "";
     const text = typeof body.text === "string" ? body.text : "";
@@ -1021,7 +1033,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** web_request from a Scribe chat's MCP: ask the user for a web call the thread's web setting does not cover. */
   app.post("/api/web-request", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "web_request only works in Scribe chat threads." });
       return;
@@ -1060,7 +1072,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** page_access from a Scribe chat's MCP (#269): ask the user for a page outside the chat's access; waits for the answer. */
   app.post("/api/page-access", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "page_access only works in Scribe chat threads." });
       return;
@@ -1096,7 +1108,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** thread_update from a Scribe chat's MCP: the chat renames its thread or asks to move its workspace (#577). */
   app.post("/api/thread-update", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "thread_update only works in Scribe chat threads." });
       return;
@@ -1127,7 +1139,7 @@ export async function startHttp(): Promise<http.Server> {
    * chat's scopes. Any of them can ask the user first, so the request stays open until answered.
    */
   app.post("/api/thread-access/:op", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "Reading other threads only works in Scribe chat threads." });
       return;
@@ -1175,7 +1187,7 @@ export async function startHttp(): Promise<http.Server> {
 
   /** memory_list, memory_save and memory_delete from a Scribe chat's MCP: the memories agents share (#104). */
   app.post("/api/memory/:op", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "Memory only works in Scribe chat threads." });
       return;
@@ -1192,7 +1204,7 @@ export async function startHttp(): Promise<http.Server> {
    * provider or model. run stays open until the helper's turn ends; closing it stops the helper.
    */
   app.post("/api/helper/:op", (req, res) => {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (!thread || !agentHost) {
       res.status(403).json({ error: "Helper agents only work in Scribe chat threads." });
       return;
@@ -2024,7 +2036,7 @@ export async function startHttp(): Promise<http.Server> {
   server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
   const contentServer = http.createServer(app);
   // A page's script or a website must not read every page off the board's socket (#660).
-  const wss = new WebSocketServer({ server, path: "/ws", verifyClient: ({ req }: { req: http.IncomingMessage }) => boardSocketAllowed(req.headers.origin, req.headers.host) });
+  const wss = new WebSocketServer({ server, path: "/ws", verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers) });
 
   wss.on("connection", (socket) => {
     sockets.add(socket);
@@ -2259,7 +2271,7 @@ function callerOf(req: express.Request): ActionCaller {
     return { by: "user", label: "user" };
   }
   const session = req.get(SESSION_HEADER)?.slice(0, 40);
-  const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+  const thread = threadOf(req);
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const label = chat ? `Scribe chat: ${chat.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
   return { by: "agent", label, ...(chat?.provider ? { provider: chat.provider } : {}), ...(session ? { session } : {}), ...(thread ? { thread } : {}) };
@@ -2269,7 +2281,7 @@ function actorOf(req: express.Request): PageActor | undefined {
   if (isContentHost(req) || viewerOf(req) !== "agent") {
     return undefined;
   }
-  const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+  const thread = threadOf(req);
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const title = chat?.title?.trim().slice(0, 120);
   const workspace = chat && agentHost ? agentHost.threadFolder(chat) : null;
@@ -2283,7 +2295,7 @@ function threadBlankPage(req: express.Request): string | undefined {
   if (isContentHost(req) || viewerOf(req) !== "agent") {
     return undefined;
   }
-  const thread = req.get(THREAD_HEADER);
+  const thread = threadOf(req);
   const scope = thread && agentHost ? agentHost.getThread(thread)?.scope : undefined;
   const page = scope?.kind === "page" && scope.ref ? store.get(scope.ref) : undefined;
   return page && isBlankPage(page) ? page.id : undefined;
@@ -2598,17 +2610,28 @@ function refuseAgent(req: express.Request, res: express.Response): boolean {
 }
 
 function viewerOf(req: express.Request): Viewer {
-  return req.get(CLIENT_HEADER) === AGENT_CLIENT ? "agent" : "user";
+  return identify(req).viewer;
+}
+
+/** The chat thread the request proved it comes from (#682); a bare thread header counts for nothing. */
+function threadOf(req: express.Request): string | undefined {
+  return identify(req).thread;
 }
 
 /**
- * Which pages an agent's request may reach (#269): its chat thread's, or for an MCP client with no
- * Scribe chat, a global untrusted chat's. Null for the board UI and page code, which this does not cover (#660).
+ * Which pages an agent's request may reach (#269): its chat thread's, or for an external MCP client
+ * (no Scribe chat, #682), a global untrusted chat's. A caller that proved neither reaches none. Null
+ * for the board UI and page code (frameReach, #660).
  */
 function reachFor(req: express.Request): ((tab: Tab) => Reach) | null {
   if (isContentHost(req) || viewerOf(req) !== "agent") return null;
-  const thread = req.get(THREAD_HEADER)?.slice(0, 60);
-  const reader: PageReader = (thread && agentHost?.pageReader(thread)) || { scope: { kind: "global", ref: null }, trusted: false, grants: [] };
+  const { thread, external } = identify(req);
+  const reader: PageReader | null | undefined = thread
+    ? agentHost?.pageReader(thread)
+    : external
+      ? { scope: { kind: "global", ref: null }, trusted: false, grants: [] }
+      : null;
+  if (!reader) return () => "hidden";
   const lookup = store.accessLookup();
   return (tab) => pageReach(reader, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, lookup);
 }
@@ -2635,7 +2658,7 @@ function reachable(req: express.Request): ((tab: Tab) => boolean) | undefined {
 function checkReach(req: express.Request, res: express.Response, tab: Tab): boolean {
   const reach = reachFor(req)?.(tab) ?? "allow";
   if (reach === "allow") {
-    const thread = req.get(THREAD_HEADER)?.slice(0, 60);
+    const thread = threadOf(req);
     if (thread && agentHost && viewerOf(req) === "agent" && !isContentHost(req)) agentHost.notePageReached(thread, tab);
     return true;
   }

@@ -131,7 +131,8 @@ test("the page routes take the page from the URL, check its grants and keep agen
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/ml/pages`;
   const post = async (page: string, body: unknown, headers: Record<string, string> = {}) => {
-    const res = await fetch(`${url}/${page}/decide`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    // The board UI in a browser (#682): a headless caller with no credential is an anonymous agent.
+    const res = await fetch(`${url}/${page}/decide`, { method: "POST", headers: { "Content-Type": "application/json", "sec-fetch-site": "same-origin", ...headers }, body: JSON.stringify(body) });
     const text = await res.text();
     assert.ok(!text.includes("sk-secret") && !text.includes("typesafe"), "the answer leaked the source");
     return { status: res.status, body: JSON.parse(text) };
@@ -144,7 +145,7 @@ test("the page routes take the page from the URL, check its grants and keep agen
     assert.equal((await post("t_missing", { state: "x", questions })).status, 404);
     assert.equal((await post("t_ok", { state: "x", questions }, { "x-scribe-client": "agent" })).status, 403);
     assert.equal((await post("t_ok", { state: "x", questions }, { origin: "https://evil.example" })).status, 403);
-    const caps = await (await fetch(`${url}/t_ask/capabilities`)).json();
+    const caps = await (await fetch(`${url}/t_ask/capabilities`, { headers: { "sec-fetch-site": "same-origin" } })).json();
     assert.deepEqual([caps.ok, caps.available, caps.permission], [true, false, "ask"]);
     assert.equal((await fetch(`${url}/t_ok/capabilities`, { headers: { "x-scribe-client": "agent" } })).status, 403);
   } finally {

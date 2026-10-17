@@ -9,6 +9,7 @@ import { dataDir } from "../config.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
 import { mcpCall, toolUses, type ThreadStats, type ToolUse } from "./threadStats.js";
 import type { Item, ProviderId, Thread, ThreadMode, Turn, Usage } from "./types.js";
+import { threadToken } from "../callers.js";
 
 export { mcpCall };
 
@@ -112,7 +113,7 @@ export function boardTools(spec: { command: string; args: string[]; env: Record<
   const key = `${provider}:${pages}`;
   let list = boardToolCache.get(key);
   if (!list) {
-    const env = { ...(process.env as Record<string, string>), ...spec.env, SCRIBE_THREAD: "th_harness_probe", SCRIBE_PROVIDER: provider, ...(pages ? {} : { SCRIBE_PAGES: "off" }) };
+    const env = { ...(process.env as Record<string, string>), ...spec.env, SCRIBE_THREAD: "th_harness_probe", SCRIBE_THREAD_TOKEN: threadToken("th_harness_probe"), SCRIBE_PROVIDER: provider, ...(pages ? {} : { SCRIBE_PAGES: "off" }) };
     list = listTools((client) => client.connect(new StdioClientTransport({ command: spec.command, args: spec.args, env, stderr: "ignore" }), { timeout: PROBE_TIMEOUT_MS }));
     boardToolCache.set(key, list);
     void list.then((result) => {

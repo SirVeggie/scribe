@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Daemon/UI protocol version. Bump with any API or event change; public/app.js BOARD_VERSION must match. */
-export const VERSION = "3.0.4";
+export const VERSION = "3.1.0";
 /** The install (checkout) this process runs from: the folder above src/ or dist/. */
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 export const HOST = "127.0.0.1";
@@ -48,6 +48,10 @@ export const AGENT_CLIENT = "agent";
 export const SESSION_HEADER = "x-scribe-session";
 /** The Scribe chat thread an MCP server was started for (SCRIBE_THREAD in its environment). */
 export const THREAD_HEADER = "x-scribe-thread";
+/** Proves THREAD_HEADER: the token the daemon gave that chat's MCP (SCRIBE_THREAD_TOKEN, src/callers.ts). */
+export const THREAD_TOKEN_HEADER = "x-scribe-token";
+/** A local tool acting for the user sends the data folder's local-token file (src/callers.ts). */
+export const LOCAL_TOKEN_HEADER = "x-scribe-local-token";
 /** The MCP client's name, shown as the holder of a claim. */
 export const AGENT_LABEL_HEADER = "x-scribe-agent";
 
@@ -58,10 +62,6 @@ export function baseUrl(): string {
 /** Origins the board shell may be opened from: the desktop app uses baseUrl(), a browser may use localhost. */
 export function shellOrigins(): string[] {
   return [baseUrl(), `http://localhost:${PORT}`];
-}
-
-export function contentBaseUrl(): string {
-  return `http://${CONTENT_HOST}:${PORT}`;
 }
 
 /**

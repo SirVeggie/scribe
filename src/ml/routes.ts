@@ -1,5 +1,6 @@
 import express, { Router } from "express";
-import { AGENT_CLIENT, CLIENT_HEADER, shellOrigins } from "../config.js";
+import { identify } from "../callers.js";
+import { shellOrigins } from "../config.js";
 import type { PermissionGrant } from "../pagePermissions.js";
 import { PageMl } from "./page.js";
 import { mlService, type MlService } from "./service.js";
@@ -62,7 +63,7 @@ export function mlRouter(service: MlService = mlService(), pages?: MlPageAccess)
     const ml = pages.ml ?? new PageMl({ service });
     const forPage = (fn: (tabId: string, grants: Map<string, PermissionGrant>, req: express.Request) => unknown) =>
       async (req: express.Request, res: express.Response) => {
-        if (req.get(CLIENT_HEADER) === AGENT_CLIENT) {
+        if (identify(req).viewer === "agent") {
           res.status(403).json({ error: "Only the Scribe UI can ask the classifier for a page" });
           return;
         }

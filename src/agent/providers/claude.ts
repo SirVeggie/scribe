@@ -14,6 +14,7 @@ import { webCallAllowed, type WebCall } from "../webAccess.js";
 import { claudeServerConfig, serversKey, type ResolvedMcpServer } from "../mcpConfig.js";
 import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
+import { threadToken } from "../../callers.js";
 
 /**
  * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
@@ -756,7 +757,7 @@ class ClaudeSession implements ProviderSession {
     const webTools = ["WebSearch", "WebFetch"];
     const { command, args } = this.ctx.boardMcp;
     // The thread id lets Scribe tie claims on cards to this thread and release them if it stops.
-    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, SCRIBE_PROVIDER: "claude", ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}), ...scribeToolsOff(thread) };
+    const env = { ...this.ctx.boardMcp.env, SCRIBE_THREAD: thread.id, SCRIBE_THREAD_TOKEN: threadToken(thread.id), SCRIBE_PROVIDER: "claude", ...(noPages(thread.scope) ? { SCRIBE_PAGES: "off" } : {}), ...scribeToolsOff(thread) };
     const permissionMode = permissionModeFor(thread);
     const userServers = this.userServers();
     // Servers set to run without asking; the rest go through canUseTool like any tool.

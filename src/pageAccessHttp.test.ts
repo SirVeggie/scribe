@@ -7,7 +7,9 @@ import path from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { AGENT_CLIENT, CLIENT_HEADER, THREAD_HEADER } from "./config.js";
+import { createHmac } from "node:crypto";
+import http from "node:http";
+import { AGENT_CLIENT, CLIENT_HEADER, LOCAL_TOKEN_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER } from "./config.js";
 
 // The daemon's page routes answer a chat's MCP by the chat's Scribe access (#269).
 test("a page chat's MCP reaches its page, is told to ask for others, and never sees Restricted pages", async () => {
@@ -26,15 +28,35 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     child.once("error", reject);
   });
   const url = `http://127.0.0.1:${port}`;
-  const call = async (method: string, route: string, body?: unknown, thread?: string) => {
+  const secret = (name: string) => fs.readFileSync(path.join(root, name), "utf8").trim();
+  /** No thread: the user (a local tool with the local token). "": an external MCP client. Else that chat's MCP (#682). */
+  const call = async (method: string, route: string, body?: unknown, thread?: string, extra: Record<string, string> = {}) => {
     const headers: Record<string, string> = body ? { "Content-Type": "application/json" } : {};
-    if (thread !== undefined) {
+    if (thread === undefined) headers[LOCAL_TOKEN_HEADER] = secret("local-token");
+    else {
       headers[CLIENT_HEADER] = AGENT_CLIENT;
-      if (thread) headers[THREAD_HEADER] = thread;
+      if (thread) {
+        headers[THREAD_HEADER] = thread;
+        headers[THREAD_TOKEN_HEADER] = createHmac("sha256", Buffer.from(secret("agent-secret"), "hex")).update(`thread:${thread}`).digest("hex");
+      } else headers[LOCAL_TOKEN_HEADER] = secret("local-token");
     }
+    Object.assign(headers, extra);
+    for (const [name, value] of Object.entries(headers)) if (value === "") delete headers[name];
     const res = await fetch(url + route, { method, headers, body: body ? JSON.stringify(body) : undefined });
     return { status: res.status, data: (await res.json().catch(() => ({}))) as Record<string, any> };
   };
+  /** A page's own script: the request comes in on that page's origin (#660). */
+  const fromPage = (page: string, method: string, route: string, body?: unknown) =>
+    new Promise<number>((resolve, reject) => {
+      const host = `t-${page.slice(2)}.localhost:${port}`;
+      const payload = body ? JSON.stringify(body) : undefined;
+      const req = http.request({ host: "127.0.0.1", port, path: route, method, headers: { host, origin: `http://${host}`, "sec-fetch-site": "same-origin", ...(payload ? { "content-type": "application/json" } : {}) } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("error", reject);
+      req.end(payload);
+    });
   try {
     let ready = false;
     for (let i = 0; i < 150 && !ready; i++) {
@@ -71,6 +93,28 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal((await call("GET", `/api/tabs/${other.id}`, undefined, "")).status, 200);
     assert.equal((await call("GET", `/api/tabs/${secret.id}`, undefined, "")).status, 404);
     assert.equal((await call("GET", `/api/tabs/${secret.id}`)).status, 200, "the user sees everything");
+
+    // A thread id without its token, or no credential at all, reaches no page and none of the board's routes (#682).
+    const forged = { [THREAD_TOKEN_HEADER]: "", [LOCAL_TOKEN_HEADER]: "" };
+    assert.equal((await call("GET", `/api/tabs/${home.id}`, undefined, thread.id, { [THREAD_TOKEN_HEADER]: "0".repeat(64) })).status, 404, "a forged token");
+    assert.equal((await call("GET", `/api/tabs/${other.id}`, undefined, "", forged)).status, 404, "the agent header alone");
+    assert.equal((await call("GET", `/api/tabs/${other.id}`, undefined, undefined, forged)).status, 404, "no header at all");
+    assert.deepEqual((await call("GET", "/api/library", undefined, undefined, forged)).data.tabs, []);
+    assert.equal((await call("GET", "/api/agent/threads", undefined, undefined, forged)).status, 403);
+    assert.equal((await call("GET", "/api/agent/threads", undefined, thread.id)).status, 403, "a chat cannot read other chats or answer its own approvals");
+    assert.equal((await call("GET", "/api/export", undefined, "")).status, 403);
+    assert.equal((await call("GET", "/api/agent/threads")).status, 200, "the local token is the user");
+    assert.equal((await call("GET", `/api/tabs/${secret.id}`, undefined, undefined, { ...forged, "sec-fetch-site": "same-origin" })).status, 200, "the board UI in a browser");
+
+    // A page's script reaches its own page only (#660).
+    assert.equal(await fromPage(home.id, "GET", `/api/tabs/${home.id}/state`), 200);
+    assert.equal(await fromPage(home.id, "PUT", `/api/tabs/${home.id}/state`, { ops: [{ op: "set", path: "x", value: 1 }] }), 200);
+    assert.equal(await fromPage(home.id, "GET", `/api/tabs/${other.id}/state`), 404);
+    assert.equal(await fromPage(home.id, "PUT", `/api/tabs/${other.id}/state`, { ops: [{ op: "set", path: "x", value: 1 }] }), 404);
+    assert.equal(await fromPage(home.id, "POST", `/api/tabs/${other.id}/action`, { action: "list" }), 404);
+    assert.equal(await fromPage(home.id, "GET", `/view/${home.id}`), 200);
+    assert.equal(await fromPage(home.id, "GET", `/view/${other.id}`), 302);
+    assert.equal(await fromPage(home.id, "GET", "/api/tabs"), 403);
   } finally {
     await fetch(url + "/api/shutdown", { method: "POST" }).catch(() => {});
     await Promise.race([exited, delay(5000)]);

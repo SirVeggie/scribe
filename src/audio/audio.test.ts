@@ -145,7 +145,8 @@ test("page transcription requires an allow grant and limits calls per page", asy
   const server = app.listen(0, "127.0.0.1"); await new Promise<void>(r => server.once("listening", r));
   try {
     const base = `http://127.0.0.1:${(server.address() as any).port}/api/audio/transcriptions`;
-    const upload = () => fetch(base, { method: "POST", body: "sound", headers: { "Content-Type": "audio/webm", "x-scribe-tab": "page" } });
+    // The board UI in a browser (#682): a headless caller with no credential is an anonymous agent.
+    const upload = () => fetch(base, { method: "POST", body: "sound", headers: { "Content-Type": "audio/webm", "x-scribe-tab": "page", "sec-fetch-site": "same-origin" } });
     grants.set("audio.transcribe", { value: "deny", updatedAt: 2 });
     assert.equal((await (await upload()).json()).error, "denied");
     assert.equal(calls.length, 0);

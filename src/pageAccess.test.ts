@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { effectiveLevel, normalizePageAccess, normalizeThreadPageGrants, pageReach, type AccessLookup, type AccessPage, type PageReader } from "./pageAccess.js";
+import { effectiveLevel, frameReach, normalizePageAccess, normalizeThreadPageGrants, pageReach, type AccessLookup, type AccessPage, type PageReader } from "./pageAccess.js";
 import type { FolderAccess, PageAccess } from "./types.js";
 
 // Library: work/ (with work/secret/ inside) and notes/. Pages are by id.
@@ -103,4 +103,19 @@ test("stored access is normalized", () => {
     grants: [{ kind: "folder", id: "f" }],
   });
   assert.deepEqual(normalizeThreadPageGrants([{ kind: "page", id: "a" }, { kind: "page", id: "a", mention: true }]), [{ kind: "page", id: "a", mention: true }]);
+});
+
+test("a page's script reaches its own page and Open pages its page or folders were granted (#660)", () => {
+  const plain = lookup();
+  assert.equal(frameReach("board", pages.board, plain), true);
+  assert.equal(frameReach("board", pages.plan, plain), false, "same folder is not a grant");
+  const made = { ...pages.report, access: { origin: { kind: "page" as const, id: "board" } } };
+  assert.equal(frameReach("board", made, plain), false, "origin is an agent rule, not a page's");
+  const granted = lookup({ pages: { board: { grants: [{ kind: "page", id: "report" }] } }, folders: { work: { grants: [{ kind: "folder", id: "secret" }] } } });
+  assert.equal(frameReach("board", pages.report, granted), true);
+  assert.equal(frameReach("board", pages.diary, granted), true, "its folder's grant");
+  assert.equal(frameReach("report", pages.board, granted), false, "grants go one way");
+  const strict = { ...pages.report, access: { level: "ask" as const } };
+  assert.equal(frameReach("board", strict, granted), false, "Ask always needs a chat's own grant");
+  assert.equal(frameReach("board", { ...pages.report, agentHidden: true }, granted), false, "Restricted");
 });
