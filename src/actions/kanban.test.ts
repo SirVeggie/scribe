@@ -193,11 +193,27 @@ test("moving into done sets doneAt and puts the card on top; moving out clears i
   assert.throws(() => run(state, "move", { card: 1, to: "nowhere" }), /no column "nowhere". Columns: Inbox/);
 });
 
-test("create numbers the card, resolves labels, and lands at the column's end", () => {
+test("creation and cross-column moves default to top in every column, with bottom available explicitly", () => {
+  for (const col of board().columns) {
+    const initial = board();
+    initial.cards[0].col = col.id;
+    initial.cards[1].col = col.id;
+    initial.cards[2].col = "elsewhere";
+    assert.deepEqual(order(run(initial, "create", { title: "New", column: col.id }).state), [4, 1, 2, 3]);
+    assert.deepEqual(order(run(initial, "create", { title: "New", column: col.id, position: "bottom" }).state), [1, 2, 4, 3]);
+    assert.deepEqual(order(run(initial, "move", { card: 3, to: col.id }).state), [3, 1, 2]);
+    assert.deepEqual(order(run(initial, "move", { card: 3, to: col.id, position: "bottom" }).state), [1, 2, 3]);
+    // Reaffirming a card's column leaves its manual ordering intact.
+    assert.deepEqual(order(run(initial, "move", { card: 2, to: col.id }).state), [1, 2, 3]);
+    assert.deepEqual(order(run(initial, "move", { card: 2, to: col.id, position: "top" }).state), [2, 1, 3]);
+  }
+});
+
+test("create numbers the card, resolves labels, and lands at the column's top", () => {
   const { state, result } = run(board(), "create", { title: "New", column: "agent", labels: ["bug"] });
   assert.equal(result.num, 4);
   assert.equal(state.nextNum, 5);
-  assert.deepEqual(order(state), [1, 2, 4, 3]);
+  assert.deepEqual(order(state), [4, 1, 2, 3]);
   assert.deepEqual(card(state, 4).labels, ["lb1"]);
   assert.equal(card(state, 4).from, "ready");
   assert.throws(() => run(board(), "create", { title: "x", labels: ["nope"] }), /no label "nope"/);
@@ -1036,8 +1052,8 @@ test("batch applies each card's update in order, all or none", () => {
   assert.deepEqual(result.cards, [{ num: 1, column: "Inbox" }, { num: 2, column: "Inbox" }]);
   assert.equal(card(state, 1).assignee, "Opus");
   assert.equal(card(state, 2).priority, 2);
-  // Both land at the end of Inbox in the order given.
-  assert.deepEqual((state.cards as Array<{ num: number; col: string }>).filter((c) => c.col === "in").map((c) => c.num), [1, 2]);
+  // Each move lands at the top of Inbox.
+  assert.deepEqual((state.cards as Array<{ num: number; col: string }>).filter((c) => c.col === "in").map((c) => c.num), [2, 1]);
   assert.throws(
     () => run(board(), "batch", { changes: [{ card: 1, priority: 1 }, { card: 9, priority: 1 }] }),
     /changes\[1\] \(card 9\): .*nothing was changed/

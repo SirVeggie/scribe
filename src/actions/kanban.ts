@@ -375,10 +375,10 @@ export function placement(state: BoardState, colId: string, top: boolean, except
   return top ? { before: `id=${inCol[0].id}` } : { after: `id=${inCol[inCol.length - 1].id}` };
 }
 
-/** Ops that move a card into a column, with the page's timestamp rules. Done columns put it on top. */
+/** Ops that move a card into a column, with the page's timestamp rules. Defaults to the top. */
 export function moveOps(state: BoardState, card: Card, col: Column, now: number, position?: unknown): unknown[] {
   const done = col.role === "done";
-  const top = position === "top" || (position === undefined && done);
+  const top = position === undefined || position === "top";
   const fields: Record<string, unknown> = {};
   if (card.col !== col.id) {
     fields.col = col.id;
@@ -731,7 +731,7 @@ export const kanbanActions: ActionSet = {
     },
     create: {
       description:
-        "Add a card. column defaults to the first column. labels are names or ids. The card gets the next number; position top or bottom (default bottom, top in a done column).",
+        "Add a card. column defaults to the first column. labels are names or ids. The card gets the next number; position top or bottom (default top).",
       args: "{ title, description?, column?, labels?, priority?, due?, checklist?: string[], position? }",
       run(state, args, ctx) {
         const title = str(args.title).trim();
@@ -760,7 +760,7 @@ export const kanbanActions: ActionSet = {
           ...(col.role === "agent" ? { from: col.id } : {}),
           ...(col.role === "done" ? { doneAt: now } : {}),
         };
-        const top = args.position === "top" || (args.position === undefined && col.role === "done");
+        const top = args.position === undefined || args.position === "top";
         return {
           ops: [
             { op: "insert", path: "cards", value: card, ...placement(state, col.id, top) },
@@ -816,7 +816,7 @@ export const kanbanActions: ActionSet = {
     },
     move: {
       description:
-        "Move a card to a column (unique role agent | working | review | done, a column id, or its title). Sets the move and done times. position top or bottom; a done column puts it on top.",
+        "Move a card to a column (unique role agent | working | review | done, a column id, or its title). Sets the move and done times. position top or bottom (default top).",
       args: "{ card, to, position? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);

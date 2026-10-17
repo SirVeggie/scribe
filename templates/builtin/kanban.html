@@ -1673,11 +1673,6 @@
     else delete c.doneAt;
     return c;
   }
-  /** Whether moving c into colId completes it: a done column, and no done time yet. */
-  function completes(c, colId) {
-    var col = column(colId);
-    return Boolean(col && col.role === "done" && !c.doneAt);
-  }
   /**
    * Inserts c into cards (which must not contain it) in column colId: at the top when top is set,
    * else before beforeId, else after the column's last card, so the array keeps columns together.
@@ -2570,13 +2565,11 @@
     } else {
       focusComposerNext = true;
     }
-    // Adding a card jumps to the end of its column, so reveal the path to it first.
-    columnLimits.set(colId, cardsIn(colId).length + 1);
-    scribe.set({ cards: allCards().concat([c]), nextNum: num + 1 });
+    scribe.set({ cards: insertCard(allCards().slice(), c, colId, null, true), nextNum: num + 1 });
     render();
     afterMove(c.id, null, colId);
     var list = boardEl.querySelector('.cards[data-col="' + colId + '"]');
-    if (list) list.scrollTop = list.scrollHeight;
+    if (list) list.scrollTop = 0;
     if (open) {
       openCard(c.id);
       startEditDesc();
@@ -2928,9 +2921,8 @@
     var moving = Object.assign({}, cards[from]);
     var fromCol = moving.col;
     cards.splice(from, 1);
-    var top = completes(moving, colId);
     enterColumn(moving, colId, Date.now());
-    setCards(insertCard(cards, moving, colId, beforeId, top));
+    setCards(insertCard(cards, moving, colId, beforeId, false));
     afterMove(id, fromCol, colId);
     if (fromCol !== colId) askAssigneeAfterMove(id, colId);
   }
@@ -3718,9 +3710,8 @@
     var from = c.col;
     var to = mColumn.value;
     var cards = allCards().filter(function (x) { return x.id !== c.id; });
-    var top = completes(c, to);
     var moved = enterColumn(Object.assign({}, c), to, Date.now());
-    setCards(insertCard(cards, moved, to, null, top));
+    setCards(insertCard(cards, moved, to, null, true));
     afterMove(c.id, from, to);
   });
   mPriority.addEventListener("change", function () {
@@ -4113,9 +4104,8 @@
     delete next.claim;
     var cards = allCards().filter(function (x) { return x.id !== id; });
     if (target && next.col !== target.id) {
-      var top = completes(next, target.id);
       enterColumn(next, target.id, Date.now());
-      insertCard(cards, next, target.id, null, top);
+      insertCard(cards, next, target.id, null, true);
     } else {
       cards = allCards().map(function (x) { return x.id === id ? next : x; });
     }

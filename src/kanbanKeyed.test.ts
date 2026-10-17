@@ -127,6 +127,32 @@ test("a remote change repaints only the cards it touched, in place", async (t) =
       return { seen, painted: nodes.every((node) => node.isConnected) };
     });
     assert.deepEqual(regions, { seen: [], painted: true });
+    await frame.locator("#mClose").click();
+
+    // User-created cards go first in every column.
+    for (const col of ["todo", "done"]) {
+      await frame.locator(`.column[data-col="${col}"] .add-card`).click();
+      await frame.locator(".composer-input").fill(`New ${col}`);
+      await frame.locator(".composer-input").press("Enter");
+      assert.ok((await frame.locator(`.cards[data-col="${col}"] .card-title`).first().textContent())?.endsWith(`New ${col}`));
+      await frame.locator(".composer-input").press("Escape");
+    }
+    await frame.locator('.card[data-id="b"] .card-title').click();
+    await frame.locator("#mColumn").selectOption("done", { force: true });
+    await frame.locator("#mClose").click();
+    assert.equal(await frame.locator('.cards[data-col="done"] .card').first().getAttribute("data-id"), "b");
+
+    // A drag into Done follows the drop position, even on first completion.
+    const source = await frame.locator('.card[data-id="c"] .card-title').boundingBox();
+    const target = await frame.locator('.cards[data-col="done"] .card').last().boundingBox();
+    assert.ok(source && target);
+    await page.mouse.move(source.x + 20, source.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(target.x + 30, target.y + target.height - 2, { steps: 12 });
+    await page.mouse.up();
+    assert.equal(await frame.locator('.cards[data-col="done"] .card').last().getAttribute("data-id"), "c");
+    const moved = await frame.evaluate(() => (window as any).scribe.state.cards.find((c: any) => c.id === "c"));
+    assert.ok(moved.doneAt);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
