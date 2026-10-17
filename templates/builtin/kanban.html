@@ -716,8 +716,9 @@
     background: rgba(8, 12, 20, .35);
     border: 0;
     border-radius: 12px;
-    font: 13px/1.5 ui-monospace, Consolas, monospace;
-    resize: vertical;
+    font: inherit;
+    resize: none;
+    overflow-y: hidden;
     outline: none;
     box-shadow: 0 0 0 1px var(--accent);
   }
@@ -787,7 +788,8 @@
   .comment-follow button:hover { background: rgba(255, 255, 255, .12); }
   .comment-follow button.primary { background: rgba(224, 179, 74, .16); color: var(--agent); }
   .comment-follow button.primary:hover { background: rgba(224, 179, 74, .26); }
-  .comment-box { width: 100%; min-height: 58px; resize: vertical; }
+  .comment-box { width: 100%; min-height: 58px; resize: none; overflow-y: hidden; }
+  .inline-add .comment-box { flex: none; }
   .m-status { padding: 8px 10px; border-radius: 10px; background: rgba(224, 179, 74, .08); color: var(--agent); display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .m-status.blocked { background: rgba(255, 107, 122, .1); color: var(--danger); }
   .m-status .clear { margin-left: auto; color: var(--muted); font-size: 12px; padding: 2px 6px; }
@@ -3013,6 +3015,21 @@
   // Draft comments belong to this viewer, never to the shared card or its agent chat.
   var editorSaveTimer = null;
   var editorSaveSince = 0;
+  function resizeCardEditor(editor) {
+    if (!editor.getClientRects().length) return;
+    var style = getComputedStyle(editor);
+    editor.style.height = "auto";
+    editor.style.height = (editor.scrollHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)) + "px";
+  }
+  [commentBox, mdEditor].forEach(function (editor) {
+    editor.addEventListener("input", function () { resizeCardEditor(editor); });
+    // Wrapping changes when the dialog's available width changes.
+    var width = 0;
+    new ResizeObserver(function () {
+      var next = editor.clientWidth;
+      if (next && next !== width) { width = next; resizeCardEditor(editor); }
+    }).observe(editor);
+  });
   function saveCommentDraft() {
     if (!openId) return;
     var drafts = Object.assign({}, scribe.local.commentDrafts || {});
@@ -3062,6 +3079,7 @@
     var c = card(id);
     if (c && hasUnread(c)) updateCard(id, function (x) { x.seenAt = Date.now(); return x; });
     renderModal();
+    resizeCardEditor(commentBox);
     // Enter the dialog without highlighting an editable control before Tab is pressed.
     modal.focus({ preventScroll: true });
   }
@@ -3388,6 +3406,7 @@
       mdPreview.classList.add("hidden");
       mdEditor.classList.remove("hidden");
     }
+    resizeCardEditor(mdEditor);
     mdEditor.focus();
   }
 
@@ -3413,6 +3432,9 @@
   });
   mTitleInput.addEventListener("blur", function () { if (editingTitle) saveTitle(); });
 
+  mdPreview.addEventListener("focus", function () {
+    if (mdPreview.matches(":focus-visible")) startEditDesc();
+  });
   mdPreview.addEventListener("click", function (e) {
     if (e.target.tagName === "IMG") { showLightbox(e.target.src); return; }
     if (e.target.tagName === "A") return;
@@ -3524,6 +3546,7 @@
     var text = commentBox.value.trim();
     if (!text || !openId) return false;
     commentBox.value = "";
+    resizeCardEditor(commentBox);
     saveCommentDraft();
     var cmId = newId("cm");
     updateCard(openId, function (x) {
@@ -4131,6 +4154,7 @@
       return next;
     });
     commentBox.value = "";
+    resizeCardEditor(commentBox);
     scribe.set({ cards: cards });
     scribe.signal("changes", { card: id, num: c.num });
     setHint("Sent back" + (target ? " to " + target.title : "") + ".");
@@ -4203,6 +4227,7 @@
     var s = ta.selectionStart || 0, e = ta.selectionEnd || 0;
     ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
     ta.selectionStart = ta.selectionEnd = s + text.length;
+    resizeCardEditor(ta);
   }
   /** Small files stay as they are (animated gifs keep animating); large ones are scaled to a JPEG. */
   function shrinkImage(file, cb) {

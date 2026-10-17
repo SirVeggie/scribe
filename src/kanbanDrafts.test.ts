@@ -52,6 +52,22 @@ test("card editors recover private comment drafts and autosave descriptions acro
     let frame = page.frames()[1];
     const open = async (id: string) => frame.locator(`.card[data-id="${id}"] .card-title`).click();
     await open("a");
+    await frame.locator("#mTitle").focus();
+    await frame.locator("#mTitle").press("Tab");
+    assert.equal(await frame.locator("#mdEditor").evaluate(el => el === document.activeElement), true,
+      "tabbing into the description enters editing immediately");
+    assert.equal(await frame.locator("#mdEditor").evaluate(el => getComputedStyle(el).font),
+      await frame.locator("#mdPreview").evaluate(el => getComputedStyle(el).font));
+    const longText = Array.from({ length: 18 }, (_, i) => `Line ${i}`).join("\n");
+    for (const selector of ["#mdEditor", "#commentBox"]) {
+      const editor = frame.locator(selector);
+      const initialHeight = await editor.evaluate(el => el.clientHeight);
+      await editor.fill(longText);
+      assert.ok(await editor.evaluate(el => el.clientHeight) > initialHeight, `${selector} grows with input`);
+      assert.ok(await editor.evaluate(el => el.scrollHeight <= el.clientHeight + 1), `${selector} shows all lines`);
+      await editor.fill("");
+      assert.equal(await editor.evaluate(el => el.clientHeight), initialHeight, `${selector} shrinks after deletion`);
+    }
     await frame.locator("#commentBox").fill("unfinished A");
     // Close immediately, before the debounce, then verify card-specific recovery.
     await frame.locator("#mClose").click();
