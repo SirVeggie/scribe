@@ -92,6 +92,7 @@ import type {
   ThreadScope,
   ThreadView,
   ThreadWorktree,
+  StaleWorktree,
   TaskInfo,
   Turn,
   Usage,
@@ -114,6 +115,12 @@ const MAX_RECAP = 24_000;
 /** Providers drop the saved sessions no thread uses a few minutes after start, then every few hours. */
 const PRUNE_FIRST_MS = 5 * 60 * 1000;
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
+/** A worktree no turn has used this long is closed when it holds no changes, else listed as stale (#686). */
+const WORKTREE_IDLE_MS = 2 * 24 * 60 * 60 * 1000;
+const WORKTREE_SWEEP_FIRST_MS = 10 * 60 * 1000;
+const WORKTREE_SWEEP_EVERY_MS = 6 * 60 * 60 * 1000;
+/** Stale worktrees are brought up at most this often. */
+const WORKTREE_REMIND_MS = 24 * 60 * 60 * 1000;
 const DELTA_MS = 50;
 /**
  * How long a result of one of Scribe's own tools is held for the classifier before the agent gets it
@@ -666,6 +673,8 @@ export class AgentHost {
     }
     this.pruneTimer = setTimeout(() => this.pruneSessions(), PRUNE_FIRST_MS);
     this.pruneTimer.unref?.();
+    this.worktreeTimer = setTimeout(() => this.sweepWorktrees(), WORKTREE_SWEEP_FIRST_MS);
+    this.worktreeTimer.unref?.();
     this.unusedPages = new Set(this.db.getSetting<string[]>("unusedPages", []));
     store.on("tab_closed", this.onPageClosed);
     store.on("tab_upserted", this.onPageUpserted);
@@ -944,6 +953,7 @@ export class AgentHost {
     if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
     if (this.pageRunTimer) clearInterval(this.pageRunTimer);
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
+    if (this.worktreeTimer) clearTimeout(this.worktreeTimer);
     if (this.usageTimer) {
       clearTimeout(this.usageTimer);
       this.usageTimer = null;
@@ -4531,7 +4541,9 @@ export class AgentHost {
       return { thread, reopened: "" };
     }
     // A merged thread goes on in a worktree again, in the same folder when it can so its session resumes there.
-    const merged = thread.worktree?.closed?.how === "merged" ? thread.worktree : null;
+    // An expired one (closed while it held nothing, #686) opens again the same way.
+    const how = thread.worktree?.closed?.how;
+    const merged = how === "merged" || how === "expired" ? thread.worktree : null;
     const made = merged ? await reopenWorktree(merged, thread.title) : { ...(await createWorktree(home, repo, thread.title)), sameFolder: false };
     // Re-read: settings can change while git runs.
     thread = { ...this.requireThread(threadId), worktree: made.worktree, cwd: made.cwd };
@@ -4552,7 +4564,7 @@ export class AgentHost {
     for (const note of made.notes) this.addItem(threadId, turnId, { kind: "notice", level: "warn", text: note });
     this.emitThread(threadId);
     const reopened = merged
-      ? `<context>\nYour earlier work on branch ${merged.branch} was merged into ${from}, and its worktree was removed. This thread now works in a new worktree${made.sameFolder ? " in the same folder" : ` at ${made.worktree.path}`}, on branch ${made.worktree.branch} from ${from} as it is now, which may hold other work merged since. Files may have changed since you last read them: read them again before you edit them.\n</context>\n\n`
+      ? `<context>\n${how === "expired" ? `This thread's worktree on branch ${merged.branch} held no changes and was removed after days without a turn.` : `Your earlier work on branch ${merged.branch} was merged into ${from}, and its worktree was removed.`} This thread now works in a new worktree${made.sameFolder ? " in the same folder" : ` at ${made.worktree.path}`}, on branch ${made.worktree.branch} from ${from} as it is now, which may hold other work merged since. Files may have changed since you last read them: read them again before you edit them.\n</context>\n\n`
       : "";
     return { thread, reopened };
   }
@@ -4645,6 +4657,114 @@ export class AgentHost {
   private sharers(threadId: string, wt: ThreadWorktree): Thread[] {
     const key = workspaceKey(wt.path);
     return [...this.threads.values()].filter((t) => t.id !== threadId && openWorktree(t) && workspaceKey(openWorktree(t)!.path) === key);
+  }
+
+  private worktreeTimer: NodeJS.Timeout | null = null;
+
+  /** When a turn last ran in the thread's worktree, or when it was made. */
+  private worktreeUsedAt(thread: Thread, wt: ThreadWorktree): number {
+    const last = this.db.listTurns(thread.id).at(-1);
+    return Math.max(wt.createdAt, last?.endedAt ?? last?.startedAt ?? 0);
+  }
+
+  /**
+   * Open worktrees no turn has used for WORKTREE_IDLE_MS, with their changes now: one entry per
+   * folder (forks and helpers share it), under the thread that used it last. Leaves out a worktree
+   * while any of its threads is busy, queued or held by a page run (a board worker's).
+   */
+  private async idleWorktrees(): Promise<Array<{ thread: Thread; wt: ThreadWorktree; usedAt: number; ahead: number; dirty: boolean }>> {
+    const now = Date.now();
+    const groups = new Map<string, Thread[]>();
+    for (const thread of this.threads.values()) {
+      const wt = openWorktree(thread);
+      if (wt) groups.set(workspaceKey(wt.path), [...(groups.get(workspaceKey(wt.path)) ?? []), thread]);
+    }
+    const out = [];
+    for (const threads of groups.values()) {
+      const busy = threads.some((t) => {
+        const run = this.pageRuns.get(t.id);
+        return this.runs.has(t.id) || this.resuming.has(t.id) || (this.status.get(t.id) ?? "idle") !== "idle" || this.queues.get(t.id)?.length || (run && run.phase !== "ended");
+      });
+      if (busy) continue;
+      const used = threads.map((t) => ({ t, at: this.worktreeUsedAt(t, openWorktree(t)!) })).sort((a, b) => b.at - a.at);
+      const usedAt = used[0].at;
+      // A helper's turns count, but the worktree is listed and kept under a thread of the user's.
+      const owner = (used.find((u) => !u.t.helperOf) ?? used[0]).t;
+      const wt = openWorktree(owner)!;
+      if (now - usedAt < WORKTREE_IDLE_MS || !fs.existsSync(wt.path)) continue;
+      const progress = await worktreeProgress(wt).catch(() => null);
+      if (progress) out.push({ thread: owner, wt, usedAt, ...progress });
+    }
+    return out;
+  }
+
+  /** Close idle worktrees that hold no changes; the next message to their thread opens one again (#686). */
+  private sweepWorktrees(): void {
+    void (async () => {
+      for (const { thread, wt, ahead, dirty } of await this.idleWorktrees()) {
+        if (ahead || dirty || this.closed) continue;
+        await this.expireWorktree(thread.id, wt).catch((err) => log(`${thread.id}: closing its unused worktree failed: ${(err as Error).message}`));
+      }
+    })()
+      .catch((err) => log(`Worktree sweep failed: ${(err as Error).message}`))
+      .finally(() => {
+        if (this.closed) return;
+        this.worktreeTimer = setTimeout(() => this.sweepWorktrees(), WORKTREE_SWEEP_EVERY_MS);
+        this.worktreeTimer.unref?.();
+      });
+  }
+
+  private async expireWorktree(threadId: string, wt: ThreadWorktree): Promise<void> {
+    const ids = [threadId, ...this.sharers(threadId, wt).map((t) => t.id)];
+    // The provider process runs in the folder; Windows will not remove a folder in use.
+    for (const id of ids) {
+      this.sessions.get(id)?.dispose();
+      this.sessions.delete(id);
+      forgetGuides(id);
+    }
+    await removeWorktree(wt);
+    await dropBranchIfEmpty(wt);
+    const days = Math.round(WORKTREE_IDLE_MS / 86_400_000);
+    const at = Date.now();
+    for (const id of ids) {
+      const cur = this.threads.get(id);
+      if (!cur || openWorktree(cur)?.path !== wt.path) continue;
+      // Like a merge: the thread keeps its session and its next message reopens the same folder where it
+      // can. Forks and helpers that shared it go back to the main checkout in fresh sessions.
+      const own = id === threadId;
+      const next: Thread = {
+        ...cur,
+        cwd: wt.home,
+        useWorktree: own,
+        worktree: { ...wt, ahead: 0, dirty: false, closed: { how: own ? "expired" : "left", at } },
+        nativeId: own ? cur.nativeId : null,
+      };
+      this.threads.set(id, next);
+      this.db.saveThread(next);
+      const after = own ? "The next message opens a new one." : "The next message starts a new agent session in the folder.";
+      this.addItem(id, null, { kind: "notice", level: "info", text: `Removed the worktree on ${wt.branch}: it held no changes and had no turns for ${days} days. ${after}` });
+      this.emitThread(id);
+    }
+    this.flushNow();
+    log(`${threadId}: removed its unused worktree ${wt.path}`);
+  }
+
+  /**
+   * Idle worktrees that hold changes, for the stale worktrees list. remind is true at most once per
+   * WORKTREE_REMIND_MS while there are any, so only one window brings them up each day.
+   */
+  async staleWorktrees(remind = false): Promise<{ worktrees: StaleWorktree[]; remind: boolean }> {
+    const worktrees = (await this.idleWorktrees())
+      .filter((w) => w.ahead || w.dirty)
+      .map(({ thread, wt, usedAt, ahead, dirty }) => ({ threadId: thread.id, title: thread.title, home: wt.home, repo: wt.repo, path: wt.path, branch: wt.branch, base: wt.base, ahead, dirty, usedAt }))
+      .sort((a, b) => a.usedAt - b.usedAt);
+    let due = false;
+    if (remind && worktrees.length) {
+      const last = this.db.getSetting<number>("worktreeRemindAt", 0);
+      due = Date.now() - last >= WORKTREE_REMIND_MS;
+      if (due) this.db.setSetting("worktreeRemindAt", Date.now());
+    }
+    return { worktrees, remind: due };
   }
 
   // ---------- hidden and deleted workspaces (#507) ----------

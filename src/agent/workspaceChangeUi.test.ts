@@ -67,9 +67,11 @@ test("worktree menu offers discard only while idle", () => {
 test("discard confirms loss of all work before posting and cancellation keeps it", async () => {
   const finishStart = source.indexOf("    async finishWorktree(how) {");
   const finishEnd = source.indexOf("    threadMenu(anchor)", finishStart);
+  const fnStart = source.indexOf("  async function finishThreadWorktree(");
+  const fnEnd = source.indexOf("  /* ---------- diff viewer", fnStart);
   for (const accept of [false, true]) {
     const calls: string[] = [];
-    const view = vm.runInNewContext(`({${source.slice(finishStart, finishEnd)}})`, {
+    const view = vm.runInNewContext(`${source.slice(fnStart, fnEnd)}({${source.slice(finishStart, finishEnd)}})`, {
       openWorktree: () => ({ branch: "agent/work" }),
       notice: () => {},
       app: () => ({ confirm: async (warning: string, label: string) => {

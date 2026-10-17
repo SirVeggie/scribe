@@ -585,6 +585,8 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.get("/threads/:id/worktree", wrap((req) => host.worktreeInfo(req.params.id)));
+  // Worktrees with changes and no turns for days (#686). remind=1 asks whether this window should bring them up now.
+  router.get("/worktrees/stale", wrap((req) => host.staleWorktrees(req.query.remind === "1")));
   // A page hands its thread to Scribe to see through (limit waits, resumes, merges), or takes it back.
   router.post("/threads/:id/run", wrap((req) => ({ thread: host.watchPageThread(req.params.id, req.body ?? {}) })));
   router.delete("/threads/:id/run", wrap((req) => ({ thread: host.releasePageThread(req.params.id) })));

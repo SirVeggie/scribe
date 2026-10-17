@@ -2426,6 +2426,48 @@
     });
   }
 
+  /** Merge, leave or discard a thread's worktree after asking; true once it is done. */
+  async function finishThreadWorktree(threadId, wt, how) {
+    let st = null;
+    try {
+      ({ status: st } = await api("GET", `/threads/${encodeURIComponent(threadId)}/worktree`));
+    } catch (err) {
+      notice(err.message);
+      return false;
+    }
+    if (how === "merge" && st) {
+      if (st.dirty.length) {
+        notice(`The worktree has ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch.`);
+        return false;
+      }
+      if (st.mainBranch !== wt.base) {
+        notice(`The main checkout is on ${st.mainBranch || "a detached HEAD"}. Switch it to ${wt.base} to merge.`);
+        return false;
+      }
+    }
+    const question =
+      how === "merge"
+        ? st?.ahead
+          ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
+          : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
+        : how === "discard"
+          ? `Discard all committed and uncommitted work on ${wt.branch}, delete the branch, and remove its worktree folder? This cannot be undone. The main checkout is unchanged.`
+          : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
+    const after =
+      how === "merge"
+        ? `A new message to the thread then opens a worktree again from ${wt.base} as it is then, and goes on in the same agent session.`
+        : "This thread and any other threads sharing the worktree then continue in the main checkout, in fresh agent sessions.";
+    if (!(await app().confirm(`${question}\n\n${after}`, how === "merge" ? "Merge" : how === "discard" ? "Discard worktree" : "Leave"))) return false;
+    try {
+      const res = await api("POST", `/threads/${encodeURIComponent(threadId)}/worktree`, { action: how });
+      notice(res.message);
+      return true;
+    } catch (err) {
+      notice(err.message);
+      return false;
+    }
+  }
+
   /* ---------- diff viewer ---------- */
 
   /** source: { kind: "turn"|"thread"|"git", threadId?, turnId?, cwd?, path? } */
@@ -3305,43 +3347,7 @@
     async finishWorktree(how) {
       const t = this.thread();
       const wt = openWorktree(t);
-      if (!wt) return;
-      let st = null;
-      try {
-        ({ status: st } = await api("GET", `/threads/${encodeURIComponent(t.id)}/worktree`));
-      } catch (err) {
-        notice(err.message);
-        return;
-      }
-      if (how === "merge" && st) {
-        if (st.dirty.length) {
-          notice(`The worktree has ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch.`);
-          return;
-        }
-        if (st.mainBranch !== wt.base) {
-          notice(`The main checkout is on ${st.mainBranch || "a detached HEAD"}. Switch it to ${wt.base} to merge.`);
-          return;
-        }
-      }
-      const question =
-        how === "merge"
-          ? st?.ahead
-            ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
-            : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
-          : how === "discard"
-            ? `Discard all committed and uncommitted work on ${wt.branch}, delete the branch, and remove its worktree folder? This cannot be undone. The main checkout is unchanged.`
-            : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
-      const after =
-        how === "merge"
-          ? `A new message to the thread then opens a worktree again from ${wt.base} as it is then, and goes on in the same agent session.`
-          : "This thread and any other threads sharing the worktree then continue in the main checkout, in fresh agent sessions.";
-      if (!(await app().confirm(`${question}\n\n${after}`, how === "merge" ? "Merge" : how === "discard" ? "Discard worktree" : "Leave"))) return;
-      try {
-        const res = await api("POST", `/threads/${encodeURIComponent(t.id)}/worktree`, { action: how });
-        notice(res.message);
-      } catch (err) {
-        notice(err.message);
-      }
+      if (wt) await finishThreadWorktree(t.id, wt, how);
     }
 
     threadMenu(anchor) {
@@ -8157,12 +8163,35 @@
       if (key.startsWith("ask:")) this.snoozed.add(key);
       this.remove(key);
     },
+    /** The daily stale worktrees reminder (#686): not a thread's, so kept apart from shown. */
+    stale: 0,
+    showStale(count) {
+      this.stale = count;
+      this.render();
+    },
+    hideStale() {
+      if (!this.stale) return;
+      this.stale = 0;
+      this.render();
+    },
+    staleToast() {
+      const node = el("div", "ag-toast k-stale");
+      const body = elWith("div", "ag-toast-body", el("b", null, `${this.stale} stale worktree${this.stale === 1 ? "" : "s"}`), el("span", "ag-toast-text", "With changes and no turns for over 2 days."));
+      const open = () => void staleWorktrees.open();
+      body.append(elWith("div", "ag-toast-actions", button("Review", "ag-btn tiny", open)));
+      node.addEventListener("click", (event) => {
+        if (!event.target.closest("button, a")) open();
+      });
+      node.append(el("span", "ag-dot s-waiting"), body, button(icon("close"), "ag-icon-btn small ag-toast-x", () => this.hideStale(), "Dismiss"));
+      return node;
+    },
     render() {
       if (!this.box) return;
       this.sig = this.signature();
       // Waiting before finished, newest first.
       const entries = [...this.shown.values()].sort((a, b) => (a.kind === b.kind ? b.at - a.at : a.kind === "ask" ? -1 : 1));
       this.box.replaceChildren();
+      if (this.stale) this.box.append(this.staleToast());
       for (const entry of entries.slice(0, TOAST_CAP)) {
         const t = S.threads.get(entry.threadId);
         if (t) this.box.append(this.toast(entry, t));
@@ -8201,6 +8230,85 @@
         button(icon("close"), "ag-icon-btn small ag-toast-x", () => this.dismiss(entry.key), entry.kind === "ask" ? "Dismiss for now (it stays in the orb's list)" : "Dismiss")
       );
       return node;
+    },
+  };
+
+  /* ---------- stale worktrees (#686) ---------- */
+
+  const STALE_CHECK_MS = 3 * 60 * 60 * 1000;
+
+  /** el with children. */
+  function elWith(tag, cls, ...kids) {
+    const node = el(tag, cls);
+    node.append(...kids);
+    return node;
+  }
+
+  const staleWorktrees = {
+    timer: null,
+    /** Asks the daemon about once a day per Scribe (not per window) whether to bring them up. */
+    start() {
+      if (this.timer) return;
+      const check = () => this.check(true);
+      this.timer = setInterval(check, STALE_CHECK_MS);
+      setTimeout(check, 60 * 1000);
+    },
+    async check(remind) {
+      try {
+        const res = await api("GET", `/worktrees/stale${remind ? "?remind=1" : ""}`);
+        if (res.remind) toasts.showStale(res.worktrees.length);
+        return res.worktrees;
+      } catch {
+        return null;
+      }
+    },
+    async open() {
+      toasts.hideStale();
+      const { panel, close } = modal("ag-stale");
+      const list = el("div", "ag-stale-list");
+      panel.append(
+        elWith("div", "ag-stale-head", el("h2", "ag-modal-title", "Stale worktrees"), el("span", "ag-grow"), button(icon("close"), "ag-icon-btn", () => close(), "Close (Esc)", false)),
+        el("p", "ag-modal-hint", "Worktrees with changes that have had no turns for over 2 days."),
+        list
+      );
+      const render = async () => {
+        const items = await this.check(false);
+        if (!panel.isConnected) return;
+        list.replaceChildren();
+        if (!items) return list.append(el("p", "ag-stale-empty", "Could not load the worktrees."));
+        if (!items.length) return list.append(el("p", "ag-stale-empty", "No stale worktrees."));
+        const groups = new Map();
+        for (const w of items) groups.set(w.home, [...(groups.get(w.home) || []), w]);
+        for (const [home, rows] of groups) {
+          const group = el("section", "ag-stale-group");
+          group.append(elWith("h3", "ag-stale-ws", el("span", null, home.split(/[\\/]/).filter(Boolean).pop() || home), el("span", "ag-stale-path", home)));
+          for (const w of rows) {
+            const state = [w.ahead ? `${w.ahead} commit${w.ahead === 1 ? "" : "s"}` : "", w.dirty ? "uncommitted changes" : ""].filter(Boolean).join(", ");
+            const row = el("div", "ag-stale-row");
+            const info = elWith("div", "ag-stale-info", el("b", null, w.title), el("span", "ag-stale-meta", `${w.branch} · ${state} · last used ${R.timeAgo(w.usedAt)} ago`));
+            const done = async (how) => {
+              if (await finishThreadWorktree(w.threadId, w, how)) void render();
+            };
+            const actions = elWith(
+              "div",
+              "ag-stale-actions",
+              button("Changes", "ag-btn tiny", () => openDiff({ kind: "git", threadId: w.threadId })),
+              button("Open thread", "ag-btn tiny", () => {
+                close();
+                openThread(w.threadId);
+              }),
+              button(w.base ? `Merge into ${w.base}` : "Merge", "ag-btn tiny", () => done("merge")),
+              button("Delete", "ag-btn tiny danger", () => done("discard"))
+            );
+            if (!w.base) actions.children[2].disabled = true;
+            row.append(info, actions);
+            group.append(row);
+          }
+          list.append(group);
+        }
+      };
+      list.append(el("p", "ag-stale-empty", "Loading…"));
+      await render();
     },
   };
 
@@ -11675,6 +11783,7 @@
     memoryDialog.mount();
     applyButton();
     toasts.mount();
+    staleWorktrees.start();
     const toggleBtn = document.getElementById("agent-toggle");
     toggleBtn?.addEventListener("click", () => shortcut("side"));
     if (toggleBtn) flyout.bind(toggleBtn, "button");

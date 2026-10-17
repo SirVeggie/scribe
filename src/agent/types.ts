@@ -152,7 +152,23 @@ export type ThreadWorktree = {
   /** As of the last turn: commits not in the base yet, and uncommitted changes. */
   ahead?: number;
   dirty?: boolean;
-  closed?: { how: "merged" | "left" | "removed"; at: number };
+  /** expired: closed by Scribe after days without a turn while it held no changes; the next message opens one again. */
+  closed?: { how: "merged" | "left" | "removed" | "expired"; at: number };
+};
+
+/** A worktree that holds changes but has had no turn for days, for the stale worktrees list (#686). */
+export type StaleWorktree = {
+  threadId: string;
+  title: string;
+  home: string;
+  repo: string;
+  path: string;
+  branch: string;
+  base: string | null;
+  ahead: number;
+  dirty: boolean;
+  /** When a turn last ran in it, or when it was made. */
+  usedAt: number;
 };
 
 export type RunStatus = "idle" | "running" | "waiting";

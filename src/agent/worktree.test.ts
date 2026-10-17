@@ -145,6 +145,57 @@ test("a landed merge closes successfully when its deregistered folder cannot be 
   }
 });
 
+test("idle worktrees close when empty and are listed as stale when they hold changes (#686)", async () => {
+  const { AgentHost } = await import("./host.js");
+  const old = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const empty = { ...(await createWorktree(repo, repo, "Idle empty")).worktree, createdAt: old };
+  const worked = { ...(await createWorktree(repo, repo, "Idle worked")).worktree, createdAt: old };
+  const fresh = (await createWorktree(repo, repo, "Fresh")).worktree;
+  fs.writeFileSync(path.join(worked.path, "w.txt"), "w\n");
+  await commitAll(worked, "work");
+  const threads = new Map(
+    [
+      { id: "idle-empty", title: "Idle empty", cwd: empty.path, worktree: empty, useWorktree: true, nativeId: "s1" },
+      { id: "idle-worked", title: "Idle worked", cwd: worked.path, worktree: worked, useWorktree: true, nativeId: "s2" },
+      { id: "fresh", title: "Fresh", cwd: fresh.path, worktree: fresh, useWorktree: true, nativeId: "s3" },
+    ].map((t) => [t.id, t])
+  );
+  const settings = new Map<string, unknown>();
+  const notices: { text: string }[] = [];
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    threads, runs: new Map(), resuming: new Set(), status: new Map(), queues: new Map(), pageRuns: new Map(), sessions: new Map(), closed: false,
+    db: {
+      saveThread() {},
+      listTurns: () => [],
+      getSetting: (k: string, d: unknown) => (settings.has(k) ? settings.get(k) : d),
+      setSetting: (k: string, v: unknown) => settings.set(k, v),
+    },
+    addItem: (_id: string, _turn: null, item: { text: string }) => notices.push(item),
+    emitThread() {}, flushNow() {},
+  });
+  try {
+    for (const { thread, wt, ahead, dirty } of await host.idleWorktrees()) if (!ahead && !dirty) await host.expireWorktree(thread.id, wt);
+    assert.equal(fs.existsSync(empty.path), false);
+    assert.equal(threads.get("idle-empty")?.worktree.closed?.how, "expired");
+    assert.equal(threads.get("idle-empty")?.useWorktree, true, "its next message opens a worktree again");
+    assert.equal(threads.get("idle-empty")?.nativeId, "s1");
+    assert.equal(threads.get("idle-empty")?.cwd, repo);
+    assert.match(notices[0].text, /held no changes/);
+    assert.ok(fs.existsSync(worked.path), "a worktree with changes is kept");
+    assert.ok(fs.existsSync(fresh.path), "a recently made worktree is kept");
+
+    const first = await host.staleWorktrees(true);
+    assert.deepEqual(first.worktrees.map((w: { threadId: string }) => w.threadId), ["idle-worked"]);
+    assert.equal(first.worktrees[0].ahead, 1);
+    assert.equal(first.remind, true);
+    assert.equal((await host.staleWorktrees(true)).remind, false, "reminds at most once a day");
+  } finally {
+    for (const wt of [worked, fresh]) {
+      await discardWorktree(wt);
+    }
+  }
+});
+
 test("a merged worktree reopens in the same folder from the latest base", async () => {
   const { worktree: wt } = await createWorktree(repo, repo, "Reopen me");
   fs.writeFileSync(path.join(wt.path, "r.txt"), "r1\n");
