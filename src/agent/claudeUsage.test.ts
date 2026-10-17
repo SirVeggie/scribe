@@ -99,6 +99,16 @@ test("a passed reset retains the observed Claude percentage and marks it expired
   assert.equal(applyExpiredWindows(limits, 2000).windows[0].expired, true);
 });
 
+test("empty quota probes retain the same source's timestamp and figures, but source changes clear them", () => {
+  const source = { tokenSource: "oauth", email: "one@example.invalid" };
+  const previous = claudePlanSnapshot({ rate_limits: { five_hour: { utilization: 60 } } }, source, 100);
+  for (const report of [null, {}, { rate_limits: {} }]) {
+    assert.equal(claudePlanSnapshot(report, source, 200, previous), previous);
+  }
+  assert.equal(claudePlanSnapshot(null, { ...source, email: "two@example.invalid" }, 200, previous).windows.length, 0);
+  assert.equal(claudePlanSnapshot({ rate_limits_available: false }, source, 200, previous).windows.length, 0);
+});
+
 test("Claude response measurements deduplicate blocks, omit child messages and reset on adoption", async () => {
   const provider = new ClaudeProvider();
   const session = provider.createSession({ id: "measure", nativeId: "synthetic-measure" } as Thread, {} as SessionContext) as any;
@@ -119,7 +129,7 @@ test("Claude response measurements deduplicate blocks, omit child messages and r
   } finally { session.sink = null; session.dispose(); provider.dispose(); }
 });
 
-test("provider result routing isolates live quotas, ignores child results and invalidates closed queries", () => {
+test("provider result routing isolates live quotas, ignores child results and retains closed-query observations", () => {
   const provider = new ClaudeProvider();
   const snapshots = new Map<string, PlanLimits>();
   const ctx = { claudeLimits: (id: string, limits: PlanLimits) => snapshots.set(id, limits) } as SessionContext;
@@ -145,8 +155,8 @@ test("provider result routing isolates live quotas, ignores child results and in
     assert.deepEqual(reported[0].billingSource, { tokenSource: "oauth" });
     a.query = { close() {} };
     a.close();
-    assert.equal(snapshots.get("a")?.availability, "unavailable");
-    assert.deepEqual(snapshots.get("a")?.billingSource, {});
-    assert.equal(snapshots.get("a")?.windows.length, 0);
+    assert.equal(snapshots.get("a")?.availability, "available");
+    assert.deepEqual(snapshots.get("a")?.billingSource, { tokenSource: "oauth" });
+    assert.equal(snapshots.get("a")?.windows[0].utilization, 0.4);
   } finally { a.sink = null; a.dispose(); b.dispose(); provider.dispose(); }
 });

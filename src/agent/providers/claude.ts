@@ -917,8 +917,6 @@ class ClaudeSession implements ProviderSession {
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;
     this.accounting = new ClaudeUsageDelta();
-    this.queryLimits = claudePlanSnapshot(null, {});
-    this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
     this.live = { model: this.thread.model, effort: this.thread.effort, permission: permissionModeFor(this.thread), key: this.restartKey(this.thread) };
     void this.readLoop(q);
     this.queryReady = (async () => {
@@ -926,7 +924,7 @@ class ClaudeSession implements ProviderSession {
       const report = await queryPlanUsage(q);
       if (this.query !== q) return;
       this.accounting.baseline(report);
-      this.queryLimits = claudePlanSnapshot(report, source);
+      this.queryLimits = claudePlanSnapshot(report, source, Date.now(), this.queryLimits);
       this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
     })();
     await this.queryReady;
@@ -943,7 +941,6 @@ class ClaudeSession implements ProviderSession {
       if (this.query === q) {
         // The process ended; the next turn starts a new one and resumes the session.
         this.query = null;
-        this.ctx.claudeLimits?.(this.thread.id, claudePlanSnapshot(null, {}));
         this.live = null;
         this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `Claude stopped unexpectedly. ${this.stderrTail.slice(-600)}`.trim() });
       }
@@ -951,7 +948,6 @@ class ClaudeSession implements ProviderSession {
       if (this.query === q) {
         const message = (err as Error).message || String(err);
         this.query = null;
-        this.ctx.claudeLimits?.(this.thread.id, claudePlanSnapshot(null, {}));
         this.live = null;
         this.endTurn({ status: this.cancelled ? "cancelled" : "error", error: this.cancelled ? undefined : `${message} ${this.stderrTail.slice(-600)}`.trim() });
       }
@@ -1208,7 +1204,7 @@ class ClaudeSession implements ProviderSession {
     }
     const q = this.query;
     this.query = null;
-    if (q) this.ctx.claudeLimits?.(this.thread.id, claudePlanSnapshot(null, {}));
+    // Process lifetime does not invalidate the last reported quota observation.
     this.live = null;
     this.input?.close();
     this.input = null;
@@ -1407,7 +1403,7 @@ class ClaudeSession implements ProviderSession {
         if (activeQuery) void queryPlanUsage(activeQuery).then((report) => {
           if (this.query !== activeQuery) return;
           const current = this.queryLimits;
-          this.queryLimits = { ...claudePlanSnapshot(report, current.billingSource ?? {}),
+          this.queryLimits = { ...claudePlanSnapshot(report, current.billingSource ?? {}, Date.now(), current),
             ...(current.overageAt ? { overage: current.overage, overageAt: current.overageAt } : {}) };
           this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
         });

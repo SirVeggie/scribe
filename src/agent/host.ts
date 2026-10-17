@@ -581,7 +581,12 @@ export class AgentHost {
       limits: (provider, info) => this.recordLimits(provider, info),
       claudeLimits: (threadId, limits) => {
         if (this.closed) return;
+        const previous = this.claudeThreadLimits.get(threadId);
+        if (limits.availability === "unavailable" && limits.detail === "Claude quota unavailable" && previous) {
+          limits = claudePlanSnapshot(null, limits.billingSource ?? {}, limits.at, previous);
+        }
         this.claudeThreadLimits.set(threadId, limits);
+        this.db.setSetting("claudeThreadLimits", Object.fromEntries(this.claudeThreadLimits));
         this.emitThread(threadId);
         if (limits.availability === "available" && !this.fakes) void this.refreshClaudeUsage();
       },
@@ -593,8 +598,10 @@ export class AgentHost {
       scanResult: (threadId, call) => this.scanResult(threadId, call),
     };
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
-    // Persisted Claude quotas predate this query/environment; do not revive an unrelated meter.
-    delete this.planLimits.claude;
+    // Keep source-tagged observations across restarts, without reviving legacy unscoped meters.
+    if (this.planLimits.claude?.source !== "claude") delete this.planLimits.claude;
+    this.claudeThreadLimits = new Map(Object.entries(this.db.getSetting<Record<string, PlanLimits>>("claudeThreadLimits", {}))
+      .filter(([id]) => this.threads.get(id)?.provider === "claude"));
     this.usageWindowStarts = new UsageWindowStarts({
       now: () => Date.now(),
       enabled: () => this.prefs().usageWindowStarts,
@@ -740,8 +747,9 @@ export class AgentHost {
   private claudeThreadLimits = new Map<string, PlanLimits>();
 
   private claudeUsageSnapshot(value: unknown): PlanLimits {
+    if (!isPlainRecord(value) && this.planLimits.claude) return this.planLimits.claude;
     const wrapper = isPlainRecord(value) ? value : {};
-    return claudePlanSnapshot(wrapper.report, claudeBillingSource(wrapper.billingSource));
+    return claudePlanSnapshot(wrapper.report, claudeBillingSource(wrapper.billingSource), Date.now(), this.planLimits.claude);
   }
   private usageWindowStarts: UsageWindowStarts;
   private usageWindowTimer: NodeJS.Timeout | null = null;
@@ -900,7 +908,9 @@ export class AgentHost {
       if (parsed) this.usageWindowStarts.observe("claude", parsed);
       if (parsed) this.commitLimits("claude", applyExpiredWindows(parsed), false);
     } catch {
-      this.commitLimits("claude", claudePlanSnapshot(null, {}), false);
+      if (this.closed) return;
+      // Retain the observation (and its timestamp) when the background probe fails.
+      if (!this.planLimits.claude) this.commitLimits("claude", claudePlanSnapshot(null, {}), false);
     }
     this.scheduleClaudeUsageRefresh();
   }
@@ -1637,6 +1647,7 @@ export class AgentHost {
       }
     }
     this.threads.delete(id);
+    if (this.claudeThreadLimits.delete(id)) this.db.setSetting("claudeThreadLimits", Object.fromEntries(this.claudeThreadLimits));
     this.effectivePermissions.delete(id);
     this.pageRuns.release(id);
     this.items.delete(id);

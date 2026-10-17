@@ -1,8 +1,13 @@
-import { isPlainRecord, type ClaudeBillingSource, type Usage } from "./types.js";
+import { isPlainRecord, type ClaudeBillingSource, type PlanLimits, type Usage } from "./types.js";
 import { planLimitsFromUsageReport } from "./planLimits.js";
 
-export function claudePlanSnapshot(report: unknown, source: ClaudeBillingSource, now = Date.now()) {
+export function claudePlanSnapshot(report: unknown, source: ClaudeBillingSource, now = Date.now(), previous?: PlanLimits): PlanLimits {
   const parsed = planLimitsFromUsageReport(report, now);
+  // A failed/empty probe is not evidence that the last observation vanished.
+  // Only reuse it for the same billing source; an explicit non-subscription report clears it.
+  if (!parsed && !(isPlainRecord(report) && report.rate_limits_available === false) && previous &&
+      previous.availability === "available" &&
+      JSON.stringify(Object.entries(source).sort()) === JSON.stringify(Object.entries(previous.billingSource ?? {}).sort())) return previous;
   return { ...(parsed ?? { at: now, windows: [], availability: "unavailable" as const,
     detail: isPlainRecord(report) && report.rate_limits_available === false ? "Subscription quota does not apply to this query" : "Claude quota unavailable" }),
     ...(parsed ? { availability: "available" as const } : {}), source: "claude" as const, billingSource: source };
