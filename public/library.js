@@ -1252,7 +1252,7 @@ window.createLibrary = function createLibrary(host) {
     }
     const point = pointFor(event);
     openMenu(point, [
-      { label: "New folder inside", action: () => createFolder(id) },
+      { label: "New folder", action: () => createFolder(id) },
       "sep",
       { label: "Rename", action: () => startRename("folder", id) },
       { label: "Move to…", action: () => openMovePicker({ kind: "folder", id }, point) },
