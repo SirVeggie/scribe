@@ -1,5 +1,5 @@
 import { codexPermissions, permissionBoundaryProblem, permissionSummary, scribeToolAvailability, workerPermissionProblem, type EffectivePermissions } from "../effectivePermissions.js";
-import { codexReadOnly, customKey, scribeToolsOff } from "../customModes.js";
+import { codexReadOnly, customKey, readShell, scribeToolsOff } from "../customModes.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -435,7 +435,7 @@ export function windowsSandboxConfig(sandbox: SandboxMode, cwd: string, platform
   };
 }
 
-export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web" | "custom">, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
+export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web" | "custom" | "cwd">, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
   const effort = thread.effort && thread.effort in EFFORT_LABELS ? (thread.effort as ModelReasoningEffort) : undefined;
   const sandbox = sandboxFor(thread);
   return {
@@ -451,6 +451,9 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
       "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code" && !codexReadOnly(thread),
       // Keep Windows ready for a later sandboxed turn after Full access.
       ...windowsSandboxConfig(thread.mode === "code" && !codexReadOnly(thread) ? "workspace-write" : sandbox, cwd, platform),
+      // The reading rungs keep the shell only with a workspace (#722): without one the thread runs in
+      // the scratch folder and has no file access, and a custom mode can turn it off.
+      ...(thread.mode === "board" && !readShell({ ...thread, provider: "codex" }) ? { features: { shell_tool: false, unified_exec: false } } : {}),
     },
   };
 }

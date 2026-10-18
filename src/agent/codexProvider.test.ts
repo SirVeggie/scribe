@@ -16,7 +16,7 @@ import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
 
-const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "mode" | "approval" | "web"> => ({
+const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "mode" | "approval" | "web" | "custom" | "cwd"> => ({
   model: "gpt-5-codex",
   effort: "medium",
   mode: "code",
@@ -32,6 +32,14 @@ test("sandboxFor: Read-only and Board are read-only; Full access drops the sandb
   assert.equal(sandboxFor(thread({ mode: "code", approval: "edits" })), "workspace-write");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "auto" })), "workspace-write");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "full" })), "danger-full-access");
+});
+
+test("threadOptions: the reading rungs keep Codex's shell only with a workspace (#722)", () => {
+  const features = (over: Partial<Thread>) => (threadOptions(thread(over), "/work").config as Record<string, unknown>).features;
+  assert.deepEqual(features({ mode: "board" }), { shell_tool: false, unified_exec: false });
+  assert.equal(features({ mode: "board", cwd: "/work" }), undefined);
+  assert.deepEqual(features({ mode: "board", cwd: "/work", custom: { id: "m", name: "M", off: ["shell"] } as Thread["custom"] }), { shell_tool: false, unified_exec: false });
+  assert.equal(features({ mode: "code" }), undefined);
 });
 
 test("threadOptions maps app-server model, sandbox, web and interactive approvals", () => {
