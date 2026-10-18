@@ -505,19 +505,21 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
 }
 
 /**
- * A thread without tools (#729): no Scribe MCP server, and Codex's own shell, image viewer, agents,
- * apps and plugins off. Codex has no switch for its patch tool; the read-only sandbox (web off, no
- * network) keeps it from writing, and Scribe refuses any approval such a thread asks for.
+ * A thread without tools (#729): no Scribe MCP server, and Codex's own tools turned off. Codex keeps
+ * a few tools no setting removes (exec, apply_patch, agents), all reached through code mode: with
+ * its host off, code mode fails closed and they return an error. The read-only sandbox with no
+ * network backs that up, and Scribe refuses any approval or question such a thread sends.
  */
 export const NO_TOOLS_CONFIG: RpcRecord = {
-  "features.shell_tool": false,
-  "features.multi_agent": false,
-  "features.memories": false,
-  "features.goals": false,
-  "features.plugins": false,
-  "tools.view_image": false,
-  "apps._default.enabled": false,
+  features: Object.fromEntries(
+    ["shell_tool", "unified_exec", "code_mode", "code_mode_host", "view_image", "image_generation", "multi_agent", "multi_agent_v2", "apps", "plugins", "goals", "memories", "hooks",
+      "sleep_tool", "tool_suggest", "skill_search", "browser_use", "browser_use_external", "computer_use", "in_app_browser", "workspace_dependencies", "request_permissions_tool"].map((name) => [name, false])
+  ),
+  apps: { _default: { enabled: false } },
 };
+
+/** Codex's note that code mode fails closed: expected in a thread without tools, so not shown there. */
+const CODE_MODE_OFF = /code-mode host is disabled/i;
 
 /** A bridged tool as a Codex dynamic tool for `thread/start`. */
 export function dynamicToolSpec(tool: Pick<BridgedTool, "name" | "server" | "tool" | "description" | "inputSchema">): RpcRecord {
@@ -1446,9 +1448,11 @@ export class CodexSession implements ProviderSession {
       case "turn/plan/updated":
         if (Array.isArray(p.plan)) sink.todos(p.plan.filter(isPlainRecord).map((step) => ({ content: String(step.step ?? ""), status: step.status === "completed" ? "completed" : step.status === "inProgress" ? "in_progress" : "pending" })));
         break;
-      case "error":
-        sink.notice("error", isPlainRecord(p.error) ? String(p.error.message) : "Codex error");
+      case "error": {
+        const text = isPlainRecord(p.error) ? String(p.error.message) : "Codex error";
+        if (!(this.thread.noTools && CODE_MODE_OFF.test(text))) sink.notice("error", text);
         break;
+      }
     }
   }
 
@@ -1518,6 +1522,8 @@ export class CodexSession implements ProviderSession {
       return;
     }
     if (message.method === "item/tool/requestUserInput") {
+      // A thread without tools asks nobody (#729).
+      if (this.thread.noTools) return rpc.reply(id, { answers: {} });
       const questions = Array.isArray(p.questions) ? p.questions.filter(isPlainRecord) : [];
       const answer = await sink.question({ questions: questions.map((q) => ({ id: String(q.id), header: String(q.header ?? ""), prompt: String(q.question), multi: false,
         options: Array.isArray(q.options) ? q.options.filter(isPlainRecord).map((o) => ({ id: String(o.label), label: String(o.label), description: String(o.description ?? "") })) : [],
@@ -1604,7 +1610,7 @@ export class CodexSession implements ProviderSession {
         sink.todos(item.items.map((todo) => ({ content: todo.text, status: todo.completed ? "completed" : "pending" })));
         return;
       case "error":
-        sink.notice("error", item.message);
+        if (!(this.thread.noTools && CODE_MODE_OFF.test(item.message))) sink.notice("error", item.message);
         return;
       case "command_execution":
       case "file_change":

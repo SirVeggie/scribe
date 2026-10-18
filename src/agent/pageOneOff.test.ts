@@ -4,6 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import { BOARD_BRIDGE_JS } from "../bridge.js";
 import { customKey, settleNoTools } from "./customModes.js";
+import { NO_TOOLS_CONFIG } from "./providers/codex.js";
 import { threadInstructions } from "./prompt.js";
 import type { Thread } from "./types.js";
 
@@ -104,4 +105,10 @@ test("a thread without tools stays Read-only with no folder or web, and is told 
   const text = threadInstructions(thread, { page: { key: "scribe:ocr", title: "OCR" }, memories: [] } as never);
   assert.match(text, /this thread has none/);
   assert.doesNotMatch(text, /page_read|ask_user|thread_list|memory_save|This thread belongs/);
+});
+
+test("Codex without tools: no Scribe server, no shell, and code mode fails closed", () => {
+  const features = NO_TOOLS_CONFIG.features as Record<string, boolean>;
+  for (const name of ["shell_tool", "unified_exec", "code_mode_host", "view_image", "multi_agent", "apps"]) assert.equal(features[name], false, name);
+  assert.equal("mcp_servers" in NO_TOOLS_CONFIG, false);
 });
