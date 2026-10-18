@@ -254,6 +254,18 @@ export function ensureAccessColumns(db: DatabaseSync): void {
 }
 
 /**
+ * Boards created before space home folders and lenses (#260) have no tabs.made_in.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureMadeInColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "made_in")) {
+    return;
+  }
+  db.exec("ALTER TABLE tabs ADD COLUMN made_in TEXT");
+}
+
+/**
  * Boards created before temporary pages (#655) have no tabs.temp.
  * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
  */

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { normalizeLens, type Lens } from "./lens.js";
 
 /**
  * Spaces: named sets of tabs. The active space is the live tab strip; every other space keeps the
@@ -20,6 +21,13 @@ export type Space = {
   createdAt: number;
   /** When the user last switched to or away from it. */
   usedAt: number;
+  /**
+   * The space's home folder (#260): pages made in the space, by the user or by a chat started in
+   * it, go there when no folder is given, and the lens shows it by default. Omitted for none.
+   */
+  home?: string;
+  /** The space's Library lens (#260). Omitted until the user sets one up. */
+  lens?: Lens;
 };
 
 export type DeletedSpace = { space: Space; index: number; deletedAt: number };
@@ -101,6 +109,7 @@ function normalizeSpace(raw: unknown): Space | null {
     tabs.push({ id, pinned: Boolean((entry as { pinned?: unknown })?.pinned) });
   }
   const now = Date.now();
+  const lens = normalizeLens(item.lens);
   return {
     id: item.id,
     name: cleanSpaceName(item.name, "Space"),
@@ -109,6 +118,8 @@ function normalizeSpace(raw: unknown): Space | null {
     activeId: typeof item.activeId === "string" && seen.has(item.activeId) ? item.activeId : null,
     createdAt: typeof item.createdAt === "number" ? item.createdAt : now,
     usedAt: typeof item.usedAt === "number" ? item.usedAt : now,
+    ...(typeof item.home === "string" && item.home ? { home: item.home } : {}),
+    ...(lens ? { lens } : {}),
   };
 }
 

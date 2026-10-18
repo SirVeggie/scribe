@@ -1474,6 +1474,8 @@ export class AgentHost {
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     if (input.draft) thread.draft = input.draft;
     if (input.helpersAllowed && !thread.noTools) thread.helpersAllowed = true;
+    const space = this.startSpace(thread.scope);
+    if (space) thread.space = space;
     // A New page becomes a real page once it has a thread, even one that has not sent anything.
     if (thread.scope.kind === "page" && thread.scope.ref) store.promoteDraft(thread.scope.ref);
     this.threads.set(thread.id, thread);
@@ -1554,6 +1556,19 @@ export class AgentHost {
       settleNoTools(thread);
     }
     return thread;
+  }
+
+  /**
+   * The space a new thread is started in (#260): the active one, except for a chat on a page that is
+   * not in the active space's strip (a board's worker while the user is elsewhere), which belongs to
+   * the space the page was made in.
+   */
+  private startSpace(scope: ThreadScope): string | undefined {
+    if (scope.kind === "page" && scope.ref && !store.isOpen(scope.ref)) {
+      const madeIn = store.get(scope.ref)?.madeIn;
+      if (madeIn) return madeIn;
+    }
+    return store.activeSpaceId();
   }
 
   /** Workspace a new thread on this page should start in: the page's own, else none. */

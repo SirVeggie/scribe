@@ -83,6 +83,10 @@ export class SearchIndex {
   private imageFails = 0;
   private imageError: string | null = null;
   private lastQuery = 0;
+  /** Bumped whenever the loaded vectors change, so cached About answers know they are stale. */
+  private rowsVersion = 0;
+  /** Library lens About answers (#260) by phrase, for the vectors they were ranked on. */
+  private abouts = new Map<string, { version: number; ids: string[] }>();
   constructor(private root: string | (() => string), private source: IndexSource, private embedder: Embedder, private debounceMs = 5000, private imageIdleMs = 3000) {}
   start(model: string, dtype: string): void {
     if (this.stopped) return;
@@ -245,7 +249,7 @@ export class SearchIndex {
       const copy = Uint8Array.from(vec);
       vectors.set(new Float32Array(copy.buffer), rows.length * WIDTH); rows.push(meta);
     }
-    this.rows = rows; this.vectors = vectors; this.dirty = false;
+    this.rows = rows; this.vectors = vectors; this.dirty = false; this.rowsVersion++;
   }
   /** The query's vector: text through the 50-entry cache, an image through the vision encoder. */
   private async queryVector(q: string | Uint8Array): Promise<Float32Array> {
@@ -269,6 +273,20 @@ export class SearchIndex {
   async query(q: string, scope: "pages" | "chunks", visible: (id: string) => boolean, limit = 8, cutoff = true): Promise<ScoredHit[]> {
     const vec = await this.queryVector(q);
     return rankVectors(this.rows, this.vectors, vec, scope, visible, limit, cutoff);
+  }
+  /**
+   * Every page about a phrase, for a Library lens (#260): the pages within the usual cut-off of the
+   * best match. Kept per phrase until the index changes, so a lens redrawn on every edit elsewhere
+   * does not rank the whole Library again.
+   */
+  async aboutPages(q: string): Promise<string[]> {
+    const vec = await this.queryVector(q);
+    const cached = this.abouts.get(q);
+    if (cached?.version === this.rowsVersion) return cached.ids;
+    const ids = rankVectors(this.rows, this.vectors, vec, "pages", () => true, Number.MAX_SAFE_INTEGER).map(hit => hit.tab_id);
+    this.abouts.delete(q); this.abouts.set(q, { version: this.rowsVersion, ids });
+    if (this.abouts.size > 50) this.abouts.delete(this.abouts.keys().next().value!);
+    return ids;
   }
   /** Images for a text query (their owner's text only) or like the given image's bytes (image only). */
   async queryImages(q: string | Uint8Array, visible: (id: string) => boolean, limit = 8, cutoff = true, weight = typeof q === "string" ? 0 : 1): Promise<ImageHit[]> {

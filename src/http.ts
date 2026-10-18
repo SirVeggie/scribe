@@ -356,6 +356,7 @@ export async function startHttp(): Promise<http.Server> {
         actor: actorOf(req),
         expectedRevision: typeof rawRevision === "number" && Number.isFinite(rawRevision) ? rawRevision : undefined,
         into: threadBlankPage(req),
+        homeFits: reach ? homeFits(req, reach) : undefined,
       });
       if (!created) {
         agentRewrote(req, tab.id);
@@ -1291,7 +1292,7 @@ export async function startHttp(): Promise<http.Server> {
     store.restoreSpace(typeof req.body?.id === "string" ? req.body.id : undefined)
   ));
   app.patch("/api/spaces/:sid", spaceRoute((req) =>
-    store.updateSpace(req.params.sid, { name: req.body?.name, color: req.body?.color })
+    store.updateSpace(req.params.sid, { name: req.body?.name, color: req.body?.color, home: req.body?.home, lens: req.body?.lens })
   ));
   app.post("/api/spaces/:sid/switch", spaceRoute((req) => store.switchSpace(req.params.sid)));
   app.post("/api/spaces/:sid/move", spaceRoute((req) => store.moveSpace(req.params.sid, Number(req.body?.index))));
@@ -1354,7 +1355,11 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.get("/api/folders/tree", (req, res) => {
-    res.json({ folders: store.folderTree(viewerOf(req), reachable(req)) });
+    // Where a page this caller shows without a folder goes (#260): its chat's space home, else the active one's.
+    const thread = viewerOf(req) === "agent" ? threadOf(req) : undefined;
+    const space = (thread && agentHost ? agentHost.getThread(thread)?.space : undefined) ?? store.activeSpaceId();
+    const home = store.spaceHome(space);
+    res.json({ folders: store.folderTree(viewerOf(req), reachable(req)), ...(home ? { newPages: store.folderPath(home) } : {}) });
   });
 
   app.post("/api/folders", (req, res) => {
@@ -2322,7 +2327,8 @@ function actorOf(req: express.Request): PageActor | undefined {
   const workspace = chat && agentHost ? agentHost.threadFolder(chat) : null;
   const scope = chat?.scope;
   const origin = scope?.ref && (scope.kind === "page" || scope.kind === "folder") ? { kind: scope.kind, id: scope.ref } : undefined;
-  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}), ...(workspace ? { workspace } : {}), ...(origin ? { origin } : {}) };
+  const space = chat?.space;
+  return { at: Date.now(), ...(thread ? { thread } : {}), ...(title ? { title } : {}), ...(workspace ? { workspace } : {}), ...(origin ? { origin } : {}), ...(space ? { space } : {}) };
 }
 
 /** The page of the chat thread making this request, when that page is still blank: a new page it shows fills it. */
@@ -2681,6 +2687,19 @@ function reachedByFrame(req: express.Request, tab: Tab): boolean {
   if (from === tab.id) return true;
   if (req.method !== "GET") return false;
   return frameReach(from, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, store.accessLookup());
+}
+
+/** Whether a page the agent makes in this folder would stay within its reach (#260). */
+function homeFits(req: express.Request, reach: (tab: Tab) => Reach): (folderId: string) => boolean {
+  const thread = threadOf(req);
+  const actor = actorOf(req);
+  return (folderId) =>
+    reach({
+      id: "t_00000000",
+      folderId,
+      ...(actor?.origin ? { access: { origin: actor.origin } } : {}),
+      ...(thread ? { provenance: { created: { thread, at: 0 } } } : {}),
+    } as Tab) === "allow";
 }
 
 /** Only the pages the agent may reach, for listings and searches. */

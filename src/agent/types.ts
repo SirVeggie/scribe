@@ -196,6 +196,11 @@ export type Thread = {
   /** The user let this thread's agent start helpers (agent_run) without asking again: Allow for this thread, or a board worker set to use helpers unasked. */
   helpersAllowed?: boolean;
   scope: ThreadScope;
+  /**
+   * The space the thread was started in (#260). Pages it makes are made in that space and go to its
+   * home folder when no folder is given; the thread list's This space filter uses it. A view only.
+   */
+  space?: string;
   /** Working directory for file and shell tools. While the thread has an open worktree, a folder inside it. */
   cwd: string | null;
   /** Work in a git worktree of its own. The worktree is made on the first message. */

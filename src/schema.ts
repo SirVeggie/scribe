@@ -29,7 +29,8 @@ CREATE TABLE tabs (
   workspace TEXT,
   file TEXT,
   temp INTEGER NOT NULL DEFAULT 0,
-  access TEXT
+  access TEXT,
+  made_in TEXT
 );
 CREATE INDEX idx_tabs_status_closed ON tabs(status, closed_at DESC);
 CREATE INDEX idx_tabs_status_deleted ON tabs(status, deleted_at DESC);

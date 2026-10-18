@@ -185,3 +185,39 @@ test("parseSpaces drops malformed entries", () => {
   assert.equal(data.deleted.length, 0);
   assert.deepEqual(parseSpaces("{bad"), { list: [], activeId: null, deleted: [] });
 });
+
+test("a space's home folder takes the pages made in it, and the lens is kept (#260)", () => {
+  const store = loaded();
+  store.ensureSpaces();
+  const main = store.spacesView().activeId!;
+  const home = store.createFolder({ name: "Work" });
+  const work = store.createSpace({ name: "Work", activate: true });
+  store.updateSpace(work.id, {
+    home: home.id,
+    lens: { on: true, match: "any", conditions: [{ type: "home" }, { type: "age", days: 7 }, { type: "bogus" }, { type: "about", text: "  audio  " }] },
+  });
+  const made = store.upsert({ title: "Notes", html: "<p>n</p>" }).tab;
+  assert.equal(made.madeIn, work.id);
+  assert.equal(made.folderId, home.id);
+  // A folder given wins; a temporary page stays out of the Library.
+  assert.equal(store.upsert({ title: "Filed", html: "<p>f</p>", folder: "Elsewhere" }).tab.folderId, store.findFolderPath("Elsewhere"));
+  assert.equal(store.upsert({ title: "Temp", html: "<p>t</p>", temp: true }).tab.folderId, undefined);
+  // A chat started in Main makes its page in Main, wherever the user is now.
+  const agent = store.upsert({ title: "Agent", html: "<p>a</p>", actor: { at: 1, thread: "th_1", space: main } }).tab;
+  assert.equal(agent.madeIn, main);
+  assert.equal(agent.folderId, undefined);
+  // A home the agent could not reach is skipped.
+  assert.equal(store.upsert({ title: "Hidden", html: "<p>h</p>", actor: { at: 1, thread: "th_2", space: work.id }, homeFits: () => false }).tab.folderId, undefined);
+  store.persist();
+  store.closeDb();
+  const again = loaded();
+  const space = again.spacesView().spaces.find((item) => item.id === work.id)!;
+  assert.equal(space.home, home.id);
+  assert.deepEqual(space.lens, { on: true, match: "any", conditions: [{ type: "home" }, { type: "age", basis: "activity", days: 7 }, { type: "about", text: "audio" }] });
+  assert.equal(again.get(made.id)?.madeIn, work.id);
+  assert.deepEqual(again.folderTree().find((folder) => folder.id === home.id)?.homeOf, ["Work"]);
+  again.updateSpace(work.id, { home: null, lens: null });
+  assert.equal(again.spacesView().spaces.find((item) => item.id === work.id)?.home, undefined);
+  assert.throws(() => again.updateSpace(work.id, { home: "f_missing" }), /folder not found/);
+  again.closeDb();
+});

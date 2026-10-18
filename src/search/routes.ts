@@ -59,6 +59,17 @@ export function searchRouter(ml: () => MlService = mlService, seeOf: SearchSee =
     refreshSearchIndex();
     res.json(searchIndex.status());
   });
+  /** Pages about a phrase, for a Library lens's About condition (#260). The board UI only. */
+  router.get("/about", async (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (viewerOf(req) !== "user") { res.status(403).json({ error: "Only the board UI uses lenses" }); return; }
+    if (!q || q.length > 200) { res.status(400).json({ error: "Use q (1–200 characters)" }); return; }
+    try {
+      refreshSearchIndex();
+      if (!searchIndex.status().enabled) { res.status(503).json({ error: "Semantic search is off" }); return; }
+      res.json({ ids: await searchIndex.aboutPages(q) });
+    } catch (err) { res.status(503).json({ error: (err as Error).message }); }
+  });
   router.get("/semantic", async (req, res) => {
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
     const scope = req.query.scope ?? "pages";

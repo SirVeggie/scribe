@@ -360,7 +360,7 @@ export async function startMcp(): Promise<void> {
       folder: z
         .string()
         .optional()
-        .describe("Library folder for a new page, e.g. \"CLIMS/Releases\"; never moves an existing page. Pass an existing path from library_folders, or a new one only when the user asked. Default: Library root."),
+        .describe("Library folder for a new page, e.g. \"CLIMS/Releases\"; never moves an existing page. Pass an existing path from library_folders, or a new one only when the user asked. Default: the home folder of the space your chat was started in (library_folders names it), else the Library root."),
       state: z.record(z.string(), z.unknown()).optional().describe("Initial scribe.state, applied only when the page has no state yet."),
       expectedRevision: z
         .number()
@@ -714,10 +714,16 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      const folders = (data as { folders: Array<{ path: string; pages: number; description?: string }> }).folders ?? [];
+      const { folders = [], newPages } = data as { folders?: Array<{ path: string; pages: number; description?: string; homeOf?: string[] }>; newPages?: string };
+      const where = newPages ? `New pages without a folder go to ${newPages}, your space's home folder.` : "New pages without a folder go to the root.";
       return jsonResult({
-        folders: folders.map(({ path, pages, description }) => ({ path, pages, ...(description ? { description } : {}) })),
-        note: folders.length ? `${folders.length} folders.` : "The Library has no folders; new pages go to the root.",
+        folders: folders.map(({ path, pages, description, homeOf }) => ({
+          path,
+          pages,
+          ...(description ? { description } : {}),
+          ...(homeOf ? { home: `home of space ${homeOf.map((name) => `"${name}"`).join(", ")}` } : {}),
+        })),
+        note: folders.length ? `${folders.length} folders. ${where}` : "The Library has no folders; new pages go to the root.",
       });
     }
   );

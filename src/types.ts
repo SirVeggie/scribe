@@ -269,6 +269,12 @@ export type Tab = {
    * Library (or a move into a folder) makes it a page like any other.
    */
   temp?: boolean;
+  /**
+   * The space the page was made in (#260): the active space when the user made it, or the space a
+   * chat was started in when the chat made it. A Library lens filters on it; it never grants or
+   * blocks access. Omitted for pages made before spaces recorded this.
+   */
+  madeIn?: string;
 };
 
 /**
@@ -299,6 +305,8 @@ export type PageActor = {
   workspace?: string;
   /** The thread's page or folder at write time. A page it creates keeps it as its access origin (#269). */
   origin?: AccessTarget;
+  /** The space the thread was started in (#260). A page it creates is made in that space. */
+  space?: string;
   at: number;
 };
 
@@ -465,6 +473,11 @@ export type UpsertInput = {
   into?: string;
   /** A new page is temporary (Tab.temp). Ignored for existing keys. */
   temp?: boolean;
+  /**
+   * Whether the writing agent could still reach a page it made in this folder (#260). A new page goes
+   * to its space's home folder only then, so a chat never loses sight of what it just made.
+   */
+  homeFits?: (folderId: string) => boolean;
 };
 
 export type StateWriteInput = {

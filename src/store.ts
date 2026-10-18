@@ -42,6 +42,7 @@ import { checkPermission, normalizeFolders, isPermissionValue, permissionDef, ty
 import { normalizeSignalName } from "./signal.js";
 import { addTargets, effectiveLevel, inheritedFolderLevel, isOpenLevel, sameTarget, type AccessLookup } from "./pageAccess.js";
 import type { AccessLevel, AccessTarget } from "./types.js";
+import { normalizeLens } from "./lens.js";
 import { applyOps, deepEqual } from "./stateOps.js";
 import { jsonBytes } from "./stateSize.js";
 import { normalizeEvents } from "./events.js";
@@ -364,13 +365,14 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Every folder as a path, depth-first in Library order, with its own page count (not subfolders'). */
-  folderTree(viewer: Viewer = "user", see?: (tab: Tab) => boolean): Array<{ id: string; path: string; pages: number; description?: string }> {
-    const out: Array<{ id: string; path: string; pages: number; description?: string }> = [];
+  folderTree(viewer: Viewer = "user", see?: (tab: Tab) => boolean): Array<{ id: string; path: string; pages: number; description?: string; homeOf?: string[] }> {
+    const out: Array<{ id: string; path: string; pages: number; description?: string; homeOf?: string[] }> = [];
     const walk = (parentId: string | null, prefix: string) => {
       for (const folder of this.foldersIn(parentId)) {
         const path = prefix ? `${prefix}/${folder.name}` : folder.name;
         const pages = this.pagesIn(folder.id).filter((tab) => (see ? see(tab) : visibleTo(tab, viewer))).length;
-        out.push({ id: folder.id, path, pages, ...(folder.description ? { description: folder.description } : {}) });
+        const homeOf = this.homeOfSpaces(folder.id);
+        out.push({ id: folder.id, path, pages, ...(folder.description ? { description: folder.description } : {}), ...(homeOf.length ? { homeOf } : {}) });
         walk(folder.id, path);
       }
     };
@@ -1180,7 +1182,8 @@ export class BoardStore extends EventEmitter {
     const now = Date.now();
     tab.createdAt = now;
     tab.updatedAt = now;
-    tab.libPos = this.pagePosAt(null, 0);
+    this.placeNew(tab);
+    tab.libPos = this.pagePosAt(tab.folderId ?? null, 0);
     return this.reopen(tab, "append", opts.activate !== false);
   }
 
@@ -1222,7 +1225,7 @@ export class BoardStore extends EventEmitter {
     tab.updatedAt = tab.createdAt;
     tab.revision += 1;
     seedState(tab, input.state);
-    if (input.folder && !tab.folderId) {
+    if (input.folder && (!tab.folderId || tab.folderId === this.spaceHome(tab.madeIn))) {
       const foldersBefore = this.folders.size;
       const folderId = this.ensureFolderPath(input.folder);
       if (folderId) {
@@ -1545,7 +1548,9 @@ export class BoardStore extends EventEmitter {
       throw err;
     }
     const foldersBefore = this.folders.size;
-    const folderId = input.folder ? this.ensureFolderPath(input.folder) : null;
+    const madeIn = this.newPageSpace(input.actor);
+    const home = input.temp ? undefined : this.spaceHome(madeIn);
+    const folderId = input.folder ? this.ensureFolderPath(input.folder) : home && (input.homeFits?.(home) ?? true) ? home : null;
     const tab: Tab = {
       id,
       key: uniqueKey(this, input.key, title, id),
@@ -1556,6 +1561,7 @@ export class BoardStore extends EventEmitter {
       createdAt: now,
       updatedAt: now,
       ...(folderId ? { folderId } : {}),
+      ...(madeIn ? { madeIn } : {}),
       libPos: this.pagePosAt(folderId, 0),
       stripSeq: this.nextSeq(),
       revision: 1,
@@ -2390,6 +2396,50 @@ export class BoardStore extends EventEmitter {
     this.emit("spaces", this.spacesView());
   }
 
+  /** The space's home folder (#260), while that folder still exists. */
+  spaceHome(spaceId: string | undefined | null): string | undefined {
+    const home = spaceId ? this.spaces.list.find((space) => space.id === spaceId)?.home : undefined;
+    return home && this.folders.has(home) ? home : undefined;
+  }
+
+  /** The active space, once the user has spaces. */
+  activeSpaceId(): string | undefined {
+    return this.spaces.activeId ?? undefined;
+  }
+
+  /** The spaces whose home folder this is (#260), by name. */
+  homeOfSpaces(folderId: string): string[] {
+    return this.spaces.list.filter((space) => space.home === folderId).map((space) => space.name);
+  }
+
+  /**
+   * The space a new page is made in (#260): the space its chat was started in, else the active one.
+   * An agent outside a chat (an external MCP client) works for the user's current space.
+   */
+  private newPageSpace(actor: PageActor | undefined): string | undefined {
+    const space = actor?.space;
+    if (space && this.spaces.list.some((item) => item.id === space)) {
+      return space;
+    }
+    return this.spaces.activeId ?? undefined;
+  }
+
+  /** A page that becomes a Library page without a folder of its own goes to its space's home. */
+  private placeNew(tab: Tab, actor?: PageActor): void {
+    if (!tab.madeIn) {
+      const madeIn = this.newPageSpace(actor);
+      if (madeIn) {
+        tab.madeIn = madeIn;
+      }
+    }
+    if (!tab.folderId) {
+      const home = this.spaceHome(tab.madeIn);
+      if (home) {
+        tab.folderId = home;
+      }
+    }
+  }
+
   /** A new space, empty or with a copy of the current tabs, at the end of the list. */
   createSpace(input: { name?: unknown; color?: unknown; copyTabs?: boolean; activate?: boolean } = {}): Space {
     this.ensureSpaces();
@@ -2412,9 +2462,26 @@ export class BoardStore extends EventEmitter {
     return space;
   }
 
-  updateSpace(id: string, patch: { name?: unknown; color?: unknown }): Space {
+  updateSpace(id: string, patch: { name?: unknown; color?: unknown; home?: unknown; lens?: unknown }): Space {
     this.ensureSpaces();
     const space = this.requireSpace(id);
+    if (patch.home !== undefined) {
+      if (patch.home === null || patch.home === "") {
+        delete space.home;
+      } else if (typeof patch.home === "string" && this.folders.has(patch.home)) {
+        space.home = patch.home;
+      } else {
+        throw new Error(`folder not found: ${String(patch.home)}`);
+      }
+    }
+    if (patch.lens !== undefined) {
+      const lens = patch.lens === null ? undefined : normalizeLens(patch.lens);
+      if (lens) {
+        space.lens = lens;
+      } else {
+        delete space.lens;
+      }
+    }
     if (patch.name !== undefined) {
       space.name = cleanSpaceName(patch.name, space.name);
     }
@@ -2762,6 +2829,7 @@ export class BoardStore extends EventEmitter {
       return tab;
     }
     delete tab.temp;
+    this.placeNew(tab);
     tab.libPos = this.pagePosAt(tab.folderId ?? null, 0, tab.id);
     this.markDirty(tab.id);
     this.persistSoon();
