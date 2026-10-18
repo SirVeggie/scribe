@@ -151,12 +151,15 @@ test("/clear opens a page-default draft in each chat layout without inheriting t
 });
 
 test("a reset page draft resolves workspace, mode and model from defaults", () => {
-  const view = vm.runInNewContext(`({${between("    settings() {", "    async updateSettings(patch)")}})`, {
+  // The access ladder's helpers come from the shipped source, so the draft follows the real rungs.
+  const rungs = between("  /** A rung from older data", "  /** Tool groups a custom mode") + between("  const APPROVALS = [", "  const WEB_MODES = [");
+  const view = vm.runInNewContext(`${rungs}\n({${between("    settings() {", "\n    /** Whether patch moves a tainted thread")}})`, {
     prefs: () => ({ provider: "codex", models: { codex: "preferred-model" }, mode: "code", web: "on", recentWorkspaces: ["other-workspace"] }),
     providerAvailable: () => true,
     modelChoice: () => ({ effort: "high", modelParams: {} }),
     pageWorkspace: (id: string) => id === "current-page" ? "page-workspace" : null,
     approvalFor: () => "auto",
+    customModes: () => [],
     webMode: (value: string, fallback: string) => value || fallback,
     dirKey: (value: string) => value,
   });
@@ -166,9 +169,15 @@ test("a reset page draft resolves workspace, mode and model from defaults", () =
   assert.equal(settings.provider, "codex");
   assert.equal(settings.model, "preferred-model");
   assert.equal(settings.effort, "high");
-  assert.equal(settings.mode, "board");
   assert.equal(settings.cwd, "page-workspace");
-  assert.equal(settings.approval, "auto");
+  // Page threads start on the Board rung (#719).
+  assert.equal(settings.approval, "board");
+  assert.equal(settings.mode, "board");
+  view.draft = { scope: { kind: "global", ref: null }, settings: {} };
+  const global = view.settings();
+  assert.equal(global.cwd, "other-workspace");
+  assert.equal(global.approval, "auto");
+  assert.equal(global.mode, "code");
 });
 
 test("sending /clear consumes the command locally, including with attachments", async () => {

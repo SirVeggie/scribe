@@ -127,10 +127,13 @@ test("Kanban columns load batches independently and retain them through live upd
       return cards[cards.length - 1].id === 'c1';
     });
     await page.locator('.column[data-col="todo"] .add-card').click();
-    await page.locator('.composer-input').fill('New task at end');
+    await page.locator('.composer-input').fill('New task at top');
     await page.locator('.composer-input').press('Enter');
-    await todo.getByText('New task at end', { exact: true }).waitFor();
-    assert.equal(await todo.locator('.card').count(), 56);
+    await todo.getByText('New task at top', { exact: true }).waitFor();
+    // New cards go to the top; the column keeps its loaded batch size.
+    assert.equal(await todo.locator('.card').first().getByText('New task at top', { exact: true }).count(), 1);
+    assert.equal(await page.locator('.column[data-col="todo"] .col-count').innerText(), '56');
+    assert.equal(await todo.locator('.card').count(), 55);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

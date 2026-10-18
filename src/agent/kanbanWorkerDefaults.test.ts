@@ -78,6 +78,7 @@ test("page usage snapshots and board preserve Codex reports past reset", () => {
   const limits = {
     codex: { windows: [{ label: "5 hours", utilization: 1, resetsAt: now - 1000 }], ordinaryUsageAllowed: false },
     claude: { windows: [{ label: "5 hours", utilization: 0.8, resetsAt: now - 1000 }] },
+    cursor: { windows: [{ label: "Month", utilization: 0.5, resetsAt: now - 1000 }] },
   };
   const context = vm.createContext({
     S: { config: { limits } },
@@ -87,7 +88,9 @@ test("page usage snapshots and board preserve Codex reports past reset", () => {
   const snapshot = vm.runInContext("pageLimits()", context);
   assert.equal(snapshot.codex.windows[0].utilization, 1);
   assert.equal(snapshot.codex.ordinaryUsageAllowed, false);
-  assert.equal(snapshot.claude.windows[0].utilization, 0);
+  // Claude reports pass through as they are, like Codex; the board zeroes a passed Claude window itself.
+  assert.equal(snapshot.claude.windows[0].utilization, 0.8);
+  assert.equal(snapshot.cursor.windows[0].utilization, 0);
   assert.equal(vm.runInContext("workerQuotaWindow('codex', pageLimits().codex.windows[0]).percent", context), 100);
   assert.match(vm.runInContext("workerQuotaWindow('codex', pageLimits().codex.windows[0]).reset", context), /awaiting update/);
   assert.equal(vm.runInContext("workerQuotaWindow('claude', pageLimits().claude.windows[0]).percent", context), 0);
@@ -149,60 +152,42 @@ test("board slot display follows provider and total limits and saves Any explici
   assert.equal(limited("web"), true);
 });
 
-test("Continue starts the newly assigned worker, but resumes for the same worker", async () => {
+test("Continue requests the continuation; it resumes only the same worker's chat", async () => {
   for (const assignee of ["New", "Old"]) {
     const calls: any[] = [];
     let click: () => void = () => {};
-    const c = { id: "card", num: 525, title: "Follow up", col: "review", thread: "earlier", assignee, threadAssignee: "Old" };
-    const workers: any = { old: { name: "Old" }, next: { name: "New" } };
+    const state: any = {
+      columns: [{ id: "ready", title: "Ready", role: "agent" }, { id: "review", title: "Review", role: "review" }],
+      settings: { workers: { old: { name: "Old" }, next: { name: "New" } } },
+      cards: [{ id: "card", num: 525, title: "Follow up", col: "review", from: "ready", thread: "earlier", assignee, threadAssignee: "Old",
+        comments: [{ id: "comment", by: "user", at: 1, text: "Go on" }] }],
+    };
     const context = vm.createContext({
-      card: () => c,
-      worker: (id: string) => workers[id],
-      workerIds: () => Object.keys(workers),
-      workerIdFor: (name: string) => Object.keys(workers).find(id => workers[id].name === name),
-      workerName: (w: any) => w.name,
-      workerReady: () => true,
-      hasWorkerApi: () => true,
-      canRunSolo: () => false, // Review/done cards still allow a comment continuation.
-      settings: () => ({}), arr: (v: any) => v || [],
+      card: () => state.cards[0],
+      workerIdFor: (name: string) => Object.keys(state.settings.workers).find(id => state.settings.workers[id].name === name),
       str: (v: any) => v == null ? "" : String(v),
-      soloStarting: {}, threadStatus: {},
-      loadAgentOptions: () => Promise.resolve(),
-      workerPrompt: (w: any, card: any, fallback: any, solo: boolean) => `${w.name}: ${card.title}, solo=${solo}`,
-      workerOpts: (w: any) => ({ model: w.name }),
-      workerRun: (id: string) => ({ data: { worker: id } }),
-      scribe: { agent: {
-        start: async (prompt: string, opts: any) => { calls.push(["start", prompt, opts]); return { ok: true, threadId: "fresh" }; },
-        card: async (thread: string) => { calls.push(["resume", thread]); return { ok: true, delivered: "queued" }; },
+      scribe: { action: async (name: string, args: any) => {
+        calls.push([name, args]);
+        return kanbanActions.actions[name].run(state, args, { caller: { by: "user" }, now: 1, values: {} }).result;
       } },
-      claimForAgent: (card: any, thread: string, name: string) => calls.push(["claim", thread, name]),
-      addSolo: (id: string, thread: string) => calls.push(["solo", id, thread]),
-      mergeWhenDone: () => calls.push(["merge"]),
-      setComment: (id: string, cm: string, fields: any) => calls.push(["comment", fields.followUp]),
-      plainLinks: (v: string) => v,
-      render: () => {}, setHint: () => {}, appendLog: () => {},
+      setHint: (text: string) => calls.push(["hint", text]),
       el: (tag: string, cls: string, text: string) => ({
         dataset: {}, appendChild: () => {},
         addEventListener: (event: string, cb: any) => { if (text === "Continue") click = () => cb({ stopPropagation() {} }); },
       }),
     });
-    vm.runInContext(["soloRuns", "changedCommentWorker", "runSolo", "followUpButtons"].map(name => fn(board, name)).join("\n"), context);
+    vm.runInContext(fn(board, "followUpButtons"), context);
     vm.runInContext("followUpButtons(card(), { id: 'comment' })", context);
     click();
     await new Promise(resolve => setImmediate(resolve));
-    if (assignee === "New") {
-      assert.equal(calls[0][0], "start");
-      assert.match(calls[0][1], /New: Follow up, solo=true/);
-      assert.equal(calls[0][2].model, "New");
-      assert.equal(calls[0][2].run.data.worker, "next");
-      assert.ok(calls.some(call => call.join() === "claim,fresh,New"));
-      assert.ok(calls.some(call => call.join() === "solo,next,fresh"));
-      assert.ok(!calls.some(call => call[0] === "resume"));
-    } else {
-      assert.deepEqual(calls[0], ["resume", "earlier"]);
-      assert.ok(!calls.some(call => call[0] === "start"));
-    }
-    assert.ok(calls.some(call => call.join() === "comment,continued"));
+    assert.equal(JSON.stringify(calls[0]), JSON.stringify(["continue", { card: 525, comment: "comment" }]));
+    assert.deepEqual(calls[1], ["hint", "Continuation requested for #525."]);
+    const { ops } = kanbanActions.actions.continue.run(state, calls[0][1], { caller: { by: "user" }, now: 1, values: {} });
+    const continuation = (ops[0] as any).value.continuation;
+    assert.equal(continuation.assignee, assignee);
+    assert.equal(continuation.comment, "comment");
+    // A reassigned card starts the new worker fresh; the same worker gets its earlier chat back.
+    assert.equal(continuation.thread, assignee === "Old" ? "earlier" : undefined);
   }
 });
 

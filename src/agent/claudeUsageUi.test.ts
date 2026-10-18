@@ -60,7 +60,8 @@ test("Claude meters isolate thread quotas and distinguish period spend, live ove
     assert.match(result.paidTip, /Last request: using subscription extra usage/);
     assert.doesNotMatch(result.routineTip, /Anthropic|Token|sub@example|extra usage|paid-credit|Console|snapshot is stale/);
     assert.equal(result.compact, "60%");
-    assert.match(result.staleChip, /stale/);
+    // The composer chip has no stale label; the tip says so instead.
+    assert.equal(result.staleChip, "60%");
     assert.match(result.zeroTip, /Billing-period spend: \$0\.00/);
     assert.match(result.capTip, /Billing-period cap: \$100\.00/);
     assert.match(result.capTip, /Extra-usage snapshot is stale/);

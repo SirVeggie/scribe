@@ -114,8 +114,10 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await permissions.getByRole("button", { name: /Revoke Unavailable server/ }).click();
     await permissions.getByText("No saved permissions.", { exact: true }).waitFor();
     assert.deepEqual(revoked[1], { key: "b".repeat(64), thread: "thread-a" });
-    await page.keyboard.press("Escape");
+    // app.js routes Escape to scribeChat.escape(); this fixture has no app.js.
+    await page.evaluate(() => (window as any).scribeChat.escape());
     await page.evaluate(() => (window as any).mcpTest.close());
+    assert.equal(await page.locator(".ag-mcp").count(), 0);
     await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
     await page.evaluate(() => (window as any).scribeHarness.open("mcp"));
     await page.getByRole("button", { name: "Saved permissions…", exact: true }).click();

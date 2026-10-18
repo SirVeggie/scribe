@@ -185,7 +185,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const view = {
         audioComposer: { paint() {}, toggle() {} },
         settings: () => settings, thread: () => null, bar: document.querySelector('#bar'), sendSlot: document.querySelector('#tail'),
-        renderForkNote() {}, setWorktree(value) { settings.useWorktree = value; }, planOn: () => false, setPlan() {},
+        renderForkNote() {}, renderContext() {}, setWorktree(value) { settings.useWorktree = value; }, planOn: () => false, setPlan() {},
         ${agent.slice(agent.indexOf('    renderComposerBar() {'), agent.indexOf('\n    /**', agent.indexOf('    renderComposerBar() {')))}
       };
       const state = { templates: [{ id: 'one', title: 'Template', fields: [{ key: 'old' }] }], builtinTemplates: [] };

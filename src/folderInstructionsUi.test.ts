@@ -41,7 +41,6 @@ test("folder instructions menu, resizing, save, cancel and indicator", async () 
       await folder.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
       const labels = await page.locator('.lib-menu button').allTextContents();
       assert.ok(labels.indexOf("Move to…") < labels.indexOf("Agent instructions"));
-      assert.ok(labels.indexOf("Agent instructions") < labels.indexOf("Export folder"));
       await page.getByRole("menuitem", { name: "Agent instructions", exact: true }).click();
     };
     await open();

@@ -102,7 +102,7 @@ test("Chromium capture stops tracks, enforces one session and cap; composer hand
         transcriptionRequests++; if (delay) await new Promise(resolve => setTimeout(resolve, delay));
         return route.fulfill({ json: { ok: true, text: "spoken words" } });
       }
-      return route.fulfill({ contentType: "text/html", body: '<main><textarea></textarea><div class="bar"><button class="ag-mic"><span></span></button></div></main>' });
+      return route.fulfill({ contentType: "text/html", body: '<main><textarea></textarea><div class="bar"><button class="ag-mic"><span class="ag-mic-status"></span></button></div></main>' });
     });
     await page.goto("http://127.0.0.1:47999/");
     for (const name of ["audio.js", "audio-composer.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
@@ -165,6 +165,8 @@ test("Chromium capture stops tracks, enforces one session and cap; composer hand
 
     // Permission-denied errors produce one useful notice.
     settings.available = true;
+    // The unavailable check hid the button; reading settings again shows it.
+    await page.evaluate(() => (window as any).scribeAudio.refresh());
     await page.evaluate(() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException("blocked", "NotAllowedError"); }; });
     await page.locator("button").click(); await page.waitForFunction(() => (window as any).notices.length === 1);
     assert.match(await page.evaluate(() => (window as any).notices[0]), /Microphone blocked.*site permissions/);
