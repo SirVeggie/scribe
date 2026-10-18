@@ -1,6 +1,9 @@
 import type { OpenAISource } from "../agent/openaiSources.js";
 
+export type SttSource = { id: string; name: string; source?: string; model: string; language?: string; custom?: { baseUrl: string; apiKey?: string } };
 export type AudioSettings = {
+  sources: SttSource[];
+  defaultSource?: string;
   stt: { source?: string; model: string; language?: string; custom?: { baseUrl: string; apiKey?: string } };
   input: { sendAfterDictation: boolean; pushToTalk: boolean };
 };

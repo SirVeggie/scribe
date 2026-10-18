@@ -8,7 +8,12 @@ export function normalizeSettings(value: unknown): AudioSettings {
   const str = (v: unknown, max: number) => typeof v === "string" ? v.trim().slice(0, max) : "";
   const source = str(body?.stt?.source, 100), language = str(body?.stt?.language, 20);
   const custom = body?.stt?.custom;
-  return { stt: { ...(source ? { source } : {}), model: str(body?.stt?.model, 200) || "whisper-1", ...(language ? { language } : {}),
+  return { sources: Array.isArray(body?.sources) ? body.sources.map(s => ({
+    id: str(s.id, 100), name: str(s.name, 200), source: str(s.source, 100),
+    model: str(s.model, 200) || "whisper-1", language: str(s.language, 20),
+    ...(s.custom ? { custom: { baseUrl: str(s.custom.baseUrl, 2000), apiKey: str(s.custom.apiKey, 4000) } } : {}),
+  })) : [], defaultSource: str(body?.defaultSource, 100) || undefined,
+    stt: { ...(source ? { source } : {}), model: str(body?.stt?.model, 200) || "whisper-1", ...(language ? { language } : {}),
     ...(custom ? { custom: { baseUrl: str(custom.baseUrl, 2000), apiKey: str(custom.apiKey, 4000) } } : {}) },
     input: { sendAfterDictation: body?.input?.sendAfterDictation === true, pushToTalk: body?.input?.pushToTalk !== false } };
 }

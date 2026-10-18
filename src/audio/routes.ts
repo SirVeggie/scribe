@@ -19,6 +19,9 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
   router.use(express.json());
   router.get("/settings", (_req, res) => res.json(service.view()));
   router.put("/settings", (req, res) => { try { res.json(service.update(req.body)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  router.post("/sources", (req, res) => { try { res.json(service.saveSource(req.body)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  router.put("/sources/:id", (req, res) => { try { res.json(service.saveSource(req.body, req.params.id)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  router.delete("/sources/:id", (req, res) => { try { res.json(service.removeSource(req.params.id)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
   router.post("/transcriptions", express.raw({ type: "audio/*", limit: MAX_AUDIO_BYTES }), async (req, res) => {
     const tab = req.get("x-scribe-tab");
     try {
@@ -33,10 +36,10 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
       }));
     } catch { res.json({ ok: false, error: "engine", message: "Speech-to-text is unavailable." }); }
   });
-  router.post("/test", async (_req, res) => {
+  router.post("/test", async (req, res) => {
     try {
       const bytes = await fs.readFile(new URL("../../public/audio-test.wav", import.meta.url));
-      res.json(await service.transcribe(new Blob([bytes], { type: "audio/wav" })));
+      res.json(await service.transcribe(new Blob([bytes], { type: "audio/wav" }), { sourceId: typeof req.body?.sourceId === "string" ? req.body.sourceId : undefined }));
     } catch { res.json({ ok: false, error: "engine", message: "Audio test clip is unavailable. Restart Scribe after updating." }); }
   });
   router.use((err: { type?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -1604,6 +1604,7 @@
     catch (err) { searchPackStatus.textContent = err.message; rerankSwitch.disabled = false; }
   });
   window.scribeMlSettings.init({ confirm: confirmDelete, view: renderRerankSetting });
+  window.scribeAudioSettings.init({ confirm: confirmDelete });
   function openSettings(category) {
     if (isPaletteOpen()) {
       closePalette();

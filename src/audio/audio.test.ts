@@ -16,6 +16,48 @@ import type { AudioResult, SttEngine, SttRequest } from "./types.js";
 
 const source: OpenAISource = { id: "test", name: "Test", baseUrl: "https://stt.invalid/v1", apiKey: "secret-key", models: [] };
 const clip = () => new Blob(["sound"], { type: "audio/webm;codecs=opus" });
+test("multiple speech sources retain credentials and settings while default, testing and removal select the right API", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-audio-sources-"));
+  try {
+    const calls: SttRequest[] = [];
+    const service = new AudioService({ sources: () => [source], store: fileStore(() => root),
+      engine: { async transcribe(req) { calls.push(req); return { ok: true, text: req.model }; } } });
+    let view = service.saveSource({ name: "Local", source: "__custom__", custom: { baseUrl: "http://localhost:1234/v1", apiKey: "local-secret" }, model: "local-model", language: "fi" });
+    const local = view.defaultSource!;
+    view = service.saveSource({ name: "Hosted", source: "test", model: "hosted-model", language: "en" });
+    const hosted = view.profiles.find(s => s.name === "Hosted")!.id;
+    assert.equal(view.profiles.length, 2); assert.equal(view.defaultSource, local);
+    assert.ok(!JSON.stringify(view).includes("local-secret"));
+    await service.transcribe(clip());
+    assert.equal(calls.at(-1)!.model, "local-model"); assert.equal(calls.at(-1)!.language, "fi");
+    service.update({ defaultSource: hosted });
+    await service.transcribe(clip());
+    assert.equal(calls.at(-1)!.source.id, "test"); assert.equal(calls.at(-1)!.model, "hosted-model");
+    await service.transcribe(clip(), { sourceId: local });
+    assert.equal(calls.at(-1)!.source.apiKey, "local-secret"); assert.equal(service.view().defaultSource, hosted);
+    service.saveSource({ name: "Renamed" }, local);
+    assert.equal(new AudioService({ sources: () => [source], store: fileStore(() => root) }).view().defaultSource, hosted);
+    assert.throws(() => service.update({ defaultSource: "missing" }), /existing/);
+    service.removeSource(hosted);
+    assert.equal(service.view().defaultSource, local);
+    service.saveSource({ custom: { baseUrl: "https://another.invalid/v1" } }, local);
+    assert.equal(service.view().profiles[0].custom?.hasKey, false);
+    service.removeSource(local); assert.equal(service.view().available, false);
+    assert.equal((await service.transcribe(clip(), { sourceId: "missing" }) as any).error, "no_source");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+test("an existing custom configuration is preserved when adding and editing named sources", async () => {
+  const calls: SttRequest[] = [];
+  const service = new AudioService({ sources: () => [], store: memoryStore({ stt: { source: "__custom__", model: "old-model",
+    custom: { baseUrl: "https://old.invalid/v1", apiKey: "old-secret" } } }),
+    engine: { async transcribe(req) { calls.push(req); return { ok: true, text: "Words" }; } } });
+  assert.equal(service.view().profiles[0].id, "__legacy__");
+  service.saveSource({ name: "New", source: "__custom__", custom: { baseUrl: "http://localhost/v1" } });
+  assert.equal(service.view().profiles.length, 2);
+  await service.transcribe(clip()); assert.equal(calls[0].source.apiKey, "old-secret"); assert.equal(calls[0].model, "old-model");
+  service.saveSource({ name: "Old renamed" }, "__legacy__");
+  assert.equal(service.view().profiles.find(s => s.id === "__legacy__")!.name, "Old renamed");
+});
 test("custom speech source works independently and keeps its key private across edits", async () => {
   let request: SttRequest | undefined;
   const service = new AudioService({ sources: () => [], store: memoryStore(), engine: { async transcribe(req) {
