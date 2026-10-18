@@ -112,16 +112,6 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
             : `Access: Board. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits.`
       );
       break;
-    case "plan":
-      lines.push(
-        "",
-        thread.provider === "pi"
-          ? "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan. Present it with exit_plan: once accepted you get the editing tools and implement it."
-          : thread.provider === "codex"
-            ? "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan. Write the plan as your final answer; Scribe will offer it for approval and then switch you to Code."
-            : "Mode: Plan. Investigate and propose a plan; do not change files until the user accepts the plan."
-      );
-      break;
     case "code":
       lines.push("", `Access: ${APPROVAL_LABEL[thread.approval] ?? "Edits"}. You can read and edit files and run commands in the workspace, subject to the user's approval settings.`);
       break;
@@ -227,7 +217,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
         );
       }
     }
-  } else if (thread.mode === "code" || thread.mode === "plan") {
+  } else if (thread.mode === "code") {
     // Code without a folder is for machine tasks (installing a tool, editing a config file) that belong nowhere yet.
     lines.push(
       "",
@@ -235,6 +225,40 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * What the agent reads before the user's message in a plan turn (#721). `thread` is as the turn runs
+ * it (planAccess): from Board up with page access it shows the plan as a page and asks on it, else
+ * (Read-only, or no page access) its final message is the plan, which Scribe offers in the chat.
+ */
+export function planTurnNote(thread: Pick<Thread, "approval" | "scope">): string {
+  const intro =
+    "<plan_turn>\nThe user wants a plan before any change: this is a plan turn. Files are read-only for it, whatever this thread's access says. Investigate what the task needs (read the code, search, check the pages involved) and plan the work. Do not make the changes in this turn.";
+  if (thread.approval === "readonly" || noPages(thread.scope)) {
+    return `${intro}\nWrite the plan as your final message: the goal, numbered steps, the files you would change, and risks or open questions. Scribe offers it to the user in the chat to accept or change; on accept you get a new turn to implement it.\n</plan_turn>\n\n`;
+  }
+  return [
+    intro,
+    "Show the plan as a page (page_show with background: true and a key of its own): the goal, the steps as a checklist (one checkbox per step, kept in page state so it can be ticked off later), the files you will change, risks and open questions, and mockups when they help the user judge the result.",
+    'End the page with a review form: a notes field and three buttons. **Accept** calls scribe.signal("accept", { notes }) with the text of the notes field, **Accept with notes** does the same and is only enabled when there are notes, and **Reject** calls scribe.signal("reject", { notes }).',
+    'Then call page_ask on that page with events ["accept", "reject"] and a one-line prompt.',
+    "- accept: end your turn at once without changing anything. Scribe starts the next turn, at the thread's own access, to implement the plan with the user's notes.",
+    "- reject with notes: revise the plan page as they ask, then page_ask again.",
+    "- reject without notes, skipped, or closed: end your turn with a one-line note.",
+    "</plan_turn>",
+    "",
+    "",
+  ].join("\n");
+}
+
+/** The message that starts the implementation turn after the user accepts a plan (#721). */
+export function implementText(notes?: string, page?: string): string {
+  return [
+    "Implement the plan.",
+    ...(notes ? [`The user's notes on it: ${notes}`] : []),
+    ...(page ? [`The plan is on the page ${page}. Use it as your progress checklist: tick each step off on it (page_update or page_patch) as you finish it.`] : []),
+  ].join("\n\n");
 }
 
 /** Stable identity for a chip that should only be sent once per thread. Selections have none. */

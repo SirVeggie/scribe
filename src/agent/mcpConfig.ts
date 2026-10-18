@@ -61,8 +61,8 @@ export type ResolvedMcpServer = {
   timeout?: number;
 };
 
-export const DEFAULT_MODES: ThreadMode[] = ["code", "plan"];
-const MODES: ThreadMode[] = ["code", "plan", "board"];
+export const DEFAULT_MODES: ThreadMode[] = ["code"];
+const MODES: ThreadMode[] = ["code", "board"];
 /** The daemon's board server's name in Claude threads; a user server may not take it. */
 const RESERVED = new Set(["agent-board", "scribe", "custom-user-tools"]);
 

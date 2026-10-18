@@ -17,7 +17,7 @@ import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTr
 import { syncDependencies } from "./deps.js";
 import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
-import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
+import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, implementText, pageKeysIn, planTurnNote, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
@@ -36,7 +36,6 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   PlanDecision,
-  PlanRequest,
   ProviderSession,
   QuestionAnswer,
   QuestionRequest,
@@ -97,7 +96,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
-import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, readsOnly, settleAccess } from "./types.js";
+import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, planAccess, readsOnly, settleAccess, wantsPlan } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
 import { injectionDetectors } from "./injection.js";
@@ -181,14 +180,14 @@ export function openWorktree(thread: Thread): ThreadWorktree | null {
   return thread.worktree && !thread.worktree.closed ? thread.worktree : null;
 }
 
-/** Code and Plan threads in a workspace can have a worktree; Pages and Ask never edit files. */
+/** Threads on an editing rung in a workspace can have a worktree; Read-only and Board never edit files. */
 /** Helpers one thread may have working at once. */
 /** How long a tainted thread's request for an untrusted helper waits for the user before it is denied (#269). */
 const TAINTED_HELPER_WAIT_MS = 15 * 60_000;
 const MAX_HELPERS = 10;
 
 function wantsWorktree(thread: Thread): boolean {
-  return Boolean(thread.useWorktree && thread.cwd && (thread.mode === "code" || thread.mode === "plan") && !openWorktree(thread));
+  return Boolean(thread.useWorktree && thread.cwd && thread.mode === "code" && !openWorktree(thread));
 }
 
 /** Folderless threads run in Scribe's scratch folder. */
@@ -206,8 +205,7 @@ function workspaceFolderError(thread: Thread): string | null {
 
 type Pending =
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
-  | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
-  | { kind: "plan"; threadId: string; itemId: string; resolve: (d: PlanDecision) => void; reject: (err: Error) => void };
+  | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void };
 
 function approvalFor(prefs: Prefs, provider: ProviderId): ApprovalPolicy {
   return prefs.approvals[provider] ?? prefs.approval;
@@ -243,6 +241,8 @@ type QueuedMessage = {
   card?: CardRef;
   /** Typed into the floating chat over a page (pageIntent.ts). */
   dock?: boolean;
+  /** A plan turn (#721): /plan, the composer's Plan chip, or a thread started in the old plan mode. */
+  plan?: boolean;
 };
 
 /** The Kanban card a board message is about: its number and the board page it is on. */
@@ -279,6 +279,13 @@ function helperResumeNote(helpers: Thread[]): string {
 
 const RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (a question, an approval, a background command) is gone. Check where you left off (files, git status, the pages or card you were working on) and go on from there to finish the task. If you were waiting for the user's answer, ask again.";
+
+/** The notes a plan page sent with its accept or reject event (#721), from the event's data or else the page's state. */
+function planNotes(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const notes = (value as { notes?: unknown }).notes;
+  return typeof notes === "string" && notes.trim() ? notes.trim().slice(0, 4000) : undefined;
+}
 
 /** What a thread reads at the start of the turn after the workspace change it asked for with thread_update. */
 function workspaceNote(cwd: string): string {
@@ -418,12 +425,15 @@ function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
     ...(msg.context.length ? { context: msg.context } : {}),
     ...(msg.from ? { from: msg.from } : {}),
     ...(msg.dock ? { dock: true } : {}),
+    ...(msg.plan ? { plan: true } : {}),
     ...(msg.card ? { card: { num: msg.card.num, ...(msg.card.title ? { title: msg.card.title } : {}), ...(msg.card.resume ? { resume: true } : {}), ...(msg.card.reply ? { reply: msg.card.reply } : {}) } } : {}),
   };
 }
 
 type RunState = {
   turn: Turn;
+  /** A plan turn's answer on its plan page (#721): accept starts the implementation turn after it. */
+  plan?: { accepted: boolean; notes?: string; page: string };
   /** Actual Native source after model resolution, including default/fallback models. */
   memoryOwner?: ReturnType<typeof memoryOwner>;
   textItem: Item | null;
@@ -474,7 +484,8 @@ export type PageAskResult =
 /** A workspace folder that is gone, and the folder Scribe thinks it became (same file id), if any. */
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean };
+/** plan: send it as a plan turn (#721), or false to drop a thread's planNext; text starting with /plan is one too. */
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -1041,7 +1052,7 @@ export class AgentHost {
       thread.updatedAt = Date.now();
       this.db.saveThread(thread);
       this.effectivePermissions.delete(thread.id);
-      this.sessions.get(thread.id)?.update(thread);
+      this.sessions.get(thread.id)?.update(this.sessionThread(thread));
       this.emit({ type: "agent_thread", thread: this.view(thread) });
     }
   }
@@ -1212,7 +1223,7 @@ export class AgentHost {
       provider = (["cursor", "codex", "claude", "pi"] as ProviderId[]).find((id) => available.includes(id)) ?? available[0];
     }
     if (!provider) throw new Error("No agent provider is available.");
-    // The rung decides (#719); a mode is still accepted: code + Ask first is Edits, ask and board are Board, plan plans first.
+    // The rung decides (#719); a mode is still accepted: code + Ask first is Edits, ask and board are Board, plan plans the first turn (#721).
     // A template action's "readonly" names the rung.
     const legacy = s.mode === "readonly" ? undefined : s.mode;
     if (legacy && !parseMode(legacy)) throw setup(`unknown mode ${s.mode}`);
@@ -1234,7 +1245,7 @@ export class AgentHost {
     if (model !== "default" && models.length && !info) throw setup(`unknown model ${model}`);
     if (s.effort && info?.efforts.length && !info.efforts.some((e) => e.id === s.effort)) throw setup(`${model} has no effort "${s.effort}"`);
     // Read-only and Board keep a folder they are given, to read files there (#718).
-    const folder = mode === "code" || mode === "plan";
+    const folder = mode === "code";
     if (folder && !s.cwd) throw setup("it needs a folder");
     if (this.closed) throw new Error("Scribe is shutting down.");
     validate?.();
@@ -1250,6 +1261,7 @@ export class AgentHost {
         web: parseWebAccess(s.web) ?? "off",
         cwd: s.cwd || null,
         useWorktree: folder && s.worktree === true,
+        ...(wantsPlan(legacy) ? { planNext: true } : {}),
         title: s.title,
         scope: { kind: "page", ref: pageId },
         ...(s.helpers ? { helpersAllowed: true } : {}),
@@ -1417,7 +1429,7 @@ export class AgentHost {
     // The session would start in the main checkout and restart once the worktree is made.
     if (wantsWorktree(thread)) return;
     const session = this.session(thread);
-    session.update(thread);
+    session.update(this.sessionThread(thread));
     await session.warm(threadInstructions(thread, this.scopeInfo(thread)));
   }
 
@@ -1485,8 +1497,8 @@ export class AgentHost {
     // Page and folder threads start on Board, others on the provider's last rung (#719).
     const editRung = approvalFor(prefs, provider);
     const access = changeAccess(
-      scoped ? { mode: "board", approval: "board" } : settleAccess(prefs.mode, editRung),
-      { mode: input.mode ?? (picked?.plan ? "plan" : undefined), approval: input.approval ?? picked?.approval },
+      scoped ? { mode: "board", approval: "board" } : settleAccess("code", editRung),
+      { mode: input.mode, approval: input.approval ?? picked?.approval },
       editRung,
       custom?.max
     );
@@ -1501,6 +1513,8 @@ export class AgentHost {
       modelParams: input.modelParams ?? choice.modelParams,
       ...access,
       ...(custom ? { custom } : {}),
+      // A custom mode that plans first, or the old plan mode: the first message is a plan turn (#721).
+      ...(input.planNext || (!input.custom && picked?.plan) ? { planNext: true } : {}),
       // A mode without web tools keeps web off whatever the thread's setting says.
       web: custom?.off.includes("web") ? "off" : input.web ?? picked?.web ?? prefs.web,
       scope,
@@ -1557,7 +1571,8 @@ export class AgentHost {
       const mode = this.prefs().customModes.find((m) => m.id === patch.customMode);
       if (!mode) throw new Error("That custom mode no longer exists.");
       next.custom = threadCustom(mode);
-      accessPatch = { mode: patch.mode ?? (mode.plan ? "plan" : undefined), approval: patch.approval ?? mode.approval };
+      accessPatch = { mode: patch.mode, approval: patch.approval ?? mode.approval };
+      if (mode.plan) next.planNext = true;
       if (mode.web) next.web = mode.web;
     }
     // The rung decides, capped by a custom mode's highest rung; a mode from an older client still works (#719).
@@ -1602,7 +1617,7 @@ export class AgentHost {
     next.updatedAt = Date.now();
     this.threads.set(id, next);
     this.db.saveThread(next);
-    this.sessions.get(id)?.update(next);
+    this.sessions.get(id)?.update(this.sessionThread(next));
     if (next.cwd && next.cwd !== thread.cwd) this.noteWorkspaces([next.cwd]);
     this.rememberChoices(next, patch);
     const view = this.view(next);
@@ -1648,7 +1663,7 @@ export class AgentHost {
     if (next.pageGrants) thread.pageGrants = next.pageGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
-    this.sessions.get(id)?.update(thread);
+    this.sessions.get(id)?.update(this.sessionThread(thread));
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
     return view;
@@ -1847,8 +1862,10 @@ export class AgentHost {
         const title = item.title || item.questions[0]?.prompt || item.page?.title || "Question";
         return { kind: "question", itemId: item.id, title, ...(item.page ? { page: item.page } : {}), ...(item.display === "dialog" ? { form: true } : {}) };
       }
-      if (item.kind === "plan") return { kind: "plan", itemId: item.id, title: item.title || "Plan to review" };
     }
+    if (this.runs.has(threadId)) return undefined;
+    const last = [...this.loadItems(threadId)].reverse().find((it) => it.kind !== "notice");
+    if (last?.kind === "plan" && last.status === "pending") return { kind: "plan", itemId: last.id, title: last.title || "Plan to review" };
     return undefined;
   }
 
@@ -2099,8 +2116,19 @@ export class AgentHost {
         throw new Error("Codex has not confirmed that included usage is available again. Waiting for a fresh quota read.");
       }
     }
-    const text = input.text.trim();
+    let text = input.text.trim();
+    // "/plan <task>" marks a plan turn (#721), whoever sends it.
+    const slash = /^\/plan(?:\s+|$)/.exec(text);
+    if (slash) text = text.slice(slash[0].length).trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
+    // A thread started in the old plan mode plans on its first message; Scribe's own notes and hooks don't use that up.
+    const ownNote = input.from === "scribe" || input.from === "hook";
+    const plan = slash ? true : input.plan ?? (ownNote ? false : Boolean(thread.planNext));
+    if (thread.planNext && (!ownNote || input.plan !== undefined)) {
+      delete thread.planNext;
+      this.db.saveThread(thread);
+      this.emitThread(threadId);
+    }
     // Only the person's composer may authorize a tag; page/agent/hook messages cannot grant access.
     const tagged: Extract<ContextChip, { kind: "thread" }>[] = [];
     const supplied = (input.context ?? []).flatMap((chip): ContextChip[] => {
@@ -2127,6 +2155,7 @@ export class AgentHost {
       ...(input.from ? { from: input.from } : {}),
       ...(input.card ? { card: input.card } : {}),
       ...(input.dock && !input.from ? { dock: true } : {}),
+      ...(plan ? { plan: true } : {}),
     };
     if (tagged.length) {
       thread.threadGrants = grantScopes(thread.threadGrants, tagged.map((chip) => ({ kind: "thread" as const, id: chip.id })));
@@ -2656,7 +2685,7 @@ export class AgentHost {
     if (JSON.stringify(next) === JSON.stringify(t.pageGrants ?? [])) return;
     t.pageGrants = next;
     this.db.saveThread(t);
-    this.sessions.get(threadId)?.update(t);
+    this.sessions.get(threadId)?.update(this.sessionThread(t));
     this.emitThread(threadId);
   }
 
@@ -3148,7 +3177,7 @@ export class AgentHost {
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
-    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace on the ${APPROVAL_LABEL[access.approval]} rung${access.mode === "plan" ? ", planning first," : ""} with this thread's web setting.\n\n${clip(task, 2000)}`;
+    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace on the ${APPROVAL_LABEL[access.approval]} rung with this thread's web setting.\n\n${clip(task, 2000)}`;
     const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Start a helper agent: ${what}`.slice(0, 300), detail, options, status: "pending" });
     let decision: ApprovalDecision;
     try {
@@ -3200,20 +3229,17 @@ export class AgentHost {
   }
 
   /**
-   * A helper's rung (#719): its parent's, or a lower one it asks for. A plan-first parent's helpers
-   * plan first too. The old mode names still work: code and plan keep the parent's rung, ask and
-   * board are the Board rung.
+   * A helper's rung (#719): its parent's, or a lower one it asks for. The old mode names still work:
+   * code keeps the parent's rung, and ask, board and plan (investigate without edits) are the Board rung.
    */
   private helperAccess(parent: Thread, requested: string | undefined): { mode: ThreadMode; approval: ApprovalPolicy } {
     if (requested === undefined) return { mode: parent.mode, approval: parent.approval };
-    const mode = parseMode(requested);
+    const mode = wantsPlan(requested) ? "board" : parseMode(requested);
     const rung = parseApproval(requested) && requested !== "ask" ? parseApproval(requested)! : mode === "board" ? minApproval("board", parent.approval) : mode ? parent.approval : null;
     const below = APPROVALS.slice(0, approvalRank(parent.approval) + 1);
     if (!rung) throw new Error(`Unknown helper access "${requested}". Choose: ${below.join(", ")}.`);
     if (approvalRank(rung) > approvalRank(parent.approval)) throw new Error(`A helper may not exceed this thread's ${parent.approval} rung. Choose: ${below.join(", ")}.`);
-    if (mode === "code" && parent.mode === "plan") throw new Error("This thread plans first, so its helpers do too. Choose plan or a lower rung.");
-    if (mode === "plan" && parent.mode === "board") throw new Error(`Plan first needs an editing rung; this thread is on ${parent.approval}.`);
-    return settleAccess(mode === "plan" || parent.mode === "plan" ? "plan" : "code", rung);
+    return settleAccess("code", rung);
   }
 
   /**
@@ -3477,10 +3503,18 @@ export class AgentHost {
     await this.sessions.get(threadId)?.cancel();
   }
 
+  /**
+   * The thread as its provider session sees it: during a plan turn (#721) it runs at planAccess, so
+   * files stay read-only whatever the thread's rung.
+   */
+  private sessionThread(thread: Thread): Thread {
+    return this.runs.get(thread.id)?.turn.plan ? { ...thread, ...planAccess(thread) } : thread;
+  }
+
   private session(thread: Thread): ProviderSession {
     let session = this.sessions.get(thread.id);
     if (!session) {
-      session = this.agent(thread.provider).createSession(thread, this.ctx);
+      session = this.agent(thread.provider).createSession(this.sessionThread(thread), this.ctx);
       this.sessions.set(thread.id, session);
     }
     return session;
@@ -3497,7 +3531,8 @@ export class AgentHost {
       status: "running",
       model: thread.model,
       effort: thread.effort,
-      mode: thread.mode,
+      mode: msg?.plan ? planAccess(thread).mode : thread.mode,
+      ...(msg?.plan ? { plan: true } : {}),
       startedAt: Date.now(),
     };
     turns.push(turn);
@@ -3579,17 +3614,19 @@ export class AgentHost {
         }
         // Stop can also arrive while the model is looked up.
         if (!run.cancelled) {
+          const live = this.sessionThread(thread);
           const session = this.session(thread);
-          session.update(thread);
+          session.update(live);
           const pageEdits = this.pageEditPrefix(thread, turn.id);
+          const planNote = msg?.plan ? planTurnNote(live) : "";
           // A note the agent must read comes before the text, so the message is then not sent as a command.
-          const command = msg && !earlier && !reopened ? this.commandText(thread, msg) : null;
+          const command = msg && !earlier && !reopened && !planNote ? this.commandText(thread, msg) : null;
           result = await session.run(
             {
-              text: command ?? (msg ? earlier + reopened + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
+              text: command ?? (msg ? earlier + reopened + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
               images: msg?.images ?? [],
               documents: msg ? pdfs(msg) : [],
-              instructions: threadInstructions(thread, this.scopeInfo(thread)),
+              instructions: threadInstructions(live, this.scopeInfo(thread)),
             },
             sink,
             opts
@@ -3699,12 +3736,18 @@ export class AgentHost {
       // A helper reports to the agent that started it, not to the user.
       if (!pageOwned(this.loadItems(threadId)) && !latest.helperOf) this.unread.add(threadId);
     }
+    const implement = turn.plan && result.status === "done" && latest ? this.endPlanTurn(threadId, turn, run) : null;
     this.emitThread(threadId);
     const moved = run.workspace && latest ? this.applyWorkspace(threadId, turn.id, run.workspace.cwd) : false;
 
     if (carried && latest) {
       const item = carried.itemId ? this.loadItems(threadId).find((it) => it.id === carried.itemId) : undefined;
       void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id });
+      return;
+    }
+    // The user accepted the plan on its page: implement it at the thread's own rung.
+    if (implement) {
+      void this.runTurn(threadId, implement, this.addItem(threadId, null, userBody(implement)));
       return;
     }
     // The agent ended its turn to get the new folder: send it on. Queued messages wait behind the
@@ -3756,9 +3799,6 @@ export class AgentHost {
     if (!item) return;
     if ((item.kind === "approval" || item.kind === "question") && item.status === "pending") {
       item.status = "expired";
-      this.touch(item);
-    } else if (item.kind === "plan" && item.status === "pending") {
-      item.status = "shown";
       this.touch(item);
     }
   }
@@ -3825,11 +3865,16 @@ export class AgentHost {
         return { ...base, answered: false, closed: wait.closed, deleted: wait.deleted, timedOut: wait.timedOut && !opts.signal.aborted };
       }
       if (this.pending.has(item.id)) this.resolveQuestion(item.id, { answers: {} });
+      const last = wait.events[wait.events.length - 1];
       if (item.kind === "question") {
-        item.event = wait.events[wait.events.length - 1].name;
+        item.event = last.name;
         this.touch(item);
       }
       const now = store.get(tab.id, "agent");
+      if (run.turn.plan && (last.name === "accept" || last.name === "reject")) {
+        const notes = planNotes(last.data) ?? planNotes(now?.state);
+        run.plan = { accepted: last.name === "accept", ...(notes ? { notes } : {}), page: tab.key };
+      }
       return { ...base, answered: true, events: wait.events, stateRevision: now?.stateRevision ?? wait.stateRevision, state: now?.state ?? null };
     } catch {
       return { cancelled: true, page: { id: tab.id, key: tab.key } };
@@ -4045,10 +4090,6 @@ export class AgentHost {
         const item = host.addItem(threadId, turnId, { kind: "question", requestId: "", ...(req.title ? { title: req.title } : {}), questions: req.questions, ...(req.display ? { display: req.display } : {}), status: "pending" });
         return waitFor<QuestionAnswer>("question", item.id, signal);
       },
-      plan(req: PlanRequest, signal) {
-        const item = host.addItem(threadId, turnId, { kind: "plan", requestId: "", ...(req.title ? { title: req.title } : {}), text: req.text, status: "pending" });
-        return waitFor<PlanDecision>("plan", item.id, signal);
-      },
       todos(todos) {
         const existing = [...host.loadItems(threadId)].reverse().find((item) => item.turnId === turnId && item.kind === "todos");
         if (existing && existing.kind === "todos") {
@@ -4081,14 +4122,6 @@ export class AgentHost {
         const t = thread();
         if (t && !t.titleLocked && title && title !== t.title) {
           t.title = title.slice(0, 120);
-          host.db.saveThread(t);
-          host.emitThread(threadId);
-        }
-      },
-      modeChanged(mode) {
-        const t = thread();
-        if (t && t.mode !== mode) {
-          t.mode = mode;
           host.db.saveThread(t);
           host.emitThread(threadId);
         }
@@ -4529,23 +4562,38 @@ export class AgentHost {
     pending.resolve(answer);
   }
 
-  resolvePlan(requestId: string, decision: PlanDecision): void {
-    const pending = this.pending.get(requestId);
-    if (!pending || pending.kind !== "plan") throw new Error("This plan is no longer waiting.");
-    this.pending.delete(requestId);
-    const planThread = this.threads.get(pending.threadId);
-    if (decision.accepted && planThread?.mode === "plan" && (planThread.provider === "cursor" || planThread.provider === "codex")) {
-      // Cursor and Codex end the turn after an accepted plan; continue in Code mode with a follow-up turn.
-      this.updateThread(planThread.id, { mode: "code" });
-      this.send(planThread.id, { text: "Implement the plan." });
+  /**
+   * The user's answer to a plan in the chat (#721, a plan turn that could not show a page). Accept
+   * sends "Implement the plan" at the thread's own rung; changes with a note send a new plan turn.
+   */
+  resolvePlan(threadId: string, itemId: string, decision: PlanDecision): void {
+    this.requireThread(threadId);
+    const item = this.loadItems(threadId).find((it) => it.id === itemId);
+    if (!item || item.kind !== "plan" || item.status !== "pending") throw new Error("This plan is no longer waiting.");
+    item.status = decision.accepted ? "accepted" : "rejected";
+    const note = decision.note?.trim();
+    if (note) item.note = note;
+    this.touch(item);
+    if (decision.accepted) this.send(threadId, { text: implementText(note), from: "scribe", plan: false });
+    else if (note) this.send(threadId, { text: `The user wants changes to the plan: ${note}`, from: "scribe", plan: true });
+    else this.emitThread(threadId);
+  }
+
+  /**
+   * A plan turn ended (#721). Accepted on its page: the implementation turn to send next. With no
+   * answer from a plan page, its last message is the plan, offered in the chat to accept or change.
+   */
+  private endPlanTurn(threadId: string, turn: Turn, run: RunState): QueuedMessage | null {
+    if (run.plan?.accepted) {
+      return { text: implementText(run.plan.notes, run.plan.page), images: [], files: [], saved: { images: [], files: [] }, context: [], from: "scribe" };
     }
-    const item = this.loadItems(pending.threadId).find((it) => it.id === pending.itemId);
-    if (item && item.kind === "plan") {
-      item.status = decision.accepted ? "accepted" : "rejected";
-      if (decision.note) item.note = decision.note;
-      this.touch(item);
-    }
-    pending.resolve(decision);
+    if (run.plan) return null;
+    const last = [...this.loadItems(threadId)].reverse().find((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId);
+    if (last?.kind !== "text" || !last.text.trim()) return null;
+    const plan = last as unknown as Record<string, unknown>;
+    Object.assign(plan, { kind: "plan", requestId: last.id, title: "Plan", status: "pending" });
+    this.touch(last);
+    return null;
   }
 
   // ---------- worktrees ----------
@@ -4986,7 +5034,7 @@ export class AgentHost {
       this.threads.set(next.id, next);
       this.db.saveThread(next);
       this.effectivePermissions.delete(next.id);
-      this.sessions.get(next.id)?.update(next);
+      this.sessions.get(next.id)?.update(this.sessionThread(next));
     }
 
     const prefs = this.prefs();

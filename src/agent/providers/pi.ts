@@ -28,7 +28,7 @@ type Model = PiModel<Api>;
  * registered as Pi providers) and from Pi's built-in providers that have a key in the environment
  * or in Scribe's Pi auth.json.
  *
- * Pi ships no approvals, questions, plan review, todos or web tools. Scribe adds them: a tool_call
+ * Pi ships no approvals, questions, todos or web tools. Scribe adds them: a tool_call
  * hook asks the user before edits and commands (by the thread's approval level), and custom tools
  * stand in for the rest. The board's tools reach the model as custom tools that call this daemon's
  * board MCP server, as with Cursor.
@@ -111,10 +111,9 @@ export function splitPiModel(id: string): { provider: string; model: string } | 
   return { provider: id.slice(0, at), model: id.slice(at + 1) };
 }
 
-/** Pi's built-in tools for a thread's mode; Plan starts read-only and gets the rest when its plan is accepted. Pages reads only with a workspace. */
+/** Pi's built-in tools for a thread's mode. Read-only and Board read only with a workspace. */
 export function builtinTools(mode: Thread["mode"], off: string[] = [], pagesReads = false): string[] {
   if (mode === "board") return pagesReads ? READ_TOOLS : [];
-  if (mode === "plan") return READ_TOOLS;
   // A custom mode's tool groups (piToolsOff) come off the code set.
   return CODE_TOOLS.filter((name) => !off.includes(name));
 }
@@ -461,8 +460,6 @@ class PiSession implements ProviderSession {
   private costMessages = new WeakSet<object>();
   /** Text and reasoning blocks of the message streaming now, so a new block breaks the chat item. */
   private lastBlock: number | null = null;
-  /** Plan mode's exit_plan was accepted: the session has the Code tools now. */
-  private planAccepted = false;
 
   constructor(
     private provider: PiProvider,
@@ -486,7 +483,6 @@ class PiSession implements ProviderSession {
       this.file = thread.nativeId && fs.existsSync(thread.nativeId) ? thread.nativeId : null;
       this.closeSession();
     }
-    if (was.mode !== thread.mode) this.planAccepted = false;
     if (this.sessionKey !== null && this.sessionKey !== this.key() && !this.running) this.closeSession();
   }
 
@@ -569,7 +565,7 @@ class PiSession implements ProviderSession {
     return this.ctx.webRequest(this.thread.id, call);
   }
 
-  /** The tools Scribe adds to Pi: the board's, the web fetch, questions, todos, and Plan mode's exit_plan. */
+  /** The tools Scribe adds to Pi: the board's, the web fetch, questions and todos. */
   private async customTools(): Promise<ToolDefinition[]> {
     this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread));
     const tools = [...(await this.board.tools()), ...(await this.userTools())];
@@ -652,15 +648,6 @@ class PiSession implements ProviderSession {
         return text("Todos updated.");
       },
     });
-    if (this.thread.mode === "plan") {
-      tools.push({
-        name: "exit_plan",
-        label: "Plan",
-        description: "Present your plan to the user for approval once you have investigated enough. If they accept, you get the editing tools and carry on implementing it in this turn; if not, revise it from their note.",
-        parameters: { type: "object", properties: { plan: { type: "string", description: "The plan, in Markdown." } }, required: ["plan"] } as unknown as ToolDefinition["parameters"],
-        execute: async (_id, params, signal) => this.exitPlan(isPlainRecord(params) ? str(params.plan) : undefined, signal),
-      });
-    }
     return tools;
   }
 
@@ -688,19 +675,6 @@ class PiSession implements ProviderSession {
       return `${q.prompt}\n→ ${picked.length ? picked.join(", ") : "(no choice)"}${note ? `\nNote: ${note}` : ""}`;
     });
     return text(lines.join("\n\n"));
-  }
-
-  private async exitPlan(plan: string | undefined, signal: AbortSignal | undefined) {
-    const sink = this.sink;
-    if (!sink) throw new Error("No active turn: nobody is there to review the plan.");
-    if (!plan) throw new Error("Send the plan text.");
-    const decision = await sink.plan({ title: "Plan", text: plan }, signal);
-    if (!decision.accepted) return text(`The user did not accept the plan${decision.note ? `: ${decision.note}` : "."} Revise it and present it again with exit_plan.`);
-    this.planAccepted = true;
-    const session = this.session;
-    if (session) session.setActiveToolsByName([...new Set([...session.getActiveToolNames().filter((n) => n !== "exit_plan"), ...builtinTools("code", piToolsOff(this.thread))])]);
-    sink.modeChanged?.("code");
-    return text(`The user accepted the plan${decision.note ? ` with a note: ${decision.note}` : ""}. You can edit files and run commands now: implement it.`);
   }
 
   /** A web tool's result after Scribe's hooks have looked at it (SessionContext.scanResult): with their note in front when they have one. */
@@ -865,7 +839,6 @@ class PiSession implements ProviderSession {
       }
     }
     sessionManager ??= sdk.SessionManager.create(cwd, sessionDir());
-    const plan = this.thread.mode === "plan" && !this.planAccepted;
     const custom = await this.customTools();
     const { session } = await sdk.createAgentSession({
       cwd,
@@ -876,11 +849,9 @@ class PiSession implements ProviderSession {
       settingsManager,
       resourceLoader,
       sessionManager,
-      // Pi's tools list is an allowlist: Plan mode needs the Code tools in it to switch them on when its plan is accepted.
-      tools: [...builtinTools(plan ? "code" : this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread)), ...custom.map((t) => t.name)],
+      tools: [...builtinTools(this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread)), ...custom.map((t) => t.name)],
       customTools: custom,
     });
-    if (plan) session.setActiveToolsByName([...READ_TOOLS, ...custom.map((t) => t.name)]);
     await session.bindExtensions({});
     session.subscribe((event) => this.onEvent(event));
     this.file = session.sessionFile ?? null;
@@ -1093,7 +1064,7 @@ class PiSession implements ProviderSession {
         return;
       }
       case "tool_execution_start": {
-        if (event.toolName === "todo_write" || event.toolName === "ask_user" || event.toolName === "exit_plan") return;
+        if (event.toolName === "todo_write" || event.toolName === "ask_user") return;
         sink.breakBlock();
         this.lastBlock = null;
         const args = isPlainRecord(event.args) ? event.args : {};
@@ -1118,7 +1089,7 @@ class PiSession implements ProviderSession {
         return;
       }
       case "tool_execution_end": {
-        if (event.toolName === "todo_write" || event.toolName === "ask_user" || event.toolName === "exit_plan") return;
+        if (event.toolName === "todo_write" || event.toolName === "ask_user") return;
         const result = isPlainRecord(event.result) ? event.result : {};
         // Reads, edits and writes: the file and the host's diff say it better than the tool's echo.
         const quiet = !event.isError && (event.toolName === "read" || event.toolName === "edit" || event.toolName === "write");

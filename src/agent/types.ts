@@ -18,18 +18,27 @@ export function isProviderId(value: unknown): value is ProviderId {
 
 /**
  * How the provider runs the thread, derived from its approval rung (#719): "board" for the Read-only
- * and Board rungs (reads files in its workspace, no edits or shell), "code" or "plan" (plan first)
- * for the others. Only plan is the user's own choice; settleAccess keeps the two in step.
+ * and Board rungs (reads files in its workspace, no edits or shell), "code" for the others.
+ * settleAccess keeps the two in step. Planning is a turn flag (#721), not a mode.
  */
-export type ThreadMode = "code" | "plan" | "board";
+export type ThreadMode = "code" | "board";
 
-/** Mode values older threads, worker settings and scribe.agent.start may still send: "ask" means "board". */
-export type ModeInput = ThreadMode | "ask";
+/**
+ * Mode values older threads, worker settings and scribe.agent.start may still send: "ask" means
+ * "board", and "plan" means "code" with a plan turn first (wantsPlan).
+ */
+export type ModeInput = ThreadMode | "ask" | "plan";
 
-/** A mode from stored data or an API, with "ask" read as "board". Null when it is none of them. */
+/** A mode from stored data or an API, with "ask" read as "board" and "plan" as "code". Null when it is none of them. */
 export function parseMode(value: unknown): ThreadMode | null {
   if (value === "ask") return "board";
-  return value === "code" || value === "plan" || value === "board" ? value : null;
+  if (value === "plan") return "code";
+  return value === "code" || value === "board" ? value : null;
+}
+
+/** The old "plan" mode (plan first): the thread's next turn is a plan turn (#721). */
+export function wantsPlan(mode: unknown): boolean {
+  return mode === "plan";
 }
 
 /** A thread's copy of its custom mode (customModes.ts): the tool groups it turns off, the MCP servers it keeps, and its instructions. */
@@ -80,21 +89,29 @@ export function readsOnly(approval: ApprovalPolicy): boolean {
 /**
  * A stored or requested mode and approval as one access setting (#719): the rung decides, and the
  * mode follows it. Old values migrate: ask and board modes become the Board rung (Read-only stays),
- * a code or plan thread on a reading rung becomes a board thread, and the old "ask" approval is Edits.
+ * a code or plan thread on a reading rung becomes a board thread, a plan thread on an editing rung
+ * a code thread, and the old "ask" approval is Edits.
  */
 export function settleAccess(mode: unknown, approval: unknown): { mode: ThreadMode; approval: ApprovalPolicy } {
   const m = parseMode(mode) ?? "code";
   const a = parseApproval(approval) ?? "edits";
   if (m === "board") return { mode: "board", approval: a === "readonly" ? "readonly" : "board" };
-  return readsOnly(a) ? { mode: "board", approval: a } : { mode: m, approval: a };
+  return readsOnly(a) ? { mode: "board", approval: a } : { mode: "code", approval: a };
+}
+
+/**
+ * The rung a plan turn runs at (#721): Board, capped by the thread's own rung. Files stay read-only
+ * and, from Board up, the agent can show the plan as a page.
+ */
+export function planAccess(thread: { approval: ApprovalPolicy }): { mode: ThreadMode; approval: ApprovalPolicy } {
+  return { mode: "board", approval: minApproval("board", thread.approval) };
 }
 
 /**
  * A thread's access after a patch that may still name a mode (old pickers, worker settings,
  * scribe.agent.start). A rung decides on its own; "board" (or "ask") without one moves to the Board
  * rung (Read-only stays); "code" or "plan" on a reading rung moves to `editRung`, the provider's
- * default for workspace threads. Plan first stays on until a mode turns it off. `max` caps the rung
- * (a custom mode's highest rung).
+ * default for workspace threads. `max` caps the rung (a custom mode's highest rung).
  */
 export function changeAccess(
   current: { mode: ThreadMode; approval: ApprovalPolicy },
@@ -105,14 +122,12 @@ export function changeAccess(
   const mode = patch.mode === undefined || patch.mode === null ? null : parseMode(patch.mode);
   const asked = patch.approval === undefined || patch.approval === null ? null : parseApproval(patch.approval);
   let approval = asked ?? current.approval;
-  let plan = current.mode === "plan";
   if (mode === "board") {
     approval = asked && readsOnly(asked) ? asked : current.approval === "readonly" ? "readonly" : "board";
   } else if (mode) {
-    plan = mode === "plan";
     if (!asked && readsOnly(approval)) approval = readsOnly(editRung) ? "edits" : editRung;
   }
-  return settleAccess(plan ? "plan" : "code", minApproval(approval, max));
+  return settleAccess("code", minApproval(approval, max));
 }
 
 export type ScopeKind = "global" | "workspace" | "folder" | "page";
@@ -153,6 +168,8 @@ export type Thread = {
   /** The custom mode picked for the thread (customModes.ts): what it takes away from `mode`, as of when it was picked or last edited. */
   custom?: ThreadCustomMode;
   approval: ApprovalPolicy;
+  /** The next user turn is a plan turn (#721): set when a thread starts in the old plan mode, cleared by that turn. */
+  planNext?: boolean;
   /** Web search and fetch tools: any site, the allowlist in prefs only, or none. */
   web: WebAccess;
   /** Web access the user granted this thread beyond its web setting (a web request answered with a domain or the thread). */
@@ -397,6 +414,8 @@ export type Turn = {
   model: string;
   effort: string | null;
   mode: ThreadMode;
+  /** A plan turn (#721): it ran at planAccess, to propose a plan without changing files. */
+  plan?: boolean;
   startedAt: number;
   endedAt?: number;
   /** Latest model output in this turn; lets boards recognize even a short completed turn. */
@@ -519,6 +538,8 @@ export type ItemBody =
       dock?: boolean;
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
       card?: { num: number; title?: string; resume?: boolean; reply?: string };
+      /** Sent as a plan turn (#721: /plan or the composer's Plan chip). */
+      plan?: boolean;
     }
   | { kind: "text"; text: string; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }

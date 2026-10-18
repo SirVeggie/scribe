@@ -516,7 +516,6 @@ function claudeSpareKey(thread: Thread): string {
 }
 
 export function permissionModeFor(thread: Pick<Thread, "mode" | "approval">): PermissionMode {
-  if (thread.mode === "plan") return "plan";
   if (thread.mode === "board") return "dontAsk";
   switch (thread.approval) {
     case "edits":
@@ -836,7 +835,8 @@ class ClaudeSession implements ProviderSession {
       options.tools = { type: "preset", preset: "claude_code" };
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers];
       // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
-      options.disallowedTools = ["EnterWorktree", "ExitWorktree"];
+      // Plans are Scribe's plan turns (#721), so Claude's own plan mode stays off.
+      options.disallowedTools = ["EnterWorktree", "ExitWorktree", "EnterPlanMode", "ExitPlanMode"];
     }
     // A custom mode's tool groups: gone from the model's tool list, whatever the approval level.
     const off = claudeToolsOff(thread);
@@ -1241,7 +1241,7 @@ class ClaudeSession implements ProviderSession {
     const sink = this.sink;
     // Between turns (a background agent at work) the host answers from the thread's rules alone.
     const ask: RunSink["approval"] | undefined = sink ? (req, signal) => sink.approval(req, signal) : this.ctx.approval ? (req) => this.ctx.approval!(this.thread.id, req) : undefined;
-    if (!ask || (!sink && (name === "AskUserQuestion" || name === "ExitPlanMode"))) return { behavior: "deny", message: "No active turn: the user is not there to answer." };
+    if (!ask || (!sink && name === "AskUserQuestion")) return { behavior: "deny", message: "No active turn: the user is not there to answer." };
     if (name === "AskUserQuestion") {
       const raw = Array.isArray(input.questions) ? input.questions : [];
       const questions = raw.filter(isPlainRecord).map((q, index) => ({
@@ -1269,18 +1269,6 @@ class ClaudeSession implements ProviderSession {
         return { behavior: "allow", updatedInput: { ...input, answers } };
       } catch {
         return { behavior: "deny", message: "The question was cancelled." };
-      }
-    }
-    if (name === "ExitPlanMode") {
-      try {
-        const decision = await sink!.plan({ title: "Plan", text: String(input.plan ?? "") }, opts.signal);
-        if (decision.accepted) {
-          sink!.modeChanged?.("code");
-          return { behavior: "allow", updatedInput: input };
-        }
-        return { behavior: "deny", message: decision.note ? `The user wants changes to the plan: ${decision.note}` : "The user did not accept the plan. Keep planning." };
-      } catch {
-        return { behavior: "deny", message: "Plan review was cancelled." };
       }
     }
     if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
@@ -1449,7 +1437,7 @@ class ClaudeSession implements ProviderSession {
       } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
         this.streamTools.set(Number(event.index), block.id);
         this.turnTools.add(block.id);
-        if (block.name === "AskUserQuestion" || block.name === "ExitPlanMode") return;
+        if (block.name === "AskUserQuestion") return;
         const described = describeTool(block.name, {}, this.thread.cwd);
         sink.toolStart({ toolId: block.id, name: block.name, tool: toolKind(block.name), title: block.name.startsWith("mcp__") ? described.title : block.name, status: "pending", parentToolId: parent });
         if (!parent && /(^|__)page_show$/.test(block.name)) this.streamPageShows.set(Number(event.index), "");
@@ -1509,7 +1497,7 @@ class ClaudeSession implements ProviderSession {
       if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
         const name = block.name;
         this.turnTools.add(block.id);
-        if (name === "AskUserQuestion" || name === "ExitPlanMode") continue;
+        if (name === "AskUserQuestion") continue;
         const described = describeTool(name, block.input, this.thread.cwd);
         sink.toolStart({ toolId: block.id, name, tool: toolKind(name), title: described.title, detail: described.detail, input: block.input, paths: described.paths, status: "running", parentToolId: parent });
         sink.toolUpdate(block.id, { title: described.title, detail: described.detail, input: block.input, paths: described.paths, status: "running" });

@@ -35,7 +35,7 @@ import { arr, newId, str, type ActionOutcome, type DriveContext, type DriveOutco
  * both start a card. Keep the wording in step with the page's.
  */
 
-const FOLDER_MODES = new Set(["code", "plan"]);
+const FOLDER_MODES = new Set(["code"]);
 /** Cards one agent chat may take before the board starts a fresh one. */
 const MAX_CARDS_PER_AGENT = 3;
 /** How much of the card goes in a worker's prompt (a page's prompts are capped at 20000 characters). */
@@ -72,7 +72,8 @@ function workerOf(state: BoardState, id: string): Worker | undefined {
 
 /**
  * The worker's mode and rung (#719). Older worker settings named a mode beside the approval: code
- * with Ask first is Edits now, ask and board are the Board rung, plan plans first on its rung.
+ * with Ask first is Edits now, ask and board are the Board rung, and plan is code: workers have no
+ * plan gate (#687), so plan turns are left to the chat.
  */
 export function workerAccess(w: Worker): { mode: ThreadMode; approval: ApprovalPolicy } {
   return settleAccess(str(w.mode) || "code", str(w.approval) || "auto");
@@ -86,7 +87,7 @@ export function workerInstructions(state: BoardState, w: Worker): string {
   return [str(settingsOf(state).workerInstructions).trim(), str(w.instructions).trim()].filter(Boolean).join("\n\n");
 }
 
-/** Set up enough to start: a name, instructions, and a folder for Code and Plan. */
+/** Set up enough to start: a name, instructions, and a folder from Edits up. */
 export function workerReady(state: BoardState, w: Worker): string | null {
   if (!str(w.name).trim()) return "needs a name";
   if (!workerInstructions(state, w)) return "needs instructions";

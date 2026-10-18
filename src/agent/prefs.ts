@@ -20,8 +20,6 @@ export type Prefs = {
    * model brings back its own; efforts and modelParams above are the last used per provider.
    */
   modelSettings: Record<string, ModelChoice>;
-  /** Plan first in new workspace threads ("plan"), or not ("code"). Older prefs could say "ask" or "board"; they read as "code". */
-  mode: ThreadMode;
   /** Approval rungs skipped by the cycle hotkey; still available in the access picker. Older prefs listed modes, which are dropped. */
   disabledModes: ApprovalPolicy[];
   /** The user's own modes (customModes.ts), shown under the built-in ones. */
@@ -85,7 +83,6 @@ export const DEFAULT_PREFS: Prefs = {
   efforts: {},
   modelParams: { cursor: { fast: "false" } },
   modelSettings: {},
-  mode: "code",
   disabledModes: [],
   customModes: [],
   customMode: null,
@@ -140,13 +137,13 @@ export function cleanDisabledModes(value: unknown): ApprovalPolicy[] {
 }
 
 /** Saved approval prefs with the old "ask" read as Edits and unknown values dropped. */
-export function cleanApprovals(saved: Partial<Prefs>): Pick<Prefs, "approval" | "approvals" | "mode"> {
+export function cleanApprovals(saved: Partial<Prefs>): Pick<Prefs, "approval" | "approvals"> {
   const approvals: Prefs["approvals"] = {};
   for (const [id, value] of Object.entries(saved.approvals ?? {})) {
     const approval = parseApproval(value);
     if (approval && ["claude", "cursor", "codex", "pi"].includes(id)) approvals[id as ProviderId] = approval;
   }
-  return { approval: parseApproval(saved.approval) ?? DEFAULT_PREFS.approval, approvals, mode: saved.mode === "plan" ? "plan" : "code" };
+  return { approval: parseApproval(saved.approval) ?? DEFAULT_PREFS.approval, approvals };
 }
 
 /** Same as dirKey in public/agent.js, which looks up these keys for new threads. */
@@ -228,7 +225,6 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
   }
   const scoped = thread.scope.kind === "page" || thread.scope.kind === "folder";
   if ((patch.mode || patch.customMode !== undefined) && !scoped) {
-    next.mode = thread.mode === "plan" ? "plan" : "code";
     next.customMode = thread.custom?.id ?? null;
   }
   // Page and folder threads start on Board whatever was picked last: only a workspace rung, or an editing one, is kept.

@@ -81,8 +81,7 @@ export type QuestionRequest = { title?: string; questions: QuestionSpec[]; displ
 
 export type QuestionAnswer = { answers: Record<string, string[]>; notes?: Record<string, string> } | { skipped: true; reason?: string };
 
-export type PlanRequest = { title?: string; text: string };
-
+/** The user's answer to a plan offered in the chat (#721). */
 export type PlanDecision = { accepted: boolean; note?: string };
 
 /** Callbacks a provider uses to report a run. All of them are cheap and synchronous except the ones that wait on the user. */
@@ -98,14 +97,11 @@ export type RunSink = {
   beforeWrite(toolId: string, path: string): Promise<void>;
   approval(req: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision>;
   question(req: QuestionRequest, signal?: AbortSignal): Promise<QuestionAnswer>;
-  plan(req: PlanRequest, signal?: AbortSignal): Promise<PlanDecision>;
   todos(todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>): void;
   usage(usage: Usage): void;
   notice(level: "info" | "warn" | "error", text: string): void;
   commands(commands: SlashCommand[]): void;
   title(title: string): void;
-  /** The provider switched its own mode (plan accepted, etc.). */
-  modeChanged?(mode: Thread["mode"]): void;
   /** A message handed to `steer` reached the model inside this turn. */
   steered?(steerId: string): void;
   /** The provider's latest transcript entry in this turn (Claude's chain uuid), where a later rewind can fork. */

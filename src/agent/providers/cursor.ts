@@ -166,7 +166,7 @@ export function cursorAutoReview(thread: Pick<Thread, "mode" | "approval">): boo
 
 /** Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be asked. */
 export function wantsHostShell(thread: Pick<Thread, "mode" | "approval" | "custom">, enabled: boolean): boolean {
-  return enabled && !modeOff(thread, "shell") && (thread.mode === "code" || thread.mode === "plan") && thread.approval === "edits";
+  return enabled && !modeOff(thread, "shell") && thread.mode === "code" && thread.approval === "edits";
 }
 
 export class CursorProvider implements AgentProvider {
@@ -538,7 +538,6 @@ class CursorSession implements ProviderSession {
   private lastUsage: Usage | null = null;
   private tools = new Map<string, string>();
   /** A plan the agent wrote this turn (Plan mode), offered to the user when the turn ends. */
-  private plan: string | null = null;
   /** Host shell calls seen in the stream (call id to command), and whether a run has been matched to each. */
   private shellCalls = new Map<string, { command: string; taken: boolean; exitCode?: number | null }>();
   /** Host shell commands waiting on approval or running; cancel stops them. */
@@ -676,7 +675,7 @@ class CursorSession implements ProviderSession {
     return {
       model: modelSelection(t, models),
       ...toolLists(t, hostShell),
-      mode: t.mode === "plan" ? "plan" : "agent",
+      mode: "agent",
       local: {
         cwd: this.cwd(),
         store: await store(),
@@ -809,7 +808,6 @@ class CursorSession implements ProviderSession {
     this.cancelled = false;
     this.tools.clear();
     this.shellCalls.clear();
-    this.plan = null;
     if (this.lastUsage) sink.usage(this.lastUsage);
     try {
       if (this.warming) await this.warming;
@@ -828,7 +826,7 @@ class CursorSession implements ProviderSession {
         { text, images: input.images.map((image) => ({ data: image.data, mimeType: image.mimeType })) },
         {
           model: modelSelection(this.thread, models),
-          mode: this.thread.mode === "plan" ? "plan" : "agent",
+          mode: "agent",
           onDelta: ({ update }) => this.onDelta(update, sink),
           ...(this.resumed ? { local: { force: true } } : {}),
         }
@@ -843,10 +841,6 @@ class CursorSession implements ProviderSession {
       await this.addCost(agent, sink);
       if (result.status === "cancelled" || this.cancelled) return this.endTurn({ status: "cancelled" });
       if (result.status === "error") return this.endTurn({ status: "error", error: result.error?.message || "Cursor run failed" });
-      if (this.plan && this.thread.mode === "plan") {
-        // The host continues in Code mode when the user accepts.
-        await sink.plan({ title: "Plan", text: this.plan }).catch(() => undefined);
-      }
       return this.endTurn({ status: "done" });
     } catch (err) {
       if (this.cancelled) return this.endTurn({ status: "cancelled" });
@@ -956,10 +950,6 @@ class CursorSession implements ProviderSession {
     const call = isPlainRecord(raw) ? raw : {};
     const type = typeof call.type === "string" ? call.type : "tool";
     const args = isPlainRecord(call.args) ? call.args : {};
-    if (type === "createPlan") {
-      if (finished && typeof args.plan === "string") this.plan = args.plan;
-      return;
-    }
     if (type === "updateTodos" && Array.isArray(args.todos)) {
       sink.todos(
         args.todos.filter(isPlainRecord).map((todo) => ({

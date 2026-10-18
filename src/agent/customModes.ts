@@ -5,8 +5,8 @@ import { parseWebAccess } from "./webAccess.js";
 /**
  * Custom modes (#271): a saved preset with a highest approval rung (#719). The rung keeps its own
  * behaviour (sandbox, folder rule); the custom mode only takes things away from it (tool groups,
- * MCP servers), adds instructions, and sets the rung (at most its highest), plan first and web a
- * thread starts with.
+ * MCP servers), adds instructions, and sets the rung (at most its highest), web, and whether the
+ * first message is a plan turn (#721) for a thread it starts.
  *
  * A thread keeps a copy of what its mode takes away (Thread.custom), so providers and the prompt read
  * it from the thread, and a deleted mode leaves its threads as limited as they were.
@@ -27,7 +27,7 @@ export type CustomMode = {
   description?: string;
   /** The highest rung a thread in this mode may use. Older modes named a built-in mode here; cleanCustomModes reads them as rungs. */
   base: ApprovalPolicy;
-  /** Threads start planning first (older modes based on Plan). */
+  /** A thread's first message in this mode is a plan turn (#721; older modes based on Plan). */
   plan?: boolean;
   /** Tool groups the mode turns off. */
   off: ModeCapability[];

@@ -10,7 +10,7 @@ import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
-import { isPlainRecord, isProviderId, parseApproval, parseMode } from "./types.js";
+import { isPlainRecord, isProviderId, parseApproval, parseMode, wantsPlan } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, setServerEnabled, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey, type ThreadPatch } from "./prefs.js";
@@ -475,7 +475,8 @@ export function agentRouter(host: AgentHost): express.Router {
         images.push(...snapshot.images);
       }
       // The board sends from: "page" for messages a page's own code sent through board.agent.
-      return host.send(req.params.id, { text, images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}) });
+      // plan: the composer's Plan chip (#721); false drops a planNext the user turned off.
+      return host.send(req.params.id, { text, images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}), ...(typeof body.plan === "boolean" ? { plan: body.plan } : {}) });
     })
   );
 
@@ -661,10 +662,10 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.post(
-    "/plans/:requestId",
+    "/threads/:id/plans/:itemId",
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
-      host.resolvePlan(req.params.requestId, { accepted: body.accepted === true, note: typeof body.note === "string" ? body.note : undefined });
+      host.resolvePlan(req.params.id, req.params.itemId, { accepted: body.accepted === true, note: typeof body.note === "string" ? body.note : undefined });
       return { ok: true };
     })
   );
@@ -835,9 +836,10 @@ function threadPatch(body: Record<string, unknown>): ThreadPatch {
   if (isPlainRecord(body.modelParams)) {
     patch.modelParams = Object.fromEntries(Object.entries(body.modelParams).map(([k, v]) => [k, String(v)]));
   }
-  // The rung decides (#719); "mode" still turns plan first on and off, and older values (ask, board) are read as rungs.
+  // The rung decides (#719); older modes (ask, board) are read as rungs, and "plan" makes the next message a plan turn (#721).
   const mode = parseMode(body.mode);
   if (mode) patch.mode = mode;
+  if (wantsPlan(body.mode)) patch.planNext = true;
   if (typeof body.customMode === "string" && body.customMode) patch.customMode = body.customMode;
   else if (body.customMode === null) patch.customMode = null;
   const approval = parseApproval(body.approval);

@@ -393,7 +393,7 @@ export async function fetchCodexPlanUsage(): Promise<unknown> {
 
 /** Read-only, Board and Plan stay read-only; Full access drops the sandbox; otherwise workspace-write. */
 export function sandboxFor(thread: Pick<Thread, "mode" | "approval" | "custom">): SandboxMode {
-  if (thread.mode === "plan" || thread.mode === "board" || readsOnly(thread.approval) || codexReadOnly(thread)) return "read-only";
+  if (thread.mode === "board" || readsOnly(thread.approval) || codexReadOnly(thread)) return "read-only";
   if (thread.approval === "full") return "danger-full-access";
   return "workspace-write";
 }
@@ -918,7 +918,6 @@ export class CodexSession implements ProviderSession {
   /** How much of each streaming item we already sent, so updates become deltas. */
   private streamed = new Map<string, number>();
   private tools = new Set<string>();
-  private plan: string | null = null;
   private reviewNotices = new Set<string>();
   private bridge: Pick<McpBridge, "servers" | "cwd" | "tools" | "close"> | null = null;
   /** Bridged user tools by dynamic tool name. */
@@ -1098,7 +1097,6 @@ export class CodexSession implements ProviderSession {
     this.tools.clear();
     this.outputs.clear();
     this.reviewNotices.clear();
-    this.plan = null;
     this.turnUsage = null;
     this.runUsage = {};
     this.reviewedDenials.clear();
@@ -1229,11 +1227,7 @@ export class CodexSession implements ProviderSession {
     if (this.finishTurn && !this.nativeTurnCompleted) this.activeTurn = result.turn.id;
     for (const id of this.steers.keys()) this.sendSteer(id);
     if (this.cancelled && this.activeTurn) await this.interrupt();
-    const outcome = await done;
-    if (outcome.status === "done" && this.plan && this.thread.mode === "plan") {
-      await sink.plan({ title: "Plan", text: this.plan }).catch(() => undefined);
-    }
-    return outcome;
+    return await done;
   }
 
   steer(input: SteerInput): string {
@@ -1582,7 +1576,6 @@ export class CodexSession implements ProviderSession {
       case "agent_message":
         if (!this.streamed.has(item.id)) sink.breakBlock();
         this.stream(item.id, item.text, "text", sink);
-        if (finished && this.thread.mode === "plan" && item.text.trim()) this.plan = item.text;
         return;
       case "reasoning":
         if (!this.streamed.has(item.id)) sink.breakBlock();
