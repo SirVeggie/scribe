@@ -134,6 +134,16 @@ test("Kanban columns load batches independently and retain them through live upd
     assert.equal(await todo.locator('.card').first().getByText('New task at top', { exact: true }).count(), 1);
     assert.equal(await page.locator('.column[data-col="todo"] .col-count').innerText(), '56');
     assert.equal(await todo.locator('.card').count(), 55);
+    // The dragged card is now just beyond the retained batch, not lost or awaiting a paint.
+    assert.equal(await todo.locator('[data-id="c1"]').count(), 0);
+    const expectedIds = await page.evaluate(() => (window as any).scribe.state.cards
+      .filter((c: any) => c.col === 'todo').map((c: any) => c.id));
+    assert.equal(expectedIds.length, 56);
+    assert.equal(expectedIds.at(-1), 'c1');
+    await todo.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await waitCount('todo', 56);
+    assert.deepEqual(await todo.locator('.card').evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.id)), expectedIds);
+    assert.equal(await other.locator('.card').count(), 21);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
