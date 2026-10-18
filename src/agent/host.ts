@@ -1176,6 +1176,22 @@ export class AgentHost {
   watchPageThread(id: string, input: RunInput): ThreadView {
     const thread = this.requireThread(id);
     if (thread.scope?.kind !== "page" || !thread.scope.ref) throw new Error("Only a page's own threads can be handed over as a run.");
+    // One-card Run (including older saved boards) starts a fresh chat. Capture the previous
+    // holder before worker_claim replaces card.thread, so its unfinished work isn't stranded.
+    if (wantsWorktree(thread) && !thread.worktree && !thread.retryWorktreeFrom && !this.loadTurns(id).length &&
+        typeof input.tag === "string" && /^(worker|solo):/.test(input.tag) && isPlainRecord(input.data) && !input.data.ask) {
+      const page = store.get(thread.scope.ref);
+      const cardNum = input.data.card;
+      const card = page && store.drives(page) && Array.isArray(page.state.cards)
+        ? page.state.cards.find((c) => isPlainRecord(c) && c.num === cardNum) : undefined;
+      const previous = isPlainRecord(card) && typeof card.thread === "string" ? this.threads.get(card.thread) : undefined;
+      const wt = previous && openWorktree(previous);
+      if (previous && previous.id !== id && previous.scope.kind === "page" && previous.scope.ref === thread.scope.ref &&
+          wt && thread.cwd && workspaceKey(wt.home) === workspaceKey(thread.cwd)) {
+        thread.retryWorktreeFrom = previous.id;
+        this.db.saveThread(thread);
+      }
+    }
     this.pageRuns.register(id, thread.scope.ref, input);
     return this.view(this.requireThread(id));
   }
@@ -4630,6 +4646,45 @@ export class AgentHost {
     const home = this.requireThread(threadId).cwd!;
     const repo = await findRepo(home);
     let thread = this.requireThread(threadId);
+    if (thread.retryWorktreeFrom) {
+      const previous = this.threads.get(thread.retryWorktreeFrom);
+      const wt = previous && openWorktree(previous);
+      if (previous && wt) {
+        if (previous.scope.kind !== "page" || previous.scope.ref !== thread.scope.ref ||
+            workspaceKey(wt.home) !== workspaceKey(home) || !repo || workspaceKey(wt.repo) !== workspaceKey(repo)) {
+          throw new Error(`The earlier chat's worktree at ${wt.path} belongs to a different workspace. Its work is kept there.`);
+        }
+        const idle = () => {
+          for (const owner of [previous, ...this.sharers(previous.id, wt)]) {
+            if (owner.id === threadId) continue;
+            const info = this.runInfo(owner.id);
+            if (info.exists && (info.running || (info.run && info.run.phase !== "ended"))) {
+              throw new Error(`The earlier worktree at ${wt.path} is still in use by “${owner.title}”. Retry once that chat is idle.`);
+            }
+          }
+        };
+        idle();
+        const status = await worktreeStatus(wt);
+        if (!status.exists) throw new Error(`The earlier worktree at ${wt.path} is missing. Check that worktree before retrying.`);
+        // Git yields: a helper or the earlier chat may have started or closed the worktree meanwhile.
+        idle();
+        if (openWorktree(this.requireThread(previous.id))?.path !== wt.path) {
+          throw new Error(`The earlier worktree at ${wt.path} changed while preparing the retry. Retry again.`);
+        }
+        thread = { ...this.requireThread(threadId), worktree: { ...wt, ahead: status.ahead, dirty: Boolean(status.dirty.length) }, cwd: path.join(wt.path, path.relative(wt.repo, wt.home)) };
+        delete thread.retryWorktreeFrom;
+        this.threads.set(threadId, thread);
+        this.db.saveThread(thread);
+        const files = status.dirty.slice(0, 20).map((file) => `- ${file}`).join("\n");
+        const note = `Reusing the earlier chat's worktree at ${wt.path}, on branch ${wt.branch}, with ${status.ahead} unmerged commit(s) and ${status.dirty.length} uncommitted file(s).`;
+        this.addItem(threadId, turnId, { kind: "notice", level: "info", text: note });
+        this.emitThread(threadId);
+        return { thread, reopened: `<context>\n${note}\nThis is work left by the earlier attempt on this card. Inspect git status and the diff, keep the changes that are still needed, and continue from them. Read the card again before editing.${files ? `\nUncommitted files:\n${files}${status.dirty.length > 20 ? "\n(additional files omitted; see git status)" : ""}` : ""}\n</context>\n\n` };
+      }
+      // The previous branch was merged or deliberately closed before this turn started.
+      delete thread.retryWorktreeFrom;
+      this.db.saveThread(thread);
+    }
     if (!repo) {
       thread = { ...thread, useWorktree: false };
       this.threads.set(threadId, thread);

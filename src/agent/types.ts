@@ -201,6 +201,8 @@ export type Thread = {
   /** Work in a git worktree of its own. The worktree is made on the first message. */
   useWorktree?: boolean;
   worktree?: ThreadWorktree | null;
+  /** A replacement board worker's first turn reuses this earlier chat's open worktree (#702). */
+  retryWorktreeFrom?: string;
   /** Provider session id used to resume. */
   nativeId: string | null;
   /**
