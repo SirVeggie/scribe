@@ -4972,7 +4972,9 @@
   var STEP_LEASE_MS = 15 * 60 * 1000;
   /** Newest lines kept in settings.workerLog (the logs action reads the same cap). */
   var MAX_WORKER_LOG = 200;
-  var MODE_LABELS = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
+  /** The access ladder (#719), lowest first; the worker panel's fallback when Scribe lists none. */
+  var RUNG_LABELS = { readonly: "Read-only", board: "Board", edits: "Edits", auto: "Auto review", full: "Full access" };
+  var READ_RUNGS = { readonly: true, board: true };
   var WORKER_COLORS = ["#f59e0b", "#22d3ee", "#a78bfa", "#34d399", "#f472b6", "#f87171", "#6ea8ff", "#94a3b8"];
   var agentOptions = null;
   /** Thread id -> { status, queued, run, gone? } as Scribe last reported it. */
@@ -5062,7 +5064,18 @@
   }
   /** Scribe (or a window with an older copy of the board) is starting the worker's next chat. */
   function stepLeased(w) { return Boolean(w && w.step && Number(w.step.at) > Date.now() - STEP_LEASE_MS); }
-  function workerMode(w) { return str(w && w.mode) || "code"; }
+  /**
+   * The worker's rung (#719). Older settings named a mode beside the approval: ask and board are the
+   * Board rung, code with Ask first is Edits. Same as workerAccess in src/actions/kanbanWorkers.ts.
+   */
+  function workerRung(w) {
+    var mode = str(w && w.mode), a = str(w && w.approval);
+    if (a === "ask") a = "edits";
+    if (mode === "ask" || mode === "board") return a === "readonly" ? "readonly" : "board";
+    return RUNG_LABELS[a] ? a : "auto";
+  }
+  /** How the worker's chats run: board on the reading rungs, plan when it plans first, else code. */
+  function workerMode(w) { return READ_RUNGS[workerRung(w)] ? "board" : str(w && w.mode) === "plan" ? "plan" : "code"; }
   /** Fixed board defaults: never inherit the last settings used in a chat. */
   function workerDefaults(opts, provider) {
     var available = ((opts && opts.providers) || []).filter(function (p) { return p.available; });
@@ -5351,7 +5364,7 @@
     var parts = [modelLabel(w)];
     if (w.effort) parts.push(str(w.effort));
     if (w.fast === "true") parts.push("fast");
-    parts.push(MODE_LABELS[mode] || mode);
+    parts.push(RUNG_LABELS[workerRung(w)] + (mode === "plan" ? " · plan first" : ""));
     if (str(w.customMode)) parts.push("custom mode");
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (FOLDER_MODES[mode] && w.worktree) parts.push("worktree");
@@ -5597,14 +5610,14 @@
   function workerOpts(w, c) {
     var mode = workerMode(w);
     var opts = Object.assign(workerDefaults(agentOptions, str(w.provider)), { title: ((workerName(w) || "Agent") + " · #" + c.num + " " + c.title).slice(0, 120), mode: mode });
-    ["model", "effort", "show", "web", "approval"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    ["model", "effort", "show", "web"].forEach(function (k) { if (str(w[k])) opts[k] = w[k]; });
+    opts.approval = workerRung(w);
     if (w.fast === "true") opts.fast = true;
     else if (w.fast === "false") opts.fast = false;
     else if (str(w.fast)) { delete opts.fast; opts.modelParams = { fast: str(w.fast) }; }
     if (str(w.customMode)) opts.customMode = w.customMode;
     if (FOLDER_MODES[mode]) {
       opts.cwd = w.cwd;
-      if (w.approval) opts.approval = w.approval;
       if (w.worktree) opts.worktree = true;
     }
     opts.helpers = w.helpers !== false;
@@ -5832,7 +5845,7 @@
     render();
     var folder = FOLDER_MODES[workerMode(w)];
     var allowed = typeof scribe.agent.allow === "function"
-      ? scribe.agent.allow({ mode: workerMode(w), cwd: folder ? str(w.cwd) : "", approval: str(w.approval) || "auto" })
+      ? scribe.agent.allow({ mode: workerMode(w), cwd: folder ? str(w.cwd) : "", approval: workerRung(w) })
       : Promise.resolve({ ok: true });
     allowed.then(function (r) {
       if (!r || !r.ok) throw new Error(launchError(r).replace(/^Could not launch: /, ""));
@@ -6558,18 +6571,30 @@
         fast.description);
     }
     var mode = workerMode(w);
-    row("Mode", enhanced(workerSelect((opts.modes || []).map(function (m) { return [m.id, m.label]; }), mode, "Mode", function (v) {
-      // A custom mode belongs to the mode it is built on.
-      set({ mode: v, customMode: "" });
+    var rung = workerRung(w);
+    var rungs = (opts.approvals || []).length ? opts.approvals : Object.keys(RUNG_LABELS).map(function (id) { return { id: id, label: RUNG_LABELS[id] }; });
+    row("Access", enhanced(workerSelect(rungs.map(function (a) { return [a.id, a.label]; }), rung, "Access", function (v) {
+      // The rung decides the mode: board on the reading rungs; plan first stays on above them.
+      set({ approval: v, mode: READ_RUNGS[v] ? "board" : mode === "plan" ? "plan" : "code" });
       rebuild();
-    })), ((opts.modes || []).filter(function (m) { return m.id === mode; })[0] || {}).detail);
-    var customs = (opts.customModes || []).filter(function (m) { return m.base === mode; });
+    })), (rungs.filter(function (a) { return a.id === rung; })[0] || {}).detail);
+    if (!READ_RUNGS[rung]) {
+      var plan = el("label", "check");
+      var planBox = el("input", "switch");
+      planBox.type = "checkbox";
+      planBox.checked = mode === "plan";
+      planBox.addEventListener("change", function () { set({ mode: planBox.checked ? "plan" : "code" }); });
+      plan.appendChild(planBox);
+      plan.appendChild(document.createTextNode("Plan first"));
+      row("", plan);
+    }
+    var customs = opts.customModes || [];
     if (customs.length || str(w.customMode)) {
       var customIds = customs.map(function (m) { return m.id; });
       var customList = [["", "None"]].concat(customs.map(function (m) { return [m.id, m.label]; }));
       if (str(w.customMode) && customIds.indexOf(str(w.customMode)) < 0) customList.push([str(w.customMode), "Deleted mode"]);
       row("Custom mode", enhanced(workerSelect(customList, str(w.customMode), "Custom mode", function (v) { set({ customMode: v }); })),
-        "One of your own modes from Agent settings that builds on this mode: it takes tools away from the agent and adds its instructions.");
+        "One of your own modes from Agent settings: it caps the rung, takes tools away from the agent and adds its instructions.");
     }
     if (FOLDER_MODES[mode]) {
       var folderRow = el("div", "row");
@@ -6598,10 +6623,6 @@
       wt.appendChild(wtBox);
       wt.appendChild(document.createTextNode("Use git worktree"));
       row("", wt);
-      if (!compact) {
-        var approvals = opts.approvals || [];
-        row("Approval", enhanced(workerSelect([["", "Default" + (defaults.approval ? " (" + labelOf(approvals, defaults.approval) + ")" : "")]].concat(approvals.map(function (a) { return [a.id, a.label]; })), str(w.approval), "Approval", function (v) { set({ approval: v }); })));
-      }
     }
     var webModes = { on: "Full", limited: "Limited", off: "Off" };
     var webOptions = [["", "Default" + (webModes[defaults.web] ? " (" + webModes[defaults.web] + ")" : "")]].concat(Object.keys(webModes).map(function (k) { return [k, webModes[k]]; }));

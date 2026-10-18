@@ -457,7 +457,7 @@ render();
 A page can start Scribe's own agent chat and read its replies with `scribe.agent`. Use it for buttons like "Summarise", "Break this card down" or "Draft a reply", where the page builds the prompt from its state and shows the answer itself.
 
 ```js
-const { ok, threadId, error } = await scribe.agent.start(prompt, { title: "Card #12", mode: "board", show: "dock" });
+const { ok, threadId, error } = await scribe.agent.start(prompt, { title: "Card #12", approval: "board", show: "dock" });
 await scribe.agent.send(threadId, "Shorter, please.");     // queued if the thread is still working
 const { reply } = await scribe.agent.wait(threadId);       // resolves when the thread is idle (default 10 min)
 const { threads } = await scribe.agent.threads();          // this page's threads, newest first
@@ -470,14 +470,14 @@ await scribe.agent.merge(threadId);                        // idle Code thread: 
 await scribe.agent.card(threadId, { card: 12, title, text }); // Kanban: a card comment into the running turn (steered, else queued); { delivered: null } when idle
 await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban Continue: the thread reads the card again and goes on (other pages' threads need a click)
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
-const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, modes, customModes: [{ id, label, detail, base }] (start({ mode: base, customMode: id })), approvals, defaults }
+const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, customModes: [{ id, label, detail, base }] (start({ customMode: id }); base is its highest rung), approvals: the rungs, defaults }
 const unsubscribe = scribe.agent.onLimits((limits) => paintLimits(limits)); // updates after limits(); call unsubscribe() to stop listening
 const { ok: limitsOk, limits } = await scribe.agent.limits(); // provider plan usage; also subscribes this page to updates
 if (limitsOk) paintLimits(limits);                         // render the initial snapshot
 const { path } = await scribe.agent.pickFolder();          // the user picks a folder (inside a click)
 const { actions } = await scribe.agent.actions();         // the template's right-click agent actions: [{ id, label, description, selection, context }]
 await scribe.agent.runAction("triage-card", { context: { card: "#12 Fix login" } }); // run one from the page's own menu (inside a click)
-await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
+await scribe.agent.start(prompt, { cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
 ```
 
 `scribe.agent.limits()` resolves to `{ ok, limits }`, where `limits` is keyed by provider. Each report has `at` (epoch milliseconds) and `windows` (`id`, `label`, `utilization` as a fraction where `1` means 100% used, optional `resetsAt` in epoch milliseconds), and may include `availability`, `detail`, `ordinaryUsageAllowed`, and `overage`. Missing providers have no report.
@@ -489,7 +489,7 @@ await scribe.agent.start(prompt, { mode: "code", cwd: path, approval: "edits", p
 For pages that hand work to agents and act on the result (a board's workers, a queue of jobs, a batch of reviews), don't write your own wait/retry/merge loop. Hand the thread to Scribe as a **run**, and Scribe sees it through in the daemon, even while no window shows the page: when a plan usage limit stops the agent's turn, it waits until the provider confirms the reset and sends the chat on (`resumePrompt`); when the turn is done, it merges the worktree branch (Code threads with `worktree: true`), and asks the agent to rebase and fix a branch that won't merge (twice) before giving up. Fixes to that lifecycle ship with Scribe, so they reach every page that uses it, customized templates included. The page only decides what to start and what an outcome means for its own data.
 
 ```js
-const { threadId } = await scribe.agent.start(prompt, { mode: "code", cwd, worktree: true,
+const { threadId } = await scribe.agent.start(prompt, { approval: "auto", cwd, worktree: true,
   run: { tag: "job", data: { job: 7 }, resumePrompt: "Your usage limit reset: check job #7 and go on." } });
 scribe.agent.onChange((t) => {                           // t.run: { phase: "running" | "waiting" | "ended", wait?: { until, count }, fixes, tag, data, outcome? }
   if (t.run?.phase !== "ended") return;
@@ -503,15 +503,15 @@ await scribe.agent.watch(threadId, { data: { job: 7 }, after: 0 }); // hand over
 - `run` options (on `start`, or `watch`): `tag` and `data` (small JSON, at most 4000 characters) come back as given; `merge: false` skips the merge; `resumePrompt` is what the chat gets after a limit; `after` (`watch` only, default now) is when the turns that count start, so hand a thread over before sending it the message that starts its work.
 - Outcomes: `done` (`merged: true` when a branch was merged, `held` when the template's actions kept it unmerged), `failed` / `cancelled` (the turn failed or was stopped; `fixes > 0` means it was the agent's merge fix), `limit` (it kept running out of usage), `merge_failed` (`fixable: false` for problems no agent can fix, like the main checkout being on another branch).
 - Each step also logs an `agent_run` event on the page (`{ thread, kind: "limit" | "resume" | "merge_fix" | "end", text, tag, data, phase, outcome }`), so `page_wait` can wait on it. Ended runs stay on the thread until the page releases them (a week at most), so a page that was closed still sees how they ended.
-- Kanban boards go further: Scribe also picks each worker's next card and acts on the outcome (the Kanban action set's `drive` hook), so their workers go on with no window open. Their ▶ calls `scribe.agent.allow({ mode, cwd, approval })` after the click, which asks the user for what starting chats without a click needs (`agent.unattended`, and the folder for Code and Plan).
+- Kanban boards go further: Scribe also picks each worker's next card and acts on the outcome (the Kanban action set's `drive` hook), so their workers go on with no window open. Their ▶ calls `scribe.agent.allow({ cwd, approval })` after the click, which asks the user for what starting chats without a click needs (`agent.unattended`, and the folder at that rung).
 
-- Threads default to Pages mode (`mode: "ask"` for read-only Q&A): page tools and the web, no files or shell. Unset `provider` / `model` / `effort` / `approval` / `web` / `fast` follow the user's defaults; take ids from `options()`. Cursor models expose a `fast` param; pass `fast: true` (or `modelParams: { fast: "true" }`) to turn it on.
+- `approval` is the thread's rung: `"readonly"` (read files and pages), `"board"` (the default: also create and change pages), `"edits"` (also edit files: workspace edits accepted, commands ask), `"auto"` (a classifier answers), `"full"`. From Edits up it needs a `cwd`. `mode: "plan"` plans first; older pages' `mode: "board"` / `"ask"` mean Board and `"code"` an editing rung (Auto review without an `approval`). Unset `provider` / `model` / `effort` / `approval` / `web` / `fast` follow the user's defaults; take ids from `options()`. Cursor models expose a `fast` param; pass `fast: true` (or `modelParams: { fast: "true" }`) to turn it on.
 - A page only sees and drives **its own** threads (scoped to that page). It cannot reach other threads, except to `show` one by id, which tells the page nothing about it.
 - `show: "dock"` or `"sidebar"` opens the thread in that chat; omit it to run quietly. The tab still shows its working dot.
 - What else a page may do is the user's call, per page (tab menu → Permissions…). Scribe asks the user when a call needs a permission the page doesn't have yet, so `start`, `send`, and `stop` may take as long as the user does. A refusal is `{ ok: false, error: "denied", permission }`; show it on the page instead of retrying in a loop.
   - `agent.chat` (allowed by default): `start` / `send` / `stop` right after a click or key press on the page. Call them first in the handler, before other `await`s.
   - `agent.unattended` (asks): the same from the page's own code, e.g. in `scribe.onChange` when a card moves. Only while the page is loaded in a Scribe window, and every open window runs the page's code: claim the work in state first (an `update` with a `test` op) so two windows don't both start it.
-  - `agent.workspace` (asks): `mode: "code"` or `"plan"` with a `cwd`, approved per folder and approval policy. `pickFolder()` only picks; Scribe still asks before the first thread there.
+  - `agent.workspace` (asks): any thread with a `cwd`, approved per folder and rung. `pickFolder()` only picks; Scribe still asks before the first thread there.
   - `scribe.permissions.request("agent.unattended")` (inside a click) asks up front, e.g. from a settings dialog; `scribe.permissions.query()` reads `[{ id, label, value, folders? }]`.
 - Agents can't read or change these grants, and an agent changing a page's HTML (or its template) resets the risky ones to Ask: tell the user to re-approve after you edit such a page.
 - Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.

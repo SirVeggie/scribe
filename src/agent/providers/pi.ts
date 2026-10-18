@@ -114,7 +114,7 @@ export function splitPiModel(id: string): { provider: string; model: string } | 
 /** Pi's built-in tools for a thread's mode; Plan starts read-only and gets the rest when its plan is accepted. Pages reads only with a workspace. */
 export function builtinTools(mode: Thread["mode"], off: string[] = [], pagesReads = false): string[] {
   if (mode === "board") return pagesReads ? READ_TOOLS : [];
-  if (mode === "ask" || mode === "plan") return READ_TOOLS;
+  if (mode === "plan") return READ_TOOLS;
   // A custom mode's tool groups (piToolsOff) come off the code set.
   return CODE_TOOLS.filter((name) => !off.includes(name));
 }

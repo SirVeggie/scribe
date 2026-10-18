@@ -636,7 +636,9 @@ export class BoardStore extends EventEmitter {
     name: string,
     args: unknown,
     caller: ActionCaller,
-    thread?: ActionContext["thread"]
+    thread?: ActionContext["thread"],
+    /** A Read-only chat's call (#719): an action that would change the page is refused. */
+    readOnly = false
   ): { result: unknown; stateRevision: number; tab: Tab } {
     const located = this.locate(idOrKey);
     if (!located) {
@@ -660,6 +662,9 @@ export class BoardStore extends EventEmitter {
       values: tab.templateValues ?? {},
       ...(thread ? { thread } : {}),
     });
+    if (readOnly && (outcome.ops.length || outcome.events?.length)) {
+      throw new Error(`"${name}" changes the page, and this thread is on the Read-only rung: it can read pages but not change them. Ask the user to move it to Board if it should.`);
+    }
     if (outcome.ops.length) {
       const write = this.writeState(tab.id, { ops: outcome.ops, actor: actorFromCaller(caller), byUser: caller.by === "user" });
       if (!write.ok) {

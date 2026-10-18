@@ -479,7 +479,7 @@ export function ownContext(thread: Pick<Thread, "provider" | "mode" | "cwd">, op
         delivery: "Appended to Claude Code's own system prompt.",
         mcpDelivery: "Passed to Claude Code as MCP servers; its own MCP config is left out.",
         loads: [
-          "Claude Code's system prompt and its built-in tools" + (pages ? (ws ? " (Pages mode: Read, Grep, Glob, web, Skill and TodoWrite)" : " (Pages mode: web, Skill and TodoWrite only)") : thread.mode === "ask" ? " (Ask mode: Read, Grep, Glob, web, Skill and TodoWrite)" : ""),
+          "Claude Code's system prompt and its built-in tools" + (pages ? (ws ? " (Pages mode: Read, Grep, Glob, web, Skill and TodoWrite)" : " (Pages mode: web, Skill and TodoWrite only)") : ""),
           pages && !ws ? "User settings only (~/.claude): CLAUDE.md, skills, permissions" : "User, project and local settings: CLAUDE.md files, skills, agents, permissions",
           opts.claudeHooks ? "Hooks from settings files and plugins" : "No hooks from settings files or plugins (off in Agent settings)",
         ],

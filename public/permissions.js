@@ -5,9 +5,11 @@
  * Permissions… dialog. Pages never reach the routes behind it.
  */
 (() => {
+  /** The access ladder (#719), lowest first. Older grants said "ask" (Ask first), now Edits. */
   const APPROVALS = [
-    { id: "ask", label: "Ask first" },
-    { id: "edits", label: "Auto-edit" },
+    { id: "readonly", label: "Read-only" },
+    { id: "board", label: "Board" },
+    { id: "edits", label: "Edits" },
     { id: "auto", label: "Auto review" },
     { id: "full", label: "Full access" },
   ];
@@ -39,7 +41,7 @@
   }
 
   function approvalLabel(id) {
-    return APPROVALS.find((a) => a.id === id)?.label || id;
+    return APPROVALS.find((a) => a.id === (id === "ask" ? "edits" : id))?.label || id;
   }
 
   function el(tag, cls, text) {
@@ -94,7 +96,7 @@
     if (def.perFolder) {
       const where = el("dl", "permission-ask-where");
       where.append(el("dt", "", "Folder"), el("dd", "permission-path", need.folder || "?"));
-      where.append(el("dt", "", "Approval"), el("dd", "", approvalLabel(need.approval || "ask")));
+      where.append(el("dt", "", "Approval"), el("dd", "", approvalLabel(need.approval || "readonly")));
       body.append(where);
     }
     body.append(el("p", "permission-ask-note", "You can change this later from the tab menu: Permissions…"));
@@ -132,7 +134,7 @@
   async function remember(tab, def, need, answer) {
     if (answer === "allow" && def.perFolder) {
       const folders = (def.folders || []).filter((f) => f.path.toLowerCase() !== String(need.folder).toLowerCase());
-      folders.push({ path: need.folder, approval: need.approval || "ask" });
+      folders.push({ path: need.folder, approval: need.approval || "readonly" });
       await request("PUT", tab.id, "", { perm: def.id, value: def.value === "deny" ? "ask" : def.value, folders });
       return;
     }
@@ -271,7 +273,7 @@
           remove.addEventListener("click", () => save({ perm: p.id, value: value, folders: others() }));
           line.append(
             el("span", "permission-path", folder.path),
-            selectOf(APPROVALS, folder.approval, `Approval in ${folder.path}`, (approval) =>
+            selectOf(APPROVALS, folder.approval === "ask" ? "edits" : folder.approval, `Approval in ${folder.path}`, (approval) =>
               save({ perm: p.id, value: value, folders: (p.folders || []).map((f) => (f === folder ? { ...f, approval } : f)) })
             ),
             remove

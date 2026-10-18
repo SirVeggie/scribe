@@ -61,8 +61,8 @@ export type ResolvedMcpServer = {
   timeout?: number;
 };
 
-export const DEFAULT_MODES: ThreadMode[] = ["code", "plan", "ask"];
-const MODES: ThreadMode[] = ["code", "plan", "ask", "board"];
+export const DEFAULT_MODES: ThreadMode[] = ["code", "plan"];
+const MODES: ThreadMode[] = ["code", "plan", "board"];
 /** The daemon's board server's name in Claude threads; a user server may not take it. */
 const RESERVED = new Set(["agent-board", "scribe", "custom-user-tools"]);
 
@@ -102,7 +102,8 @@ export function cleanServer(value: unknown): McpServer | null {
   if (typeof value.enabled === "boolean") out.enabled = value.enabled;
   // Cursor and Claude use "disabled".
   if (value.disabled === true) out.enabled = false;
-  const modes = strings(value.modes)?.filter((m): m is ThreadMode => MODES.includes(m as ThreadMode));
+  // An older "ask" entry: Ask threads are Board-rung threads now (#719).
+  const modes = strings(value.modes)?.map((m) => (m === "ask" ? "board" : m)).filter((m): m is ThreadMode => MODES.includes(m as ThreadMode));
   if (modes) out.modes = [...new Set(modes)];
   if (value.approve === "auto" || value.approve === "ask") out.approve = value.approve;
   if (typeof value.description === "string" && value.description) out.description = value.description;

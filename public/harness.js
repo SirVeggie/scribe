@@ -7,7 +7,8 @@
 (() => {
   const PROVIDERS = ["cursor", "claude", "codex", "pi"];
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const MODE_LABEL = { code: "Code", plan: "Plan", ask: "Ask", board: "Pages" };
+  /** How a thread runs, which follows its rung (#719). Older samples can still say ask. */
+  const MODE_LABEL = { code: "Code", plan: "Plan", board: "Board" };
   const KIND_LABEL = { execute: "Shell commands", mcp: "MCP tools", read: "File reads", search: "Searches", edit: "File edits", fetch: "Web", think: "Thinking", task: "Subagents", todo: "To-dos", delete: "Deletes", move: "Moves", other: "Other" };
   const RANGES = [
     { id: 7, label: "7 days" },
@@ -1138,11 +1139,11 @@
   /** Sections whose numbers depend on the range. */
   const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills"]);
 
-  /** The user's own modes: presets on a built-in mode. The editor is the chat's (agent.js). */
+  /** The user's own modes: presets with a highest rung. The editor is the chat's (agent.js). */
   function renderModes() {
     const node = card(
       "Custom modes",
-      "A mode of your own builds on Code, Ask, Plan or Pages: it takes tools and MCP servers away from the agent, adds instructions, and sets the approval and web a thread starts with. It appears in the chat's mode menu under the built-in ones, and board workers can use it. Editing a mode applies to the threads already in it."
+      "A mode of your own has a highest rung: it takes tools and MCP servers away from the agent, adds instructions, and sets the rung and web a thread starts with. It appears in the chat's access menu under the rungs, and board workers can use it. Editing a mode applies to the threads already in it."
     );
     const edit = (mode) => chat()?.editCustomMode(mode, render);
     node.append(button("New mode…", "hx-btn", () => edit(null)));

@@ -638,7 +638,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs/:id/action", (req, res) => {
     try {
       const { result, stateRevision } = store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
-        agentHost ? agentHost.runInfo(id) : { exists: false }
+        agentHost ? agentHost.runInfo(id) : { exists: false }, req.body?.readOnly === true
       );
       res.json({ result: result ?? null, stateRevision });
     } catch (err) {
@@ -1230,7 +1230,8 @@ export async function startHttp(): Promise<http.Server> {
           provider: str(body.provider, 40),
           model: str(body.model, 200),
           effort: str(body.effort, 40),
-          mode: body.mode === undefined ? undefined : typeof body.mode === "string" ? body.mode : "invalid",
+          // access is the rung (#719); mode is the older name, with mode values too.
+          mode: (body.access ?? body.mode) === undefined ? undefined : typeof (body.access ?? body.mode) === "string" ? String(body.access ?? body.mode) : "invalid",
           thread: str(body.thread, 60),
           background: body.background === true,
           stop: body.stop === true,

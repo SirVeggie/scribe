@@ -85,7 +85,7 @@ test("optional app instructions are on by default and left out once turned off",
   // Pages with a workspace reads files there (#718).
   const pages = threadInstructions({ ...thread, mode: "board" } as Thread, { instructionsOff: ["threadTitle"] });
   assert.match(pages, /This thread: When you need to read files in a folder outside the workspace/);
-  assert.match(pages, /Mode: Pages\. You can read and search files in the workspace, but not edit them or run commands\./);
+  assert.match(pages, /Access: Board\. You can read and search files in the workspace, but not edit them or run commands\./);
   assert.match(pages, /Workspace: \/work\nRelative file paths are relative to this folder\./);
   assert.doesNotMatch(pages, /Shell commands already run/);
   assert.deepEqual(cleanInstructionsOff(["userSlip", "bogus", "userSlip", 3]), ["userSlip"]);
@@ -171,7 +171,7 @@ test("threads with no Scribe scope are told they have no page tools", () => {
   assert.doesNotMatch(none, /page_show/);
   const global = threadInstructions(thread({ scope: { kind: "global", ref: null } }), {});
   assert.match(global, /page_show/);
-  assert.match(global, /Mode: Pages\./);
+  assert.match(global, /Access: Board\./);
 });
 
 test("cursorScribeServers finds Scribe servers in a Cursor MCP config", () => {

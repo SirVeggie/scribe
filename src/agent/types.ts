@@ -16,20 +16,104 @@ export function isProviderId(value: unknown): value is ProviderId {
   return value === "claude" || value === "cursor" || value === "codex" || value === "pi";
 }
 
-/** What the agent may touch. Chosen per thread; the provider maps it onto its own tools and modes. */
-export type ThreadMode = "code" | "ask" | "plan" | "board";
+/**
+ * How the provider runs the thread, derived from its approval rung (#719): "board" for the Read-only
+ * and Board rungs (reads files in its workspace, no edits or shell), "code" or "plan" (plan first)
+ * for the others. Only plan is the user's own choice; settleAccess keeps the two in step.
+ */
+export type ThreadMode = "code" | "plan" | "board";
+
+/** Mode values older threads, worker settings and scribe.agent.start may still send: "ask" means "board". */
+export type ModeInput = ThreadMode | "ask";
+
+/** A mode from stored data or an API, with "ask" read as "board". Null when it is none of them. */
+export function parseMode(value: unknown): ThreadMode | null {
+  if (value === "ask") return "board";
+  return value === "code" || value === "plan" || value === "board" ? value : null;
+}
 
 /** A thread's copy of its custom mode (customModes.ts): the tool groups it turns off, the MCP servers it keeps, and its instructions. */
 export type ThreadCustomMode = {
   id: string;
   name: string;
+  /** The highest rung the mode allows (#719). Copies made before that have none: every rung. */
+  max?: ApprovalPolicy;
   off: import("./customModes.js").ModeCapability[];
   mcp: "all" | "none" | string[];
   instructions: string;
 };
 
-/** How tool calls that need permission are answered. */
-export type ApprovalPolicy = "ask" | "edits" | "auto" | "full";
+/**
+ * The thread's rung on the access ladder (#719), lowest first. readonly: read files and pages.
+ * board: also write pages. edits: also edit files, workspace edits accepted, commands ask. auto: the
+ * auto-review classifier answers. full: everything without asking. The workspace decides the folder
+ * and the scope the pages; the rung decides how much may change.
+ */
+export type ApprovalPolicy = "readonly" | "board" | "edits" | "auto" | "full";
+
+export const APPROVALS: ApprovalPolicy[] = ["readonly", "board", "edits", "auto", "full"];
+
+/** The rungs' names in the pickers (APPROVALS in public/agent.js). */
+export const APPROVAL_LABEL: Record<ApprovalPolicy, string> = { readonly: "Read-only", board: "Board", edits: "Edits", auto: "Auto review", full: "Full access" };
+
+/** A rung from stored data or an API. The old "ask" (ask before every edit) is now Edits. Null when it is none of them. */
+export function parseApproval(value: unknown): ApprovalPolicy | null {
+  if (value === "ask") return "edits";
+  return APPROVALS.includes(value as ApprovalPolicy) ? (value as ApprovalPolicy) : null;
+}
+
+/** Position on the ladder: 0 for readonly up to 4 for full. */
+export function approvalRank(approval: ApprovalPolicy): number {
+  return APPROVALS.indexOf(approval);
+}
+
+/** The lower of two rungs. */
+export function minApproval(a: ApprovalPolicy, b: ApprovalPolicy): ApprovalPolicy {
+  return approvalRank(a) <= approvalRank(b) ? a : b;
+}
+
+/** Read-only and Board: no file edits or shell; the provider runs the thread in board mode. */
+export function readsOnly(approval: ApprovalPolicy): boolean {
+  return approval === "readonly" || approval === "board";
+}
+
+/**
+ * A stored or requested mode and approval as one access setting (#719): the rung decides, and the
+ * mode follows it. Old values migrate: ask and board modes become the Board rung (Read-only stays),
+ * a code or plan thread on a reading rung becomes a board thread, and the old "ask" approval is Edits.
+ */
+export function settleAccess(mode: unknown, approval: unknown): { mode: ThreadMode; approval: ApprovalPolicy } {
+  const m = parseMode(mode) ?? "code";
+  const a = parseApproval(approval) ?? "edits";
+  if (m === "board") return { mode: "board", approval: a === "readonly" ? "readonly" : "board" };
+  return readsOnly(a) ? { mode: "board", approval: a } : { mode: m, approval: a };
+}
+
+/**
+ * A thread's access after a patch that may still name a mode (old pickers, worker settings,
+ * scribe.agent.start). A rung decides on its own; "board" (or "ask") without one moves to the Board
+ * rung (Read-only stays); "code" or "plan" on a reading rung moves to `editRung`, the provider's
+ * default for workspace threads. Plan first stays on until a mode turns it off. `max` caps the rung
+ * (a custom mode's highest rung).
+ */
+export function changeAccess(
+  current: { mode: ThreadMode; approval: ApprovalPolicy },
+  patch: { mode?: unknown; approval?: unknown },
+  editRung: ApprovalPolicy,
+  max: ApprovalPolicy = "full"
+): { mode: ThreadMode; approval: ApprovalPolicy } {
+  const mode = patch.mode === undefined || patch.mode === null ? null : parseMode(patch.mode);
+  const asked = patch.approval === undefined || patch.approval === null ? null : parseApproval(patch.approval);
+  let approval = asked ?? current.approval;
+  let plan = current.mode === "plan";
+  if (mode === "board") {
+    approval = asked && readsOnly(asked) ? asked : current.approval === "readonly" ? "readonly" : "board";
+  } else if (mode) {
+    plan = mode === "plan";
+    if (!asked && readsOnly(approval)) approval = readsOnly(editRung) ? "edits" : editRung;
+  }
+  return settleAccess(plan ? "plan" : "code", minApproval(approval, max));
+}
 
 export type ScopeKind = "global" | "workspace" | "folder" | "page";
 

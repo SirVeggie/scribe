@@ -4,12 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import { dataDir } from "../config.js";
 import type { ThreadStats } from "./threadStats.js";
 import type { Item, Thread, Turn } from "./types.js";
+import { settleAccess } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 
-/** A stored thread. Older ones kept web as a boolean. */
+/** A stored thread. Older ones kept web as a boolean, and a mode beside their approval (#719). */
 function readThread(data: string): Thread {
   const thread = JSON.parse(data) as Thread;
   thread.web = parseWebAccess(thread.web) ?? "on";
+  Object.assign(thread, settleAccess(thread.mode, thread.approval));
   return thread;
 }
 

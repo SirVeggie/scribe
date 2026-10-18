@@ -10,7 +10,7 @@ import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
-import { isPlainRecord, isProviderId } from "./types.js";
+import { isPlainRecord, isProviderId, parseApproval, parseMode } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, setServerEnabled, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey, type ThreadPatch } from "./prefs.js";
@@ -835,11 +835,13 @@ function threadPatch(body: Record<string, unknown>): ThreadPatch {
   if (isPlainRecord(body.modelParams)) {
     patch.modelParams = Object.fromEntries(Object.entries(body.modelParams).map(([k, v]) => [k, String(v)]));
   }
-  if (body.mode === "code" || body.mode === "ask" || body.mode === "plan" || body.mode === "board") patch.mode = body.mode;
-  // Picking a built-in mode leaves the custom one.
+  // The rung decides (#719); "mode" still turns plan first on and off, and older values (ask, board) are read as rungs.
+  const mode = parseMode(body.mode);
+  if (mode) patch.mode = mode;
   if (typeof body.customMode === "string" && body.customMode) patch.customMode = body.customMode;
-  else if (body.customMode === null || patch.mode) patch.customMode = null;
-  if (body.approval === "ask" || body.approval === "edits" || body.approval === "auto" || body.approval === "full") patch.approval = body.approval;
+  else if (body.customMode === null) patch.customMode = null;
+  const approval = parseApproval(body.approval);
+  if (approval) patch.approval = approval;
   const web = parseWebAccess(body.web);
   if (web) patch.web = web;
   if (typeof body.useWorktree === "boolean") patch.useWorktree = body.useWorktree;

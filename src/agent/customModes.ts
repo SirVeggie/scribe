@@ -1,11 +1,12 @@
-import type { ApprovalPolicy, ProviderId, Thread, ThreadCustomMode, ThreadMode, WebAccess } from "./types.js";
-import { isPlainRecord } from "./types.js";
+import type { ApprovalPolicy, ProviderId, Thread, ThreadCustomMode, WebAccess } from "./types.js";
+import { APPROVALS, isPlainRecord, minApproval, parseApproval } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 
 /**
- * Custom modes (#271): a saved preset on top of a built-in mode. The base keeps its own behaviour
- * (sandbox, plan flow, folder rule); the custom mode only takes things away from it (tool groups,
- * MCP servers), adds instructions, and sets the approval and web a thread starts with.
+ * Custom modes (#271): a saved preset with a highest approval rung (#719). The rung keeps its own
+ * behaviour (sandbox, folder rule); the custom mode only takes things away from it (tool groups,
+ * MCP servers), adds instructions, and sets the rung (at most its highest), plan first and web a
+ * thread starts with.
  *
  * A thread keeps a copy of what its mode takes away (Thread.custom), so providers and the prompt read
  * it from the thread, and a deleted mode leaves its threads as limited as they were.
@@ -16,8 +17,6 @@ export type ModeCapability = "edit" | "shell" | "web" | "subagents" | "helpers" 
 
 export const MODE_CAPABILITIES: ModeCapability[] = ["edit", "shell", "web", "subagents", "helpers", "browser", "threads"];
 
-const BASE_MODES: ThreadMode[] = ["code", "ask", "plan", "board"];
-const APPROVALS: ApprovalPolicy[] = ["ask", "edits", "auto", "full"];
 const MAX_MODES = 40;
 const MAX_INSTRUCTIONS = 8000;
 
@@ -26,14 +25,17 @@ export type CustomMode = {
   id: string;
   name: string;
   description?: string;
-  base: ThreadMode;
+  /** The highest rung a thread in this mode may use. Older modes named a built-in mode here; cleanCustomModes reads them as rungs. */
+  base: ApprovalPolicy;
+  /** Threads start planning first (older modes based on Plan). */
+  plan?: boolean;
   /** Tool groups the mode turns off. */
   off: ModeCapability[];
   /** The user's MCP servers (Agent settings) the mode keeps: every one its base mode gets, none, or the named ones. */
   mcp: "all" | "none" | string[];
   /** Added to the thread's instructions. */
   instructions: string;
-  /** Approval and web a thread gets when the mode is picked; the user can still change them on the thread. */
+  /** Rung (at most base) and web a thread gets when the mode is picked; the user can still change them on the thread. */
   approval?: ApprovalPolicy;
   web?: WebAccess;
 };
@@ -49,6 +51,13 @@ function cleanOff(value: unknown): ModeCapability[] {
   return MODE_CAPABILITIES.filter((cap) => value.includes(cap));
 }
 
+/** The highest rung of a saved mode. Older modes were built on a mode: Code and Plan allow every rung, Ask and Pages the Board rung. */
+function cleanBase(value: unknown): { base: ApprovalPolicy; plan?: true } {
+  if (APPROVALS.includes(value as ApprovalPolicy)) return { base: value as ApprovalPolicy };
+  if (value === "ask" || value === "board") return { base: "board" };
+  return value === "plan" ? { base: "full", plan: true } : { base: "full" };
+}
+
 /** Drop malformed modes from saved preferences and API patches; ids stay unique. */
 export function cleanCustomModes(value: unknown): CustomMode[] {
   if (!Array.isArray(value)) return [];
@@ -62,15 +71,18 @@ export function cleanCustomModes(value: unknown): CustomMode[] {
     seen.add(id);
     const description = typeof raw.description === "string" ? raw.description.trim().slice(0, 200) : "";
     const web = parseWebAccess(raw.web);
+    const { base, plan } = cleanBase(raw.base);
+    const approval = parseApproval(raw.approval);
     modes.push({
       id,
       name,
       ...(description ? { description } : {}),
-      base: BASE_MODES.includes(raw.base as ThreadMode) ? (raw.base as ThreadMode) : "code",
+      base,
+      ...(plan || raw.plan === true ? { plan: true } : {}),
       off: cleanOff(raw.off),
       mcp: cleanMcp(raw.mcp),
       instructions: typeof raw.instructions === "string" ? raw.instructions.slice(0, MAX_INSTRUCTIONS) : "",
-      ...(APPROVALS.includes(raw.approval as ApprovalPolicy) ? { approval: raw.approval as ApprovalPolicy } : {}),
+      ...(approval ? { approval: minApproval(approval, base) } : {}),
       ...(web ? { web } : {}),
     });
     if (modes.length >= MAX_MODES) break;
@@ -80,7 +92,12 @@ export function cleanCustomModes(value: unknown): CustomMode[] {
 
 /** The copy of a mode a thread carries. */
 export function threadCustom(mode: CustomMode): ThreadCustomMode {
-  return { id: mode.id, name: mode.name, off: [...mode.off], mcp: Array.isArray(mode.mcp) ? [...mode.mcp] : mode.mcp, instructions: mode.instructions };
+  return { id: mode.id, name: mode.name, max: mode.base, off: [...mode.off], mcp: Array.isArray(mode.mcp) ? [...mode.mcp] : mode.mcp, instructions: mode.instructions };
+}
+
+/** The highest rung the thread's custom mode allows; every rung without one. */
+export function modeMax(thread: Limited): ApprovalPolicy {
+  return thread.custom?.max ?? "full";
 }
 
 type Limited = Pick<Thread, "custom">;
@@ -96,14 +113,20 @@ export function modeKeepsServer(thread: Limited, name: string): boolean {
   return mcp === "all" || (mcp !== "none" && mcp.includes(name));
 }
 
-/** What of a custom mode a provider session cannot change while it runs; part of every restart and spare key. */
-export function customKey(thread: Limited): string {
-  return thread.custom?.off.join(",") ?? "";
+type Rung = Limited & { approval?: ApprovalPolicy };
+
+/** What of a custom mode (and the Read-only rung's page tools) a provider session cannot change while it runs; part of every restart and spare key. */
+export function customKey(thread: Rung): string {
+  return (thread.custom?.off.join(",") ?? "") + (thread.approval === "readonly" ? ";readonly" : "");
 }
 
-/** Tool groups of Scribe's own MCP server that the thread's mode turns off, for SCRIBE_TOOLS_OFF. */
-export function scribeToolsOff(thread: Limited): Record<string, string> {
-  const off = (["helpers", "browser", "threads"] as const).filter((cap) => modeOff(thread, cap));
+/**
+ * Tool groups of Scribe's own MCP server the thread does not get, for SCRIBE_TOOLS_OFF: the ones its
+ * custom mode turns off, and on the Read-only rung the page writes ("pagewrite", #719).
+ */
+export function scribeToolsOff(thread: Rung): Record<string, string> {
+  const off: string[] = (["helpers", "browser", "threads"] as const).filter((cap) => modeOff(thread, cap));
+  if (thread.approval === "readonly") off.push("pagewrite");
   return off.length ? { SCRIBE_TOOLS_OFF: off.join(",") } : {};
 }
 

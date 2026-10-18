@@ -73,19 +73,27 @@
   }
 
   function approvalFor(provider, p = prefs()) {
-    return p.approvals?.[provider] || p.approval || "ask";
+    return parseRung(p.approvals?.[provider] || p.approval) || "edits";
   }
 
+  /** How a provider runs a thread, which follows its rung (#719): board on Read-only and Board, else code or plan (plan first). For MCP servers' mode lists. */
   const MODES = [
-    { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
-    // Pages with a workspace reads files too (#718), so Ask is left out of the pickers; threads in it keep it.
-    { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits", hidden: true },
-    { id: "plan", label: "Plan", detail: "Investigate and propose a plan before changing anything" },
-    { id: "board", label: "Pages", detail: "Scribe pages and web; reads files in its workspace, no edits or shell" },
+    { id: "code", label: "Code" },
+    { id: "plan", label: "Plan" },
+    { id: "board", label: "Read-only and Board" },
   ];
-  /** The modes the pickers offer, plus `keep` when it is a hidden one already in use. */
-  function pickModes(keep) {
-    return MODES.filter((m) => !m.hidden || m.id === keep);
+  /** A rung from older data: "ask" (Ask first) is Edits now. Null when it is none. Same as parseApproval in src/agent/types.ts. */
+  function parseRung(id) {
+    if (id === "ask") return "edits";
+    return APPROVALS.some((a) => a.id === id) ? id : null;
+  }
+  const READ_RUNGS = new Set(["readonly", "board"]);
+  function rungRank(id) {
+    return APPROVALS.findIndex((a) => a.id === id);
+  }
+  /** The mode that goes with a rung. Same as settleAccess in src/agent/types.ts. */
+  function accessMode(approval, plan) {
+    return READ_RUNGS.has(approval) ? "board" : plan ? "plan" : "code";
   }
   /** Tool groups a custom mode can turn off (ModeCapability in src/agent/customModes.ts). */
   const MODE_TOOLS = [
@@ -104,9 +112,11 @@
     { id: "codeBlocks", label: "Name the language of code blocks" },
     { id: "threadTitle", label: "Rename the thread when its subject changes" },
   ];
+  /** The access ladder (#719), lowest first: APPROVALS in src/agent/types.ts. */
   const APPROVALS = [
-    { id: "ask", label: "Ask first", detail: "Ask before edits and commands that are not allowlisted" },
-    { id: "edits", label: "Auto-edit", detail: "Accept file edits, ask before commands" },
+    { id: "readonly", label: "Read-only", detail: "Read files and pages; no edits, commands or page changes" },
+    { id: "board", label: "Board", detail: "Read files; create and change pages; no edits or commands" },
+    { id: "edits", label: "Edits", detail: "Accept edits in the workspace; ask before commands and edits outside it" },
     { id: "auto", label: "Auto review", detail: "A classifier approves safe calls and asks for the rest (Claude)" },
     { id: "full", label: "Full access", detail: "Approve everything automatically" },
   ];
@@ -130,24 +140,18 @@
   function scribeLimited() {
     return prefs().searxngUrl ? SEARXNG_LIMITED : CURSOR_LIMITED;
   }
-  /** The Cursor SDK has no approval callback: every mode but Full access runs Cursor's Auto-review, which denies instead of asking. */
-  const CURSOR_ASK = "Would ask first; Cursor Auto-reviews instead (can't ask yet)";
+  /** The Cursor SDK has no approval callback: every editing rung but Full access runs Cursor's Auto-review, which denies instead of asking. */
   const CURSOR_EDITS = "Would auto-edit; Cursor Auto-reviews instead (can't ask yet)";
   const CURSOR_REVIEW = "Auto-review approves safe calls and denies the rest; Cursor can't ask you yet";
-  const CODEX_ASK = "Ask you when an action requires approval; actions allowed by the sandbox run normally";
   const CODEX_EDITS = "Approve file edits automatically; ask you for other actions that require approval";
   const CODEX_REVIEW = "Codex reviews actions that require approval; if denied, you can approve one retry through Auto-review. Actions allowed by the sandbox run normally; the mode's sandbox stays in place.";
   const CODEX_LIMITED = "Web search is off; Codex has no gated fetch for the allowlist";
   /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */
-  const CURSOR_HOST_ASK = "Would ask first; Cursor asks before each shell command, Auto-reviews other tools";
   const CURSOR_HOST_EDITS = "Would auto-edit; Cursor asks before each shell command, Auto-reviews other tools";
   function approvalDetail(a, provider) {
-    if (provider === "cursor" && a.id === "ask" && prefs().cursorHostShell) return CURSOR_HOST_ASK;
     if (provider === "cursor" && a.id === "edits" && prefs().cursorHostShell) return CURSOR_HOST_EDITS;
-    if (provider === "cursor" && a.id === "ask") return CURSOR_ASK;
     if (provider === "cursor" && a.id === "edits") return CURSOR_EDITS;
     if (provider === "cursor" && a.id === "auto") return CURSOR_REVIEW;
-    if (provider === "codex" && a.id === "ask") return CODEX_ASK;
     if (provider === "codex" && a.id === "edits") return CODEX_EDITS;
     if (provider === "codex" && a.id === "auto") return CODEX_REVIEW;
     if (a.id === "auto" && provider === "pi") return "Workspace edits run automatically; the configured classifier reviews commands and asks when unsure or unavailable. Commands have no OS sandbox.";
@@ -445,11 +449,11 @@
     return prefs().customModes || [];
   }
 
-  /** One line on a custom mode (or a thread's copy of one): its base mode and what it turns off. */
-  function customDetail(custom, baseId) {
-    const base = MODES.find((m) => m.id === baseId) || MODES[0];
+  /** One line on a custom mode (or a thread's copy of one): its highest rung and what it turns off. */
+  function customDetail(custom, max) {
+    const rung = APPROVALS.find((a) => a.id === max) || APPROVALS[APPROVALS.length - 1];
     const off = MODE_TOOLS.filter((tool) => (custom.off || []).includes(tool.id)).map((tool) => tool.label.toLowerCase());
-    return `${base.label} mode${off.length ? `, without: ${off.join(", ")}` : ""}`;
+    return `Up to ${rung.label}${custom.plan ? ", plans first" : ""}${off.length ? `, without: ${off.join(", ")}` : ""}`;
   }
 
   /** Where a provider cannot follow a mode as written. Same rules as providerNotes in src/agent/customModes.ts. */
@@ -464,7 +468,7 @@
   }
 
   function prefs() {
-    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, modelSettings: {}, mode: "code", approval: "ask", approvals: {}, web: "on", recentWorkspaces: [], scopeWorkspaces: {} };
+    return S.config.prefs || { provider: "cursor", models: {}, efforts: {}, modelParams: {}, modelSettings: {}, mode: "code", approval: "edits", approvals: {}, web: "on", recentWorkspaces: [], scopeWorkspaces: {} };
   }
 
   /** The effort and params last picked for this model, else its defaults. Same as modelChoice in src/agent/prefs.ts. */
@@ -1036,7 +1040,7 @@
   }
 
   /** What the presets in an empty chat set (Agent settings turns them off). */
-  const PAGE_PRESET = { mode: "board", web: "on" };
+  const PAGE_PRESET = { mode: "board", approval: "board", web: "on" };
   const WORKSPACE_PRESET = { mode: "code", approval: "auto", web: "limited", useWorktree: false };
 
   /** Workspaces offered as presets: last used first, then the other folders threads are attached to. */
@@ -2054,16 +2058,17 @@
     description.value = mode?.description || "";
     description.maxLength = 200;
     description.placeholder = "Shown in the mode menu";
-    const base = select(pickModes(mode?.base).map((m) => [m.id, `${m.label}: ${m.detail}`]), mode?.base || "code");
+    const base = select(APPROVALS.map((a) => [a.id, `${a.label}: ${a.detail}`]), parseRung(mode?.base) || "full");
+    const plan = checks([["plan", "Plan first"]], () => Boolean(mode?.plan));
     const off = mode?.off || [];
     const tools = checks(MODE_TOOLS.map((tool) => [tool.id, tool.label]), (id) => !off.includes(id));
     const toolsField = el("div", "ag-field");
     const toolsLabel = el("span", "ag-field-label", "Tools");
-    toolsLabel.dataset.tooltip = "Unticked tools are taken away from the agent in this mode, whatever the approval level. A mode cannot add what its base mode does not have.";
+    toolsLabel.dataset.tooltip = "Unticked tools are taken away from the agent in this mode, whatever the rung. A mode cannot add what its highest rung does not have.";
     toolsLabel.setAttribute("aria-description", toolsLabel.dataset.tooltip);
     const note = el("p", "ag-muted ag-hook-note");
     toolsField.append(toolsLabel, tools.wrap, note);
-    const mcp = select([["all", "All that the base mode gets"], ["none", "None"], ["pick", "Only these"]], Array.isArray(mode?.mcp) ? "pick" : mode?.mcp || "all");
+    const mcp = select([["all", "All that the rung gets"], ["none", "None"], ["pick", "Only these"]], Array.isArray(mode?.mcp) ? "pick" : mode?.mcp || "all");
     // Scribe's own MCP list: the global servers and every workspace's.
     let known = [];
     try {
@@ -2087,7 +2092,12 @@
       note.textContent = customModeNotes(offNow()).join(" ");
       note.hidden = !note.textContent;
       web.disabled = offNow().includes("web");
+      // At most the highest rung, and plan first needs an editing one.
+      for (const option of approval.options) option.disabled = Boolean(option.value) && rungRank(option.value) > rungRank(base.value);
+      if (approval.selectedOptions[0]?.disabled) approval.value = "";
+      plan.boxes[0].disabled = READ_RUNGS.has(base.value);
     };
+    base.addEventListener("change", sync);
     mcp.addEventListener("change", sync);
     for (const box of tools.boxes) box.addEventListener("change", sync);
     sync();
@@ -2116,6 +2126,7 @@
         name: name.value,
         description: description.value,
         base: base.value,
+        ...(plan.boxes[0].checked && !plan.boxes[0].disabled ? { plan: true } : {}),
         off: offNow(),
         mcp: mcp.value === "pick" ? servers.boxes.filter((box) => box.checked).map((box) => box.value) : mcp.value,
         instructions: instructions.value,
@@ -2131,12 +2142,13 @@
       el("h3", null, mode ? "Edit mode" : "New mode"),
       field("Name", name),
       field("Description", description),
-      field("Based on", base, "The built-in mode this one starts from. It keeps that mode's own behaviour, such as Plan's accept step or Pages working without a folder."),
+      field("Highest rung", base, "The most a thread in this mode may do. It can be set lower on the thread."),
+      plan.wrap,
       toolsField,
       field("MCP servers", mcp, "Which servers from Scribe's MCP list a thread in this mode gets. Cursor also loads the servers in its own settings."),
       servers.wrap,
       field("Instructions", instructions, "Added to what the agent is told in every thread in this mode."),
-      field("Approval when picked", approval, "Set on a thread when this mode is picked. It can still be changed on the thread."),
+      field("Rung when picked", approval, "Set on a thread when this mode is picked. It can still be changed on the thread, up to the highest rung."),
       field("Web when picked", web, "Set on a thread when this mode is picked. It can still be changed on the thread, unless the mode turns web tools off."),
       error,
       actions
@@ -2737,18 +2749,22 @@
       const model = d.settings.model || p.models?.[provider] || "default";
       const choice = modelChoice(provider, model, p);
       const scoped = d.scope.kind === "page" || d.scope.kind === "folder";
-      // The custom mode picked for the draft, else the last one picked when the draft names no mode.
-      const customId = d.settings.customMode !== undefined ? d.settings.customMode : d.settings.mode || scoped ? null : p.customMode;
+      // The custom mode picked for the draft, else the last one picked when the draft names no rung.
+      const customId = d.settings.customMode !== undefined ? d.settings.customMode : d.settings.mode || d.settings.approval || scoped ? null : p.customMode;
       const custom = (customId && customModes().find((m) => m.id === customId)) || null;
+      // Page and folder threads start on Board, others on the provider's last rung; a custom mode caps it (#719).
+      let approval = parseRung(d.settings.approval) || parseRung(custom?.approval) || (scoped ? "board" : approvalFor(provider));
+      if (custom && rungRank(approval) > rungRank(custom.base)) approval = custom.base;
+      const plan = d.settings.mode ? d.settings.mode === "plan" : custom ? Boolean(custom.plan) : !scoped && p.mode === "plan";
       return {
         id: null,
         provider,
         model,
         effort: d.settings.effort !== undefined ? d.settings.effort : choice.effort,
         modelParams: d.settings.modelParams || choice.modelParams,
-        mode: custom ? custom.base : d.settings.mode || (scoped ? "board" : p.mode || "code"),
-        ...(custom ? { custom } : {}),
-        approval: d.settings.approval || approvalFor(provider),
+        mode: accessMode(approval, plan),
+        ...(custom ? { custom: { ...custom, max: custom.base } } : {}),
+        approval,
         web: custom?.off.includes("web") ? "off" : webMode(d.settings.web, webMode(p.web)),
         cwd,
         // Last choice made in this workspace.
@@ -2788,7 +2804,7 @@
           pending.settings.model = model;
           if (patch.effort === undefined) pending.settings.effort = choice.effort;
           if (patch.modelParams === undefined) pending.settings.modelParams = choice.modelParams;
-          if (patch.provider && patch.approval === undefined) pending.settings.approval = approvalFor(provider);
+          if (patch.provider && patch.approval === undefined && !READ_RUNGS.has(this.settings().approval)) pending.settings.approval = approvalFor(provider);
         }
         if (pending.settings.provider === t.provider) {
           this.pendingFork = null;
@@ -2805,7 +2821,7 @@
         const p = prefs();
         if (patch.provider) {
           this.draft.settings.model = patch.model || p.models?.[patch.provider] || modelsOf(patch.provider)[0]?.id || "default";
-          if (patch.approval === undefined) this.draft.settings.approval = approvalFor(patch.provider, p);
+          if (patch.approval === undefined && !READ_RUNGS.has(this.settings().approval)) this.draft.settings.approval = approvalFor(patch.provider, p);
         }
         if (patch.provider || patch.model) {
           // Each model comes back with the effort and fast setting last picked for it.
@@ -3530,8 +3546,8 @@
       const tab = activeTab();
       if (tab) {
         const scope = { kind: "page", ref: tab.id };
-        const on = sameScope(s.scope, scope) && s.mode === PAGE_PRESET.mode && s.web === PAGE_PRESET.web;
-        row("page", tab.title, "Pages · full web", "This page: Pages mode, full web access, scoped to this page", on, scope, PAGE_PRESET);
+        const on = sameScope(s.scope, scope) && s.approval === PAGE_PRESET.approval && s.web === PAGE_PRESET.web;
+        row("page", tab.title, "Board · full web", "This page: Board (reads files, changes pages), full web access, scoped to this page", on, scope, PAGE_PRESET);
       }
       const dirs = presetWorkspaces();
       if (dirs.length) list.append(el("div", "ag-preset-sep", "Workspaces"));
@@ -3541,7 +3557,7 @@
           dirKey(s.cwd) === dirKey(dir) &&
           !s.useWorktree &&
           Object.keys(WORKSPACE_PRESET).every((key) => key === "useWorktree" || s[key] === WORKSPACE_PRESET[key]);
-        row("box", R.basename(dir) || dir, "Code · auto review", `Code mode, Auto review, limited web, no worktree\n${dir}`, on, { kind: "global", ref: null }, { ...WORKSPACE_PRESET, cwd: dir });
+        row("box", R.basename(dir) || dir, "Auto review", `Auto review, limited web, no worktree\n${dir}`, on, { kind: "global", ref: null }, { ...WORKSPACE_PRESET, cwd: dir });
       }
       return list;
     }
@@ -5252,14 +5268,13 @@
         if (fastOn) eff.append(el("span", "ag-tag tiny", "fast"));
         bar.append(eff);
       }
-      const mode = MODES.find((m) => m.id === s.mode) || MODES[0];
-      const modeBtn = button("", `ag-pill mode-${mode.id}`, (event) => this.modeMenu(event.currentTarget), s.custom ? customDetail(s.custom, mode.id) : mode.detail);
-      modeBtn.append(el("span", null, s.custom ? s.custom.name : mode.label));
-      bar.append(modeBtn);
-      if (s.mode === "code") {
-        const ap = APPROVALS.find((a) => a.id === s.approval) || APPROVALS[0];
-        const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.approvalMenu(event.currentTarget), approvalDetail(ap, s.provider));
-        apBtn.append(icon("shield"), el("span", null, ap.label));
+      {
+        // One access picker (#719): the rung, plan first, and the user's own modes.
+        const ap = APPROVALS.find((a) => a.id === s.approval) || APPROVALS[2];
+        const detail = s.custom ? `${s.custom.name}: ${ap.label}. ${customDetail(s.custom, s.custom.max)}` : approvalDetail(ap, s.provider);
+        const apBtn = button("", `ag-pill ap-${ap.id}${s.mode === "plan" ? " mode-plan" : ""}`, (event) => this.accessMenu(event.currentTarget), detail);
+        apBtn.append(icon("shield"), el("span", null, s.custom ? `${s.custom.name} · ${ap.label}` : ap.label));
+        if (s.mode === "plan") apBtn.append(el("span", "ag-tag tiny", "plan"));
         bar.append(apBtn);
       }
       if (t?.effectivePermissions?.provider === s.provider) {
@@ -5457,9 +5472,31 @@
       openMenu(anchor, items, { width: 240 });
     }
 
-    modeMenu(anchor) {
+    /** The access ladder (#719): rungs up to the custom mode's highest, plan first, and the user's own modes. */
+    accessMenu(anchor) {
       const s = this.settings();
-      const items = pickModes(s.mode).map((m) => ({ label: m.label, detail: m.detail, checked: !s.custom && s.mode === m.id, run: () => this.updateSettings({ mode: m.id, customMode: null }) }));
+      const max = s.custom?.max || "full";
+      const plan = s.mode === "plan";
+      // With scope None there are no pages to change, so Board reads like Read-only.
+      const noPages = s.scope?.kind === "workspace";
+      const items = APPROVALS.map((a) => ({
+        label: a.label,
+        detail: a.id === "board" && noPages ? "Same as Read-only: this thread has no page access" : approvalDetail(a, s.provider),
+        checked: s.approval === a.id,
+        danger: a.id === "full",
+        disabled: rungRank(a.id) > rungRank(max),
+        run: () => this.updateSettings({ approval: a.id, mode: accessMode(a.id, plan) }),
+      }));
+      items.push(
+        { separator: true },
+        {
+          label: "Plan first",
+          detail: READ_RUNGS.has(s.approval) ? "Needs Edits or higher" : "Investigate and propose a plan before changing anything",
+          checked: plan,
+          disabled: READ_RUNGS.has(s.approval),
+          run: () => this.updateSettings({ mode: plan ? "code" : "plan" }),
+        }
+      );
       const custom = customModes();
       if (custom.length || s.custom) items.push({ separator: true });
       for (const m of custom) {
@@ -5467,29 +5504,15 @@
           label: m.name,
           detail: m.description || customDetail(m, m.base),
           checked: s.custom?.id === m.id,
-          // The mode's own approval and web are where a thread starts; they can be changed on the thread after.
-          run: () => this.updateSettings({ mode: m.base, customMode: m.id, ...(m.approval ? { approval: m.approval } : {}), ...(m.web ? { web: m.web } : {}) }),
+          // The mode's own rung and web are where a thread starts; they can be changed on the thread after.
+          run: () => this.updateSettings({ customMode: m.id, ...(m.approval ? { approval: m.approval } : {}), ...(m.web ? { web: m.web } : {}) }),
         });
       }
-      // A deleted mode: the thread keeps what it took away until another mode is picked.
-      if (s.custom && !custom.some((m) => m.id === s.custom.id)) items.push({ label: s.custom.name, detail: `Deleted. ${customDetail(s.custom, s.mode)}`, checked: true, disabled: true });
+      // A deleted mode: the thread keeps what it took away until it leaves it.
+      if (s.custom && !custom.some((m) => m.id === s.custom.id)) items.push({ label: s.custom.name, detail: `Deleted. ${customDetail(s.custom, s.custom.max)}`, checked: true, disabled: true });
+      if (s.custom) items.push({ label: "No custom mode", detail: "Keep the rung, without the mode's limits", run: () => this.updateSettings({ customMode: null }) });
       items.push({ separator: true }, { label: "Edit modes…", icon: "gear", run: () => window.scribeHarness?.open("modes") });
-      openMenu(anchor, items, { width: 290 });
-    }
-
-    approvalMenu(anchor) {
-      const s = this.settings();
-      openMenu(
-        anchor,
-        APPROVALS.map((a) => ({
-          label: a.label,
-          detail: approvalDetail(a, s.provider),
-          checked: s.approval === a.id,
-          danger: a.id === "full",
-          run: () => this.updateSettings({ approval: a.id }),
-        })),
-        { width: 300 }
-      );
+      openMenu(anchor, items, { width: 300 });
     }
 
     webMenu(anchor) {
@@ -10339,15 +10362,15 @@
       const modeTrack = el("div", "button-track text-track");
       modeTrack.setAttribute("role", "group");
       this.modeButtons = new Map();
-      for (const mode of pickModes()) {
-        const control = button(mode.label, null, () => void this.toggleCycleMode(mode.id));
-        this.modeButtons.set(mode.id, control);
+      for (const rung of APPROVALS) {
+        const control = button(rung.label, null, () => void this.toggleCycleMode(rung.id));
+        this.modeButtons.set(rung.id, control);
         modeTrack.append(control);
       }
       this.renderCycleModes();
-      chat.append(settingRow("Mode cycling", modeTrack, {
+      chat.append(settingRow("Access cycling", modeTrack, {
         id: "ag-cycle-modes-label",
-        hint: "Choose which modes Ctrl+Shift+' cycles through. All modes remain available in the mode selector. With every button off, the hotkey leaves the current mode unchanged.",
+        hint: "Choose which rungs Ctrl+Shift+' cycles through. All of them remain in the access picker.",
       }));
       const list = el("div", "ag-keys");
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
@@ -10425,7 +10448,7 @@
     },
     async toggleCycleMode(id) {
       const disabled = prefs().disabledModes || [];
-      const disabledModes = disabled.includes(id) ? disabled.filter((mode) => mode !== id) : [...disabled, id];
+      const disabledModes = disabled.includes(id) ? disabled.filter((rung) => rung !== id) : [...disabled, id];
       for (const control of this.modeButtons.values()) control.disabled = true;
       try {
         S.config.prefs = await api("PUT", "/prefs", { disabledModes });
@@ -10635,8 +10658,22 @@
   /* ---------- board.agent: pages that start and continue their own threads ---------- */
 
   const PAGE_PROMPT_MAX = 20000;
-  const PAGE_MODES = new Set(["board", "ask", "code", "plan"]);
-  /** Modes that need a folder. A thread with a folder in any mode needs it approved (agent.workspace): Pages reads files there (#718). */
+  /** Older pages' mode names, still accepted (#719): code keeps the rung, plan plans first, ask and board are Board. */
+  const PAGE_MODES = new Set(["board", "ask", "code", "plan", "readonly"]);
+  /**
+   * A page-started thread's mode and rung, from scribe.agent.start's approval and older mode. With
+   * neither it is Board; code without a rung is Auto review. Same as AgentHost.launchPageThread.
+   */
+  function pageAccess(data, custom = null) {
+    const asked = parseRung(data.approval);
+    const legacy = data.mode === "readonly" ? null : data.mode;
+    let approval = data.mode === "readonly" ? "readonly" : asked || (legacy && legacy !== "board" && legacy !== "ask" ? "auto" : "board");
+    if (legacy === "board" || legacy === "ask") approval = asked === "readonly" ? "readonly" : "board";
+    else if (legacy && READ_RUNGS.has(approval) && !asked) approval = "auto";
+    if (custom && rungRank(approval) > rungRank(custom.base)) approval = custom.base;
+    return { mode: accessMode(approval, legacy === "plan" || (!legacy && Boolean(custom?.plan))), approval };
+  }
+  /** Modes that need a folder. A thread with a folder on any rung needs it approved (agent.workspace): Read-only and Board read files there (#718). */
   const FOLDER_MODES = new Set(["code", "plan"]);
   /** board.agent.wait calls by thread id. */
   const pageWaiters = new Map();
@@ -10999,10 +11036,14 @@
           })),
         ])
       ),
-      modes: pickModes().map((m) => ({ id: m.id, label: m.label, detail: m.detail, needsFolder: FOLDER_MODES.has(m.id) })),
-      // The user's own modes: start a thread in one with customMode, next to the mode it is based on.
+      // Older pages pick a mode; the rung (approvals) decides now (#719). plan: plan first.
+      modes: [
+        { id: "board", label: "Board", detail: APPROVALS[1].detail, needsFolder: false },
+        { id: "plan", label: "Plan first", detail: "Investigate and propose a plan before changing anything", needsFolder: true },
+      ],
+      // The user's own modes: start a thread in one with customMode; base is its highest rung.
       customModes: customModes().map((m) => ({ id: m.id, label: m.name, detail: m.description || customDetail(m, m.base), base: m.base })),
-      approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail })),
+      approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail, needsFolder: !READ_RUNGS.has(a.id) })),
       defaults: provider
         ? {
             provider,
@@ -11054,18 +11095,18 @@
       provider = data.provider;
     }
     if (!provider) return { error: "no_provider" };
-    const mode = data.mode || "board";
-    if (!PAGE_MODES.has(mode)) return { error: "unknown_mode" };
-    // A custom mode that is gone, or built on another mode, is refused: starting without its limits would be worse.
-    const custom = typeof data.customMode === "string" && data.customMode ? customModes().find((m) => m.id === data.customMode && m.base === mode) : null;
+    if (data.mode && !PAGE_MODES.has(data.mode)) return { error: "unknown_mode" };
+    if (data.approval && !parseRung(data.approval)) return { error: "unknown_approval" };
+    // A custom mode that is gone is refused: starting without its limits would be worse.
+    const custom = typeof data.customMode === "string" && data.customMode ? customModes().find((m) => m.id === data.customMode) : null;
     if (data.customMode && !custom) return { error: "unknown_mode" };
+    const { mode, approval } = pageAccess(data, custom);
     // The user's model settings only carry over when the page keeps their provider and model.
     const own = Boolean((data.model && data.model !== "default") || data.provider);
     if (data.model && data.model !== "default" && modelsOf(provider).length && !modelInfo(provider, data.model)) return { error: "unknown_model" };
     const model = data.model || (own ? "default" : p.models?.[provider] || "default");
     const efforts = modelInfo(provider, model)?.efforts || [];
     if (data.effort && efforts.length && !efforts.some((e) => e.id === data.effort)) return { error: "unknown_effort" };
-    if (data.approval && !APPROVALS.some((a) => a.id === data.approval)) return { error: "unknown_approval" };
     const folderMode = FOLDER_MODES.has(mode);
     const cwd = typeof data.cwd === "string" ? data.cwd.trim() : "";
     if (folderMode && !cwd) return { error: "needs_folder" };
@@ -11084,7 +11125,7 @@
       modelParams,
       mode,
       ...(custom ? { customMode: custom.id } : {}),
-      approval: data.approval || custom?.approval || approvalFor(provider, p),
+      approval,
       web: webMode(data.web, custom?.web || webMode(p.web)),
       cwd: cwd || null,
       useWorktree: folderMode && data.worktree === true,
@@ -11265,9 +11306,9 @@
         const may = await pageMayWrite(tab, false);
         if (!may.ok) return may;
         const cwd = typeof data.cwd === "string" ? data.cwd.trim() : "";
-        if (FOLDER_MODES.has(data.mode) && !cwd) return { ok: false, error: "needs_folder" };
+        const { mode, approval } = pageAccess(data);
+        if (FOLDER_MODES.has(mode) && !cwd) return { ok: false, error: "needs_folder" };
         if (cwd) {
-          const approval = APPROVALS.some((a) => a.id === data.approval) ? data.approval : "auto";
           const folder = await pageMayUseFolder(tab, cwd, approval);
           if (!folder.ok) return folder;
         }
@@ -11493,23 +11534,24 @@
     const view = targetView();
     const s = view.settings();
     const disabled = prefs().disabledModes || [];
-    const modes = pickModes();
-    const at = modes.findIndex((m) => m.id === s.mode);
+    // Up to a custom mode's highest rung.
+    const rungs = APPROVALS.filter((a) => rungRank(a.id) <= rungRank(s.custom?.max || "full"));
+    const at = rungs.findIndex((a) => a.id === s.approval);
     let next;
-    for (let offset = 1; offset <= modes.length; offset += 1) {
-      const mode = modes[(at + offset) % modes.length];
-      if (!disabled.includes(mode.id)) {
-        next = mode;
+    for (let offset = 1; offset <= rungs.length; offset += 1) {
+      const rung = rungs[(at + offset) % rungs.length];
+      if (!disabled.includes(rung.id)) {
+        next = rung;
         break;
       }
     }
     if (!next) {
-      notice("No modes enabled for cycling. Choose modes in Agent settings.");
+      notice("No rungs enabled for cycling. Choose them in Agent settings.");
       return;
     }
-    if (next.id === s.mode && !s.custom) return;
-    await view.updateSettings({ mode: next.id, customMode: null });
-    notice(`Mode: ${next.label}`);
+    if (next.id === s.approval) return;
+    await view.updateSettings({ approval: next.id, mode: accessMode(next.id, s.mode === "plan") });
+    notice(`Access: ${next.label}`);
   }
 
   /** Folders existing threads use, then recent ones, plus the current pick if it is not already listed. */

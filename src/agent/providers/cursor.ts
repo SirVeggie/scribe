@@ -155,7 +155,6 @@ export function toolLists(thread: Pick<Thread, "mode" | "web" | "custom"> & { cw
   const off = cursorToolsOff(thread);
   const keep = (tools: ToolName[]) => tools.filter((name) => !off.includes(name));
   if (thread.mode === "board") return { tools: keep([...(pagesReadsFiles(thread) ? ASK_TOOLS : (["updateTodos", "readTodos"] as ToolName[])), "mcp", ...web]) };
-  if (thread.mode === "ask") return { tools: keep([...ASK_TOOLS, "mcp", ...web]) };
   // Not "mcp": that would take the custom tools, the host shell among them, away too.
   return { disallowedTools: [...new Set([...NO_ANSWER_TOOLS, ...(hostShell ? (["shell"] as ToolName[]) : []), ...(thread.web === "on" ? [] : WEB_TOOLS), ...off])] };
 }
@@ -167,7 +166,7 @@ export function cursorAutoReview(thread: Pick<Thread, "mode" | "approval">): boo
 
 /** Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be asked. */
 export function wantsHostShell(thread: Pick<Thread, "mode" | "approval" | "custom">, enabled: boolean): boolean {
-  return enabled && !modeOff(thread, "shell") && (thread.mode === "code" || thread.mode === "plan") && (thread.approval === "ask" || thread.approval === "edits");
+  return enabled && !modeOff(thread, "shell") && (thread.mode === "code" || thread.mode === "plan") && thread.approval === "edits";
 }
 
 export class CursorProvider implements AgentProvider {

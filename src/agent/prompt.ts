@@ -5,7 +5,7 @@ import path from "node:path";
 import { BOARD_MCP } from "./providers/cursor.js";
 import type { FolderInstruction } from "../types.js";
 import { memoryBlock, type Memory } from "./memory.js";
-import { noPages, type ContextChip, type Thread } from "./types.js";
+import { APPROVAL_LABEL, noPages, type ContextChip, type Thread } from "./types.js";
 
 /** Scope details the host resolves from the board for a thread's instructions. */
 export type ScopeInfo = {
@@ -107,13 +107,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
           ? thread.cwd
             ? "Mode: Chat. You can read and search files in the workspace, but not edit them or run commands, and you have no page access: answer from the conversation and the files, plus web search and fetch when they are available. Do not ask to run commands."
             : "Mode: Chat. You have no file, shell or page access in this thread: answer from the conversation, plus web search and fetch when they are available. Do not ask to run commands."
-          : `Mode: Pages. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits.`
-      );
-      break;
-    case "ask":
-      lines.push(
-        "",
-        "Mode: Ask. Read-only: answer questions, read and search files, and use the web if available. Do not try to edit files or run commands."
+          : thread.approval === "readonly"
+            ? `Access: Read-only. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} You can read pages but not create or change them. Answer from what you read, plus web search and fetch when they are available. Do not ask to run commands.`
+            : `Access: Board. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits.`
       );
       break;
     case "plan":
@@ -127,7 +123,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       );
       break;
     case "code":
-      lines.push("", "Mode: Code. You can read and edit files and run commands in the workspace, subject to the user's approval settings.");
+      lines.push("", `Access: ${APPROVAL_LABEL[thread.approval] ?? "Edits"}. You can read and edit files and run commands in the workspace, subject to the user's approval settings.`);
       break;
   }
   lines.push(...customInstructions(thread));

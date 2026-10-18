@@ -18,7 +18,7 @@ import type {
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ChatImage, ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
-import { isPlainRecord, noPages } from "../types.js";
+import { isPlainRecord, noPages, readsOnly } from "../types.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
 import { McpBridge, type BridgeAsk, type BridgedTool } from "../mcpBridge.js";
@@ -391,9 +391,9 @@ export async function fetchCodexPlanUsage(): Promise<unknown> {
   });
 }
 
-/** Ask / Plan / Pages stay read-only; Full access drops the sandbox; otherwise workspace-write. */
+/** Read-only, Board and Plan stay read-only; Full access drops the sandbox; otherwise workspace-write. */
 export function sandboxFor(thread: Pick<Thread, "mode" | "approval" | "custom">): SandboxMode {
-  if (thread.mode === "ask" || thread.mode === "plan" || thread.mode === "board" || codexReadOnly(thread)) return "read-only";
+  if (thread.mode === "plan" || thread.mode === "board" || readsOnly(thread.approval) || codexReadOnly(thread)) return "read-only";
   if (thread.approval === "full") return "danger-full-access";
   return "workspace-write";
 }

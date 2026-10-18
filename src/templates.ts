@@ -172,7 +172,7 @@ const ACTION_PLACEHOLDERS = new Set(["selection", "input", "page.title", "page.k
 const ACTION_CONTEXT_NAME = /^[a-z][a-z_]{0,29}$/;
 const MAX_ACTION_CONTEXT = 4;
 const ACTION_TAG = /\{\{\s*([#/]?)\s*([a-zA-Z_.]+)\s*\}\}/g;
-const ACTION_MODES = ["board", "ask"] as const;
+const ACTION_MODES = ["board", "ask", "readonly"] as const;
 const ACTION_WEB = ["on", "limited", "off"] as const;
 
 /** Check a template's agentActions list; null or undefined is an empty list. */
@@ -284,7 +284,7 @@ function parseActionThread(raw: unknown, at: string, context: string[] = []): Ag
   const thread: AgentActionThread = {};
   if (raw.mode !== undefined) {
     if (!(ACTION_MODES as readonly unknown[]).includes(raw.mode)) {
-      throw new Error(`${at}.mode must be board or ask (actions do not run in a workspace folder)`);
+      throw new Error(`${at}.mode must be board, ask or readonly (actions do not edit files or run commands)`);
     }
     thread.mode = raw.mode as AgentActionThread["mode"];
   }

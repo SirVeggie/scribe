@@ -77,12 +77,12 @@ test("servers reach threads by mode, enabled, and workspace layer", () => {
       "S:\\Proj": { mcpServers: { shared: { command: "local" }, docs: { enabled: false }, db: { command: "db", approve: "auto" } } },
     },
   });
-  const names = (mode: "code" | "ask" | "plan" | "board", cwd: string | null) => serversForThread(thread(mode, cwd), file, null).map((s) => s.name).sort();
+  const names = (mode: "code" | "plan" | "board", cwd: string | null) => serversForThread(thread(mode, cwd), file, null).map((s) => s.name).sort();
   assert.deepEqual(names("code", null), ["board", "docs", "shared"]);
   assert.deepEqual(names("board", null), ["board"]);
   assert.deepEqual(names("code", "s:/proj/sub"), ["board", "db", "shared"]);
   assert.deepEqual(names("code", "S:\\Projector"), ["board", "docs", "shared"]);
-  const shared = serversForThread(thread("ask", "S:\\Proj"), file, null).find((s) => s.name === "shared");
+  const shared = serversForThread(thread("plan", "S:\\Proj"), file, null).find((s) => s.name === "shared");
   assert.equal(shared?.command, "local");
   assert.equal(shared?.layer, "S:\\Proj");
   assert.equal(serversForThread(thread("code", "S:\\Proj"), file, null).find((s) => s.name === "db")?.approve, "auto");

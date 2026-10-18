@@ -55,6 +55,7 @@ test("folder grants from input are absolute, normalized, and one per folder", ()
   ]);
   assert.deepEqual(folders, [
     { path: path.resolve(root), approval: "full" },
-    { path: path.join(root, "b"), approval: "ask" },
+    // An unknown rung is the lowest one.
+    { path: path.join(root, "b"), approval: "readonly" },
   ]);
 });

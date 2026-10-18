@@ -215,3 +215,12 @@
 - **Export format:** unchanged; board exports don't include agent threads.
 - **Where:** `src/agent/db.ts`.
 - **When to remove:** Keep. This is the current schema.
+
+## Access ladder: modes become approval rungs (`agent.sqlite` thread JSON, prefs, page state, no schema change)
+
+- **What changed:** Code / Ask / Plan / Pages are gone from the pickers (#719). A thread's `approval` is its rung: `readonly`, `board`, `edits`, `auto`, `full`. `mode` stays on the thread, derived from the rung (`board` on Read-only and Board, else `code`, or `plan` when it plans first); `settleAccess` and `changeAccess` in `src/agent/types.ts` keep the two in step. Read-only also turns off Scribe's page writes (`pagewrite` in `SCRIBE_TOOLS_OFF`; `page_action` refuses actions that change the page).
+- **Affected data:** Thread JSON (`mode`, `approval`), prefs (`approval`, `approvals`, `mode`, `disabledModes`), custom modes (`base`, `approval`), page folder grants (`agent.workspace` folders' `approval`), Kanban worker settings (`mode`, `approval`).
+- **Transform (on read, never written back until the next save):** code + `ask` (Ask first) becomes Edits, so those threads now accept workspace edits without asking; ask and board modes become the Board rung (Read-only stays); plan keeps its rung and plans first. Prefs: `ask` reads as Edits, `mode` ask/board as code, and `disabledModes` keeps only rung ids (old mode ids are dropped). Custom modes: `base` is the highest rung (code → full, plan → full + `plan: true`, ask/board → board). Folder grants: `ask` reads as Edits. Worker settings and `scribe.agent.start({ mode })` keep the old values as aliases (`workerAccess`, `AgentHost.launchPageThread`, `pageAccess` in `public/agent.js`).
+- **Protocol:** `agent_run` takes `access` (a rung, at most the parent's) instead of `mode`; the daemon still accepts `mode` with old values. `POST /api/tabs/:id/action` takes `readOnly`. `VERSION` stays `3.0.0`.
+- **How to verify:** `src/agent/accessLadder.test.ts`.
+- **When to remove:** The `ask` aliases once no stored threads, prefs, grants or edited board copies use them.

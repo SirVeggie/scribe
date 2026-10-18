@@ -1,5 +1,6 @@
 import type { BoardState } from "../types.js";
 import type { RunOutcome } from "../agent/pageRuns.js";
+import { settleAccess, type ApprovalPolicy, type ThreadMode } from "../agent/types.js";
 import {
   MAX_WORKER_LOG,
   STEP_LEASE_MS,
@@ -69,8 +70,16 @@ function workerOf(state: BoardState, id: string): Worker | undefined {
   return w && typeof w === "object" ? w : undefined;
 }
 
+/**
+ * The worker's mode and rung (#719). Older worker settings named a mode beside the approval: code
+ * with Ask first is Edits now, ask and board are the Board rung, plan plans first on its rung.
+ */
+export function workerAccess(w: Worker): { mode: ThreadMode; approval: ApprovalPolicy } {
+  return settleAccess(str(w.mode) || "code", str(w.approval) || "auto");
+}
+
 export function workerMode(w: Worker): string {
-  return str(w.mode) || "code";
+  return workerAccess(w).mode;
 }
 
 export function workerInstructions(state: BoardState, w: Worker): string {
@@ -215,7 +224,7 @@ export function workerPrompt(state: BoardState, page: { id: string; title: strin
 
 /** The chat's settings from the worker's. Provider and model left out follow the board's fixed defaults (see AgentHost.launchPageThread). */
 export function workerSettings(w: Worker, c: Card): LaunchSettings {
-  const mode = workerMode(w);
+  const { mode, approval } = workerAccess(w);
   const folder = FOLDER_MODES.has(mode);
   const modelParams: Record<string, string> = {};
   const fast = str(w.fast);
@@ -229,7 +238,7 @@ export function workerSettings(w: Worker, c: Card): LaunchSettings {
     ...(str(w.customMode) ? { customMode: str(w.customMode) } : {}),
     ...(str(w.show) ? { show: str(w.show) } : {}),
     web: str(w.web) || "off",
-    approval: str(w.approval) || "auto",
+    approval,
     modelParams,
     ...(folder ? { cwd: str(w.cwd).trim(), ...(w.worktree ? { worktree: true } : {}) } : {}),
     helpers: w.helpers !== false,

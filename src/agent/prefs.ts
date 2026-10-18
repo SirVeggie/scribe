@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ApprovalPolicy, ProviderId, Thread, ThreadMode, ThreadScope, WebAccess } from "./types.js";
+import { APPROVALS, parseApproval, readsOnly } from "./types.js";
 import type { HookRule } from "./hooks.js";
 import type { CustomMode } from "./customModes.js";
 import { DEFAULT_WEB_ALLOWLIST } from "./webAccess.js";
@@ -19,15 +20,16 @@ export type Prefs = {
    * model brings back its own; efforts and modelParams above are the last used per provider.
    */
   modelSettings: Record<string, ModelChoice>;
+  /** Plan first in new workspace threads ("plan"), or not ("code"). Older prefs could say "ask" or "board"; they read as "code". */
   mode: ThreadMode;
-  /** Modes skipped by the cycle hotkey; still available in the mode selector. */
-  disabledModes: ThreadMode[];
+  /** Approval rungs skipped by the cycle hotkey; still available in the access picker. Older prefs listed modes, which are dropped. */
+  disabledModes: ApprovalPolicy[];
   /** The user's own modes (customModes.ts), shown under the built-in ones. */
   customModes: CustomMode[];
   /** The custom mode last picked, by id; new threads start in it. Null after a built-in mode was picked. */
   customMode: string | null;
   approval: ApprovalPolicy;
-  /** Last Code-mode approval per provider. `approval` is the most recently used, and the fallback. */
+  /** Last approval rung per provider for workspace threads (page and folder threads start on Board). `approval` is the most recently used, and the fallback. */
   approvals: Partial<Record<ProviderId, ApprovalPolicy>>;
   web: WebAccess;
   /** Domains a thread with limited web access may search and fetch (subdomains included). */
@@ -87,7 +89,7 @@ export const DEFAULT_PREFS: Prefs = {
   disabledModes: [],
   customModes: [],
   customMode: null,
-  approval: "ask",
+  approval: "edits",
   approvals: {},
   web: "on",
   webAllowlist: DEFAULT_WEB_ALLOWLIST,
@@ -131,10 +133,20 @@ export function summaryChoice(prefs: Prefs, thread: Pick<Thread, "provider" | "m
   return typeof choice === "object" && choice ? choice : { provider: thread.provider, model: choice || thread.model };
 }
 
-/** Ignore malformed or obsolete mode ids in saved preferences and API patches. */
-export function cleanDisabledModes(value: unknown): ThreadMode[] {
+/** Ignore malformed ids, and the mode ids older prefs kept, in saved preferences and API patches. */
+export function cleanDisabledModes(value: unknown): ApprovalPolicy[] {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter((mode): mode is ThreadMode => ["code", "ask", "plan", "board"].includes(mode)))];
+  return [...new Set(value.filter((id): id is ApprovalPolicy => APPROVALS.includes(id)))];
+}
+
+/** Saved approval prefs with the old "ask" read as Edits and unknown values dropped. */
+export function cleanApprovals(saved: Partial<Prefs>): Pick<Prefs, "approval" | "approvals" | "mode"> {
+  const approvals: Prefs["approvals"] = {};
+  for (const [id, value] of Object.entries(saved.approvals ?? {})) {
+    const approval = parseApproval(value);
+    if (approval && ["claude", "cursor", "codex", "pi"].includes(id)) approvals[id as ProviderId] = approval;
+  }
+  return { approval: parseApproval(saved.approval) ?? DEFAULT_PREFS.approval, approvals, mode: saved.mode === "plan" ? "plan" : "code" };
 }
 
 /** Same as dirKey in public/agent.js, which looks up these keys for new threads. */
@@ -214,11 +226,13 @@ export function prefsPatchFromChoices(prefs: Prefs, thread: ChoiceThread, patch:
       [modelKey(thread.provider, thread.model)]: { effort: thread.effort, modelParams: { ...thread.modelParams } },
     };
   }
-  if ((patch.mode || patch.customMode !== undefined) && thread.scope.kind !== "page" && thread.scope.kind !== "folder") {
-    next.mode = thread.mode;
+  const scoped = thread.scope.kind === "page" || thread.scope.kind === "folder";
+  if ((patch.mode || patch.customMode !== undefined) && !scoped) {
+    next.mode = thread.mode === "plan" ? "plan" : "code";
     next.customMode = thread.custom?.id ?? null;
   }
-  if (patch.approval) {
+  // Page and folder threads start on Board whatever was picked last: only a workspace rung, or an editing one, is kept.
+  if ((patch.approval || patch.mode) && (!scoped || !readsOnly(thread.approval))) {
     next.approval = thread.approval;
     const seeded: Prefs["approvals"] = { ...prefs.approvals };
     for (const id of ["claude", "cursor", "codex", "pi"] as const) {

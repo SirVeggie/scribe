@@ -9,7 +9,8 @@ import { isPlainObject } from "./types.js";
 export type PermissionValue = "allow" | "deny" | "ask";
 
 /** Approval policies a page may ask for, least to most permissive (same ids as agent threads). */
-export const APPROVAL_RANK = ["ask", "edits", "auto", "full"] as const;
+/** The approval rungs (#719), lowest first. Older grants and requests said "ask" (Ask first), read as Edits. */
+export const APPROVAL_RANK = ["readonly", "board", "edits", "auto", "full"] as const;
 export type PageApproval = (typeof APPROVAL_RANK)[number];
 
 export type PermissionDef = {
@@ -52,7 +53,7 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
   {
     id: "agent.workspace",
     label: "Agents with file and shell access",
-    detail: "Start chats in folders you approve: Code and Plan read and change files and run commands there, Pages reads files.",
+    detail: "Start chats in folders you approve: from Edits up they read and change files and run commands there, Read-only and Board read files.",
     default: "ask",
     risky: true,
     perFolder: true,
@@ -89,6 +90,11 @@ export function isApproval(value: unknown): value is PageApproval {
   return typeof value === "string" && (APPROVAL_RANK as readonly string[]).includes(value);
 }
 
+/** A grant's or request's rung, with the older "ask" read as Edits; null when it is none. */
+export function parsePageApproval(value: unknown): PageApproval | null {
+  return value === "ask" ? "edits" : isApproval(value) ? value : null;
+}
+
 /** Folder grants from untrusted input: absolute paths, normalized, one per path (the last wins). */
 export function normalizeFolders(value: unknown): FolderGrant[] {
   if (!Array.isArray(value)) {
@@ -104,7 +110,7 @@ export function normalizeFolders(value: unknown): FolderGrant[] {
       continue;
     }
     const folder = path.resolve(raw);
-    byKey.set(folderKey(folder), { path: folder, approval: isApproval(item.approval) ? item.approval : "ask" });
+    byKey.set(folderKey(folder), { path: folder, approval: parsePageApproval(item.approval) ?? "readonly" });
   }
   return [...byKey.values()];
 }
@@ -140,7 +146,7 @@ export function checkPermission(grants: Map<string, PermissionGrant>, need: Perm
   if (!need.folder || !path.isAbsolute(need.folder)) {
     return "deny";
   }
-  const want = APPROVAL_RANK.indexOf(isApproval(need.approval) ? need.approval : "ask");
+  const want = APPROVAL_RANK.indexOf(parsePageApproval(need.approval) ?? "readonly");
   const covered = (grant?.folders ?? []).some(
     (folder) => isInside(need.folder as string, folder.path) && APPROVAL_RANK.indexOf(folder.approval) >= want
   );

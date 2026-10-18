@@ -179,9 +179,9 @@ test("splitPiModel splits at the first slash; model ids keep theirs", () => {
   assert.equal(splitPiModel("x/"), null);
 });
 
-test("builtinTools: Pages none, Ask and Plan read-only, Code all", () => {
+test("builtinTools: the reading rungs none (reads with a workspace), Plan read-only, Code all", () => {
   assert.deepEqual(builtinTools("board"), []);
-  assert.ok(!builtinTools("ask").includes("bash"));
+  assert.ok(!builtinTools("board", [], true).includes("bash") && builtinTools("board", [], true).includes("read"));
   assert.ok(!builtinTools("plan").includes("edit"));
   assert.ok(builtinTools("code").includes("bash") && builtinTools("code").includes("write"));
 });

@@ -60,8 +60,8 @@ import { McpPermissions } from "./mcpPermissions.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
-import { cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
-import { cleanCustomModes, modeKeepsServer, modeOff, threadCustom } from "./customModes.js";
+import { cleanApprovals, cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
+import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
@@ -97,7 +97,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
-import { isProviderId, noPages, pagesReadsFiles } from "./types.js";
+import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, readsOnly, settleAccess } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
 import { injectionDetectors } from "./injection.js";
@@ -367,8 +367,8 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
     return Promise.resolve({ optionId: allow.id });
   }
   if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo" && !(pagesReadsFiles(t) && (req.tool === "read" || req.tool === "search"))) {
-    // Pages mode never edits files or runs commands, whatever the approval setting; with a workspace it reads there.
-    const note = pagesReadsFiles(t) ? "Pages mode reads files but does not edit them or run commands." : "Pages mode has no file or shell access.";
+    // The Read-only and Board rungs never edit files or run commands; with a workspace they read there.
+    const note = pagesReadsFiles(t) ? `The ${APPROVAL_LABEL[t.approval]} rung reads files but does not edit them or run commands.` : `The ${APPROVAL_LABEL[t.approval]} rung has no file or shell access.`;
     if (reject) return Promise.resolve({ optionId: reject.id, note });
     return Promise.reject(new Error(note));
   }
@@ -977,7 +977,8 @@ export class AgentHost {
       modelParams: { ...DEFAULT_PREFS.modelParams, ...saved.modelParams },
       modelSettings: seedModelSettings(saved),
       forkSummarizers: seedForkSummarizers(saved),
-      approvals: { ...DEFAULT_PREFS.approvals, ...saved.approvals },
+      // Older prefs kept "ask" (ask before every edit), now Edits, and could default to the Ask or Pages mode (#719).
+      ...cleanApprovals(saved),
       // Older prefs kept web as a boolean.
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
@@ -1035,6 +1036,7 @@ export class AgentHost {
       const custom = threadCustom(mode);
       if (JSON.stringify(custom) === JSON.stringify(thread.custom)) continue;
       thread.custom = custom;
+      Object.assign(thread, changeAccess(thread, {}, approvalFor(prefs, thread.provider), custom.max));
       if (modeOff(thread, "web")) thread.web = "off";
       thread.updatedAt = Date.now();
       this.db.saveThread(thread);
@@ -1210,19 +1212,28 @@ export class AgentHost {
       provider = (["cursor", "codex", "claude", "pi"] as ProviderId[]).find((id) => available.includes(id)) ?? available[0];
     }
     if (!provider) throw new Error("No agent provider is available.");
-    const modes: ThreadMode[] = ["code", "ask", "plan", "board"];
-    const mode = modes.find((m) => m === s.mode);
-    if (!mode) throw setup(`unknown mode ${s.mode}`);
-    // A custom mode that is gone, or built on another mode, is refused: starting without its limits would be worse.
-    if (s.customMode && !this.prefs().customModes.some((m) => m.id === s.customMode && m.base === mode)) throw setup("its custom mode is gone");
+    // The rung decides (#719); a mode is still accepted: code + Ask first is Edits, ask and board are Board, plan plans first.
+    // A template action's "readonly" names the rung.
+    const legacy = s.mode === "readonly" ? undefined : s.mode;
+    if (legacy && !parseMode(legacy)) throw setup(`unknown mode ${s.mode}`);
+    if (s.approval && !parseApproval(s.approval)) throw setup(`unknown approval ${s.approval}`);
+    const picked = s.customMode ? this.prefs().customModes.find((m) => m.id === s.customMode) : undefined;
+    // A custom mode that is gone is refused: starting without its limits would be worse.
+    if (s.customMode && !picked) throw setup("its custom mode is gone");
+    const asked = s.mode === "readonly" ? "readonly" : parseApproval(s.approval);
+    const access = changeAccess(
+      { mode: "board", approval: "board" },
+      { mode: legacy || (asked && !readsOnly(asked) ? "code" : undefined), approval: asked ?? (parseMode(legacy) && parseMode(legacy) !== "board" ? "auto" : undefined) },
+      "auto",
+      picked?.base
+    );
+    const { mode, approval } = access;
     const model = s.model || (provider === "cursor" ? "composer-2.5" : "default");
     const models = await this.models(provider).catch(() => [] as ModelOption[]);
     const info = models.find((m) => m.id === model);
     if (model !== "default" && models.length && !info) throw setup(`unknown model ${model}`);
     if (s.effort && info?.efforts.length && !info.efforts.some((e) => e.id === s.effort)) throw setup(`${model} has no effort "${s.effort}"`);
-    const approvals: ApprovalPolicy[] = ["ask", "edits", "auto", "full"];
-    const approval = approvals.find((a) => a === s.approval) ?? "auto";
-    // Pages keeps a folder it is given, to read files there (#718).
+    // Read-only and Board keep a folder they are given, to read files there (#718).
     const folder = mode === "code" || mode === "plan";
     if (folder && !s.cwd) throw setup("it needs a folder");
     if (this.closed) throw new Error("Scribe is shutting down.");
@@ -1471,6 +1482,14 @@ export class AgentHost {
     const customId = input.customMode !== undefined ? input.customMode : input.mode === undefined && !scoped ? prefs.customMode : null;
     const picked = input.custom ? undefined : prefs.customModes.find((mode) => mode.id === customId);
     const custom = input.custom ?? (picked ? threadCustom(picked) : undefined);
+    // Page and folder threads start on Board, others on the provider's last rung (#719).
+    const editRung = approvalFor(prefs, provider);
+    const access = changeAccess(
+      scoped ? { mode: "board", approval: "board" } : settleAccess(prefs.mode, editRung),
+      { mode: input.mode ?? (picked?.plan ? "plan" : undefined), approval: input.approval ?? picked?.approval },
+      editRung,
+      custom?.max
+    );
     const now = Date.now();
     const thread: Thread = {
       id: `th_${crypto.randomBytes(6).toString("hex")}`,
@@ -1480,9 +1499,8 @@ export class AgentHost {
       model,
       effort: input.effort !== undefined ? input.effort : choice.effort,
       modelParams: input.modelParams ?? choice.modelParams,
-      mode: picked?.base ?? input.mode ?? (scoped ? "board" : prefs.mode),
+      ...access,
       ...(custom ? { custom } : {}),
-      approval: input.approval ?? picked?.approval ?? approvalFor(prefs, provider),
       // A mode without web tools keeps web off whatever the thread's setting says.
       web: custom?.off.includes("web") ? "off" : input.web ?? picked?.web ?? prefs.web,
       scope,
@@ -1517,7 +1535,8 @@ export class AgentHost {
       next.provider = patch.provider;
       const prefs = this.prefs();
       next.model = patch.model ?? prefs.models[patch.provider] ?? "default";
-      next.approval = patch.approval ?? approvalFor(prefs, patch.provider);
+      // Another provider's last rung, unless the thread reads only (a page thread on Board stays there).
+      if (!readsOnly(next.approval)) next.approval = approvalFor(prefs, patch.provider);
       next.nativeId = null;
       this.sessions.get(id)?.dispose();
       this.sessions.delete(id);
@@ -1532,17 +1551,17 @@ export class AgentHost {
     }
     if (patch.effort !== undefined) next.effort = patch.effort;
     if (patch.modelParams && typeof patch.modelParams === "object") next.modelParams = { ...next.modelParams, ...patch.modelParams };
-    if (patch.mode) next.mode = patch.mode;
+    let accessPatch: { mode?: unknown; approval?: unknown } = { mode: patch.mode, approval: patch.approval };
     if (patch.customMode === null) delete next.custom;
     else if (patch.customMode) {
       const mode = this.prefs().customModes.find((m) => m.id === patch.customMode);
       if (!mode) throw new Error("That custom mode no longer exists.");
-      next.mode = mode.base;
       next.custom = threadCustom(mode);
-      if (mode.approval) next.approval = mode.approval;
+      accessPatch = { mode: patch.mode ?? (mode.plan ? "plan" : undefined), approval: patch.approval ?? mode.approval };
       if (mode.web) next.web = mode.web;
     }
-    if (patch.approval) next.approval = patch.approval;
+    // The rung decides, capped by a custom mode's highest rung; a mode from an older client still works (#719).
+    Object.assign(next, changeAccess(next, accessPatch, approvalFor(this.prefs(), next.provider), modeMax(next)));
     if (patch.web) next.web = patch.web;
     if (modeOff(next, "web")) next.web = "off";
     if (patch.cwd !== undefined) {
@@ -2772,7 +2791,7 @@ export class AgentHost {
     if (thread.approval !== "full") {
       const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS.useful : null;
       const detail = [
-        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. ${thread.mode === "board" ? "It can then read and search files there (Pages mode: no edits or commands)." : "Commands then run there, and this thread's approval level covers that folder instead."}`,
+        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. ${thread.mode === "board" ? `It can then read and search files there (${APPROVAL_LABEL[thread.approval]} rung: no edits or commands).` : "Commands then run there, and this thread's approval level covers that folder instead."}`,
         opts.reason?.trim(),
         waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
       ]
@@ -3119,7 +3138,7 @@ export class AgentHost {
   }
 
   /** Ask the user before a thread starts a helper, unless it has full access or they allowed helpers for the thread. */
-  private async approveHelper(parent: Thread, what: string, task: string, mode: ThreadMode, signal?: AbortSignal): Promise<void> {
+  private async approveHelper(parent: Thread, what: string, task: string, access: { mode: ThreadMode; approval: ApprovalPolicy }, signal?: AbortSignal): Promise<void> {
     if (parent.approval === "full" || parent.helpersAllowed) return;
     const run = this.runs.get(parent.id);
     if (!run) throw new Error("With no turn running the user cannot be asked to allow a helper.");
@@ -3129,7 +3148,7 @@ export class AgentHost {
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
-    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace in ${mode} mode with this thread's approval and web settings.\n\n${clip(task, 2000)}`;
+    const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace on the ${APPROVAL_LABEL[access.approval]} rung${access.mode === "plan" ? ", planning first," : ""} with this thread's web setting.\n\n${clip(task, 2000)}`;
     const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Start a helper agent: ${what}`.slice(0, 300), detail, options, status: "pending" });
     let decision: ApprovalDecision;
     try {
@@ -3180,19 +3199,21 @@ export class AgentHost {
     if (decision.optionId === "deny") throw new Error(decision.note ? `The user kept trusted content from the untrusted helper: ${decision.note}` : "The user kept this thread's trusted content from the untrusted helper. Do the work yourself, or use a trusted model.");
   }
 
-  /** Pages has a different tool boundary; file modes can only be reduced: Code -> Plan -> Ask. */
-  private helperMode(parent: Thread, requested: string | undefined): ThreadMode {
-    if (requested === undefined) return parent.mode;
-    const allowed: Record<ThreadMode, readonly string[]> = {
-      code: ["code", "plan", "ask"],
-      plan: ["plan", "ask"],
-      ask: ["ask"],
-      board: ["board"],
-    };
-    if (!allowed[parent.mode].includes(requested)) {
-      throw new Error(`Helper mode "${requested}" is not allowed from ${parent.mode} mode. Choose: ${allowed[parent.mode].join(", ")}.`);
-    }
-    return requested as ThreadMode;
+  /**
+   * A helper's rung (#719): its parent's, or a lower one it asks for. A plan-first parent's helpers
+   * plan first too. The old mode names still work: code and plan keep the parent's rung, ask and
+   * board are the Board rung.
+   */
+  private helperAccess(parent: Thread, requested: string | undefined): { mode: ThreadMode; approval: ApprovalPolicy } {
+    if (requested === undefined) return { mode: parent.mode, approval: parent.approval };
+    const mode = parseMode(requested);
+    const rung = parseApproval(requested) && requested !== "ask" ? parseApproval(requested)! : mode === "board" ? minApproval("board", parent.approval) : mode ? parent.approval : null;
+    const below = APPROVALS.slice(0, approvalRank(parent.approval) + 1);
+    if (!rung) throw new Error(`Unknown helper access "${requested}". Choose: ${below.join(", ")}.`);
+    if (approvalRank(rung) > approvalRank(parent.approval)) throw new Error(`A helper may not exceed this thread's ${parent.approval} rung. Choose: ${below.join(", ")}.`);
+    if (mode === "code" && parent.mode === "plan") throw new Error("This thread plans first, so its helpers do too. Choose plan or a lower rung.");
+    if (mode === "plan" && parent.mode === "board") throw new Error(`Plan first needs an editing rung; this thread is on ${parent.approval}.`);
+    return settleAccess(mode === "plan" || parent.mode === "plan" ? "plan" : "code", rung);
   }
 
   /**
@@ -3225,7 +3246,7 @@ export class AgentHost {
     } else {
       const title = opts.title?.replace(/\s+/g, " ").trim();
       if (!title) throw new Error("title is required for a new helper: a short name describing its task.");
-      const mode = this.helperMode(parent, opts.mode);
+      const access = this.helperAccess(parent, opts.mode);
       if (!opts.provider || !isProviderId(opts.provider)) throw new Error(`provider is required: one of ${Object.keys(this.providers).join(", ")}. agent_models lists their models.`);
       const provider = opts.provider;
       const status = (await this.providerStatus()).find((s) => s.id === provider);
@@ -3238,7 +3259,7 @@ export class AgentHost {
       if (busy >= MAX_HELPERS) throw new Error(`This thread already has ${busy} helpers working. Wait for one to finish.`);
       const what = `${status.label}${model ? ` (${model.label})` : ""}`;
       if (parent.tainted && !this.modelTrusted(provider, model?.id ?? this.prefs().models[provider] ?? "default")) await this.approveTaintedHelper(parent, what, opts.signal);
-      await this.approveHelper(parent, what, task, mode, opts.signal);
+      await this.approveHelper(parent, what, task, access, opts.signal);
       if (opts.signal?.aborted) throw new Error("cancelled");
       // Other calls can have started while this one waited for approval.
       if ([...this.threads.values()].filter((t) => t.helperOf === threadId && (this.runs.has(t.id) || this.queues.get(t.id)?.length || this.resuming.has(t.id))).length >= MAX_HELPERS) {
@@ -3252,11 +3273,10 @@ export class AgentHost {
         provider,
         ...(model ? { model: model.id } : {}),
         ...(opts.effort ? { effort: opts.effort } : {}),
-        // Recheck the boundary: the parent mode may have changed while approval was pending.
-        mode: this.helperMode(now, opts.mode),
+        // Recheck the boundary: the parent's rung may have changed while approval was pending.
+        ...this.helperAccess(now, opts.mode),
         // A helper is held to what its parent's mode takes away.
         ...(now.custom ? { custom: now.custom } : {}),
-        approval: now.approval,
         web: now.web,
         // A helper for files and commands gets no page tools; one of a Pages thread works on the same pages.
         // In a worktree the workspace is still the user's folder, or each worktree would list as a workspace of its own (#544).
@@ -5207,7 +5227,7 @@ export class AgentHost {
    * open worktree is shared). Its first turn continues this thread's provider session when it can,
    * or starts fresh with a summary; the provider can still be changed until then.
    */
-  fork(threadId: string, to: { provider?: ProviderId; model?: string; mode?: ThreadMode } = {}): ThreadView {
+  fork(threadId: string, to: { provider?: ProviderId; model?: string; mode?: ModeInput } = {}): ThreadView {
     const source = this.requireThread(threadId);
     const turns = this.loadTurns(threadId).filter((t) => t.status !== "running");
     if (!turns.length) throw new Error("This thread has no finished turns to fork from.");
@@ -5236,11 +5256,11 @@ export class AgentHost {
       thread.model = to.model ?? prefs.models[to.provider] ?? "default";
       thread.effort = prefs.efforts[to.provider] ?? null;
       thread.modelParams = prefs.modelParams[to.provider] ?? {};
-      thread.approval = approvalFor(prefs, to.provider);
+      if (!readsOnly(thread.approval)) thread.approval = approvalFor(prefs, to.provider);
     } else if (to.model) {
       thread.model = to.model;
     }
-    if (to.mode) thread.mode = to.mode;
+    Object.assign(thread, changeAccess(thread, { mode: to.mode }, approvalFor(this.prefs(), thread.provider), modeMax(thread)));
     // A merged thread's session belongs to its removed worktree folder, not the folder a fork starts in.
     const native = this.agent(source.provider).forks === true && source.nativeId && last.nativeEnd && !source.worktree?.closed;
     thread.fork = {

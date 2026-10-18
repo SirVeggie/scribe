@@ -9,7 +9,7 @@ import { builtinTools } from "./providers/pi.js";
 import { threadInstructions } from "./prompt.js";
 import type { Thread } from "./types.js";
 
-const review = { id: "cm_review1", name: "Review", base: "code", off: ["edit", "subagents", "browser"], mcp: ["keeper"], instructions: "Report findings; never fix them.", approval: "auto" };
+const review = { id: "cm_review1", name: "Review", base: "full", off: ["edit", "subagents", "browser"], mcp: ["keeper"], instructions: "Report findings; never fix them.", approval: "auto" };
 
 test("saved custom modes are cleaned: bad ids, bases, groups and duplicates go", () => {
   const modes = cleanCustomModes([
@@ -22,14 +22,15 @@ test("saved custom modes are cleaned: bad ids, bases, groups and duplicates go",
   ]);
   assert.deepEqual(modes.map((m) => m.id), ["cm_review1", "cm_loose1"]);
   assert.deepEqual(modes[0], review);
-  assert.deepEqual(modes[1], { id: "cm_loose1", name: "Loose", base: "code", off: ["edit"], mcp: "none", instructions: "", web: "off" });
+  // An unknown base allows every rung, as a Code base did.
+  assert.deepEqual(modes[1], { id: "cm_loose1", name: "Loose", base: "full", off: ["edit"], mcp: "none", instructions: "", web: "off" });
   assert.deepEqual(cleanCustomModes(null), []);
 });
 
-test("a thread carries a copy of its mode, without the base and defaults", () => {
+test("a thread carries a copy of its mode, with its highest rung and without the defaults", () => {
   const [mode] = cleanCustomModes([review]);
   const custom = threadCustom(mode);
-  assert.deepEqual(custom, { id: "cm_review1", name: "Review", off: ["edit", "subagents", "browser"], mcp: ["keeper"], instructions: "Report findings; never fix them." });
+  assert.deepEqual(custom, { id: "cm_review1", name: "Review", max: "full", off: ["edit", "subagents", "browser"], mcp: ["keeper"], instructions: "Report findings; never fix them." });
 });
 
 test("each provider takes the mode's tool groups away", () => {
@@ -49,11 +50,11 @@ test("Cursor: the groups come off the allowlist or join the denylist, and the ho
   const custom = threadCustom(cleanCustomModes([{ ...review, off: ["edit", "shell"] }])[0]);
   const code = toolLists({ mode: "code", web: "on", custom });
   assert.ok(["edit", "delete", "shell"].every((name) => code.disallowedTools?.includes(name)));
-  const ask = toolLists({ mode: "ask", web: "on", custom: threadCustom(cleanCustomModes([{ ...review, off: ["web"] }])[0]) });
+  const ask = toolLists({ mode: "board", web: "on", cwd: "/work", custom: threadCustom(cleanCustomModes([{ ...review, off: ["web"] }])[0]) });
   assert.ok(ask.tools?.includes("read"));
   assert.ok(!ask.tools?.includes("webSearch"));
-  assert.equal(wantsHostShell({ mode: "code", approval: "ask", custom }, true), false);
-  assert.equal(wantsHostShell({ mode: "code", approval: "ask" }, true), true);
+  assert.equal(wantsHostShell({ mode: "code", approval: "edits", custom }, true), false);
+  assert.equal(wantsHostShell({ mode: "code", approval: "edits" }, true), true);
 });
 
 test("Codex: no edits or no shell falls back to the read-only sandbox", () => {
@@ -84,9 +85,9 @@ test("the mode's limits and instructions reach the thread's instructions", () =>
   const lines = customInstructions({ custom });
   assert.match(lines[1], /Custom mode: Review\. Turned off in this mode: file editing, subagents, the browser tools\./);
   assert.equal(lines[2], "Report findings; never fix them.");
-  const thread = { id: "th_1", provider: "claude", mode: "code", web: "on", approval: "ask", scope: { kind: "global", ref: null }, cwd: null, custom } as unknown as Thread;
+  const thread = { id: "th_1", provider: "claude", mode: "code", web: "on", approval: "edits", scope: { kind: "global", ref: null }, cwd: null, custom } as unknown as Thread;
   const text = threadInstructions(thread, { pages: [] } as never);
-  assert.match(text, /Mode: Code\./);
+  assert.match(text, /Access: Edits\./);
   assert.match(text, /Custom mode: Review\./);
 });
 

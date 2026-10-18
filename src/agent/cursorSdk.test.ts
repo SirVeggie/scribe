@@ -40,7 +40,7 @@ test("modelSelection passes only parameters the model takes", () => {
   assert.deepEqual(modelSelection({ model: "default", effort: null, modelParams: {} }, models), { id: "composer-2" });
 });
 
-test("toolLists: Pages and Ask are allowlists, web off drops the web tools", () => {
+test("toolLists: the reading rungs are allowlists, web off drops the web tools", () => {
   assert.deepEqual(toolLists({ mode: "code", web: "on" }), { disallowedTools: ["askQuestion"] });
   assert.deepEqual(toolLists({ mode: "code", web: "off" }), { disallowedTools: ["askQuestion", "webSearch", "webFetch", "fetch", "xSearch"] });
   assert.deepEqual(toolLists({ mode: "plan", web: "limited" }), { disallowedTools: ["askQuestion", "webSearch", "webFetch", "fetch", "xSearch"] });
@@ -48,7 +48,8 @@ test("toolLists: Pages and Ask are allowlists, web off drops the web tools", () 
   assert.ok(board.includes("mcp"));
   for (const tool of ["shell", "edit", "write", "delete", "webSearch", "webFetch", "task"]) assert.ok(!board.includes(tool), tool);
   assert.ok(toolLists({ mode: "board", web: "on" }).tools!.includes("webSearch"));
-  const ask = toolLists({ mode: "ask", web: "off" }).tools!;
+  // Read-only and Board with a workspace read files there (#718, #719).
+  const ask = toolLists({ mode: "board", web: "off", cwd: "/work" }).tools!;
   assert.ok(ask.includes("read") && ask.includes("grep") && ask.includes("mcp"));
   for (const tool of ["shell", "edit", "write", "delete", "webFetch"]) assert.ok(!ask.includes(tool), tool);
 });
@@ -60,13 +61,12 @@ test("isSdkAgentId tells SDK agents from old ACP sessions", () => {
 });
 
 test("host shell: only Code and Plan threads that ask, and it drops the built-in shell but keeps mcp", () => {
-  assert.equal(wantsHostShell({ mode: "code", approval: "ask" }, true), true);
+  assert.equal(wantsHostShell({ mode: "code", approval: "edits" }, true), true);
   assert.equal(wantsHostShell({ mode: "plan", approval: "edits" }, true), true);
-  assert.equal(wantsHostShell({ mode: "code", approval: "ask" }, false), false);
+  assert.equal(wantsHostShell({ mode: "code", approval: "edits" }, false), false);
   assert.equal(wantsHostShell({ mode: "code", approval: "auto" }, true), false);
   assert.equal(wantsHostShell({ mode: "code", approval: "full" }, true), false);
-  assert.equal(wantsHostShell({ mode: "board", approval: "ask" }, true), false);
-  assert.equal(wantsHostShell({ mode: "ask", approval: "ask" }, true), false);
+  assert.equal(wantsHostShell({ mode: "board", approval: "board" }, true), false);
   const lists = toolLists({ mode: "code", web: "on" }, true).disallowedTools!;
   assert.ok(lists.includes("shell"));
   assert.ok(!lists.includes("mcp"));
@@ -75,7 +75,7 @@ test("host shell: only Code and Plan threads that ask, and it drops the built-in
 test("Cursor retains an open agent across equivalent approval levels, but closes it for review or shell changes", () => {
   for (const mode of ["code", "board"] as const) {
     for (const hostShell of [false, true]) {
-      const thread = { id: "cursor-policy", nativeId: null, mode, web: "off", approval: "ask", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread;
+      const thread = { id: "cursor-policy", nativeId: null, mode, web: "off", approval: "edits", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread;
       const session = new CursorProvider().createSession(thread, { scratchDir: "/scratch", cursorHostShell: () => hostShell } as SessionContext);
       // Install an already-open agent without credentials, subprocesses or a model run.
       const opened = session as unknown as { key(): string; agentKey: string | null; agent: { close(): void } | null };
@@ -91,7 +91,7 @@ test("Cursor retains an open agent across equivalent approval levels, but closes
           session.update({ ...thread, approval: "full" });
           assert.equal(closes, mode === "code" ? 1 : 0);
         }
-        // Full -> Ask must also rebuild agents outside Pages mode.
+        // Full -> Edits must also rebuild agents outside the reading rungs.
         session.update({ ...thread, approval: "full" });
         opened.agentKey = opened.key();
         opened.agent = { close() { closes++; } };

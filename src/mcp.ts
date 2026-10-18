@@ -265,12 +265,19 @@ function outsideOf(outside: TabMeta[] | undefined): { outside?: Array<{ id: stri
   };
 }
 
+/** Tools that create or change pages and templates: left out on the Read-only rung. page_action stays, and the daemon refuses an action that would change the page. */
+const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open"]);
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
   const pages = !(process.env.SCRIBE_THREAD && process.env.SCRIBE_PAGES === "off");
   const server = new McpServer({ name: "scribe", version: VERSION }, { instructions: pages ? INSTRUCTIONS : NO_PAGES_INSTRUCTIONS });
-  const pageTool = ((...args: unknown[]) => (pages ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined)) as unknown as McpServer["tool"];
+  // Tool groups the thread does not get (customModes.ts scribeToolsOff): its custom mode's, and "pagewrite" on the Read-only rung (#719).
+  const off = new Set(process.env.SCRIBE_THREAD ? (process.env.SCRIBE_TOOLS_OFF ?? "").split(",") : []);
+  const readOnly = off.has("pagewrite");
+  const pageTool = ((...args: unknown[]) =>
+    pages && !(readOnly && PAGE_WRITE_TOOLS.has(String(args[0]))) ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined) as unknown as McpServer["tool"];
   const revisions = new SeenRevisions();
   // Registered first, so it wraps inside the gate: a denied call returns no result to scan.
   scanTools(server);
@@ -1210,7 +1217,7 @@ export async function startMcp(): Promise<void> {
       if (!which) {
         return errorResult("Provide id or key");
       }
-      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/action`, { action, args: args ?? {} });
+      const { status, data } = await api("POST", `/api/tabs/${encodeURIComponent(which)}/action`, { action, args: args ?? {}, ...(readOnly ? { readOnly } : {}) });
       if (status >= 400) {
         return withGuide(errorResult((data as ApiError).error || `HTTP ${status}`), which);
       }
@@ -1319,7 +1326,7 @@ export async function startMcp(): Promise<void> {
             run: z.enum(["new", "chat"]).optional(),
             thread: z
               .object({
-                mode: z.enum(["board", "ask"]).optional(),
+                mode: z.enum(["board", "ask", "readonly"]).optional(),
                 provider: z.string().optional(),
                 model: z.string().optional(),
                 effort: z.string().optional(),
@@ -1459,8 +1466,6 @@ export async function startMcp(): Promise<void> {
 
   // The agent browser, page_ask and ask_user are for Scribe chat threads only; other MCP clients have their own.
   if (process.env.SCRIBE_THREAD) {
-    // Tool groups the thread's custom mode turns off (customModes.ts).
-    const off = new Set((process.env.SCRIBE_TOOLS_OFF ?? "").split(","));
     if (!off.has("browser")) registerBrowserTools(server);
     if (pages) registerAsk(server);
     registerQuestion(server);
@@ -1878,12 +1883,12 @@ function registerHelperTools(server: McpServer): void {
       provider: z.string().optional().describe("claude, cursor, codex or pi (Native: the user's own model sources). Required for a new helper."),
       model: z.string().optional().describe("Model from agent_models. Default: the provider's last used."),
       effort: z.string().optional().describe("One of the model's efforts in agent_models. Default: its last used."),
-      mode: z.enum(["code", "plan", "ask", "board"]).optional().describe("New helper only; default the parent's. Can only reduce access: Code may pick Plan or Ask, Plan may pick Ask; Ask and Pages (board) keep theirs."),
-      thread: z.string().optional().describe("A helper's thread from an earlier agent_run: send it a follow-up (it keeps context and mode; provider, model, effort, mode ignored), or with no task wait for its report."),
+      access: z.enum(["readonly", "board", "edits", "auto", "full"]).optional().describe("New helper only: its approval rung, default the parent's. At most the parent's rung (readonly < board < edits < auto < full)."),
+      thread: z.string().optional().describe("A helper's thread from an earlier agent_run: send it a follow-up (it keeps context and access; provider, model, effort, access ignored), or with no task wait for its report."),
       background: z.boolean().optional().describe("Default true. false waits for the report during launch."),
       stop: z.boolean().optional().describe("With thread and no task: stop that helper."),
     },
-    async ({ title, task, provider, model, effort, mode, thread, background, stop }, extra) => {
+    async ({ title, task, provider, model, effort, access, thread, background, stop }, extra) => {
       const progressToken = extra._meta?.progressToken;
       const startedAt = Date.now();
       const heartbeat =
@@ -1896,7 +1901,7 @@ function registerHelperTools(server: McpServer): void {
                 .catch(() => {});
             }, WAIT_HEARTBEAT_MS);
       try {
-        const { status, data } = await api("POST", "/api/helper/run", { title, task, provider, model, effort, mode, thread, stop, background: background ?? true }, { signal: extra.signal });
+        const { status, data } = await api("POST", "/api/helper/run", { title, task, provider, model, effort, access, thread, stop, background: background ?? true }, { signal: extra.signal });
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }

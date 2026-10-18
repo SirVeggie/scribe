@@ -282,8 +282,10 @@ function harness(available = ["cursor", "codex", "claude", "pi"]) {
       defaults: { provider: "claude", model: "last-model", approval: "full", web: "on", fast: true },
     },
     FOLDER_MODES: new Set(["code", "plan"]),
-    PAGE_MODES: new Set(["board", "ask", "code", "plan"]),
-    APPROVALS: ["ask", "edits", "auto", "full"].map((id) => ({ id })),
+    PAGE_MODES: new Set(["board", "ask", "code", "plan", "readonly"]),
+    APPROVALS: ["readonly", "board", "edits", "auto", "full"].map((id) => ({ id })),
+    READ_RUNGS: new Set(["readonly", "board"]),
+    RUNG_LABELS: { readonly: "Read-only", board: "Board", edits: "Edits", auto: "Auto review", full: "Full access" },
     prefs: () => ({ provider: "claude", models: { claude: "last-model" }, web: "on" }),
     approvalFor: () => "full",
     modelChoice: () => ({ effort: "high", modelParams: { fast: "true", context: "last-context" } }),
@@ -295,13 +297,15 @@ function harness(available = ["cursor", "codex", "claude", "pi"]) {
     str: (value: unknown) => value == null ? "" : String(value),
     // workerOpts uses the board's object lookup, pageThreadSettings uses a Set.
     BOARD_FOLDER_MODES: { code: true, plan: true },
+    BOARD_READ_RUNGS: { readonly: true, board: true },
   });
   vm.runInContext([
     fn(board, "workerDefaults"),
-    'function workerMode(w) { return str(w.mode) || "code"; }',
+    fn(board, "workerRung").replaceAll("READ_RUNGS[", "BOARD_READ_RUNGS["),
+    fn(board, "workerMode").replaceAll("READ_RUNGS[", "BOARD_READ_RUNGS["),
     fn(board, "workerOpts").replaceAll("FOLDER_MODES[mode]", "BOARD_FOLDER_MODES[mode]"),
     fn(chat, "webMode"),
-    fn(chat, "pageThreadSettings"),
+    ...["parseRung", "rungRank", "accessMode", "pageAccess", "pageThreadSettings"].map((name) => fn(chat, name)),
     'function launch(w) { return pageThreadSettings(workerOpts(w, { num: 295, title: "Defaults" })); }',
   ].join("\n"), context);
   return (code: string) => JSON.parse(JSON.stringify(vm.runInContext(code, context)));
@@ -356,7 +360,11 @@ test("provider fallback is stable and page-only workers also receive fixed defau
   const run = harness(["pi", "codex", "claude"]);
   const settings = run("launch({ mode: 'board' })");
   assert.equal(settings.provider, "codex");
-  assert.equal(settings.approval, "auto");
+  // A Pages worker from before the ladder runs on the Board rung (#719).
+  assert.equal(settings.approval, "board");
+  assert.equal(settings.mode, "board");
+  assert.equal(run("launch({ mode: 'code', approval: 'ask', cwd: 'C:/project' })").approval, "edits");
+  assert.equal(run("launch({ mode: 'board', approval: 'readonly' })").approval, "readonly");
   assert.equal(settings.web, "off");
   assert.equal(settings.cwd, null);
 });
@@ -409,20 +417,24 @@ test("template agent actions ignore last-used chat model through thread creation
     modelChoice: () => ({ effort: "high", modelParams: { fast: "true" } }),
     approvalFor: () => "full",
     webMode: (w?: string, fallback?: string) => w || fallback || "off",
-    PAGE_MODES: new Set(["board", "ask", "code", "plan"]),
+    PAGE_MODES: new Set(["board", "ask", "code", "plan", "readonly"]),
     FOLDER_MODES: new Set(["code", "plan"]),
-    APPROVALS: ["ask", "edits", "auto", "full"].map((id) => ({ id })),
+    APPROVALS: ["readonly", "board", "edits", "auto", "full"].map((id) => ({ id })),
+    READ_RUNGS: new Set(["readonly", "board"]),
   });
   const providerPref = chat.match(/^  const AGENT_ACTION_PROVIDER_PREF = .*;/m);
   const agentActionFn = chat.match(/^  function agentActionThreadInput\([^]*?^  }/m);
   const pageThreadFn = chat.match(/^  function pageThreadSettings\([^]*?^  }/m);
   assert.ok(providerPref && agentActionFn && pageThreadFn);
-  vm.runInContext([providerPref[0], agentActionFn[0], pageThreadFn[0], 'function launch(thread) { return pageThreadSettings(agentActionThreadInput(thread)); }'].join("\n"), context);
+  const helpers = ["parseRung", "rungRank", "accessMode", "pageAccess"].map((name) => fn(chat, name));
+  vm.runInContext([providerPref[0], agentActionFn[0], ...helpers, pageThreadFn[0], 'function launch(thread) { return pageThreadSettings(agentActionThreadInput(thread)); }'].join("\n"), context);
   const run = (code: string) => vm.runInContext(code, context);
   const triage = run('launch({ title: "Triage: Board" })');
   assert.equal(triage.provider, "cursor");
   assert.equal(triage.model, "composer-2.5");
-  assert.equal(triage.approval, "auto");
+  assert.equal(triage.approval, "board");
+  assert.equal(triage.mode, "board");
+  assert.equal(run('launch({ mode: "readonly" })').approval, "readonly");
   assert.equal(triage.web, "off");
   assert.equal(triage.modelParams?.fast, "false");
   assert.equal(triage.effort, null);

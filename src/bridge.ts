@@ -1287,8 +1287,9 @@ ${POINTER_DRAG_JS}
   var agent = {
     /**
      * New thread for this page: { ok, threadId, queued }. opts: { title, show: "dock" | "sidebar",
-     * mode: "board" | "ask" | "code" | "plan", provider, model, effort, fast (Cursor),
-     * modelParams, and for Code and Plan: cwd (folder), approval: "ask" | "edits" | "auto" | "full",
+     * approval: the rung, "readonly" | "board" (default) | "edits" | "auto" | "full", mode: "plan"
+     * to plan first ("code", "board" and "ask" are older names: code keeps the rung, board and ask
+     * are Board), provider, model, effort, fast (Cursor), modelParams, cwd (folder: needed from Edits up),
      * worktree, web: "on" | "limited" | "off" (or a boolean), helpers: true (the agent may start
      * helper agents without asking the user each time) }. run: true or { tag, data, merge,
      * resumePrompt } hands the thread to Scribe to see through (see watch).

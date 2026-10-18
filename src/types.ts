@@ -110,8 +110,8 @@ export type AgentAction = {
 };
 
 export type AgentActionThread = {
-  /** Only modes without a workspace folder: board (Pages) or ask. */
-  mode?: "board" | "ask";
+  /** Only the reading rungs (#719): board (also "ask", the older name) or readonly. */
+  mode?: "board" | "ask" | "readonly";
   provider?: string;
   model?: string;
   effort?: string;

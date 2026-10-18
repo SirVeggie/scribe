@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
-import { isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
+import { APPROVAL_LABEL, isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
 import { claudeServerConfig, serversKey, type ResolvedMcpServer } from "../mcpConfig.js";
 import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
@@ -519,8 +519,6 @@ export function permissionModeFor(thread: Pick<Thread, "mode" | "approval">): Pe
   if (thread.mode === "plan") return "plan";
   if (thread.mode === "board") return "dontAsk";
   switch (thread.approval) {
-    case "ask":
-      return "default";
     case "edits":
       return "acceptEdits";
     case "auto":
@@ -830,13 +828,10 @@ class ClaudeSession implements ProviderSession {
       ...(this.sessionId && thread.rewind?.at ? { resumeSessionAt: thread.rewind.at, forkSession: true } : {}),
     };
     if (board) {
-      // With a workspace, Pages reads and searches files there (#718).
+      // Read-only and Board: with a workspace, they read and search files there (#718).
       const reads = pagesReadsFiles(thread) ? PAGES_READ_TOOLS : [];
       options.tools = [...reads, ...webTools, "Skill", "TodoWrite"];
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...reads, ...webTools, "Skill", "TodoWrite"];
-    } else if (thread.mode === "ask") {
-      options.tools = ["Read", "Grep", "Glob", "Skill", "TodoWrite", ...webTools];
-      options.allowedTools = ["Read", "Grep", "Glob", ...webTools, `mcp__${BOARD_SERVER}__*`, ...autoServers];
     } else {
       options.tools = { type: "preset", preset: "claude_code" };
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers];
@@ -1289,7 +1284,7 @@ class ClaudeSession implements ProviderSession {
       }
     }
     if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
-      return { behavior: "deny", message: pagesReadsFiles(this.thread) ? "This thread is in Pages mode: only board tools, file reads and web search are available." : "This thread is in Pages mode: only board tools and web search are available." };
+      return { behavior: "deny", message: pagesReadsFiles(this.thread) ? `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools, file reads and web search are available.` : `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools and web search are available.` };
     }
     const described = describeTool(name, input, this.thread.cwd);
     const mcpServer = this.userServers().find((server) => name.startsWith(`mcp__${server.name}__`));

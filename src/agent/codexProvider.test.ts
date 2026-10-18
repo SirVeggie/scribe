@@ -20,16 +20,16 @@ const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "
   model: "gpt-5-codex",
   effort: "medium",
   mode: "code",
-  approval: "ask",
+  approval: "edits",
   web: "on",
   ...over,
 });
 
-test("sandboxFor: Ask, Plan and Pages are read-only; Full access drops the sandbox", () => {
-  assert.equal(sandboxFor(thread({ mode: "ask" })), "read-only");
+test("sandboxFor: Read-only, Board and Plan are read-only; Full access drops the sandbox", () => {
+  // The rung decides, even on a thread whose mode was not settled.
+  assert.equal(sandboxFor(thread({ mode: "code", approval: "readonly" })), "read-only");
   assert.equal(sandboxFor(thread({ mode: "plan" })), "read-only");
   assert.equal(sandboxFor(thread({ mode: "board" })), "read-only");
-  assert.equal(sandboxFor(thread({ mode: "code", approval: "ask" })), "workspace-write");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "edits" })), "workspace-write");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "auto" })), "workspace-write");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "full" })), "danger-full-access");
@@ -108,8 +108,8 @@ test("mcpConfig registers the board server as scribe with the thread id", () => 
 });
 
 test("Codex approval modes select the native reviewer without widening the mode sandbox", () => {
-  for (const mode of ["code", "ask", "plan", "board"] as const) {
-    for (const approval of ["ask", "edits", "auto", "full"] as const) {
+  for (const mode of ["code", "plan", "board"] as const) {
+    for (const approval of ["edits", "auto", "full"] as const) {
       const opts = threadOptions(thread({ mode, approval }), "/work");
       assert.equal(opts.approvalsReviewer, approval === "auto" ? "auto_review" : "user");
       assert.equal(opts.approvalPolicy, approval === "full" ? "never" : "on-request");
@@ -764,8 +764,8 @@ test("Codex policy update errors or broader observations stop before the next tu
 });
 
 test("Codex per-turn sandbox keeps mode restrictions, networking and worktree git writes", () => {
-  for (const mode of ["code", "ask", "plan", "board"] as const) {
-    for (const approval of ["ask", "edits", "auto", "full"] as const) {
+  for (const mode of ["code", "plan", "board"] as const) {
+    for (const approval of ["edits", "auto", "full"] as const) {
       const overrides = turnPermissionOverrides(thread({ mode, approval, web: "off" }), process.cwd());
       const sandbox = overrides.sandboxPolicy as Record<string, unknown>;
       assert.equal(sandbox.type, mode !== "code" ? "readOnly" : approval === "full" ? "dangerFullAccess" : "workspaceWrite");
