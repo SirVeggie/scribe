@@ -93,8 +93,8 @@ test("the mode's limits and instructions reach the thread's instructions", () =>
 
 test("the last picked custom mode is remembered, and a built-in pick forgets it", () => {
   const custom = threadCustom(cleanCustomModes([review])[0]);
-  const thread = { provider: "claude" as const, model: "default", effort: null, modelParams: {}, mode: "code" as const, approval: "ask" as const, web: "on" as const, scope: { kind: "global" as const, ref: null }, cwd: null };
+  const thread = { provider: "claude" as const, model: "default", effort: null, modelParams: {}, mode: "code" as const, approval: "edits" as const, web: "on" as const, scope: { kind: "global" as const, ref: null }, cwd: null };
   assert.equal(prefsPatchFromChoices(DEFAULT_PREFS, { ...thread, custom }, { customMode: "cm_review1" }).customMode, "cm_review1");
   assert.equal(prefsPatchFromChoices(DEFAULT_PREFS, thread, { mode: "code", customMode: null }).customMode, null);
-  assert.equal("customMode" in prefsPatchFromChoices(DEFAULT_PREFS, thread, { approval: "ask" }), false);
+  assert.equal("customMode" in prefsPatchFromChoices(DEFAULT_PREFS, thread, { approval: "edits" }), false);
 });

@@ -85,7 +85,9 @@ function newPage() {
 
 async function settled(thread: string) {
   const deadline = Date.now() + 5000;
-  while (host.runInfo(thread).running) {
+  while (true) {
+    const info = host.runInfo(thread);
+    if (!info.exists || !info.running) break;
     assert.ok(Date.now() < deadline, "fake turn should finish");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

@@ -992,8 +992,7 @@ test("user writes leave provenance alone; external agents have no thread", () =>
 
 test("an activating agent write names its thread on the upsert notice", () => {
   const store = loaded();
-  /** @type {Array<[string, { activate: boolean, structural: boolean, thread?: string }]>} */
-  const notices = [];
+  const notices: Array<[string, { activate: boolean; structural: boolean; thread?: string }]> = [];
   store.on("tab_upserted", (tab, _index, notice) => notices.push([tab.id, notice]));
   const actor = { thread: "th_abc", title: "Show", at: 1 };
   const { tab } = store.upsert({ key: "shown", title: "Shown", html: "<p>a</p>", viewer: "agent", actor });
@@ -2172,8 +2171,7 @@ test("a template change marks its pages' upsert notices, so a page on screen can
   const store = loaded();
   const { template } = store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc</p>" });
   const { tab } = store.openFromTemplate(template.key, {});
-  /** @type {Array<[string, { structural: boolean, template?: boolean }]>} */
-  const notices = [];
+  const notices: Array<[string, { structural: boolean; template?: boolean }]> = [];
   store.on("tab_upserted", (meta, _index, notice) => notices.push([meta.id, notice]));
   store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc 2</p>" });
   const refreshed = notices.find(([id]) => id === tab.id);

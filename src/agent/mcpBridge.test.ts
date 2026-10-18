@@ -32,7 +32,7 @@ test("bridged tools call the server, and ask first unless allowed", async () => 
   const server = resolveServer("echo-srv", "global", { command: process.execPath, args: [file], env: { ECHO_TAG: "tagged" } })!;
   const asked: string[] = [];
   let answer = "reject";
-  let approval: "ask" | "full" = "ask";
+  let approval: "edits" | "full" = "edits";
   const bridge = new McpBridge(
     [server],
     os.tmpdir(),
@@ -60,7 +60,7 @@ test("bridged tools call the server, and ask first unless allowed", async () => 
     approval = "full";
     await tools[0].call({}, {});
     assert.equal(asked.length, 2);
-    approval = "ask";
+    approval = "edits";
     answer = "mcp";
     await tools[0].call({}, {});
     await tools[0].call({}, {});
@@ -75,7 +75,7 @@ test("a server that does not start is skipped and reported", async () => {
   const bridge = new McpBridge(
     [resolveServer("broken", "global", { command: process.execPath, args: ["-e", "process.exit(1)"] })!],
     os.tmpdir(),
-    () => ({ approval: "ask" }),
+    () => ({ approval: "edits" }),
     () => undefined,
     (name) => errors.push(name)
   );

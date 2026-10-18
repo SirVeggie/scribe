@@ -30,7 +30,7 @@ function thread(over: Partial<Thread> = {}): Thread {
     effort: null,
     modelParams: {},
     mode: "board",
-    approval: "ask",
+    approval: "edits",
     web: "off",
     scope: { kind: "page", ref: "t_1" },
     cwd: null,

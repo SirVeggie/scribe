@@ -235,7 +235,7 @@ test("Codex RPC rejects outstanding calls on process exit", async () => {
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "ask", limits?: SessionContext["limits"],
+function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "edits", limits?: SessionContext["limits"],
   mcp?: { servers: ResolvedMcpServer[]; bridge: ConstructorParameters<typeof CodexSession>[6] },
   worker = false, scope: Thread["scope"] = { kind: "page", ref: "board" }) {
   let f: ReturnType<typeof rpcFixture>;
@@ -300,7 +300,7 @@ test("Codex quota reader checks auth without forcing refresh and reads only acco
 
 test("Codex account quota notifications are forwarded even between turns", async () => {
   const reports: unknown[] = [];
-  const f = sessionFixture(null, "ask", (provider, info) => { assert.equal(provider, "codex"); reports.push(info); });
+  const f = sessionFixture(null, "edits", (provider, info) => { assert.equal(provider, "codex"); reports.push(info); });
   const { run } = await f.start();
   const first = { rateLimits: { limitId: "codex", primary: { usedPercent: 30 } } };
   f.f.emit({ method: "account/rateLimits/updated", params: first });
@@ -703,7 +703,7 @@ test("Codex approval changes and warm-ups reuse one connection and verify each p
     await first.run;
     const connection = f.f;
     let turnNumber = 1;
-    for (const approval of ["ask", "edits", "auto", "full", "ask"] as const) {
+    for (const approval of ["edits", "auto", "full", "edits"] as const) {
       const updated = { ...thread({ approval }), id: "scribe-thread", nativeId: "native-thread", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread;
       f.session.update(updated);
       await f.session.warm("Scribe instructions");
@@ -778,7 +778,7 @@ test("Codex per-turn sandbox keeps mode restrictions, networking and worktree gi
 
 test("Codex turn overrides retain custom mode read-only restrictions at every approval level", () => {
   for (const off of ["edit", "shell"] as const) {
-    for (const approval of ["ask", "edits", "auto", "full"] as const) {
+    for (const approval of ["edits", "auto", "full"] as const) {
       const limited = { ...thread({ approval }), custom: { id: "cm_test", name: "Limited", off: [off], mcp: "all" as const, instructions: "" } };
       assert.deepEqual(turnPermissionOverrides(limited, "/work").sandboxPolicy, { type: "readOnly", networkAccess: false });
       const config = threadOptions(limited, "/work", "win32").config as Record<string, unknown>;
@@ -855,7 +855,7 @@ function bridgeFixture(approve: ResolvedMcpServer["approve"]) {
 
 test("Codex offers the user's MCP servers as dynamic tools and asks before a call", async () => {
   const mcp = bridgeFixture("ask");
-  const f = sessionFixture(null, "ask", undefined, mcp);
+  const f = sessionFixture(null, "edits", undefined, mcp);
   const { run } = await f.start();
   const start = f.f.sent.find((message) => message.method === "thread/start")!;
   assert.deepEqual(start.params?.dynamicTools, [{ type: "function", name: "files__read", description: "Read a file", inputSchema: { type: "object", properties: { path: { type: "string" } } } }]);
@@ -888,7 +888,7 @@ test("Codex offers the user's MCP servers as dynamic tools and asks before a cal
 
 test("Codex bridged calls skip the prompt for auto servers; a resumed thread gets no new tool list", async () => {
   const mcp = bridgeFixture("auto");
-  const f = sessionFixture("native-thread", "ask", undefined, mcp);
+  const f = sessionFixture("native-thread", "edits", undefined, mcp);
   const { run } = await f.start();
   assert.equal(f.f.sent.find((message) => message.method === "thread/resume")?.params?.dynamicTools, undefined);
   f.f.emit({ id: "call", method: "item/tool/call", params: { threadId: "native-thread", turnId: "turn-1", callId: "c", namespace: null, tool: "files__read", arguments: { path: "a.txt" } } });
@@ -975,7 +975,7 @@ for (const nativeId of [null, "saved-thread"]) {
 }
 
 test("Codex compatible worker inventories board actions and reports without mutating pages", async () => {
-  const f = sessionFixture(null, "ask", undefined, undefined, true);
+  const f = sessionFixture(null, "edits", undefined, undefined, true);
   try {
     const { run } = await f.start({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request", approvalsReviewer: "user" });
     assert.ok(f.f.sent.some((m) => m.method === "turn/start"));
@@ -986,7 +986,7 @@ test("Codex compatible worker inventories board actions and reports without muta
 });
 
 test("Codex worker with App scope None stops before a turn or MCP inventory", async () => {
-  const f = sessionFixture(null, "ask", undefined, undefined, true, { kind: "workspace", ref: "/work" });
+  const f = sessionFixture(null, "edits", undefined, undefined, true, { kind: "workspace", ref: "/work" });
   try {
     const { run } = await f.start({ sandbox: { type: "workspaceWrite" }, approvalPolicy: "on-request" });
     assert.match((await run).error!, /App scope None/);

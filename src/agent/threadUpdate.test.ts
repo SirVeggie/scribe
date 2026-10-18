@@ -71,7 +71,7 @@ after(async () => {
   }
 });
 
-function thread(approval: ApprovalPolicy = "ask", extra: Record<string, unknown> = {}): string {
+function thread(approval: ApprovalPolicy = "edits", extra: Record<string, unknown> = {}): string {
   return host.createThread({ provider: "pi", mode: "code", approval, cwd: a, scope: { kind: "workspace", ref: a }, ...extra }).id;
 }
 
@@ -116,7 +116,7 @@ test("thread_update renames the thread, but not one the user named", async () =>
 });
 
 test("an allowed workspace change applies when the turn ends, and Scribe sends the thread on there", async () => {
-  const id = thread("ask");
+  const id = thread("edits");
   let during: string | null = null;
   let reply: unknown;
   act = async (threadId) => {

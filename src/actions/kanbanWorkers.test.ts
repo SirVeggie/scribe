@@ -52,7 +52,7 @@ const ended = (outcome: Record<string, unknown>, extra: Record<string, unknown> 
   running: false,
   title: "chat",
   lastTurn: { status: "done", endedAt: 9000 },
-  run: { phase: "ended", fixes: 0, createdAt: 1, merge: true, outcome: outcome as never },
+  run: { phase: "ended", fixes: 0, createdAt: 1, after: 0, merge: true, outcome: outcome as never },
   ...extra,
 });
 
@@ -324,9 +324,9 @@ test("stop after this card ends the run once the chat is wrapped up", () => {
 
 test("a running chat or a limit wait is left alone", () => {
   const state = board({ run: { since: 5, card: 1, startedAt: 100 }, threadId: "th_1" });
-  const running = ctx({ th_1: { exists: true, running: true, title: "chat", run: { phase: "running", fixes: 0, createdAt: 1, merge: true } } });
+  const running = ctx({ th_1: { exists: true, running: true, title: "chat", run: { phase: "running", fixes: 0, createdAt: 1, after: 0, merge: true } } });
   assert.equal(drive(state, running.c), null);
-  const waiting = ctx({ th_1: { exists: true, running: false, title: "chat", run: { phase: "waiting", fixes: 0, createdAt: 1, merge: true, wait: { until: 99_999, count: 1 } } } });
+  const waiting = ctx({ th_1: { exists: true, running: false, title: "chat", run: { phase: "waiting", fixes: 0, createdAt: 1, after: 0, merge: true, wait: { until: 99_999, count: 1 } } } });
   assert.equal(drive(state, waiting.c), null);
 });
 

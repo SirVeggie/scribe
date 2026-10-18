@@ -77,7 +77,7 @@ function parent(approval: ApprovalPolicy = "full"): string {
 /** Give a thread a running turn, so the user can be asked. */
 function running(id: string): void {
   const internals = host as unknown as Internals;
-  const turn = { id: `tu_${id}`, threadId: id, seq: 1, status: "running", model: "m", effort: null, mode: "ask", startedAt: Date.now() };
+  const turn = { id: `tu_${id}`, threadId: id, seq: 1, status: "running", model: "m", effort: null, mode: "board", startedAt: Date.now() };
   internals.turns.get(id)?.push(turn);
   internals.runs.set(id, { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: "", dock: false, called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } });
 }
@@ -246,7 +246,7 @@ test("without full access the user is asked first, and Allow for this thread sti
     await new Promise((resolve) => setTimeout(resolve, 40));
     return status();
   });
-  const id = parent("ask");
+  const id = parent("edits");
   await assert.rejects(host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" }), /cannot be asked/);
   running(id);
   const denied = assert.rejects(host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" }), /denied the helper/);
@@ -265,7 +265,7 @@ test("without full access the user is asked first, and Allow for this thread sti
 
 test("a thread made with helpers allowed (a board worker) is not asked", async () => {
   host.setPrefs({ helpers: true });
-  const id = host.createThread({ provider: "codex", mode: "ask", approval: "ask", cwd: null, scope: { kind: "global", ref: null }, helpersAllowed: true }).id;
+  const id = host.createThread({ provider: "codex", mode: "board", approval: "board", cwd: null, scope: { kind: "global", ref: null }, helpersAllowed: true }).id;
   assert.equal((await host.runHelper(id, { task: "x", title: "Inspect files", provider: "pi" })).status, "done");
 });
 

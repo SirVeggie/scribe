@@ -72,7 +72,7 @@ test('floating handles follow dynamic surfaces and disappear behind a modal or o
     await page.waitForFunction(() => !document.querySelector('.overlay-scrollbar:not([hidden])'));
     await page.locator('#cover').evaluate(el => el.remove());
     await page.waitForFunction(() => document.querySelector('.overlay-scrollbar:not([hidden])'));
-    await page.locator('textarea').evaluate(el => { el.hidden = true; });
+    await page.locator('textarea').evaluate(el => { el.setAttribute('hidden', ''); });
     await page.waitForFunction(() => !document.querySelector('.overlay-scrollbar:not([hidden])'));
     await page.locator('textarea').evaluate(el => el.remove());
     await page.waitForFunction(() => !document.querySelector('.overlay-scrollbar'));

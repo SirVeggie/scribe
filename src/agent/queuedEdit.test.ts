@@ -48,7 +48,7 @@ test("cancel targets an older message, and targeted steering still attaches to t
 
 test("editing the queue head holds subsequent sends after turn completion and saves in place", async () => {
   const f = setup();
-  const edited = host.send(f.id, { text: "original", context: [{ kind: "page", id: "t_missing", title: "Context" }] }).item;
+  const edited = host.send(f.id, { text: "original", context: [{ kind: "page", id: "t_missing", key: "scribe:missing", title: "Context" }] }).item;
   const second = host.send(f.id, { text: "second" }).item;
   const { token } = await host.beginQueuedEdit(f.id, edited.id);
   await assert.rejects(host.steer(f.id, second.id), /Finish editing/);
@@ -62,7 +62,9 @@ test("editing the queue head holds subsequent sends after turn completion and sa
   const item = users(f.id).find((it) => it.id === edited.id)!;
   assert.equal(item.text, "revised");
   assert.equal(item.editing, undefined);
-  assert.equal(item.context?.[0].id, "t_missing");
+  const context = item.context?.[0];
+  assert.ok(context?.kind === "page");
+  assert.equal(context.id, "t_missing");
   f.results[1]({ status: "done" });
   await tick();
   assert.match(f.inputs[2].text, /second/);

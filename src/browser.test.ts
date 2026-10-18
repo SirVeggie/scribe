@@ -190,6 +190,7 @@ test("a thread opens a page, acts on refs, and reads console and network", async
   assert.ok(ref, opened.snapshot as string);
 
   const clicked = await browserAct("thr_a", { action: "click", ref });
+  assert.ok("snapshot" in clicked);
   assert.match(clicked.snapshot as string, /status \[ref=e\d+\]: "1"/);
   assert.equal(await browserEval("thr_a", { script: "document.getElementById('count').textContent" }).then((r) => r.result), '"1"');
 
@@ -241,6 +242,7 @@ test("browser_act, snapshot, and screenshot reach a page frame", async (t) => {
   // Without frame, text only looks in the shell.
   await assert.rejects(browserAct("thr_frame_act", { action: "click", text: "Press me", snapshot: false }), /Timeout/);
   const clicked = await browserAct("thr_frame_act", { action: "click", text: "Press me", frame: "scribe:framed" });
+  assert.ok("snapshot" in clicked);
   assert.match(clicked.snapshot as string, /button "Pressed"/);
   assert.doesNotMatch(clicked.snapshot as string, /iframe/);
 

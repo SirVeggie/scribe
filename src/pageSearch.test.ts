@@ -10,7 +10,6 @@ function tab(over: Partial<Tab> & Pick<Tab, "title">): Tab {
   return {
     id,
     key: over.key ?? id,
-    title: over.title,
     html: over.html ?? "",
     pinned: false,
     createdAt: 1,
@@ -20,10 +19,10 @@ function tab(over: Partial<Tab> & Pick<Tab, "title">): Tab {
     state: over.state ?? {},
     stateRevision: 0,
     stateUpdatedAt: 0,
-    signalRevision: 0,
-    signal: null,
-    assets: [],
+    eventSeq: 0,
+    events: [],
     libPos: 0,
+    assets: [],
     ...over,
   };
 }

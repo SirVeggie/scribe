@@ -9,7 +9,7 @@ import type { ThreadWorktree } from "./types.js";
 
 test("scoped search filters, paginates and bounds matches without shell interpretation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-search-test-"));
-  const scope = { cwd: root, mode: "ask", approval: "ask" } as const;
+  const scope = { cwd: root, mode: "board", approval: "readonly" } as const;
   try {
     await fs.mkdir(path.join(root, "sub"));
     await fs.mkdir(path.join(root, "node_modules"));
@@ -59,7 +59,7 @@ test("search uses read roots for modes, attachments, recorded links and nested e
   process.env.SCRIBE_HOME = path.join(root, "data");
   const cwd = path.join(root, "workspace"), repo = path.join(root, "repo");
   const linked = path.join(cwd, "linked"), escape = path.join(repo, "linked", "escape"), cycle = path.join(cwd, "cycle");
-  const scope = { id: "one", cwd, mode: "plan", approval: "full", worktree: { path: cwd, repo, links: ["linked"] } as ThreadWorktree } as const;
+  const scope = { id: "one", cwd, mode: "board", approval: "board", worktree: { path: cwd, repo, links: ["linked"] } as ThreadWorktree } as const;
   try {
     await fs.mkdir(cwd);
     await fs.mkdir(path.join(repo, "linked"), { recursive: true });
@@ -74,7 +74,7 @@ test("search uses read roots for modes, attachments, recorded links and nested e
     assert.deepEqual((await searchScopedFiles(scope, { pattern: "secret" }, true)).results, []);
     await assert.rejects(searchScopedFiles({ ...scope, worktree: null }, { path: "linked" }, false), /link target/);
     await assert.rejects(searchScopedFiles(scope, { path: repo }, true), /outside/);
-    assert.equal((await searchScopedFiles({ ...scope, mode: "code" }, { path: path.join(repo, "secret.txt"), pattern: "secret" }, true)).results.length, 1);
+    assert.equal((await searchScopedFiles({ ...scope, mode: "code", approval: "full" }, { path: path.join(repo, "secret.txt"), pattern: "secret" }, true)).results.length, 1);
     for (const id of ["one", "two"]) {
       await fs.mkdir(threadFilesDir(id), { recursive: true });
       await fs.writeFile(path.join(threadFilesDir(id), "attached.txt"), id);

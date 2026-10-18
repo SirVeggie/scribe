@@ -23,9 +23,9 @@ function page(id: string, state: Tab["state"] = {}, html = "<h1 id='one'>Heading
 class StubEmbedder implements Embedder {
   calls: EmbedDocument[][] = [];
   queries = 0;
-  async embedDocuments(items: EmbedDocument[]) { this.calls.push(items); return items.map(() => vector()); }
-  async embedQuery() { this.queries++; return vector(); }
-  async embedImage() { return vector(); }
+  async embedDocuments(items: EmbedDocument[]): Promise<Float32Array[]> { this.calls.push(items); return items.map(() => vector()); }
+  async embedQuery(_query: string) { this.queries++; return vector(); }
+  async embedImage(_bytes: Uint8Array) { return vector(); }
 }
 function fixture(pages: Tab[], declaration?: SearchDeclaration, embedder = new StubEmbedder()) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-semantic-"));
@@ -149,7 +149,7 @@ test("deleted or changed pages cannot commit stale embeddings", async () => {
   const p = page("Page"); const embedder = new StubEmbedder();
   let resolve!: (vectors: Float32Array[]) => void, entered!: () => void;
   const started = new Promise<void>(r => { entered = r; });
-  embedder.embedDocuments = async items => { entered(); return new Promise(r => { resolve = r; }); };
+  embedder.embedDocuments = async items => { entered(); return new Promise<Float32Array[]>(r => { resolve = r; }); };
   const f = fixture([p], undefined, embedder);
   try {
     f.index.start("model", "q8"); await started;

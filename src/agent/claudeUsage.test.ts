@@ -132,7 +132,7 @@ test("Claude response measurements deduplicate blocks, omit child messages and r
 test("provider result routing isolates live quotas, ignores child results and retains closed-query observations", () => {
   const provider = new ClaudeProvider();
   const snapshots = new Map<string, PlanLimits>();
-  const ctx = { claudeLimits: (id: string, limits: PlanLimits) => snapshots.set(id, limits) } as SessionContext;
+  const ctx = { claudeLimits: (id: string, limits: PlanLimits) => snapshots.set(id, limits) } as unknown as SessionContext;
   const a = provider.createSession({ id: "a", nativeId: "synthetic-a" } as Thread, ctx) as any;
   const b = provider.createSession({ id: "b", nativeId: "synthetic-b" } as Thread, ctx) as any;
   const reported: Usage[] = [];

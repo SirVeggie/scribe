@@ -67,7 +67,7 @@ test("helper agents are only mentioned when they are on, and never to a helper",
 test("every thread is told to check a message that looks meant for another thread", () => {
   const thread = (over: Partial<Thread>): Thread =>
     ({ provider: "cursor", mode: "board", cwd: null, scope: { kind: "global", ref: null }, ...over }) as Thread;
-  for (const t of [thread({}), thread({ mode: "code", cwd: "/work" }), thread({ provider: "claude", mode: "ask" })]) {
+  for (const t of [thread({}), thread({ mode: "code", cwd: "/work" }), thread({ provider: "claude", mode: "board", approval: "readonly" })]) {
     assert.match(threadInstructions(t, {}), /Wrong thread: .*ask in one short line whether it was meant for this thread/);
   }
 });

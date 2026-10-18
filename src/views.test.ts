@@ -80,7 +80,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       let views: any;
       const select = (id: string) => { views.onSelect(id); active = id; views.layout(); };
       const host = {
-        mainEl, isPageOrigin: (origin) => origin === location.origin,
+        mainEl, isPageOrigin: (origin: string) => origin === location.origin,
         tabs: () => [...pages.values()], closed: () => [],
         findAnyTab: (id: string) => pages.get(id) || (draft?.id === id ? draft : null),
         activeId: () => active, activeTab: () => pages.get(active!) || (draft?.id === active ? draft : null),
@@ -709,7 +709,7 @@ test("a split holds more than two panes: stored two-pane splits migrate, drops a
       let views: any;
       const select = (id: string) => { views.onSelect(id); active = id; views.layout(); };
       const host = {
-        mainEl, isPageOrigin: (origin) => origin === location.origin,
+        mainEl, isPageOrigin: (origin: string) => origin === location.origin,
         tabs: () => [...pages.values()], closed: () => [],
         findAnyTab: (id: string) => pages.get(id) || null,
         activeId: () => active, activeTab: () => pages.get(active!) || null,
@@ -788,10 +788,12 @@ test("a split holds more than two panes: stored two-pane splits migrate, drops a
       observations.reloaded = [panes().length, stored().panes.length, stored().sizes.reduce((sum: number, size: number) => sum + size, 0).toFixed(3)];
       return observations;
     });
+    assert.ok(Array.isArray(result.added));
+    const addedLayout = result.added[4] as { sizes: number[] };
     assert.deepEqual(result, {
       migrated: ["ba", "b", [440, 660]],
       addDrop: { edge: "right", at: 1 },
-      added: ["bac", "b", 2, [293, 440, 367], { panes: [{ page: "b" }, { page: "a" }, { page: "c" }], sizes: result.added[4].sizes, dir: "row", focus: 1 }],
+      added: ["bac", "b", 2, [293, 440, 367], { panes: [{ page: "b" }, { page: "a" }, { page: "c" }], sizes: addedLayout.sizes, dir: "row", focus: 1 }],
       linkNext: ["bad", "b"], linkFromLast: ["bcd", "c"],
       fullDrop: { pane: "a" }, full: ["acd", "c"],
       noMove: null, moveDrop: { edge: "right", at: 2 }, moved: ["cda", "b", [440, 367, 293]],

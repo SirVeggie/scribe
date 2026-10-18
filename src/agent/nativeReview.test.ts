@@ -15,7 +15,7 @@ test("Native review fails closed on failure, throws, timeout and missing answers
     async () => ({ ok: false, error: "no_source", message: "missing", ms: 0 }),
     async () => { throw new Error("down"); },
     () => new Promise(() => {}),
-    async () => ({ ...(await answer(1)({}, {})), answers: {} }),
+    async () => ({ ...(await answer(1)({}, {}, {})), answers: {} }),
   ] as HookDecide[]) assert.equal((await reviewNativeCommand(decide, "git status", "/work", undefined, 10)).allowed, false);
 });
 

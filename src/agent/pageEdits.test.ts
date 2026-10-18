@@ -19,7 +19,7 @@ const snap = (over: Partial<PageSnapshot> & Pick<PageSnapshot, "id">): PageSnaps
   ...over,
 });
 
-const tool = (over: Partial<Extract<Item, { kind: "tool" }>>): Item =>
+const tool = (over: Partial<Extract<Item, { kind: "tool" }>>): Extract<Item, { kind: "tool" }> =>
   ({
     id: "i1",
     threadId: "th",
@@ -34,7 +34,7 @@ const tool = (over: Partial<Extract<Item, { kind: "tool" }>>): Item =>
     status: "done",
     startedAt: 1,
     ...over,
-  }) as Item;
+  });
 
 test("pageEditsSince reports html, state, or both, and skips unchanged or missing pages", () => {
   const seen = [snap({ id: "a", revision: 14, stateRevision: 3 }), snap({ id: "b", revision: 2, stateRevision: 8 }), snap({ id: "gone" })];

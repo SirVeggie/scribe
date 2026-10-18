@@ -137,7 +137,7 @@ test("HTTP ZIP upload returns refreshed settings and handles invalid archives", 
   await new Promise<void>(r => server.once("listening", r));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/search`;
   try {
-    const response = await fetch(`${url}/install`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: zip(fixture()) });
+    const response = await fetch(`${url}/install`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: new Uint8Array(zip(fixture())) });
     assert.equal(response.status, 200);
     const status = await response.json(); assert.equal(status.status, "ready"); assert.equal(status.enabled, false); assert.equal(status.version, "new");
     const invalid = await fetch(`${url}/install`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: "invalid" });

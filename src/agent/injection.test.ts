@@ -188,7 +188,7 @@ test("the test set through the fake adapter: every injection is a hit, with no f
 
 test("the replay script scores a text by its surest window", async () => {
   const { service } = scanner();
-  const decide = (state: unknown, questions: never, options: never) => service.decide(state, questions, options);
+  const decide: Parameters<typeof score>[0] = (state, questions, options) => service.decide(state, questions, options);
   const buried = `${"Plain filler line about nothing much.\n".repeat(300)}${injections[0].text}${"\nMore filler after it.".repeat(300)}`;
   assert.deepEqual(await score(decide, buried), { yes: 0.94 });
   assert.deepEqual(await score(decide, benign[0].text), { yes: 0.06 });

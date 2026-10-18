@@ -8,7 +8,7 @@ const grok = {
   effort: "high",
   modelParams: { context: "1m", fast: "false" },
   mode: "code" as const,
-  approval: "ask" as const,
+  approval: "edits" as const,
   web: "limited" as const,
   scope: { kind: "global" as const, ref: null },
   cwd: "S:\\proj",
@@ -21,7 +21,7 @@ test("creating a thread remembers model and the rest, not only approval", () => 
   assert.equal(patch.models?.cursor, "cursor-grok-4.6");
   assert.equal(patch.efforts?.cursor, "high");
   assert.deepEqual(patch.modelParams?.cursor, { context: "1m", fast: "false" });
-  assert.equal(patch.approval, "ask");
+  assert.equal(patch.approval, "edits");
   assert.equal(patch.web, "limited");
   assert.equal(patch.recentWorkspaces?.[0], "S:\\proj");
   assert.equal(patch.worktrees?.[workspaceKey("S:\\proj")], true);
@@ -30,7 +30,7 @@ test("creating a thread remembers model and the rest, not only approval", () => 
 test("a page-scoped board thread does not overwrite the global mode default", () => {
   const page = { ...grok, mode: "board" as const, scope: { kind: "page" as const, ref: "t_1" } };
   const patch = prefsPatchFromChoices(DEFAULT_PREFS, page, settingPatch(page));
-  assert.equal(patch.mode, undefined);
+  assert.equal("mode" in patch, false);
   assert.equal(patch.models?.cursor, "cursor-grok-4.6");
 });
 
@@ -38,7 +38,7 @@ test("a model-only change still stores the provider so the next thread uses that
   const patch = prefsPatchFromChoices(DEFAULT_PREFS, grok, { model: grok.model });
   assert.equal(patch.provider, "cursor");
   assert.equal(patch.models?.cursor, "cursor-grok-4.6");
-  assert.equal(patch.mode, undefined);
+  assert.equal("mode" in patch, false);
 });
 
 test("effort and model params are remembered per model", () => {

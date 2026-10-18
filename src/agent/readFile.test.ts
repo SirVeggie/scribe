@@ -29,7 +29,7 @@ test("Code threads can read and edit their own page checkout without exposing ot
     for (const denied of [other, standalone, path.dirname(pageCheckoutDir(scope.id))]) {
       await assert.rejects(readScopedFile(scope, { path: denied }), /outside/);
     }
-    for (const mode of ["ask", "plan", "board"] as const) {
+    for (const mode of ["board"] as const) {
       await assert.rejects(readScopedFile({ ...scope, mode }, { path: file }), /outside|mode/);
     }
     await assert.rejects(readScopedFile({ ...scope, id: undefined }, { path: file }), /outside/);
@@ -63,7 +63,7 @@ test("external skills are readable under auto review without exposing adjacent f
       await fs.mkdir(path.join(folder, "help", "docs"), { recursive: true });
       await fs.writeFile(path.join(folder, "help", "SKILL.md"), "Use this skill.");
       await fs.writeFile(path.join(folder, "help", "docs", "guide.md"), "Supporting instructions.");
-      for (const mode of ["code", "ask", "plan"] as const) {
+      for (const mode of ["code", "board"] as const) {
         const scope = { cwd, provider: "codex", mode, approval: "auto" } as const;
         assert.match((await readScopedFile(scope, { path: path.join(folder, "help", "SKILL.md") })).content, /Use this skill/);
         assert.match((await readScopedFile(scope, { path: path.join(folder, "help", "docs", "guide.md") })).content, /Supporting instructions/);
@@ -97,6 +97,7 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     await fs.writeFile(path.join(cwd, "text.txt"), "one\r\ntwo\r\nthree\r\n");
     const first = await readScopedFile(scope, { path: "text.txt", offset: 2, limit: 1 });
     assert.equal(first.content, "2\ttwo");
+    assert.ok("encoding" in first);
     assert.equal(first.encoding, "utf-8");
     assert.equal(first.totalLines, 3);
     assert.equal(first.nextOffset, 3);
@@ -106,8 +107,8 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
     assert.equal(end.nextOffset, null);
     assert.equal((await readScopedFile(scope, { path: "text.txt", offset: 20 })).linesReturned, 0);
     await fs.writeFile(path.join(root, "outside.txt"), "outside");
-    for (const mode of ["code", "ask", "plan"] as const) {
-      for (const approval of ["ask", "edits", "auto", "full"] as const) {
+    for (const mode of ["code", "board"] as const) {
+      for (const approval of ["readonly", "board", "edits", "auto", "full"] as const) {
         const thread = { cwd, mode, approval };
         assert.equal((await readScopedFile(thread, { path: "text.txt" })).linesReturned, 3);
         if (mode === "code" && approval === "full") assert.equal((await readScopedFile(thread, { path: "../outside.txt" })).content, "1\toutside");
@@ -183,6 +184,7 @@ test("BOM-marked UTF-16 reads strip the BOM, paginate and validate the whole str
       };
       await write("héllo 世界 😀\r\nsecond\r\nthird\r\n");
       const first = await readScopedFile(scope, { path: file, limit: 1 });
+      assert.ok("encoding" in first);
       assert.equal(first.encoding, encoding);
       assert.equal(first.content, "1\théllo 世界 😀");
       assert.equal(first.totalLines, 3);
@@ -221,7 +223,7 @@ test("recorded worktree links and own attachments are readable without granting 
   const repo = path.join(root, "main");
   const dependency = path.join(repo, "node_modules");
   const linked = path.join(cwd, "node_modules");
-  const thread = { id: "thread-one", cwd, mode: "ask", approval: "full",
+  const thread = { id: "thread-one", cwd, mode: "code", approval: "edits",
     worktree: { path: cwd, repo, links: ["node_modules"] } as ThreadWorktree } as const;
   try {
     await fs.mkdir(cwd);

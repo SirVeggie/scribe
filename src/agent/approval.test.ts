@@ -37,7 +37,7 @@ const request: ApprovalRequest = { tool: "edit", title: "Override native denial"
   options: [{ id: "retry", label: "Approve one retry", kind: "allow_once" }, { id: "deny", label: "Keep denied", kind: "reject_once" }] };
 
 test("native denial overrides require a human in every approval policy", async () => {
-  for (const policy of ["ask", "edits", "auto", "full"] as const) {
+  for (const policy of ["edits", "auto", "full"] as const) {
     const { id, sink } = running(policy);
     const pending = sink.approval(request);
     const item = host.threadDetail(id)?.items.find((it) => it.kind === "approval");

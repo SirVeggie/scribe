@@ -55,7 +55,7 @@ test("a deleted worker folder fails clearly before creating a session or worktre
   fs.rmdirSync(cwd);
   await f.host.warm(t.id);
   f.host.warmDraft({ provider: "pi", mode: "code", cwd });
-  f.host.send(t.id, { text: "Work on the card", from: "page", card: { num: 339, title: "Fix folder" } });
+  f.host.send(t.id, { text: "Work on the card", from: "page", card: { board: "scribe:agent-todo", num: 339, title: "Fix folder" } });
   const detail = await settled(f.host, t.id);
   assert.equal(detail.turns[0].error, `Folder not found: ${cwd}`);
   assert.equal(detail.turns[0].status, "error");
@@ -74,7 +74,7 @@ test("a file at the saved folder path cannot start a provider", async () => {
   const f = fixture();
   const cwd = path.join(dir, "file.txt");
   fs.writeFileSync(cwd, "file");
-  const t = f.thread({ cwd, mode: "plan" });
+  const t = f.thread({ cwd, mode: "code", planNext: true });
   f.host.send(t.id, { text: "Plan the work" });
   assert.equal((await settled(f.host, t.id)).turns[0].error, `Not a folder: ${cwd}`);
   assert.equal(f.counts().sessions, 0);

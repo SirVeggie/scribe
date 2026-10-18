@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { RunSink, TurnInput } from "./providers/provider.js";
-import type { Item, Turn } from "./types.js";
+import type { Item, Thread, Turn } from "./types.js";
 
 // The host keeps its data under SCRIBE_HOME; point it at a scratch folder first.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-resume-"));
@@ -100,7 +100,8 @@ test("a turn cut off by a restart is sent on with Scribe's note, and queued mess
 
   const { host, ran } = startHost();
   // Until it is sent on, the board must not take it for a stopped agent and release its card.
-  assert.equal(host.runInfo(id).exists && host.runInfo(id).running, true);
+  const info = host.runInfo(id);
+  assert.ok(info.exists && info.running);
   const cut = host.threadDetail(id)!.turns[0];
   assert.equal(cut.status, "cancelled");
   assert.equal(cut.interrupted, true);
@@ -118,7 +119,8 @@ test("a turn cut off by a restart is sent on with Scribe's note, and queued mess
   assert.equal(items.find((it) => it.text === "queued 2")?.dropped, true);
 
   // A thread whose turns keep getting cut off is left alone, so a turn that crashes Scribe cannot loop.
-  assert.equal(host.runInfo(looping).exists && host.runInfo(looping).running, false);
+  const loopingInfo = host.runInfo(looping);
+  assert.equal(loopingInfo.exists && loopingInfo.running, false);
   assert.equal(userItems(host, looping).length, 0);
 });
 
@@ -126,8 +128,8 @@ test("a session that cannot be resumed starts over with a recap that keeps a sto
   const first = startHost().host;
   const view = first.createThread({ provider: "pi", mode: "board", scope: { kind: "global", ref: null } });
   const id = view.id;
-  const thread = (first as unknown as { threads: Map<string, { nativeId: string | null }> }).threads.get(id)!;
-  first.db.saveThread({ ...(thread as never), nativeId: "lost-session" });
+  const thread = (first as unknown as { threads: Map<string, Thread> }).threads.get(id)!;
+  first.db.saveThread({ ...thread, nativeId: "lost-session" });
   first.db.saveTurn({ id: `tu_${id}_0`, threadId: id, seq: 1, status: "cancelled", model: "m", effort: null, mode: "board", startedAt: Date.now() });
   first.db.saveItems([
     { id: `it_${id}_0`, threadId: id, turnId: `tu_${id}_0`, seq: 1, createdAt: Date.now(), kind: "user", text: "Issues: 1) the first list" } as Item,
@@ -179,8 +181,8 @@ test("a helper cut off by a restart is told to report to its agent, not to ask t
   const first = startHost().host;
   const caller = cutOff(first);
   const helper = cutOff(first);
-  const thread = (first as unknown as { threads: Map<string, object> }).threads.get(helper)!;
-  first.db.saveThread({ ...(thread as never), helperOf: caller });
+  const thread = (first as unknown as { threads: Map<string, Thread> }).threads.get(helper)!;
+  first.db.saveThread({ ...thread, helperOf: caller });
   first.dispose();
   hosts.splice(hosts.indexOf(first), 1);
 

@@ -77,7 +77,7 @@ test("Cursor retains an open agent across equivalent approval levels, but closes
   for (const mode of ["code", "board"] as const) {
     for (const hostShell of [false, true]) {
       const thread = { id: "cursor-policy", nativeId: null, mode, web: "off", approval: "edits", cwd: "/work", scope: { kind: "page", ref: "board" } } as Thread;
-      const session = new CursorProvider().createSession(thread, { scratchDir: "/scratch", cursorHostShell: () => hostShell } as SessionContext);
+      const session = new CursorProvider().createSession(thread, { scratchDir: "/scratch", cursorHostShell: () => hostShell } as unknown as SessionContext);
       // Install an already-open agent without credentials, subprocesses or a model run.
       const opened = session as unknown as { key(): string; agentKey: string | null; agent: { close(): void } | null };
       let closes = 0;

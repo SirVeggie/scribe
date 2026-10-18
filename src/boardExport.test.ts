@@ -23,8 +23,9 @@ function fakeTab(partial: Partial<Tab> & Pick<Tab, "key" | "title" | "html">): T
     state: {},
     stateRevision: 0,
     stateUpdatedAt: 0,
-    signalRevision: 0,
-    signal: null,
+    eventSeq: 0,
+    events: [],
+    libPos: 0,
     assets: [],
     ...partial,
   };

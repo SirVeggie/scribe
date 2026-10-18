@@ -12,7 +12,7 @@ import type { RunSink, SessionContext } from "./providers/provider.js";
 import type { SessionBeforeCompactEvent, SessionBeforeCompactResult } from "@earendil-works/pi-coding-agent";
 
 test("Native compaction delegates manual, threshold and overflow summaries without changing the retained boundary", async () => {
-  const provider = new PiProvider();
+  const provider = new PiProvider(() => []);
   const thread = { id: "compact-test", provider: "pi", model: "native/chat", scope: { kind: "global", ref: null } } as Thread;
   const signal = new AbortController().signal;
   const prompts: string[] = [];
@@ -54,7 +54,7 @@ test("Native compaction delegates manual, threshold and overflow summaries witho
 });
 
 test("Native compaction cancels on empty, failed or aborted summaries", async () => {
-  const provider = new PiProvider();
+  const provider = new PiProvider(() => []);
   const warnings: string[] = [];
   let complete = async () => "";
   const session = provider.createSession({ id: "compact-failure", scope: { kind: "global", ref: null } } as Thread, {
@@ -82,7 +82,7 @@ test("Native compaction cancels on empty, failed or aborted summaries", async ()
 });
 
 test("Native Auto review sends every command and edit to host approval", async () => {
-  const provider = new PiProvider();
+  const provider = new PiProvider(() => []);
   const session = provider.createSession({ id: "review-test", provider: "pi", approval: "auto", mode: "code", cwd: process.cwd(), scope: { kind: "global", ref: null } } as Thread, {
     approval: async (_id, req) => { requests.push(req); return { optionId: "reject" }; },
   } as SessionContext) as unknown as { gate(event: unknown): Promise<{ block?: boolean } | undefined>; dispose(): void };

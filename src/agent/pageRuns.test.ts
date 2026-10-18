@@ -151,7 +151,7 @@ test("Claude's session limit keeps the run waiting and resumes the same chat (#7
   state.now += 1000;
   turn({});
   await runs.check("th");
-  assert.equal(run.outcome?.kind, "done");
+  assert.equal(runs.get("th")?.outcome?.kind, "done");
 });
 
 test("failed sends after a reset back off, then end the run", async () => {

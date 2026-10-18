@@ -37,7 +37,8 @@ test("appearance API persists across restarts, merges profiles, and excludes fun
     const bootstrap = await fetch(base + "/bootstrap.js");
     assert.equal(bootstrap.headers.get("cache-control"), "no-store");
     assert.match(await bootstrap.text(), /scribeAppearanceSeed=.*dusk/);
-    for (const settings of [{ "scribe.agent.sendKey": "mod" }, { "scribe.theme": "wrong" }, { "scribe.uiEffects": "true" }, { "scribe.dock-appearance.v1": "null" }]) {
+    const invalidSettings: Appearance[] = [{ "scribe.agent.sendKey": "mod" }, { "scribe.theme": "wrong" }, { "scribe.uiEffects": "true" }, { "scribe.dock-appearance.v1": "null" }];
+    for (const settings of invalidSettings) {
       assert.equal((await put(settings)).status, 400);
     }
     assert.equal(db.readAppearance()["scribe.auroraEdge"], "0");
