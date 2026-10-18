@@ -375,8 +375,8 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
     return Promise.resolve({ optionId: allow.id });
   }
   if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo" && !(pagesReadsFiles(t) && (req.tool === "read" || req.tool === "search")) && !(req.tool === "execute" && readShell(t))) {
-    // The Read-only and Board rungs never edit files; with a workspace they read there, and each command asks (#720).
-    const note = pagesReadsFiles(t) ? `The ${APPROVAL_LABEL[t.approval]} rung reads files and runs commands with the user's approval, but does not edit files.` : `The ${APPROVAL_LABEL[t.approval]} rung has no file or shell access.`;
+    // The Read-only and Board rungs never edit files; with a workspace they read there, and only Codex runs commands (#733).
+    const note = pagesReadsFiles(t) ? `The ${APPROVAL_LABEL[t.approval]} rung reads files, but does not edit them or run commands.` : `The ${APPROVAL_LABEL[t.approval]} rung has no file or shell access.`;
     if (reject) return Promise.resolve({ optionId: reject.id, note });
     return Promise.reject(new Error(note));
   }

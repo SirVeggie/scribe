@@ -179,10 +179,9 @@ test("splitPiModel splits at the first slash; model ids keep theirs", () => {
   assert.equal(splitPiModel("x/"), null);
 });
 
-test("builtinTools: the reading rungs none (reads and asking commands with a workspace), Code all", () => {
+test("builtinTools: the reading rungs none (reads with a workspace, never the shell), Code all", () => {
   assert.deepEqual(builtinTools("board"), []);
-  assert.ok(builtinTools("board", [], true).includes("bash") && builtinTools("board", [], true).includes("read"));
-  assert.ok(!builtinTools("board", [], true).includes("edit") && !builtinTools("board", ["bash"], true).includes("bash"));
+  assert.deepEqual(builtinTools("board", [], true), ["read", "grep", "find", "ls"]);
   assert.ok(builtinTools("code").includes("bash") && builtinTools("code").includes("write"));
 });
 

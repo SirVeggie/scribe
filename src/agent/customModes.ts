@@ -108,12 +108,13 @@ export function modeOff(thread: Limited, capability: ModeCapability): boolean {
 }
 
 /**
- * Read-only and Board with a workspace run shell commands (#720): Codex in its read-only sandbox
- * without asking; elsewhere there is no OS sandbox, so each command asks the user and is refused
- * once READ_SHELL_WAIT_MS passes unanswered. A custom mode can still turn the shell off.
+ * Read-only and Board with a workspace run shell commands only on Codex, in its read-only sandbox
+ * without asking (#720). Elsewhere there is no OS sandbox, so every command asked the user, and models
+ * reached for the shell even with file tools at hand (#733): those providers get no shell on these rungs.
+ * A custom mode can still turn the shell off.
  */
-export function readShell(thread: Limited & { mode: Thread["mode"]; cwd?: string | null }): boolean {
-  return thread.mode === "board" && Boolean(thread.cwd) && !modeOff(thread, "shell");
+export function readShell(thread: Limited & { provider: Thread["provider"]; mode: Thread["mode"]; cwd?: string | null }): boolean {
+  return thread.provider === "codex" && thread.mode === "board" && Boolean(thread.cwd) && !modeOff(thread, "shell");
 }
 
 /** How long a reading rung's command waits for the user before it is refused (#720), as a useful web request does. */

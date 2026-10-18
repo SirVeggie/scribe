@@ -6,8 +6,8 @@ import { after, before, mock, test } from "node:test";
 import type { ApprovalRequest, RunSink } from "./providers/provider.js";
 import type { ApprovalPolicy } from "./types.js";
 
-// Read-only and Board with a workspace run commands (#720): outside Codex's sandbox each one asks the
-// user, also in a chat the user watches, and is refused after 15 minutes without an answer.
+// Read-only and Board with a workspace run commands only on Codex (#720, #733): one that still asks
+// the user is refused after 15 minutes without an answer. Other providers get no shell there.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-read-shell-"));
 process.env.SCRIBE_HOME = dir;
 const { store } = await import("../store.js");
@@ -33,8 +33,8 @@ type Internals = {
 };
 const internals = () => host as unknown as Internals;
 
-function sinkFor(approval: ApprovalPolicy, cwd: string | null): { threadId: string; sink: RunSink } {
-  const thread = host.createThread({ provider: "claude", approval, cwd, scope: { kind: "global", ref: null } });
+function sinkFor(approval: ApprovalPolicy, cwd: string | null, provider: "codex" | "claude" = "codex"): { threadId: string; sink: RunSink } {
+  const thread = host.createThread({ provider, approval, cwd, scope: { kind: "global", ref: null } });
   const turn = { id: `tu_${thread.id}`, threadId: thread.id, seq: 1, status: "running", model: "m", effort: null, mode: thread.mode, startedAt: Date.now() };
   internals().turns.get(thread.id)?.push(turn);
   const run = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: "", dock: false, called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null } };
@@ -91,4 +91,12 @@ test("the reading rungs still refuse edits, and commands without a workspace", a
   const noWorkspace = await sinkFor("readonly", null).sink.approval(command);
   assert.equal(noWorkspace.optionId, "deny");
   assert.match(noWorkspace.note ?? "", /no file or shell access/);
+});
+
+test("outside Codex the reading rungs refuse commands without asking (#733)", async () => {
+  const { threadId, sink } = sinkFor("readonly", dir, "claude");
+  const answer = await sink.approval(command);
+  assert.equal(answer.optionId, "deny");
+  assert.match(answer.note ?? "", /does not edit them or run commands/);
+  assert.equal(pendingApprovals(threadId).length, 0);
 });

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { customInstructions, READ_SHELL_WAIT_MS, readShell } from "./customModes.js";
+import { customInstructions, readShell } from "./customModes.js";
 import os from "node:os";
 import path from "node:path";
 import { BOARD_MCP } from "./providers/cursor.js";
@@ -66,14 +66,13 @@ function duplicateScribe(thread: Thread): string {
  * the instructions block). Other lines only depend on the thread's scope and mode.
  */
 /**
- * What the Read-only and Board rungs may do with files and the shell (#720): Codex runs commands in its
- * read-only sandbox; elsewhere nothing sandboxes them, so each asks the user and is refused unanswered.
+ * What the Read-only and Board rungs may do with files and the shell: only Codex runs commands, in its
+ * read-only sandbox (#720); elsewhere nothing sandboxes them, so there is no shell (#733).
  */
 function readingFiles(thread: Thread): string {
   if (!thread.cwd) return "You have no file or shell access in this thread. Do not ask to run commands.";
   if (!readShell(thread)) return "You can read and search files in the workspace, but not edit them or run commands. Do not ask to run commands.";
-  if (thread.provider === "codex") return "You can read and search files in the workspace and run commands, but not edit files: commands run in a read-only sandbox without asking.";
-  return `You can read and search files in the workspace, but not edit them. Commands have no sandbox here, so each one asks the user and is refused if nobody answers within ${READ_SHELL_WAIT_MS / 60000} minutes: prefer the file tools, run only commands that change nothing, and carry on without a refused one.`;
+  return "You can read and search files in the workspace and run commands, but not edit files: commands run in a read-only sandbox without asking.";
 }
 
 export function threadInstructions(thread: Thread, scope: ScopeInfo): string {

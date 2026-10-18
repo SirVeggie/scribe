@@ -111,9 +111,9 @@ export function splitPiModel(id: string): { provider: string; model: string } | 
   return { provider: id.slice(0, at), model: id.slice(at + 1) };
 }
 
-/** Pi's built-in tools for a thread's mode. Read-only and Board read, and run commands that each ask (#720), only with a workspace. */
+/** Pi's built-in tools for a thread's mode. Read-only and Board read only with a workspace, and get no shell: nothing sandboxes it (#733). */
 export function builtinTools(mode: Thread["mode"], off: string[] = [], pagesReads = false): string[] {
-  if (mode === "board") return pagesReads ? [...READ_TOOLS, "bash"].filter((name) => !off.includes(name)) : [];
+  if (mode === "board") return pagesReads ? READ_TOOLS.filter((name) => !off.includes(name)) : [];
   // A custom mode's tool groups (piToolsOff) come off the code set.
   return CODE_TOOLS.filter((name) => !off.includes(name));
 }

@@ -84,8 +84,8 @@ test("optional app instructions are on by default and left out once turned off",
   // Pages with a workspace reads files there (#718).
   const pages = threadInstructions({ ...thread, mode: "board" } as Thread, { instructionsOff: ["threadTitle"] });
   assert.match(pages, /This thread: When you need to read files in a folder outside the workspace/);
-  assert.match(pages, /Access: Board\. You can read and search files in the workspace, but not edit them\. Commands have no sandbox here, so each one asks the user and is refused if nobody answers within 15 minutes/);
-  // Codex runs them in its read-only sandbox (#720).
+  assert.match(pages, /Access: Board\. You can read and search files in the workspace, but not edit them or run commands\./);
+  // Only Codex runs commands, in its read-only sandbox (#720, #733).
   assert.match(threadInstructions({ ...thread, mode: "board", provider: "codex" } as Thread, {}), /run commands, but not edit files: commands run in a read-only sandbox without asking\./);
   assert.match(pages, /Workspace: \/work\nRelative file paths are relative to this folder\./);
   assert.doesNotMatch(pages, /Shell commands already run/);
