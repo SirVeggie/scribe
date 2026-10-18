@@ -1513,7 +1513,7 @@ export async function startHttp(): Promise<http.Server> {
       const level = req.body?.level;
       const remove = Array.isArray(req.body?.removeGrants) ? req.body.removeGrants.map(normalizeTarget).filter((t: AccessTarget | undefined): t is AccessTarget => Boolean(t)) : [];
       if (level !== undefined && !isAccessLevel(level)) {
-        res.status(400).json({ error: "level must be open, ask, trusted or restricted" });
+        res.status(400).json({ error: "level must be public, open, ask, trusted or restricted" });
         return;
       }
       try {

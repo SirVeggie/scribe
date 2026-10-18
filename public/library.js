@@ -1128,22 +1128,24 @@ window.createLibrary = function createLibrary(host) {
     fields[0].input.focus();
   }
 
+  // public is "Open" to the user (#723); open, the default, is "Normal".
   const ACCESS_LEVELS = [
-    { id: "open", label: "Open", detail: "Chats in scope reach it; others ask." },
+    { id: "public", label: "Open", detail: "Every chat reaches it without asking." },
+    { id: "open", label: "Normal", detail: "Chats in scope reach it; others ask." },
     { id: "ask", label: "Ask always", detail: "Every chat asks, even global ones." },
     { id: "trusted", label: "Trusted only", detail: "Only chats on trusted model sources." },
     { id: "restricted", label: "Restricted", detail: "Only chats on this exact page." },
   ];
-  const LEVEL_RANK = { open: 0, ask: 1, trusted: 2, restricted: 3 };
+  const LEVEL_RANK = { public: 0, open: 1, ask: 2, trusted: 3, restricted: 4 };
 
-  /** The strictest level among a folder and its parents (#269). */
+  /** The strictest level set on a folder and its parents (#269), or null when none sets one. */
   function inheritedLevel(folderId) {
-    let level = "open";
+    let level = null;
     const seen = new Set();
     for (let at = folderId ? model.folderById.get(folderId) : null; at && !seen.has(at.id); at = at.parentId ? model.folderById.get(at.parentId) : null) {
       seen.add(at.id);
-      const own = at.access?.level || "open";
-      if (LEVEL_RANK[own] > LEVEL_RANK[level]) level = own;
+      const own = at.access?.level;
+      if (own && (!level || LEVEL_RANK[own] > LEVEL_RANK[level])) level = own;
     }
     return level;
   }
@@ -1197,13 +1199,15 @@ window.createLibrary = function createLibrary(host) {
       const item = fresh || current();
       if (!item) return;
       rows.replaceChildren();
-      const own = target.kind === "page" ? (item.agentHidden ? "restricted" : item.access?.level || "open") : item.access?.level || "open";
+      const set = target.kind === "page" ? (item.agentHidden ? "restricted" : item.access?.level) : item.access?.level;
       const inherited = inheritedLevel(target.kind === "page" ? item.folderId : item.parentId);
+      // Nothing set is Normal, or Open under an Open folder.
+      const own = set || (inherited === "public" ? "public" : "open");
       const row = el("div", "permission-row");
       const text = el("div", "permission-text");
       const levels = target.kind === "page" ? ACCESS_LEVELS : ACCESS_LEVELS.map((l) => (l.id === "restricted" ? { ...l, detail: "Only chats on each page itself." } : l));
       // A stricter parent folder decides; say that instead of what this level alone would do.
-      const detail = LEVEL_RANK[inherited] > LEVEL_RANK[own]
+      const detail = inherited && (set ? LEVEL_RANK[inherited] > LEVEL_RANK[set] : inherited !== "open")
         ? `A parent folder makes it ${levels.find((l) => l.id === inherited).label}.`
         : levels.find((l) => l.id === own)?.detail || "";
       text.append(el("div", "permission-label", target.kind === "page" ? item.title : folderPathOf(target.id)), el("div", "permission-detail", detail));

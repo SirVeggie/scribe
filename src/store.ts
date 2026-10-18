@@ -40,7 +40,7 @@ import {
 } from "./pageAssets.js";
 import { checkPermission, normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionNeed, type PermissionValue } from "./pagePermissions.js";
 import { normalizeSignalName } from "./signal.js";
-import { addTargets, effectiveLevel, sameTarget, type AccessLookup } from "./pageAccess.js";
+import { addTargets, effectiveLevel, inheritedFolderLevel, isOpenLevel, sameTarget, type AccessLookup } from "./pageAccess.js";
 import type { AccessLevel, AccessTarget } from "./types.js";
 import { applyOps, deepEqual } from "./stateOps.js";
 import { jsonBytes } from "./stateSize.js";
@@ -441,7 +441,7 @@ export class BoardStore extends EventEmitter {
         const page = this.locate(tab.id)?.tab;
         const target = this.locate(key)?.tab;
         if (!page || !target || target.id === page.id || !pageKeysIn(page.state).includes(key)) return;
-        if (effectiveLevel({ ...target, createdBy: undefined }, this.accessLookup()) !== "open") return;
+        if (!isOpenLevel(effectiveLevel({ ...target, createdBy: undefined }, this.accessLookup()))) return;
         this.changeAccessGrants({ kind: "page", id: page.id }, { add: [{ kind: "page", id: target.id }] });
       }, LINK_GRANT_DELAY_MS);
       timer.unref?.();
@@ -462,7 +462,8 @@ export class BoardStore extends EventEmitter {
   setPageAccessLevel(idOrKey: string, level: AccessLevel): Tab {
     const tab = this.requireAny(idOrKey);
     const hidden = level === "restricted";
-    const next = level === "ask" || level === "trusted" ? level : undefined;
+    // Normal is the default; it is kept only to override an Open folder above (#723).
+    const next = hidden ? undefined : level === "open" && inheritedFolderLevel(tab.folderId ?? null, this.accessLookup()) !== "public" ? undefined : level;
     if (Boolean(tab.agentHidden) === hidden && tab.access?.level === next) return tab;
     if (hidden) tab.agentHidden = true;
     else delete tab.agentHidden;
@@ -476,7 +477,7 @@ export class BoardStore extends EventEmitter {
 
   setFolderAccessLevel(id: string, level: AccessLevel): Folder {
     const folder = this.requireFolder(id);
-    const next = level === "open" ? undefined : level;
+    const next = level === "open" && inheritedFolderLevel(folder.parentId ?? null, this.accessLookup()) !== "public" ? undefined : level;
     if (folder.access?.level === next) return folder;
     folder.access = this.trimAccess({ ...(folder.access ?? {}), level: next });
     if (!folder.access) delete folder.access;

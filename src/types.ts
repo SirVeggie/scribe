@@ -177,15 +177,20 @@ export type Folder = {
 export type AccessTarget = { kind: "page" | "folder"; id: string };
 
 /**
- * How agents reach pages (#269). open: chats in scope, plus grants; ask: only a grant for the chat
- * itself (every chat asks); trusted: trusted model sources only; restricted: only a chat on that
- * exact page. A user's @mention gets past all of them. The strictest level up the folder tree wins.
+ * How agents reach pages (#269). public ("Open" in the UI, #723): every chat, whatever its scope;
+ * open ("Normal", the default): chats in scope, plus grants; ask: only a grant for the chat itself
+ * (every chat asks); trusted: trusted model sources only; restricted: only a chat on that exact page.
+ * A user's @mention gets past all of them. The strictest level set up the folder tree wins; with none
+ * set, a page is open.
  */
-export type AccessLevel = "open" | "ask" | "trusted" | "restricted";
+export type AccessLevel = "public" | "open" | "ask" | "trusted" | "restricted";
 
-/** A folder's access level and the pages and folders chats on it may reach without asking. */
+/**
+ * A folder's access level and the pages and folders chats on it may reach without asking. open is
+ * kept only under a public folder, where it makes this folder Normal again.
+ */
 export type FolderAccess = {
-  level?: Exclude<AccessLevel, "open">;
+  level?: AccessLevel;
   grants?: AccessTarget[];
 };
 
@@ -194,7 +199,8 @@ export type FolderAccess = {
  * it came from, and what chats on it may reach without asking.
  */
 export type PageAccess = {
-  level?: "ask" | "trusted";
+  /** open is kept only under a public folder, where it makes this page Normal again. */
+  level?: "public" | "open" | "ask" | "trusted";
   /** The page or folder of the chat that created it; set once. Chats there reach it like their own. */
   origin?: AccessTarget;
   grants?: AccessTarget[];

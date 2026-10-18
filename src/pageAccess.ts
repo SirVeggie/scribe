@@ -53,7 +53,7 @@ export type AccessLookup = {
   pageAccess(pageId: string): PageAccess | undefined;
 };
 
-const LEVEL_ORDER: AccessLevel[] = ["open", "ask", "trusted", "restricted"];
+const LEVEL_ORDER: AccessLevel[] = ["public", "open", "ask", "trusted", "restricted"];
 
 export function isAccessLevel(value: unknown): value is AccessLevel {
   return typeof value === "string" && (LEVEL_ORDER as string[]).includes(value);
@@ -63,23 +63,34 @@ export function stricterLevel(a: AccessLevel, b: AccessLevel): AccessLevel {
   return LEVEL_ORDER.indexOf(a) >= LEVEL_ORDER.indexOf(b) ? a : b;
 }
 
-/** The page's own level, before its folders. */
-export function ownLevel(page: Pick<AccessPage, "agentHidden" | "access">): AccessLevel {
-  return page.agentHidden ? "restricted" : page.access?.level ?? "open";
+/** The level the page itself sets, before its folders; undefined when it sets none. */
+export function ownLevel(page: Pick<AccessPage, "agentHidden" | "access">): AccessLevel | undefined {
+  return page.agentHidden ? "restricted" : page.access?.level;
 }
 
-/** The strictest of the page's own level and its folders'. */
-export function effectiveLevel(page: AccessPage, lookup: AccessLookup): AccessLevel {
-  let level = ownLevel(page);
-  for (const id of lookup.folderChain(page.folderId)) level = stricterLevel(level, lookup.folderAccess(id)?.level ?? "open");
+/** Strictest set level among a folder and its parents (and start); undefined when none is set. */
+function chainLevel(start: AccessLevel | undefined, folderId: string | null | undefined, lookup: AccessLookup): AccessLevel | undefined {
+  let level = start;
+  for (const id of lookup.folderChain(folderId)) {
+    const set = lookup.folderAccess(id)?.level;
+    if (set) level = level ? stricterLevel(level, set) : set;
+  }
   return level;
+}
+
+/** The strictest level the page and its folders set; open (Normal) when none is set. */
+export function effectiveLevel(page: AccessPage, lookup: AccessLookup): AccessLevel {
+  return chainLevel(ownLevel(page), page.folderId, lookup) ?? "open";
 }
 
 /** Strictest level among a folder and its parents, for the folder settings to show what pages inherit. */
 export function inheritedFolderLevel(folderId: string | null, lookup: AccessLookup): AccessLevel {
-  let level: AccessLevel = "open";
-  for (const id of lookup.folderChain(folderId)) level = stricterLevel(level, lookup.folderAccess(id)?.level ?? "open");
-  return level;
+  return chainLevel(undefined, folderId, lookup) ?? "open";
+}
+
+/** Normal or Open: chats reach it through their scope and grants without the user (Open: every chat). */
+export function isOpenLevel(level: AccessLevel): boolean {
+  return level === "open" || level === "public";
 }
 
 /** Whether target names the page or a folder it is in. */
@@ -115,6 +126,8 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
   if (reader.scope.kind === "workspace") return "hidden";
   if (reader.grants.some((g) => g.mention && targetCovers(g, page, lookup))) return "allow";
   const level = effectiveLevel(page, lookup);
+  // Open to all agents (#723): reference pages such as a style guide, for any chat with Scribe access.
+  if (level === "public") return "allow";
   const scopes = [reader.scope, ...(reader.formerScopes ?? [])].filter((s) => s.kind !== "workspace");
   const ownPage = scopes.some((s) => s.kind === "page" && s.ref === page.id);
   if (level === "restricted") return ownPage ? "allow" : "hidden";
@@ -136,22 +149,22 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
 
 /**
  * Whether a page's own script, on its own origin, may reach another page (#660): its own page, and
- * Open pages its page or folders were granted (the grants its chats inherit). Ask always, Trusted
- * only and Restricted pages need a chat's own grant or the user, so no page script reaches them.
+ * Normal or Open pages its page or folders were granted (the grants its chats inherit). Ask always,
+ * Trusted only and Restricted pages need a chat's own grant or the user, so no page script reaches them.
  */
 export function frameReach(fromPageId: string, page: AccessPage, lookup: AccessLookup): boolean {
   if (page.id === fromPageId) return true;
-  if (effectiveLevel(page, lookup) !== "open") return false;
+  if (!isOpenLevel(effectiveLevel(page, lookup))) return false;
   return homeGrants({ kind: "page", ref: fromPageId }, lookup).some((g) => targetCovers(g, page, lookup));
 }
 
 /** Why a page is out of reach, for the agent. */
 export function reachMessage(reach: Reach, page: { key: string; title: string }): string {
-  if (reach === "ask") {
-    return `${page.key} ("${page.title}") is outside this chat's Scribe access. Ask for it with page_access (key, reason), then try again.`;
-  }
+  // #723: a worker took "outside" for a refusal; say that page_access asks and how long it can block.
+  const ask = "Ask the user for it with page_access (key, reason, importance), then try again. A board worker's chat waits for the answer only as long as importance says, then goes on without it.";
+  if (reach === "ask") return `${page.key} ("${page.title}") is outside this chat's Scribe access. ${ask}`;
   // No title: the caller knew the key, and that is all it learns.
-  if (reach === "request") return `${page.key} is outside this chat's Scribe access. Ask for it with page_access (key, reason), then try again.`;
+  if (reach === "request") return `${page.key} is outside this chat's Scribe access. ${ask}`;
   return `tab not found: ${page.key}`;
 }
 
@@ -186,7 +199,7 @@ function normalizeTargets(value: unknown): AccessTarget[] | undefined {
 export function normalizePageAccess(value: unknown): PageAccess | undefined {
   if (!isPlainObject(value)) return undefined;
   const out: PageAccess = {};
-  if (value.level === "ask" || value.level === "trusted") out.level = value.level;
+  if (value.level === "public" || value.level === "open" || value.level === "ask" || value.level === "trusted") out.level = value.level;
   const origin = normalizeTarget(value.origin);
   if (origin) out.origin = origin;
   const grants = normalizeTargets(value.grants);
@@ -197,7 +210,7 @@ export function normalizePageAccess(value: unknown): PageAccess | undefined {
 export function normalizeFolderAccess(value: unknown): FolderAccess | undefined {
   if (!isPlainObject(value)) return undefined;
   const out: FolderAccess = {};
-  if (value.level === "ask" || value.level === "trusted" || value.level === "restricted") out.level = value.level;
+  if (isAccessLevel(value.level)) out.level = value.level;
   const grants = normalizeTargets(value.grants);
   if (grants) out.grants = grants;
   return Object.keys(out).length ? out : undefined;

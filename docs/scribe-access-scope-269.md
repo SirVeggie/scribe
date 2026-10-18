@@ -8,8 +8,9 @@ A chat reaches the pages in its Scribe scope plus anything it has been granted. 
 
 - **Scope:** page (that page), folder (the folder tree), global (every page its access level allows), None (no page tools).
 - **Also reachable:** pages the thread created itself; pages whose origin (the page or folder of the chat that created them; for older pages, that thread's first home) is in scope; grants held by the chat's home page or folder (and folders above it); the thread's own grants; and homes it had before it followed a page it showed (`formerScopes`, cleared when the user picks a scope).
-- **Access levels** (page or folder; the strictest up the tree wins):
-  - **Open:** the normal rules.
+- **Access levels** (page or folder; the strictest level set up the tree wins, Normal when none is set):
+  - **Open** (`public`, #723): every chat with Scribe access reaches it, whatever its scope. For reference pages such as the UI style guide. A page or folder under an Open folder can set Normal (stored as `open`) to drop back.
+  - **Normal** (`open`, the default): the normal rules.
   - **Ask always:** only a grant for the thread itself counts, so every new chat asks, global ones included.
   - **Trusted only:** untrusted model sources do not find the page in listings or search, and its home's grants and origin do not open it for them. One that knows its key or id can still ask with `page_access` (403 without the title), and the user can allow it for that thread only.
   - **Restricted:** only a chat on that exact page. This replaces Hide from agent and is still stored as `agentHidden`.

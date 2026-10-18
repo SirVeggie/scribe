@@ -64,6 +64,19 @@ test("the strictest level up the tree wins", () => {
   assert.equal(effectiveLevel({ ...pages.plan, access: { level: "trusted" } }, l), "trusted");
 });
 
+test("Open reaches every chat with Scribe access; a folder's Open covers its pages unless one sets a level", () => {
+  const style = { ...pages.report, access: { level: "public" as const } };
+  assert.equal(pageReach(reader(), style, lookup()), "allow", "a board chat outside notes/");
+  assert.equal(pageReach(reader({ scope: { kind: "workspace", ref: null } }), style, lookup()), "hidden");
+  const open = lookup({ folders: { notes: { level: "public" } } });
+  assert.equal(effectiveLevel(pages.report, open), "public");
+  assert.equal(pageReach(reader(), pages.report, open), "allow");
+  assert.equal(effectiveLevel({ ...pages.report, access: { level: "open" } }, open), "open", "Normal set on the page");
+  assert.equal(effectiveLevel({ ...pages.report, access: { level: "ask" } }, open), "ask");
+  assert.equal(effectiveLevel(style, lookup({ folders: { notes: { level: "ask" } } })), "ask", "a stricter folder wins");
+  assert.equal(effectiveLevel(pages.report, lookup()), "open", "Normal is the default");
+});
+
 test("Ask always takes a grant for the thread itself, whatever the scope or home grants", () => {
   const l = lookup({ pages: { plan: { level: "ask" }, board: { grants: [{ kind: "page", id: "plan" }] } } });
   const plan = { ...pages.plan, access: { level: "ask" as const } };
