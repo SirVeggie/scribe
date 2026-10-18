@@ -1,5 +1,15 @@
 # Migrations
 
+## `tabs.made_in` column, space home folders and lenses (#260, additive, schema still 3)
+
+- **What changed:** Spaces can have a home folder and a Library lens (`home`, `lens` on each space in the `spaces` meta JSON). A page records the space it was made in as `tabs.made_in TEXT` (the active space for the user's pages, the space a chat was started in for an agent's), and a new page without a folder goes to that space's home folder (for an agent, only when it could still reach a page there). Threads (`agent.sqlite`, JSON) gain `space`. The lens is evaluated in the board (`public/lens.js`); its About condition asks `GET /api/search/about`, which caches each phrase until the index changes.
+- **Why no version bump:** Existing rows read as null (made in no recorded space); `ensureMadeInColumn` checks `PRAGMA table_info(tabs)` before `ALTER TABLE`. Spaces without `home` or `lens` behave as before, and thread `space` is optional JSON. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged; space ids are local.
+- **Protocol:** additive: `home` and `lens` on `PATCH /api/spaces/:sid` and in the spaces view, `madeIn` on tab meta, `space` on threads, `homeOf` and `newPages` on `GET /api/folders/tree` (MCP `library_folders` names home folders and where new pages go), `GET /api/search/about` (board UI only). `VERSION` stays as is.
+- **Where:** `src/lens.ts`, `src/spaces.ts`, `src/schema.ts`, `src/dbMigrate.ts` (`ensureMadeInColumn`), `src/db.ts`, `src/types.ts`, `src/store.ts` (`spaceHome`, `placeNew`, `newPageSpace`), `src/http.ts` (`homeFits`), `src/agent/host.ts` (`startSpace`), `src/search/indexer.ts` (`aboutPages`), `src/search/routes.ts`, `src/mcp.ts`, `public/lens.js`, `public/library.js`, `public/agent.js`, `public/app.js`, `public/spaces.js`.
+- **How to verify:** `src/spaces.test.ts`, `src/lens.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## Page origins and caller tokens (#690, protocol `3.1.0`)
 
 - **What changed:** Each tab page runs on an origin of its own, `http://t-<hex>.localhost:<port>` for `t_<hex>` (other ids: `x<hex of the id>`). `/view/:id` and the page routes answer only there; `127.0.0.2` redirects `/view` there and serves only shared files and blobs. Agent identity is a token: chats' MCPs get `SCRIBE_THREAD_TOKEN` (sent as `x-scribe-token`), and the data folder gets two new secret files, `agent-secret` and `local-token` (sent as `x-scribe-local-token` by MCPs outside a chat and by local tools acting as the user).

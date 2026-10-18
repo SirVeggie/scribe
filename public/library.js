@@ -550,8 +550,8 @@ window.createLibrary = function createLibrary(host) {
         days.min = "1";
         days.className = "lens-days";
         const unit = document.createElement("span");
-        unit.className = "lens-cond-note";
-        unit.textContent = "days or less";
+        unit.className = "lens-cond-note lens-unit";
+        unit.textContent = "days";
         controls.appendChild(unit);
         read = () => (Number(days.value) > 0 ? { type: "age", basis: basis.value, days: Number(days.value) } : null);
         break;

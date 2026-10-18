@@ -544,6 +544,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.workspace ? { workspace: tab.workspace } : {}),
     ...(tab.file ? { file: tab.file } : {}),
     ...(tab.temp ? { temp: true } : {}),
+    ...(tab.madeIn ? { madeIn: tab.madeIn } : {}),
     ...(embedUrl ? { embedUrl } : {}),
     ...(isBlankPage(tab) ? { blank: true } : {}),
     ...(tab.templateId

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { parseSpaces } from "./spaces.js";
 import { BoardStore } from "./store.js";
+import { toMeta } from "./types.js";
 
 let dir = "";
 let prevHome: string | undefined;
@@ -199,6 +200,7 @@ test("a space's home folder takes the pages made in it, and the lens is kept (#2
   const made = store.upsert({ title: "Notes", html: "<p>n</p>" }).tab;
   assert.equal(made.madeIn, work.id);
   assert.equal(made.folderId, home.id);
+  assert.equal(toMeta(made).madeIn, work.id);
   // A folder given wins; a temporary page stays out of the Library.
   assert.equal(store.upsert({ title: "Filed", html: "<p>f</p>", folder: "Elsewhere" }).tab.folderId, store.findFolderPath("Elsewhere"));
   assert.equal(store.upsert({ title: "Temp", html: "<p>t</p>", temp: true }).tab.folderId, undefined);

@@ -1454,7 +1454,7 @@ button.lib-lens-all:hover {
 
 .lens-cond {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) auto auto;
+  grid-template-columns: 120px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   padding: 6px 6px 6px 10px;
@@ -1476,7 +1476,7 @@ button.lib-lens-all:hover {
 
 .lens-cond-controls .select-wrap {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 96px;
 }
 
 .lens-cond-controls input {
@@ -1492,7 +1492,7 @@ button.lib-lens-all:hover {
 }
 
 .lens-cond-controls input.lens-days {
-  flex: 0 0 64px;
+  flex: 0 0 60px;
 }
 
 .lens-cond-note {
@@ -1501,6 +1501,7 @@ button.lib-lens-all:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 auto;
 }
 
 button.lens-not,
@@ -5209,3 +5210,7 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .ml-form-error { margin: 0; color: var(--danger); }
 .ml-grow { flex: 1 1 auto; }
 .ml-source-form button.primary { background: var(--accent-soft); color: var(--heading); }
+
+.lens-cond-note.lens-unit {
+  flex: none;
+}
