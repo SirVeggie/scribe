@@ -438,6 +438,7 @@
     chipSlot: settingsToggle,
     findAnyTab,
     folderPath: (id) => library.pathOf(id),
+    setHomeFolder: (space) => library.openHomeFolderPicker(space),
     showNotice,
     beforeOpen: () => {
       closePalette();

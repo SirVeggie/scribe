@@ -397,8 +397,7 @@ window.createLibrary = function createLibrary(host) {
     none.textContent = lensView.waiting ? "Finding pages…" : "No pages match this space's lens";
   }
 
-  async function saveSpace(patch) {
-    const space = currentSpace();
+  async function saveSpace(patch, space = currentSpace()) {
     if (!space) {
       return false;
     }
@@ -420,14 +419,40 @@ window.createLibrary = function createLibrary(host) {
     return saveSpace({ lens: { ...window.scribeLens.lensOf(space), on } });
   }
 
-  /** Folder menu: make the folder the active space's home (#260), or stop. */
-  function homeItem(folderId) {
-    const space = currentSpace();
-    if (!space) {
-      return null;
-    }
-    const isHome = space.home === folderId;
-    return { label: `Home of ${space.name}`, checked: isHome, action: () => void saveSpace({ home: isHome ? null : folderId }) };
+  function openHomeFolderPicker(space) {
+    model = buildModel();
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm";
+    dialog.setAttribute("aria-labelledby", "home-folder-title");
+    const form = document.createElement("form");
+    const title = document.createElement("h2");
+    title.id = "home-folder-title";
+    title.textContent = `${space.name} home folder`;
+    const select = selectOf([["", "None"], ...folderOptions()], space.home && model.folderById.has(space.home) ? space.home : "", "Home folder");
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => dialog.close());
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "primary";
+    save.textContent = "Save";
+    actions.append(cancel, save);
+    form.append(title, select, actions);
+    dialog.append(form);
+    document.body.append(dialog);
+    window.createSelect?.(select);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      const ok = await saveSpace({ home: select.value || null }, space);
+      save.disabled = false;
+      if (ok) dialog.close();
+    });
+    dialog.addEventListener("close", () => dialog.remove(), { once: true });
+    dialog.showModal();
   }
 
   const CONDITION_TYPES = [
@@ -1920,7 +1945,6 @@ window.createLibrary = function createLibrary(host) {
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
       { label: "Agent access", submenu: () => agentAccessItems({ kind: "folder", id }) },
-      homeItem(id),
       "sep",
       { label: "Delete folder…", danger: true, action: () => deleteFolder(id) },
     ]);
@@ -2724,6 +2748,7 @@ window.createLibrary = function createLibrary(host) {
   list.addEventListener("scroll", closeMenu);
 
   return {
+    openHomeFolderPicker,
     render,
     reveal,
     pageMenu,

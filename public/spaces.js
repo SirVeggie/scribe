@@ -487,6 +487,7 @@ window.createSpaces = function createSpaces(host) {
       renaming = space.id;
       render();
     });
+    item("Set home folder…", () => host.setHomeFolder(space));
     if (space.id === data.activeId) {
       item("Duplicate", () => void duplicateCurrent());
     }
