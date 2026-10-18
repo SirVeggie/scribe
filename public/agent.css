@@ -2727,8 +2727,14 @@ textarea.ag-q-input {
   color: var(--accent);
 }
 
-.ag-pill.mode-plan.on {
-  color: #9fc3ff;
+.ag-chip.mode-plan {
+  color: var(--ag-warn);
+  background: color-mix(in srgb, var(--ag-warn) 15%, var(--ag-sunken));
+  border-radius: 999px;
+}
+
+.ag-chip.mode-plan .ag-chip-x {
+  color: inherit;
 }
 
 .ag-pill.ap-full {

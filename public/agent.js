@@ -5124,6 +5124,12 @@
       const row = this.ctxRow;
       if (!row) return;
       row.replaceChildren();
+      if (this.planOn()) {
+        const chip = el("span", "ag-chip small mode-plan");
+        chip.append(icon("todo"), el("span", null, "Plan"));
+        chip.append(button(icon("close"), "ag-chip-x", () => this.setPlan(false), "Remove plan"));
+        row.append(chip);
+      }
       this.mentions.forEach((chip, index) => {
         const node = el("span", "ag-chip small");
         node.dataset.tooltip = chipTitle(chip);
@@ -5264,7 +5270,7 @@
     setPlan(on) {
       this.planChips ??= new Map();
       this.planChips.set(this.thread()?.id || "", on);
-      this.renderComposerBar();
+      this.renderContext();
     }
 
     /** Drop the composer's files, freeing their preview URLs. */
@@ -5278,6 +5284,7 @@
       const t = this.thread();
       const bar = document.createDocumentFragment();
       this.renderForkNote(t);
+      this.renderContext();
       const info = modelInfo(s.provider, s.model);
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model", false);
       model.append(providerIcon(s.provider), el("span", null, info?.label || s.model));
@@ -5299,15 +5306,6 @@
         const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.accessMenu(event.currentTarget), detail);
         apBtn.append(icon("shield"), el("span", null, s.custom ? `${s.custom.name} · ${ap.label}` : ap.label));
         bar.append(apBtn);
-      }
-      {
-        // The Plan chip (#721): the next message is a plan turn; it turns itself off once sent.
-        const on = this.planOn();
-        const planBtn = button("", `ag-pill toggle mode-plan${on ? " on" : ""}`, () => this.setPlan(!this.planOn()), "Plan the next message first, without changing files (/plan)");
-        planBtn.append(icon("todo"));
-        if (this.variant !== "dock") planBtn.append(el("span", null, "Plan"));
-        planBtn.setAttribute("aria-pressed", String(on));
-        bar.append(planBtn);
       }
       if (t?.effectivePermissions?.provider === s.provider) {
         const p = t.effectivePermissions;
