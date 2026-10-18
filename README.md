@@ -28,6 +28,8 @@ npm install
 npm run build
 ```
 
+`npm run build` type-checks all TypeScript tests before compiling the app. Use `npm run typecheck:tests` to check tests without emitting files.
+
 Then two copies outside the repo:
 
 1. **MCP** — add this to `%USERPROFILE%\.cursor\mcp.json`, with the `args` path pointing at this clone:

@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Scribe: a local hub of HTML pages that you and your agents share over MCP",
   "scripts": {
-    "build": "tsc",
+    "build": "npm run typecheck:tests && tsc",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
     "test:settings": "tsx --test src/settingsFixes.test.ts src/agent/forkSummaryUi.test.ts src/audio/audio.test.ts",
     "test:search": "tsx --test src/search/*.test.ts",
     "test:clear-command": "node --experimental-strip-types --test --test-isolation=none src/agent/clearCommand.test.ts",
