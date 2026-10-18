@@ -21,7 +21,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage } from "../types.js";
-import { isPlainRecord, noPages } from "../types.js";
+import { isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
 import { cursorAccessToken } from "./cursorAuth.js";
@@ -149,12 +149,12 @@ export function modelSelection(thread: Pick<Thread, "model" | "effort" | "modelP
 }
 
 /** Built-in tools for a thread: an allowlist (tools) or what to drop from the default set (disallowedTools). */
-export function toolLists(thread: Pick<Thread, "mode" | "web" | "custom">, hostShell = false): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
+export function toolLists(thread: Pick<Thread, "mode" | "web" | "custom"> & { cwd?: string | null }, hostShell = false): { tools?: ToolName[]; disallowedTools?: ToolName[] } {
   const web = thread.web === "on" ? WEB_TOOLS : [];
   // A custom mode's tool groups come off either list.
   const off = cursorToolsOff(thread);
   const keep = (tools: ToolName[]) => tools.filter((name) => !off.includes(name));
-  if (thread.mode === "board") return { tools: keep(["mcp", "updateTodos", "readTodos", ...web]) };
+  if (thread.mode === "board") return { tools: keep([...(pagesReadsFiles(thread) ? ASK_TOOLS : (["updateTodos", "readTodos"] as ToolName[])), "mcp", ...web]) };
   if (thread.mode === "ask") return { tools: keep([...ASK_TOOLS, "mcp", ...web]) };
   // Not "mcp": that would take the custom tools, the host shell among them, away too.
   return { disallowedTools: [...new Set([...NO_ANSWER_TOOLS, ...(hostShell ? (["shell"] as ToolName[]) : []), ...(thread.web === "on" ? [] : WEB_TOOLS), ...off])] };
@@ -380,7 +380,7 @@ export class CursorProvider implements AgentProvider {
 
 /** A spare is bound to what its agent was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
-  const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
+  const where = !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
   return JSON.stringify([where, thread.mode, customKey(thread), thread.web, thread.approval, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
 }
 
@@ -579,7 +579,7 @@ class CursorSession implements ProviderSession {
   }
 
   private cwd(): string {
-    if (this.thread.mode === "board" || !this.thread.cwd) {
+    if (!this.thread.cwd) {
       return this.ctx.scratchDir;
     }
     return this.thread.cwd;

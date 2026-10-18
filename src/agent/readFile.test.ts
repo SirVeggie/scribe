@@ -76,7 +76,7 @@ test("external skills are readable under auto review without exposing adjacent f
     await assert.rejects(readScopedFile({ ...scope, provider: "claude" }, { path: path.join(provider, "help", "SKILL.md") }), /outside/);
     await fs.symlink(path.dirname(privateFile), escape, "junction");
     await assert.rejects(readScopedFile(scope, { path: path.join(escape, "auth.json") }), /link target/);
-    await assert.rejects(readScopedFile({ ...scope, mode: "board" }, { path: path.join(shared, "help", "SKILL.md") }), /mode/);
+    await assert.rejects(readScopedFile({ ...scope, mode: "board", cwd: null }, { path: path.join(shared, "help", "SKILL.md") }), /mode/);
   } finally {
     homeMock.mock.restore();
     if (previousHome === undefined) delete process.env.SCRIBE_HOME;
@@ -114,7 +114,10 @@ test("scoped reads paginate, enforce modes and scope, and bound bytes and output
         else await assert.rejects(readScopedFile(thread, { path: "../outside.txt" }), /outside the workspace/);
       }
     }
-    await assert.rejects(readScopedFile({ ...scope, mode: "board", approval: "full" }, { path: "text.txt" }), /mode/);
+    // Pages reads in its workspace (#718), never outside it, whatever the approval level; with no workspace it reads nothing.
+    assert.equal((await readScopedFile({ ...scope, mode: "board", approval: "full" }, { path: "text.txt" })).linesReturned, 3);
+    await assert.rejects(readScopedFile({ ...scope, mode: "board", approval: "full" }, { path: "../outside.txt" }), /outside the workspace/);
+    await assert.rejects(readScopedFile({ ...scope, mode: "board", approval: "full", cwd: null }, { path: path.join(cwd, "text.txt") }), /mode/);
     await assert.rejects(readScopedFile(null, { path: "text.txt" }), /mode/);
     await assert.rejects(readScopedFile({ ...scope, cwd: null }, { path: "text.txt" }), /No workspace/);
     // Junctions work without Windows symlink privileges.
@@ -238,7 +241,7 @@ test("recorded worktree links and own attachments are readable without granting 
     assert.match((await readScopedFile(thread, { path: attachment })).content, /thread-one/);
     assert.match((await readScopedFile({ ...thread, cwd: null }, { path: attachment })).content, /thread-one/);
     await assert.rejects(readScopedFile(thread, { path: path.join(threadFilesDir("thread-two"), "attached.txt") }), /outside/);
-    await assert.rejects(readScopedFile({ ...thread, mode: "board" }, { path: attachment }), /mode/);
+    await assert.rejects(readScopedFile({ ...thread, mode: "board", cwd: null }, { path: attachment }), /mode/);
     const escape = path.join(dependency, "escape");
     await fs.symlink(repo, escape, "junction");
     await assert.rejects(readScopedFile(thread, { path: "node_modules/escape/private.txt" }), /link target/);

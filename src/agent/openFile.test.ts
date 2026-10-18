@@ -44,7 +44,7 @@ test("an agent can't open a file outside its read scope, unless Code mode has Fu
   const store = fakeStore();
   const secret = path.join(outside, "secret.txt");
   await assert.rejects(openFileForAgent({ cwd: work, mode: "code", approval: "ask" }, store, { path: secret }), /denied/);
-  await assert.rejects(openFileForAgent({ cwd: work, mode: "board", approval: "ask" }, store, { path: path.join(work, "inside.txt") }), /unavailable/);
+  await assert.rejects(openFileForAgent({ cwd: null, mode: "board", approval: "ask" }, store, { path: path.join(work, "inside.txt") }), /unavailable/);
   await assert.rejects(openFileForAgent(null, store, { path: secret }), /unavailable/);
   assert.equal(store.calls.length, 0);
   await openFileForAgent({ cwd: work, mode: "code", approval: "full" }, store, { path: secret });

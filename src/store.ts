@@ -869,8 +869,8 @@ export class BoardStore extends EventEmitter {
     if (!allowed({ perm: "agent.chat" }) || !allowed({ perm: "agent.unattended" })) {
       return "Scribe needs this board's permission to start agent chats on its own: press ▶ to allow it (or tab menu → Permissions…: Agent chats without a click).";
     }
-    if ((settings.mode === "code" || settings.mode === "plan") && !allowed({ perm: "agent.workspace", folder: settings.cwd, approval: settings.approval })) {
-      return `Scribe needs this board's permission to start Code and Plan chats in ${settings.cwd} at ${settings.approval}: press ▶ to allow it (or tab menu → Permissions…).`;
+    if (settings.cwd && !allowed({ perm: "agent.workspace", folder: settings.cwd, approval: settings.approval })) {
+      return `Scribe needs this board's permission to start agent chats in ${settings.cwd} at ${settings.approval}: press ▶ to allow it (or tab menu → Permissions…).`;
     }
     return null;
   }

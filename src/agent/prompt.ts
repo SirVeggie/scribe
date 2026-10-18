@@ -104,8 +104,10 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       lines.push(
         "",
         noPages(thread.scope)
-          ? "Mode: Chat. You have no file, shell or page access in this thread: answer from the conversation, plus web search and fetch when they are available. Do not ask to run commands."
-          : "Mode: Pages. You have no file or shell access in this thread. Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits."
+          ? thread.cwd
+            ? "Mode: Chat. You can read and search files in the workspace, but not edit them or run commands, and you have no page access: answer from the conversation and the files, plus web search and fetch when they are available. Do not ask to run commands."
+            : "Mode: Chat. You have no file, shell or page access in this thread: answer from the conversation, plus web search and fetch when they are available. Do not ask to run commands."
+          : `Mode: Pages. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits.`
       );
       break;
     case "ask":
@@ -129,7 +131,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       break;
   }
   lines.push(...customInstructions(thread));
-  if (thread.provider === "codex" && thread.mode !== "board") {
+  if (thread.provider === "codex" && (thread.mode !== "board" || thread.cwd)) {
     lines.push("Files: prefer the scribe MCP read_file for routine text reads, list_files for recursive file discovery (optional glob), and grep_files for content searches (pattern, optional glob, fixedStrings and ignoreCase), instead of shell commands. All accept path, a 1-based offset and limit, and return nextOffset for continuation. Searches skip .git and node_modules unless targeted directly; includeHidden includes hidden entries. Reads and searches cover the workspace, this provider's skill folders (including user skills outside the workspace), Scribe-recorded worktree links, this thread's attachments and (in Code mode) its page checkouts, with resolved link targets checked. Read a skill's SKILL.md and supporting files with read_file. Code mode with Full access permits outside reads. A denied read or search does not authorize bypassing the scope through a shell.");
   }
   // Pi always and Cursor without full web get Scribe's web_search when a SearXNG instance is set.
@@ -159,9 +161,10 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     );
   }
   const rename = on("threadTitle") ? " when its subject has changed and the title no longer fits, rename it with thread_update (title)." : "";
-  const move =
-    thread.mode === "board" || thread.helperOf
-      ? ""
+  const move = thread.helperOf
+    ? ""
+    : thread.mode === "board"
+      ? thread.cwd ? " When you need to read files in a folder outside the workspace, ask to make it this thread's workspace with thread_update (workspace); the change applies when your turn ends, so end the turn after the call." : ""
       : " When the work moves to a folder outside the workspace for more than a file or two, ask to move the workspace there with thread_update (workspace) instead of having each file access approved; the change applies when your turn ends, so end the turn after the call.";
   if (rename || move) lines.push(`This thread:${rename}${move}`);
   lines.push(
@@ -209,7 +212,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       memoryBlock(scope.memories)
     );
   }
-  if (thread.cwd && thread.mode !== "board") {
+  if (thread.cwd && thread.mode === "board") {
+    lines.push("", `Workspace: ${thread.cwd}`, "Relative file paths are relative to this folder.");
+  } else if (thread.cwd) {
     lines.push("", `Workspace: ${thread.cwd}`);
     // Agents otherwise tend to start every command with `cd <workspace> &&`, which is noise in the
     // transcript and, with Claude, a compound command that can need approval where the bare one would not.

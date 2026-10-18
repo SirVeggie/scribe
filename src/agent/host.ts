@@ -97,7 +97,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
-import { isProviderId, noPages } from "./types.js";
+import { isProviderId, noPages, pagesReadsFiles } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
 import { injectionDetectors } from "./injection.js";
@@ -191,9 +191,9 @@ function wantsWorktree(thread: Thread): boolean {
   return Boolean(thread.useWorktree && thread.cwd && (thread.mode === "code" || thread.mode === "plan") && !openWorktree(thread));
 }
 
-/** Pages mode and folderless threads run in Scribe's scratch folder. */
+/** Folderless threads run in Scribe's scratch folder. */
 function workspaceFolderError(thread: Thread): string | null {
-  if (thread.mode === "board" || !thread.cwd) return null;
+  if (!thread.cwd) return null;
   try {
     if (!fs.statSync(thread.cwd).isDirectory()) return `Not a folder: ${thread.cwd}`;
     return null;
@@ -305,7 +305,7 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
             ? `<context>\n${PAGE_INTENT_NOTE}\n</context>\n\n`
             : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
-  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" });
+  const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" || pagesReadsFiles(thread) });
   const recap = !thread.rewind?.recap
     ? ""
     : thread.rewind.migrated
@@ -366,10 +366,11 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
   if (req.boardTool && allow) {
     return Promise.resolve({ optionId: allow.id });
   }
-  if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo") {
-    // Pages mode never runs file or shell tools, whatever the approval setting.
-    if (reject) return Promise.resolve({ optionId: reject.id, note: "Pages mode has no file or shell access." });
-    return Promise.reject(new Error("Pages mode has no file or shell access."));
+  if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo" && !(pagesReadsFiles(t) && (req.tool === "read" || req.tool === "search"))) {
+    // Pages mode never edits files or runs commands, whatever the approval setting; with a workspace it reads there.
+    const note = pagesReadsFiles(t) ? "Pages mode reads files but does not edit them or run commands." : "Pages mode has no file or shell access.";
+    if (reject) return Promise.resolve({ optionId: reject.id, note });
+    return Promise.reject(new Error(note));
   }
   if (req.humanOnly) return null;
   if (t?.approval === "full" && allow) {
@@ -1221,6 +1222,7 @@ export class AgentHost {
     if (s.effort && info?.efforts.length && !info.efforts.some((e) => e.id === s.effort)) throw setup(`${model} has no effort "${s.effort}"`);
     const approvals: ApprovalPolicy[] = ["ask", "edits", "auto", "full"];
     const approval = approvals.find((a) => a === s.approval) ?? "auto";
+    // Pages keeps a folder it is given, to read files there (#718).
     const folder = mode === "code" || mode === "plan";
     if (folder && !s.cwd) throw setup("it needs a folder");
     if (this.closed) throw new Error("Scribe is shutting down.");
@@ -1235,7 +1237,7 @@ export class AgentHost {
         ...(s.customMode ? { customMode: s.customMode } : {}),
         approval,
         web: parseWebAccess(s.web) ?? "off",
-        cwd: folder ? s.cwd : null,
+        cwd: s.cwd || null,
         useWorktree: folder && s.worktree === true,
         title: s.title,
         scope: { kind: "page", ref: pageId },
@@ -2753,7 +2755,6 @@ export class AgentHost {
    */
   private async requestWorkspace(threadId: string, folder: string, opts: { reason?: string; continue?: boolean; signal?: AbortSignal }): Promise<string> {
     const thread = this.requireThread(threadId);
-    if (thread.mode === "board") return "Not changed: a Pages thread has no workspace.";
     if (thread.helperOf) return "Not changed: a helper thread works in the workspace of the agent that started it.";
     const wt = openWorktree(thread);
     if (wt) return `Not changed: this thread works in a git worktree of its own (${wt.path}), which stays its workspace until the user merges or leaves it.`;
@@ -2771,7 +2772,7 @@ export class AgentHost {
     if (thread.approval !== "full") {
       const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS.useful : null;
       const detail = [
-        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. Commands then run there, and this thread's approval level covers that folder instead.`,
+        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. ${thread.mode === "board" ? "It can then read and search files there (Pages mode: no edits or commands)." : "Commands then run there, and this thread's approval level covers that folder instead."}`,
         opts.reason?.trim(),
         waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
       ]
@@ -2985,9 +2986,8 @@ export class AgentHost {
     ];
   }
 
-  /** The folder a thread's workspace memories belong to: its workspace, or the main checkout for a worktree. None in Pages mode. */
+  /** The folder a thread's workspace memories belong to: its workspace, or the main checkout for a worktree. */
   private memoryWorkspace(thread: Thread): string | null {
-    if (thread.mode === "board") return null;
     return thread.worktree?.home ?? thread.cwd ?? (thread.scope.kind === "workspace" ? thread.scope.ref : null);
   }
 
@@ -4423,7 +4423,7 @@ export class AgentHost {
   }
 
   private resolvePath(thread: Thread | undefined, file: string): string {
-    const base = thread?.mode === "board" || !thread?.cwd ? this.ctx.scratchDir : thread.cwd;
+    const base = thread?.cwd || this.ctx.scratchDir;
     return path.resolve(base, file);
   }
 

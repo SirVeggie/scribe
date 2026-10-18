@@ -11,7 +11,7 @@ import { log } from "../../log.js";
 import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
 import { addCostRecord, estimateCost, type RateSnapshot } from "../pricing.js";
 import { deepSeekProfile, recordTariff } from "../tariffs.js";
-import { isPlainRecord, noPages, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
+import { isPlainRecord, noPages, pagesReadsFiles, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
 import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
@@ -111,9 +111,9 @@ export function splitPiModel(id: string): { provider: string; model: string } | 
   return { provider: id.slice(0, at), model: id.slice(at + 1) };
 }
 
-/** Pi's built-in tools for a thread's mode; Plan starts read-only and gets the rest when its plan is accepted. */
-export function builtinTools(mode: Thread["mode"], off: string[] = []): string[] {
-  if (mode === "board") return [];
+/** Pi's built-in tools for a thread's mode; Plan starts read-only and gets the rest when its plan is accepted. Pages reads only with a workspace. */
+export function builtinTools(mode: Thread["mode"], off: string[] = [], pagesReads = false): string[] {
+  if (mode === "board") return pagesReads ? READ_TOOLS : [];
   if (mode === "ask" || mode === "plan") return READ_TOOLS;
   // A custom mode's tool groups (piToolsOff) come off the code set.
   return CODE_TOOLS.filter((name) => !off.includes(name));
@@ -353,7 +353,7 @@ export class PiProvider implements AgentProvider {
 
 /** A spare is bound to what its session was opened with. */
 function spareKey(thread: Thread, ctx: SessionContext): string {
-  const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
+  const where = !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
   return JSON.stringify([where, thread.mode, customKey(thread), thread.web, noPages(thread.scope), ctx.webSearchUrl?.() ?? ""]);
 }
 
@@ -500,7 +500,7 @@ class PiSession implements ProviderSession {
   }
 
   private cwd(): string {
-    if (this.thread.mode === "board" || !this.thread.cwd) return this.ctx.scratchDir;
+    if (!this.thread.cwd) return this.ctx.scratchDir;
     return this.thread.cwd;
   }
 
@@ -877,7 +877,7 @@ class PiSession implements ProviderSession {
       resourceLoader,
       sessionManager,
       // Pi's tools list is an allowlist: Plan mode needs the Code tools in it to switch them on when its plan is accepted.
-      tools: [...builtinTools(plan ? "code" : this.thread.mode, piToolsOff(this.thread)), ...custom.map((t) => t.name)],
+      tools: [...builtinTools(plan ? "code" : this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread)), ...custom.map((t) => t.name)],
       customTools: custom,
     });
     if (plan) session.setActiveToolsByName([...READ_TOOLS, ...custom.map((t) => t.name)]);

@@ -38,7 +38,7 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
   {
     id: "agent.chat",
     label: "Agent chats when you click",
-    detail: "Start and continue its own agent chats after you click or press a key on the page. Pages and Ask mode only: no files or shell.",
+    detail: "Start and continue its own agent chats after you click or press a key on the page. Pages mode with no folder only: no files or shell.",
     default: "allow",
     risky: false,
   },
@@ -52,7 +52,7 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
   {
     id: "agent.workspace",
     label: "Agents with file and shell access",
-    detail: "Start Code and Plan chats that read and change files and run commands, in folders you approve.",
+    detail: "Start chats in folders you approve: Code and Plan read and change files and run commands there, Pages reads files.",
     default: "ask",
     risky: true,
     perFolder: true,

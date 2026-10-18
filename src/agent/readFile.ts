@@ -55,7 +55,7 @@ async function readRoots(thread: ReadScope): Promise<Array<{ lexical: string; re
 
 /** Host-side gate: MCP tools run outside Codex's shell sandbox. Never trust a caller-supplied scope. */
 export async function scopedReadResolver(thread: ReadScope | null) {
-  if (!thread || thread.mode === "board") throw new Error("File reads are unavailable in this thread's mode.");
+  if (!thread || (thread.mode === "board" && !thread.cwd)) throw new Error("File reads are unavailable in this thread's mode.");
   const full = thread.mode === "code" && thread.approval === "full";
   const roots = full ? [] : await readRoots(thread);
   return async (inputPath: unknown) => {

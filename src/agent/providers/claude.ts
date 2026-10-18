@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
-import { isPlainRecord, noPages } from "../types.js";
+import { isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
 import { claudeServerConfig, serversKey, type ResolvedMcpServer } from "../mcpConfig.js";
 import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
@@ -46,6 +46,8 @@ const AUTH_TTL_MS = 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const BOARD_SERVER = "scribe";
+/** Claude Code's read tools: a Pages thread with a workspace gets these and no others for files (#718). */
+const PAGES_READ_TOOLS = ["Read", "Grep", "Glob"];
 
 const EFFORT_LABELS: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
@@ -741,8 +743,7 @@ class ClaudeSession implements ProviderSession {
   }
 
   private cwd(): string {
-    if (this.thread.mode === "board" || !this.thread.cwd) return this.ctx.scratchDir;
-    return this.thread.cwd;
+    return this.thread.cwd || this.ctx.scratchDir;
   }
 
   /** The user's servers from Agent settings; with them, Claude Code's own MCP config is left out (strictMcpConfig). */
@@ -780,7 +781,7 @@ class ClaudeSession implements ProviderSession {
       // The host resolves Scribe's list and the Code-mode Keeper fallback. Do not load other servers
       // from ~/.claude.json, .mcp.json or plugins alongside them.
       strictMcpConfig: true,
-      settingSources: board ? ["user"] : ["user", "project", "local"],
+      settingSources: board && !thread.cwd ? ["user"] : ["user", "project", "local"],
       // Hooks from settings files and plugins are written for the user's own Claude Code sessions; a
       // fail-closed one (a plugin posting to a sidecar) denies every tool here for reasons the chat never
       // shows. Off unless the user turns them on. Scribe's own hooks below are callbacks and still run.
@@ -829,8 +830,10 @@ class ClaudeSession implements ProviderSession {
       ...(this.sessionId && thread.rewind?.at ? { resumeSessionAt: thread.rewind.at, forkSession: true } : {}),
     };
     if (board) {
-      options.tools = [...webTools, "Skill", "TodoWrite"];
-      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...webTools, "Skill", "TodoWrite"];
+      // With a workspace, Pages reads and searches files there (#718).
+      const reads = pagesReadsFiles(thread) ? PAGES_READ_TOOLS : [];
+      options.tools = [...reads, ...webTools, "Skill", "TodoWrite"];
+      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...reads, ...webTools, "Skill", "TodoWrite"];
     } else if (thread.mode === "ask") {
       options.tools = ["Read", "Grep", "Glob", "Skill", "TodoWrite", ...webTools];
       options.allowedTools = ["Read", "Grep", "Glob", ...webTools, `mcp__${BOARD_SERVER}__*`, ...autoServers];
@@ -1285,8 +1288,8 @@ class ClaudeSession implements ProviderSession {
         return { behavior: "deny", message: "Plan review was cancelled." };
       }
     }
-    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite"].includes(name)) {
-      return { behavior: "deny", message: "This thread is in Pages mode: only board tools and web search are available." };
+    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
+      return { behavior: "deny", message: pagesReadsFiles(this.thread) ? "This thread is in Pages mode: only board tools, file reads and web search are available." : "This thread is in Pages mode: only board tools and web search are available." };
     }
     const described = describeTool(name, input, this.thread.cwd);
     const mcpServer = this.userServers().find((server) => name.startsWith(`mcp__${server.name}__`));

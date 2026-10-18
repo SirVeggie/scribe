@@ -49,6 +49,11 @@ export function noPages(scope: ThreadScope): boolean {
   return scope.kind === "workspace";
 }
 
+/** A Pages thread with a workspace reads and searches files there; it still gets no edits or shell (#718). */
+export function pagesReadsFiles(thread: { mode: ThreadMode; cwd?: string | null }): boolean {
+  return thread.mode === "board" && Boolean(thread.cwd);
+}
+
 export type Thread = {
   id: string;
   title: string;

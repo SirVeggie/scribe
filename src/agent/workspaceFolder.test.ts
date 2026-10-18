@@ -80,13 +80,17 @@ test("a file at the saved folder path cannot start a provider", async () => {
   assert.equal(f.counts().sessions, 0);
 });
 
-test("Pages mode ignores a missing cwd, and folderless Code uses scratch", async () => {
+test("Pages mode checks its folder like Code (#718), and folderless threads use scratch", async () => {
   const f = fixture();
-  for (const patch of [{ mode: "board" as const, cwd: path.join(dir, "missing") }, { cwd: null }]) {
+  for (const patch of [{ mode: "board" as const, cwd: null }, { cwd: null }]) {
     const t = f.thread(patch);
     f.host.send(t.id, { text: "Work" });
     assert.equal((await settled(f.host, t.id)).turns[0].status, "done");
   }
+  const missing = path.join(dir, "missing");
+  const pages = f.thread({ mode: "board", cwd: missing });
+  f.host.send(pages.id, { text: "Work" });
+  assert.equal((await settled(f.host, pages.id)).turns[0].error, `Folder not found: ${missing}`);
   assert.equal(f.counts().runs, 2);
 });
 

@@ -78,10 +78,15 @@
 
   const MODES = [
     { id: "code", label: "Code", detail: "Read, edit files and run commands in the workspace" },
-    { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits" },
+    // Pages with a workspace reads files too (#718), so Ask is left out of the pickers; threads in it keep it.
+    { id: "ask", label: "Ask", detail: "Read-only: answer, read and search, no edits", hidden: true },
     { id: "plan", label: "Plan", detail: "Investigate and propose a plan before changing anything" },
-    { id: "board", label: "Pages", detail: "Scribe pages and web only, no shell or file edits" },
+    { id: "board", label: "Pages", detail: "Scribe pages and web; reads files in its workspace, no edits or shell" },
   ];
+  /** The modes the pickers offer, plus `keep` when it is a hidden one already in use. */
+  function pickModes(keep) {
+    return MODES.filter((m) => !m.hidden || m.id === keep);
+  }
   /** Tool groups a custom mode can turn off (ModeCapability in src/agent/customModes.ts). */
   const MODE_TOOLS = [
     { id: "edit", label: "Edit files" },
@@ -2049,7 +2054,7 @@
     description.value = mode?.description || "";
     description.maxLength = 200;
     description.placeholder = "Shown in the mode menu";
-    const base = select(MODES.map((m) => [m.id, `${m.label}: ${m.detail}`]), mode?.base || "code");
+    const base = select(pickModes(mode?.base).map((m) => [m.id, `${m.label}: ${m.detail}`]), mode?.base || "code");
     const off = mode?.off || [];
     const tools = checks(MODE_TOOLS.map((tool) => [tool.id, tool.label]), (id) => !off.includes(id));
     const toolsField = el("div", "ag-field");
@@ -5454,7 +5459,7 @@
 
     modeMenu(anchor) {
       const s = this.settings();
-      const items = MODES.map((m) => ({ label: m.label, detail: m.detail, checked: !s.custom && s.mode === m.id, run: () => this.updateSettings({ mode: m.id, customMode: null }) }));
+      const items = pickModes(s.mode).map((m) => ({ label: m.label, detail: m.detail, checked: !s.custom && s.mode === m.id, run: () => this.updateSettings({ mode: m.id, customMode: null }) }));
       const custom = customModes();
       if (custom.length || s.custom) items.push({ separator: true });
       for (const m of custom) {
@@ -10334,7 +10339,7 @@
       const modeTrack = el("div", "button-track text-track");
       modeTrack.setAttribute("role", "group");
       this.modeButtons = new Map();
-      for (const mode of MODES) {
+      for (const mode of pickModes()) {
         const control = button(mode.label, null, () => void this.toggleCycleMode(mode.id));
         this.modeButtons.set(mode.id, control);
         modeTrack.append(control);
@@ -10631,7 +10636,7 @@
 
   const PAGE_PROMPT_MAX = 20000;
   const PAGE_MODES = new Set(["board", "ask", "code", "plan"]);
-  /** Modes with file and shell access: the page needs the folder approved (agent.workspace). */
+  /** Modes that need a folder. A thread with a folder in any mode needs it approved (agent.workspace): Pages reads files there (#718). */
   const FOLDER_MODES = new Set(["code", "plan"]);
   /** board.agent.wait calls by thread id. */
   const pageWaiters = new Map();
@@ -10701,7 +10706,7 @@
       provider: t.provider,
       model: t.model,
       effort: t.effort,
-      ...(FOLDER_MODES.has(t.mode) ? { cwd: pageFolder(t), approval: t.approval } : {}),
+      ...(pageFolder(t) ? { cwd: pageFolder(t), approval: t.approval } : {}),
       // As of its last turn, so a board can tell a finished chat whose branch is still unmerged.
       ...(openWorktree(t) ? { worktree: { branch: t.worktree.branch, ahead: t.worktree.ahead || 0, dirty: Boolean(t.worktree.dirty) } } : {}),
       ...(t.usage ? { usage: t.usage } : {}),
@@ -10722,7 +10727,7 @@
     };
   }
 
-  /** The folder a page's Code or Plan thread was approved for: the picked folder, not its worktree. */
+  /** The folder a page's thread was approved for: the picked folder, not its worktree. */
   function pageFolder(t) {
     return t.worktree?.home || t.cwd || null;
   }
@@ -10994,7 +10999,7 @@
           })),
         ])
       ),
-      modes: MODES.map((m) => ({ id: m.id, label: m.label, detail: m.detail, needsFolder: FOLDER_MODES.has(m.id) })),
+      modes: pickModes().map((m) => ({ id: m.id, label: m.label, detail: m.detail, needsFolder: FOLDER_MODES.has(m.id) })),
       // The user's own modes: start a thread in one with customMode, next to the mode it is based on.
       customModes: customModes().map((m) => ({ id: m.id, label: m.name, detail: m.description || customDetail(m, m.base), base: m.base })),
       approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail })),
@@ -11062,7 +11067,7 @@
     if (data.effort && efforts.length && !efforts.some((e) => e.id === data.effort)) return { error: "unknown_effort" };
     if (data.approval && !APPROVALS.some((a) => a.id === data.approval)) return { error: "unknown_approval" };
     const folderMode = FOLDER_MODES.has(mode);
-    const cwd = folderMode && typeof data.cwd === "string" ? data.cwd.trim() : "";
+    const cwd = typeof data.cwd === "string" ? data.cwd.trim() : "";
     if (folderMode && !cwd) return { error: "needs_folder" };
     const modelParams = { ...(own ? {} : modelChoice(provider, model, p).modelParams) };
     if (data.modelParams && typeof data.modelParams === "object" && !Array.isArray(data.modelParams)) {
@@ -11199,7 +11204,7 @@
         if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
         const may = await pageMayWrite(tab, activated);
         if (!may.ok) return may;
-        if (FOLDER_MODES.has(thread.mode)) {
+        if (pageFolder(thread)) {
           const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
           if (!folder.ok) return folder;
         }
@@ -11224,7 +11229,7 @@
         if (!own && !activated) return { ok: false, error: "no_gesture" };
         const may = await pageMayWrite(tab, activated);
         if (!may.ok) return may;
-        if (own && FOLDER_MODES.has(thread.mode)) {
+        if (own && pageFolder(thread)) {
           const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
           if (!folder.ok) return folder;
         }
@@ -11246,7 +11251,7 @@
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
         const may = await pageMayWrite(tab, activated);
         if (!may.ok) return may;
-        if (FOLDER_MODES.has(thread.mode)) {
+        if (pageFolder(thread)) {
           const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
           if (!folder.ok) return folder;
         }
@@ -11259,9 +11264,9 @@
         if (!activated) return { ok: false, error: "no_gesture" };
         const may = await pageMayWrite(tab, false);
         if (!may.ok) return may;
-        if (FOLDER_MODES.has(data.mode)) {
-          const cwd = typeof data.cwd === "string" ? data.cwd.trim() : "";
-          if (!cwd) return { ok: false, error: "needs_folder" };
+        const cwd = typeof data.cwd === "string" ? data.cwd.trim() : "";
+        if (FOLDER_MODES.has(data.mode) && !cwd) return { ok: false, error: "needs_folder" };
+        if (cwd) {
           const approval = APPROVALS.some((a) => a.id === data.approval) ? data.approval : "auto";
           const folder = await pageMayUseFolder(tab, cwd, approval);
           if (!folder.ok) return folder;
@@ -11488,10 +11493,11 @@
     const view = targetView();
     const s = view.settings();
     const disabled = prefs().disabledModes || [];
-    const at = MODES.findIndex((m) => m.id === s.mode);
+    const modes = pickModes();
+    const at = modes.findIndex((m) => m.id === s.mode);
     let next;
-    for (let offset = 1; offset <= MODES.length; offset += 1) {
-      const mode = MODES[(at + offset) % MODES.length];
+    for (let offset = 1; offset <= modes.length; offset += 1) {
+      const mode = modes[(at + offset) % modes.length];
       if (!disabled.includes(mode.id)) {
         next = mode;
         break;

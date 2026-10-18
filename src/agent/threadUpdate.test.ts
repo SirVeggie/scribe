@@ -204,7 +204,7 @@ test("workspaces that cannot change say why", async () => {
   assert.match((await host.threadUpdateOp(id, { workspace: a })).workspace!, /already is this thread's workspace/);
   assert.match((await host.threadUpdateOp(id, { workspace: b })).workspace!, /no turn running/);
   const pages = host.createThread({ provider: "pi", mode: "board", approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
-  assert.deepEqual(await host.threadUpdateOp(pages, { title: "Notes", workspace: b }), { title: "The thread is now titled “Notes”.", workspace: "Not changed: a Pages thread has no workspace." });
+  assert.deepEqual(await host.threadUpdateOp(pages, { title: "Notes", workspace: b }), { title: "The thread is now titled “Notes”.", workspace: "Not changed: with no turn running the user cannot be asked." });
 });
 
 test("a thread's instructions name thread_update; Pages threads only for the title", () => {

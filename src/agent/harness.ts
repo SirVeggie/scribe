@@ -470,7 +470,8 @@ function instructionFile(file: string): Array<{ path: string; tokens: number }> 
 /** Not Scribe's doing, but part of every session: the provider's own prompt, settings and instruction files. */
 export function ownContext(thread: Pick<Thread, "provider" | "mode" | "cwd">, opts: { claudeHooks: boolean }, home = os.homedir()): OwnContext {
   const pages = thread.mode === "board";
-  const ws = pages ? null : thread.cwd;
+  // A Pages thread with a workspace runs there to read files (#718).
+  const ws = thread.cwd ?? null;
   const agentsMd = ws ? instructionFile(path.join(ws, "AGENTS.md")) : [];
   switch (thread.provider) {
     case "claude":
@@ -478,8 +479,8 @@ export function ownContext(thread: Pick<Thread, "provider" | "mode" | "cwd">, op
         delivery: "Appended to Claude Code's own system prompt.",
         mcpDelivery: "Passed to Claude Code as MCP servers; its own MCP config is left out.",
         loads: [
-          "Claude Code's system prompt and its built-in tools" + (pages ? " (Pages mode: web, Skill and TodoWrite only)" : thread.mode === "ask" ? " (Ask mode: Read, Grep, Glob, web, Skill and TodoWrite)" : ""),
-          pages ? "User settings only (~/.claude): CLAUDE.md, skills, permissions" : "User, project and local settings: CLAUDE.md files, skills, agents, permissions",
+          "Claude Code's system prompt and its built-in tools" + (pages ? (ws ? " (Pages mode: Read, Grep, Glob, web, Skill and TodoWrite)" : " (Pages mode: web, Skill and TodoWrite only)") : thread.mode === "ask" ? " (Ask mode: Read, Grep, Glob, web, Skill and TodoWrite)" : ""),
+          pages && !ws ? "User settings only (~/.claude): CLAUDE.md, skills, permissions" : "User, project and local settings: CLAUDE.md files, skills, agents, permissions",
           opts.claudeHooks ? "Hooks from settings files and plugins" : "No hooks from settings files or plugins (off in Agent settings)",
         ],
         files: [...instructionFile(path.join(home, ".claude", "CLAUDE.md")), ...(ws ? [...instructionFile(path.join(ws, "CLAUDE.md")), ...instructionFile(path.join(ws, "CLAUDE.local.md")), ...instructionFile(path.join(ws, ".claude", "CLAUDE.md"))] : [])],

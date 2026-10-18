@@ -771,7 +771,7 @@ function apiKeyOption(): Pick<CodexOptions, "apiKey"> {
 }
 
 function spareKey(thread: Thread, ctx: SessionContext): string {
-  const where = thread.mode === "board" || !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
+  const where = !thread.cwd ? `board:${ctx.scratchDir}` : `cwd:${path.normalize(thread.cwd).toLowerCase()}`;
   return JSON.stringify([where, thread.mode, customKey(thread), thread.web, thread.approval, noPages(thread.scope)]);
 }
 
@@ -979,7 +979,7 @@ export class CodexSession implements ProviderSession {
   }
 
   private cwd(): string {
-    if (this.thread.mode === "board" || !this.thread.cwd) return this.ctx.scratchDir;
+    if (!this.thread.cwd) return this.ctx.scratchDir;
     return this.thread.cwd;
   }
 
