@@ -46,6 +46,10 @@ const MAX_FOLDER_DEPTH = 16;
 /** Folders not worth opening as pages: version control, dependencies, build caches. */
 const SKIPPED_DIRS = new Set(["node_modules", ".git", ".hg", ".svn", "__pycache__", ".venv", "venv"]);
 
+export function skippedDirName(name: string): boolean {
+  return SKIPPED_DIRS.has(name.toLowerCase());
+}
+
 const IMAGE_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",

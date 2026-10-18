@@ -63,6 +63,7 @@ import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
+import { DiskLinkTakenError, FileExistsError, NeedsLocationError, recycleFile } from "./diskFolders.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
@@ -105,6 +106,8 @@ export async function startHttp(): Promise<http.Server> {
   store.load();
   prepareSecrets();
   refreshSearchIndex();
+  // Watch linked disk folders (#707) once start-up is done: the first scan of each can take a moment.
+  setTimeout(() => store.watchDisk(), 3000).unref();
   if (builtinWatchEnabled()) {
     watchBuiltinTemplates(() => {
       const changed = store.reloadBuiltins();
@@ -114,6 +117,7 @@ export async function startHttp(): Promise<http.Server> {
     });
   }
   const flush = () => {
+    store.stopDiskWatch();
     searchEmbedder.stop();
     void searchIndex.close();
     try {
@@ -420,9 +424,17 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const folderId = parseFolderRef(req.body?.folderId);
       const index = optionalNumber(req.body?.index) ?? 0;
+      // The user moving a file page into a folder on disk moves the file too (#707); agents only move the page.
+      if (viewerOf(req) !== "agent") {
+        store.moveFileWithPage(req.params.id, folderId, { keepBoth: req.body?.keepBoth === true });
+      }
       const tab = store.movePage(req.params.id, folderId, index, { close: req.body?.close === true });
       res.json({ tab: toMeta(tab) });
     } catch (err) {
+      if (err instanceof FileExistsError) {
+        res.status(409).json({ error: err.message, exists: err.target });
+        return;
+      }
       sendStoreError(res, err);
     }
   });
@@ -1317,12 +1329,22 @@ export async function startHttp(): Promise<http.Server> {
 
   // Close/delete results list ids this call affected. Do not include closedCount
   // (Library-wide closed pages): agents read it as "this call closed N tabs".
-  app.delete("/api/tabs/:id", (req, res) => {
+  app.delete("/api/tabs/:id", async (req, res) => {
     try {
       const permanent = req.query.permanent === "true" || req.query.permanent === "1";
       if (permanent) {
+        // file=trash: the user also sends a file page's file to the Recycle Bin (#707).
+        const file = req.query.file === "trash" && viewerOf(req) !== "agent" ? store.get(req.params.id)?.file : undefined;
+        if (file && !file.copy) {
+          try {
+            await recycleFile(file.path);
+          } catch (err) {
+            res.status(500).json({ error: `Could not move the file to the Recycle Bin: ${(err as Error).message}` });
+            return;
+          }
+        }
         const tab = store.deletePermanent(req.params.id);
-        res.json({ deleted: [tab.id] });
+        res.json({ deleted: [tab.id], ...(file && !file.copy ? { recycled: file.path } : {}) });
         return;
       }
       const tab = store.closeTab(req.params.id);
@@ -1401,6 +1423,30 @@ export async function startHttp(): Promise<http.Server> {
       const mode: FolderDeleteMode = req.query.mode === "delete" ? "delete" : "lift";
       const { deleted, moved } = store.deleteFolder(req.params.fid, mode);
       res.json({ deleted: deleted.map((tab) => tab.id), moved: moved.map((tab) => tab.id) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  /** Link a Library folder to a disk folder (#707), or unlink it with path null. */
+  app.put("/api/folders/:fid/disk", (req, res) => {
+    try {
+      const raw = req.body?.path;
+      const dir = typeof raw === "string" && raw.trim() ? raw.trim() : null;
+      res.json({ folder: store.setFolderDisk(req.params.fid, dir) });
+    } catch (err) {
+      if (err instanceof DiskLinkTakenError) {
+        res.status(409).json({ error: err.message, folderId: err.folderId });
+        return;
+      }
+      sendStoreError(res, err);
+    }
+  });
+
+  /** Pages for files in the folder's disk location that have none yet. */
+  app.post("/api/folders/:fid/rescan", (req, res) => {
+    try {
+      res.json({ added: store.rescanFolder(req.params.fid) });
     } catch (err) {
       sendStoreError(res, err);
     }
@@ -1852,6 +1898,53 @@ export async function startHttp(): Promise<http.Server> {
       const result = store.openDiskFolder(path.resolve(dir), parseFolderRef(req.body?.folderId));
       res.status(201).json(result);
     } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  /** Where new files go and whether deleting a file page also bins its file (#707). */
+  app.get("/api/files/settings", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    res.json({ settings: store.fileSettings(), unwatched: store.unwatchedDisk() });
+  });
+
+  app.put("/api/files/settings", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      const pick = (value: unknown) => (value === null ? null : typeof value === "string" ? value : undefined);
+      res.json({ settings: store.setFileSettings({ defaultLocation: pick(req.body?.defaultLocation), deleteFiles: pick(req.body?.deleteFiles) }) });
+    } catch (err) {
+      sendStoreError(res, err);
+    }
+  });
+
+  /**
+   * A new empty file as a page (#707): name (e.g. Untitled.md) in folderId's disk location or the
+   * default one, or file (an exact path). 409 needsLocation when neither applies: the board asks
+   * for location (remember: make it the default) and tries again.
+   */
+  app.post("/api/files/create", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    try {
+      const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+      const tab = store.createFile({
+        folderId: parseFolderRef(req.body?.folderId),
+        name: text(req.body?.name),
+        file: text(req.body?.file),
+        location: text(req.body?.location),
+        remember: req.body?.remember === true,
+        activate: req.body?.activate !== false,
+      });
+      res.status(201).json({ tab: toMeta(tab) });
+    } catch (err) {
+      if (err instanceof NeedsLocationError) {
+        res.status(409).json({ error: err.message, needsLocation: true });
+        return;
+      }
+      if (err instanceof FileExistsError) {
+        res.status(409).json({ error: err.message, exists: err.target });
+        return;
+      }
       sendStoreError(res, err);
     }
   });

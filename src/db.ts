@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureAccessColumns, ensureMadeInColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
 import { normalizeFolderAccess, normalizePageAccess } from "./pageAccess.js";
 import { normalizeEvents } from "./events.js";
@@ -50,6 +50,7 @@ type FolderRow = {
   deleted_at: number | null;
   deleted_batch: string | null;
   access: string | null;
+  disk: string | null;
 };
 
 type TemplateRow = {
@@ -218,8 +219,8 @@ ON CONFLICT(id) DO UPDATE SET
 `;
 
 const INSERT_FOLDER_SQL = `
-INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch, description, instructions, access)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO folders (id, parent_id, name, pos, created_at, updated_at, deleted_at, deleted_batch, description, instructions, access, disk)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const UPSERT_TEMPLATE_SQL = `
@@ -311,6 +312,7 @@ export class BoardDb {
       ensureTempColumn(db);
       ensureAccessColumns(db);
       ensureMadeInColumn(db);
+      ensureFolderDiskColumn(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -338,6 +340,20 @@ export class BoardDb {
 
   writeAppearance(settings: Record<string, string>): void {
     this.metaStmt.run("appearance", JSON.stringify(settings));
+  }
+
+  /** A JSON value kept in the meta table (e.g. "files", #707); undefined when unset or unreadable. */
+  readMetaJson(key: string): unknown {
+    const row = this.db.prepare("SELECT v FROM meta WHERE k = ?").get(key) as { v: string } | undefined;
+    try {
+      return row ? JSON.parse(row.v) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  writeMetaJson(key: string, value: unknown): void {
+    this.metaStmt.run(key, JSON.stringify(value));
   }
 
   load(): {
@@ -660,6 +676,7 @@ export class BoardDb {
       ensureTempColumn(db);
       ensureAccessColumns(db);
       ensureMadeInColumn(db);
+      ensureFolderDiskColumn(db);
       return new BoardDb(db);
     } catch (err) {
       try {
@@ -772,6 +789,7 @@ function folderToParams(stored: StoredFolder): SQLInputValue[] {
     folder.description ?? "",
     folder.instructions ?? "",
     folder.access ? JSON.stringify(folder.access) : null,
+    folder.disk ?? null,
   ];
 }
 
@@ -797,6 +815,7 @@ function rowToFolder(row: FolderRow): StoredFolder {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       ...folderAccessOf(row.access),
+      ...(row.disk ? { disk: row.disk } : {}),
     },
     ...(row.deleted_at !== null ? { deletedAt: row.deleted_at } : {}),
     ...(row.deleted_batch ? { deletedBatch: row.deleted_batch } : {}),

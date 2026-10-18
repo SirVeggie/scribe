@@ -266,6 +266,18 @@ export function ensureMadeInColumn(db: DatabaseSync): void {
 }
 
 /**
+ * Boards created before disk folders (#707) have no folders.disk.
+ * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
+ */
+export function ensureFolderDiskColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(folders)").all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === "disk")) {
+    return;
+  }
+  db.exec("ALTER TABLE folders ADD COLUMN disk TEXT");
+}
+
+/**
  * Boards created before temporary pages (#655) have no tabs.temp.
  * SQLite has no ADD COLUMN IF NOT EXISTS, so check first. See docs/migrations.md.
  */

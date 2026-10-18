@@ -171,6 +171,11 @@ export type Folder = {
   updatedAt: number;
   /** Agent access level and grants (#269); see pageAccess.ts. Omitted when open with no grants. */
   access?: FolderAccess;
+  /**
+   * The disk folder this Library folder stands for (#707), absolute. Its subfolders without one
+   * inherit `<parent's location>\<name>`; see store.folderDiskPath.
+   */
+  disk?: string;
 };
 
 /** A page or folder, as an access grant's target or a page's origin. */

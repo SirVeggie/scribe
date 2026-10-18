@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { cleanupOrphanAssets, deleteTabAssets, normalizeTabAssets, readPreparedAssets, writePreparedAssets } from "./assets.js";
@@ -120,6 +121,7 @@ import {
 import { wrapHtml } from "./wrapHtml.js";
 import { embedPageHtml, embedUrlFromHtml, safeEmbedUrl } from "./embed.js";
 import { removeCopies, safeFileName, samePath, scanFolder, storeCopy, filePlaceholderHtml, type FolderEntry } from "./filePages.js";
+import { createEmptyFile, DiskLinkTakenError, DiskWatcher, FileExistsError, isDir, moveFile, NeedsLocationError, normalizeFileSettings, uniqueFileName, within, type FileSettings } from "./diskFolders.js";
 
 /** How long a link the user added must stay before it grants access (#269). */
 const LINK_GRANT_DELAY_MS = 60_000;
@@ -2684,6 +2686,7 @@ export class BoardStore extends EventEmitter {
     const folder = this.requireFolder(id);
     const next = cleanFolderName(name);
     if (next !== folder.name) {
+      this.pinDiskPath(folder);
       folder.name = next;
       folder.updatedAt = Date.now();
       this.foldersDirty = true;
@@ -2700,6 +2703,9 @@ export class BoardStore extends EventEmitter {
       if (this.subtreeFolderIds(folder.id).has(parentId)) {
         throw new Error("cannot move a folder into itself");
       }
+    }
+    if (folder.parentId !== parentId) {
+      this.pinDiskPath(folder);
     }
     folder.parentId = parentId;
     folder.pos = this.folderPosAt(parentId, index, folder.id);
@@ -2864,13 +2870,26 @@ export class BoardStore extends EventEmitter {
 
   /**
    * Open folder (#654): a Library folder for the disk folder and each subfolder in it, and a file
-   * page for each file, all in the Library (no tabs). Files that already have a page keep it.   */
+   * page for each file, all in the Library (no tabs). Files that already have a page keep it.
+   * The folder stays linked to the disk folder (#707); opening a disk folder that a Library folder
+   * already stands for brings that folder up to date instead of making a second one.
+   */
   openDiskFolder(root: string, parentId: string | null): { folder: Folder; pages: number; reused: number; truncated: boolean } {
-    const { tree, truncated } = scanFolder(root);
+    const abs = path.resolve(root);
+    const { tree, truncated, files } = scanFolder(abs);
+    const linked = this.folderOnDisk(abs);
+    if (linked) {
+      const pages = this.addDiskFiles(folderEntryFiles(tree));
+      return { folder: linked, pages, reused: files - pages, truncated };
+    }
     let pages = 0;
     let reused = 0;
     const make = (entry: FolderEntry & { kind: "dir" }, parent: string | null): Folder => {
       const folder = this.createFolder({ name: entry.name, parentId: parent });
+      // Subfolders inherit their disk path from the name; link explicitly where the name differs.
+      if (entry === tree || !samePath(this.folderDiskPath(folder.id) ?? "", entry.path)) {
+        folder.disk = entry.path;
+      }
       let index = 0;
       for (const child of entry.children) {
         if (child.kind === "dir") {
@@ -2888,7 +2907,301 @@ export class BoardStore extends EventEmitter {
       }
       return folder;
     };
-    return { folder: make(tree, parentId), pages, reused, truncated };
+    const folder = make(tree, parentId);
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    return { folder, pages, reused, truncated };
+  }
+
+  /* ---------- disk folders (#707) ---------- */
+
+  private diskWatcher: DiskWatcher | null = null;
+
+  fileSettings(): FileSettings {
+    return normalizeFileSettings(this.db?.readMetaJson("files"));
+  }
+
+  /** Change where new files go or what deleting a file page does; null clears a setting. */
+  setFileSettings(patch: { defaultLocation?: string | null; deleteFiles?: string | null }): FileSettings {
+    if (!this.db) throw new Error("Database is not loaded");
+    const next: Record<string, unknown> = { ...this.fileSettings() };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      if (value === null || value === "") delete next[key];
+      else next[key] = value;
+    }
+    if (typeof next.defaultLocation === "string" && !isDir(path.resolve(next.defaultLocation))) {
+      throw new Error(`folder not found: ${next.defaultLocation}`);
+    }
+    const settings = normalizeFileSettings(next);
+    this.db.writeMetaJson("files", settings);
+    this.emit("file_settings", settings);
+    return settings;
+  }
+
+  /**
+   * The disk folder a Library folder stands for: its own link, else its parent's location plus
+   * its name (inherited), else null.
+   */
+  folderDiskPath(folderId: string | null | undefined): string | null {
+    const names: string[] = [];
+    let at = folderId ? this.folders.get(folderId) : undefined;
+    for (let depth = 0; at && depth < 64; depth++) {
+      if (at.disk) {
+        return path.join(at.disk, ...names.reverse());
+      }
+      names.push(safeFileName(at.name));
+      at = at.parentId ? this.folders.get(at.parentId) : undefined;
+    }
+    return null;
+  }
+
+  /** The Library folder that stands for this disk folder, by its own link or inherited. */
+  folderOnDisk(dir: string): Folder | undefined {
+    for (const folder of this.folders.values()) {
+      const at = this.folderDiskPath(folder.id);
+      if (at && samePath(at, dir)) {
+        return folder;
+      }
+    }
+    return undefined;
+  }
+
+  /** Link a Library folder to a disk folder, or unlink it (null). One Library folder per disk folder. */
+  setFolderDisk(id: string, dir: string | null): Folder {
+    const folder = this.requireFolder(id);
+    if (dir) {
+      const abs = path.resolve(dir);
+      if (!isDir(abs)) {
+        throw new Error(`folder not found: ${abs}`);
+      }
+      const taken = this.folderOnDisk(abs);
+      if (taken && taken.id !== id) {
+        throw new DiskLinkTakenError(taken.id, taken.name);
+      }
+      folder.disk = abs;
+    } else {
+      delete folder.disk;
+    }
+    folder.updatedAt = Date.now();
+    this.foldersDirty = true;
+    this.persistSoon();
+    this.emitFolders();
+    return folder;
+  }
+
+  /**
+   * Before a rename or move: a subfolder that inherits its disk path from its name keeps the disk
+   * folder it already has files in, as an explicit link.
+   */
+  private pinDiskPath(folder: Folder): void {
+    if (folder.disk) return;
+    const at = this.folderDiskPath(folder.id);
+    if (at && isDir(at)) {
+      folder.disk = at;
+    }
+  }
+
+  /**
+   * A new empty file as a page in Library folder folderId (#707). It goes in that folder's disk
+   * location, else in `location` (the user's pick when there was none), else in the default
+   * location; with none of them it throws NeedsLocationError and creates nothing. `file` is an
+   * exact path the user chose (Other…).
+   */
+  createFile(input: { folderId?: string | null; name?: string; file?: string; location?: string; remember?: boolean; activate?: boolean }): Tab {
+    const folderId = input.folderId ?? null;
+    if (folderId) {
+      this.requireFolder(folderId);
+    }
+    let file: string;
+    if (input.file) {
+      file = path.resolve(input.file);
+      if (fs.existsSync(file)) {
+        throw new FileExistsError(file);
+      }
+    } else {
+      const dir = this.folderDiskPath(folderId) ?? (input.location ? path.resolve(input.location) : null) ?? this.fileSettings().defaultLocation ?? null;
+      if (!dir) {
+        throw new NeedsLocationError();
+      }
+      file = uniqueFileName(dir, input.name || "Untitled.md");
+    }
+    if (input.location && input.remember) {
+      fs.mkdirSync(path.resolve(input.location), { recursive: true });
+      this.setFileSettings({ defaultLocation: input.location });
+    }
+    createEmptyFile(file);
+    return this.openFilePage({ path: file, folderId, activate: input.activate !== false }).tab;
+  }
+
+  /**
+   * Moving a file page into a Library folder on disk moves its file there (#707); a dropped
+   * copy becomes a real file. Outside disk folders, or already there, the file stays. A name
+   * already in the folder throws FileExistsError unless keepBoth (then "name 2.ext").
+   */
+  moveFileWithPage(idOrKey: string, folderId: string | null, opts: { keepBoth?: boolean } = {}): Tab {
+    const tab = this.requireAny(idOrKey);
+    if (!tab.file) {
+      return tab;
+    }
+    const dir = this.folderDiskPath(folderId);
+    if (!dir || samePath(path.dirname(tab.file.path), dir)) {
+      return tab;
+    }
+    const name = path.basename(tab.file.path);
+    let target = path.join(dir, name);
+    if (fs.existsSync(target)) {
+      if (!opts.keepBoth) {
+        throw new FileExistsError(target);
+      }
+      target = uniqueFileName(dir, name);
+    }
+    if (tab.file.copy) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(tab.file.path, target, fs.constants.COPYFILE_EXCL);
+    } else {
+      moveFile(tab.file.path, target);
+    }
+    return this.setFilePath(tab.id, target);
+  }
+
+  /** Watch the linked disk folders (#707): files added there outside Scribe get pages. */
+  watchDisk(): DiskWatcher {
+    this.diskWatcher ??= new DiskWatcher({
+      diskLinks: () => [...this.folders.values()].flatMap((folder) => (folder.disk ? [folder.disk] : [])),
+      diskChanged: (paths) => this.diskChanged(paths),
+      reconcileDisk: (root) => this.rescanDisk(root),
+    });
+    this.diskWatcher.sync();
+    return this.diskWatcher;
+  }
+
+  stopDiskWatch(): void {
+    this.diskWatcher?.stop();
+    this.diskWatcher = null;
+  }
+
+  /** Disk folders whose watcher failed (Rescan in the folder menu still works). */
+  unwatchedDisk(): string[] {
+    return this.diskWatcher?.failedRoots() ?? [];
+  }
+
+  /** Pages for files under a disk folder that have none yet (start-up, Rescan). Returns how many. */
+  rescanDisk(root: string): number {
+    const { tree } = scanFolder(root);
+    return this.addDiskFiles(folderEntryFiles(tree));
+  }
+
+  /** Rescan a Library folder's disk location. */
+  rescanFolder(id: string): number {
+    this.requireFolder(id);
+    const dir = this.folderDiskPath(id);
+    if (!dir) {
+      throw new Error("this folder is not on disk");
+    }
+    return isDir(dir) ? this.rescanDisk(dir) : 0;
+  }
+
+  /**
+   * Changed paths from the disk watcher: a new file gets a page in the Library folder for its disk
+   * folder; a file renamed in place (gone plus new in one folder) keeps its page. Deleted files keep
+   * their page, which shows the file as missing.
+   */
+  diskChanged(paths: string[]): void {
+    const known = this.knownFilePaths();
+    const norm = normPath;
+    const added: string[] = [];
+    const gone: Tab[] = [];
+    for (const p of paths) {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(p);
+      } catch {
+        const tab = known.get(norm(p));
+        if (tab) gone.push(tab);
+        continue;
+      }
+      if (stat.isDirectory()) {
+        // A folder moved or copied in: its files may come without events of their own.
+        try {
+          added.push(...folderEntryFiles(scanFolder(p).tree).filter((file) => !known.has(norm(file))));
+        } catch {
+          /* gone again */
+        }
+      } else if (stat.isFile() && !known.has(norm(p))) {
+        added.push(p);
+      }
+    }
+    for (const tab of gone) {
+      const dir = norm(path.dirname(tab.file!.path));
+      const here = added.filter((file) => norm(path.dirname(file)) === dir);
+      const goneHere = gone.filter((other) => norm(path.dirname(other.file!.path)) === dir);
+      if (here.length === 1 && goneHere.length === 1) {
+        this.setFilePath(tab.id, here[0]);
+        added.splice(added.indexOf(here[0]), 1);
+      }
+    }
+    this.addDiskFiles(added, known);
+  }
+
+  /** Every file page's path (open, closed, or in the bin), so a file never gets a second page. */
+  private knownFilePaths(): Map<string, Tab> {
+    const known = new Map<string, Tab>();
+    const tabs = [...this.tabs.values(), ...this.closed.values(), ...this.deleted.flatMap((batch) => batch.tabs)];
+    for (const tab of tabs) {
+      if (tab.file && !tab.file.copy) known.set(normPath(tab.file.path), tab);
+    }
+    return known;
+  }
+
+  /** Pages for these files in the Library folders their disk folders map to. Returns how many were made. */
+  private addDiskFiles(files: string[], known = this.knownFilePaths()): number {
+    if (!files.length) return 0;
+    const roots: Array<{ id: string; dir: string }> = [];
+    for (const folder of this.folders.values()) {
+      const dir = this.folderDiskPath(folder.id);
+      if (dir) roots.push({ id: folder.id, dir });
+    }
+    let made = 0;
+    for (const file of files) {
+      if (known.has(normPath(file))) continue;
+      const folderId = this.libraryFolderFor(path.dirname(file), roots);
+      if (!folderId) continue;
+      const { tab, created } = this.openFilePage({ path: file, folderId, activate: false });
+      known.set(normPath(file), tab);
+      if (created) made += 1;
+    }
+    if (this.foldersDirty) {
+      this.persistSoon();
+      this.emitFolders();
+    }
+    return made;
+  }
+
+  /** The Library folder for a disk folder: the deepest one on it or above it, with subfolders made below. */
+  private libraryFolderFor(dir: string, roots: Array<{ id: string; dir: string }>): string | null {
+    let best: { id: string; dir: string } | null = null;
+    for (const root of roots) {
+      if (within(root.dir, dir) && (!best || root.dir.length > best.dir.length)) best = root;
+    }
+    if (!best) return null;
+    let at = best.id;
+    let atDir = best.dir;
+    for (const part of path.relative(best.dir, dir).split(/[\\/]+/).filter(Boolean)) {
+      atDir = path.join(atDir, part);
+      const parent = at;
+      const child =
+        this.foldersIn(parent).find((folder) => samePath(this.folderDiskPath(folder.id) ?? "", atDir)) ??
+        this.createFolder({ name: part, parentId: parent });
+      if (!samePath(this.folderDiskPath(child.id) ?? "", atDir)) {
+        child.disk = atDir;
+        this.foldersDirty = true;
+      }
+      roots.push({ id: child.id, dir: atDir });
+      at = child.id;
+    }
+    return at;
   }
 
   /** `lift` moves the folder's contents up to its parent; `delete` bins the whole subtree as one batch. */
@@ -3467,6 +3780,7 @@ export class BoardStore extends EventEmitter {
     const hi = siblings[at + 1]?.pos ?? folder.pos + 1;
     const children = this.foldersIn(folder.id);
     children.forEach((child, i) => {
+      this.pinDiskPath(child);
       child.parentId = parentId;
       child.pos = lo + ((hi - lo) * (i + 1)) / (children.length + 1);
     });
@@ -3652,6 +3966,8 @@ export class BoardStore extends EventEmitter {
 
   private emitFolders(): void {
     this.emit("folders", this.listFolders());
+    // Folder links, moves and deletes change which disk folders are watched (#707).
+    this.diskWatcher?.syncSoon();
   }
 
   /** The nearest still-open tab right of `id` in `prevOrder`, else the nearest to its left. */
@@ -4326,6 +4642,17 @@ function splitFolderPath(path: string): string[] {
 
 function sameName(a: string, b: string): boolean {
   return a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
+}
+
+/** A disk path to compare by (Windows paths ignore case), as samePath does. */
+function normPath(file: string): string {
+  const resolved = path.resolve(file);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+/** Every file in an Open folder scan. */
+function folderEntryFiles(entry: FolderEntry): string[] {
+  return entry.kind === "file" ? [entry.path] : entry.children.flatMap(folderEntryFiles);
 }
 
 function cleanFolderName(name: string): string {

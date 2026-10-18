@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS folders (
   updated_at INTEGER NOT NULL,
   deleted_at INTEGER,
   deleted_batch TEXT,
-  access TEXT
+  access TEXT,
+  disk TEXT
 );
 `;
 
