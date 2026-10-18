@@ -107,6 +107,18 @@ export function modeOff(thread: Limited, capability: ModeCapability): boolean {
   return thread.custom?.off.includes(capability) ?? false;
 }
 
+/**
+ * Read-only and Board with a workspace run shell commands (#720): Codex in its read-only sandbox
+ * without asking; elsewhere there is no OS sandbox, so each command asks the user and is refused
+ * once READ_SHELL_WAIT_MS passes unanswered. A custom mode can still turn the shell off.
+ */
+export function readShell(thread: Limited & { mode: Thread["mode"]; cwd?: string | null }): boolean {
+  return thread.mode === "board" && Boolean(thread.cwd) && !modeOff(thread, "shell");
+}
+
+/** How long a reading rung's command waits for the user before it is refused (#720), as a useful web request does. */
+export const READ_SHELL_WAIT_MS = 15 * 60 * 1000;
+
 /** Whether the thread's custom mode keeps this MCP server of the user's. */
 export function modeKeepsServer(thread: Limited, name: string): boolean {
   const mcp = thread.custom?.mcp ?? "all";

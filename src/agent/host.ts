@@ -60,7 +60,7 @@ import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanApprovals, cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
-import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, threadCustom } from "./customModes.js";
+import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, READ_SHELL_WAIT_MS, readShell, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
@@ -136,6 +136,7 @@ const HOOK_GRACE_MS = 400;
 /** In a thread nobody watches (a board worker, its helpers), a hook's ask is refused after this long, as a useful web request is. */
 const HOOK_ASK_WAIT_MS = WEB_IMPORTANCE_WAIT_MS.useful ?? 15 * 60 * 1000;
 const HOOK_ASK_TIMEOUT = "Nobody answered the hook's approval in time, so the call was not run. Leave it out, and mention it in your result.";
+const READ_SHELL_TIMEOUT = "Nobody answered in time, so the command was not run. Carry on without it, and mention what you could not check.";
 
 /** The approval's line saying when an unanswered request is refused. */
 function refusedBy(waitMs: number): string {
@@ -373,9 +374,9 @@ function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<Appr
   if (req.boardTool && allow) {
     return Promise.resolve({ optionId: allow.id });
   }
-  if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo" && !(pagesReadsFiles(t) && (req.tool === "read" || req.tool === "search"))) {
-    // The Read-only and Board rungs never edit files or run commands; with a workspace they read there.
-    const note = pagesReadsFiles(t) ? `The ${APPROVAL_LABEL[t.approval]} rung reads files but does not edit them or run commands.` : `The ${APPROVAL_LABEL[t.approval]} rung has no file or shell access.`;
+  if (t?.mode === "board" && req.tool !== "mcp" && req.tool !== "fetch" && req.tool !== "todo" && !(pagesReadsFiles(t) && (req.tool === "read" || req.tool === "search")) && !(req.tool === "execute" && readShell(t))) {
+    // The Read-only and Board rungs never edit files; with a workspace they read there, and each command asks (#720).
+    const note = pagesReadsFiles(t) ? `The ${APPROVAL_LABEL[t.approval]} rung reads files and runs commands with the user's approval, but does not edit files.` : `The ${APPROVAL_LABEL[t.approval]} rung has no file or shell access.`;
     if (reject) return Promise.resolve({ optionId: reject.id, note });
     return Promise.reject(new Error(note));
   }
@@ -2822,7 +2823,7 @@ export class AgentHost {
     if (thread.approval !== "full") {
       const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS.useful : null;
       const detail = [
-        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. ${thread.mode === "board" ? `It can then read and search files there (${APPROVAL_LABEL[thread.approval]} rung: no edits or commands).` : "Commands then run there, and this thread's approval level covers that folder instead."}`,
+        `The agent asks to move this thread's workspace${thread.cwd ? ` from ${thread.cwd}` : ""} to ${cwd}, from its next turn on. ${thread.mode === "board" ? `It can then read and search files there (${APPROVAL_LABEL[thread.approval]} rung: no edits; commands it runs there are read-only).` : "Commands then run there, and this thread's approval level covers that folder instead."}`,
         opts.reason?.trim(),
         waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
       ]
@@ -4064,28 +4065,37 @@ export class AgentHost {
           });
           return waitFor<ApprovalDecision>("approval", item.id, wait);
         };
+        /** Ask, refused with `timeout` once `waitMs` passes unanswered (null: wait for the user). */
+        const decideBy = (asked: ApprovalRequest, reason: string | undefined, waitMs: number | null, timeout: string): Promise<ApprovalDecision> => {
+          asked = { ...asked, detail: [asked.detail, reason, waitMs !== null ? refusedBy(waitMs) : ""].filter(Boolean).join("\n\n") };
+          const deadline = withDeadline(waitMs, signal);
+          return decide(asked, deadline.signal)
+            .catch((err: unknown) => {
+              if (!deadline.timedOut()) throw err;
+              const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+              if (!reject) throw new Error(timeout);
+              return { optionId: reject.id, note: timeout };
+            })
+            .finally(deadline.done);
+        };
+        // Read-only and Board run commands outside any sandbox here: each one asks, and an unanswered one is refused (#720).
+        const t = thread();
+        const readCommand = req.tool === "execute" && t !== undefined && readShell(t);
+        const plain = (): Promise<ApprovalDecision> =>
+          readCommand ? decideBy(req, `The ${APPROVAL_LABEL[t!.approval]} rung asks before every command; allow only ones that change nothing.`, READ_SHELL_WAIT_MS, READ_SHELL_TIMEOUT) : decide(req);
         // A hook can only tighten this: deny the call, or have the user decide whatever the approval level.
         const gate = host.approvalGate(threadId, run, req);
-        if (!gate) return decide(req);
+        if (!gate) return plain();
         return gate.then((hook) => {
           if (hook?.kind === "block") {
             const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
             if (!reject) throw new Error(hook.reason);
             return { optionId: reject.id, note: hook.reason };
           }
-          if (hook?.kind !== "ask") return decide(req);
+          if (hook?.kind !== "ask") return plain();
           // Nobody may be watching a worker's thread: its ask is refused once the wait is up.
-          const waitMs = host.unattended(threadId) ? HOOK_ASK_WAIT_MS : null;
-          const asked = { ...req, humanOnly: true, detail: [req.detail, hook.reason, waitMs !== null ? refusedBy(waitMs) : ""].filter(Boolean).join("\n\n") };
-          const deadline = withDeadline(waitMs, signal);
-          return decide(asked, deadline.signal)
-            .catch((err: unknown) => {
-              if (!deadline.timedOut()) throw err;
-              const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
-              if (!reject) throw new Error(HOOK_ASK_TIMEOUT);
-              return { optionId: reject.id, note: HOOK_ASK_TIMEOUT };
-            })
-            .finally(deadline.done);
+          if (readCommand) return decideBy({ ...req, humanOnly: true }, hook.reason, READ_SHELL_WAIT_MS, READ_SHELL_TIMEOUT);
+          return decideBy({ ...req, humanOnly: true }, hook.reason, host.unattended(threadId) ? HOOK_ASK_WAIT_MS : null, HOOK_ASK_TIMEOUT);
         });
       },
       question(req: QuestionRequest, signal) {

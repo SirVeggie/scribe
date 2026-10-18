@@ -65,6 +65,9 @@ test("host shell: only Code threads that ask, and it drops the built-in shell bu
   assert.equal(wantsHostShell({ mode: "code", approval: "auto" }, true), false);
   assert.equal(wantsHostShell({ mode: "code", approval: "full" }, true), false);
   assert.equal(wantsHostShell({ mode: "board", approval: "board" }, true), false);
+  // The reading rungs with a workspace always run commands through Scribe, asking each time (#720).
+  assert.equal(wantsHostShell({ mode: "board", approval: "readonly", cwd: "/work" }, false), true);
+  assert.equal(wantsHostShell({ mode: "board", approval: "board", cwd: "/work", custom: { id: "cm_x", name: "X", off: ["shell"], mcp: "all", instructions: "" } }, true), false);
   const lists = toolLists({ mode: "code", web: "on" }, true).disallowedTools!;
   assert.ok(lists.includes("shell"));
   assert.ok(!lists.includes("mcp"));

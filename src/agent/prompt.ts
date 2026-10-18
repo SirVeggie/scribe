@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { customInstructions } from "./customModes.js";
+import { customInstructions, READ_SHELL_WAIT_MS, readShell } from "./customModes.js";
 import os from "node:os";
 import path from "node:path";
 import { BOARD_MCP } from "./providers/cursor.js";
@@ -65,6 +65,17 @@ function duplicateScribe(thread: Thread): string {
  * edit applies on the next message (Claude restarts its process when they change; Cursor re-sends
  * the instructions block). Other lines only depend on the thread's scope and mode.
  */
+/**
+ * What the Read-only and Board rungs may do with files and the shell (#720): Codex runs commands in its
+ * read-only sandbox; elsewhere nothing sandboxes them, so each asks the user and is refused unanswered.
+ */
+function readingFiles(thread: Thread): string {
+  if (!thread.cwd) return "You have no file or shell access in this thread. Do not ask to run commands.";
+  if (!readShell(thread)) return "You can read and search files in the workspace, but not edit them or run commands. Do not ask to run commands.";
+  if (thread.provider === "codex") return "You can read and search files in the workspace and run commands, but not edit files: commands run in a read-only sandbox without asking.";
+  return `You can read and search files in the workspace, but not edit them. Commands have no sandbox here, so each one asks the user and is refused if nobody answers within ${READ_SHELL_WAIT_MS / 60000} minutes: prefer the file tools, run only commands that change nothing, and carry on without a refused one.`;
+}
+
 export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   const server = thread.provider === "cursor" ? BOARD_MCP : "scribe";
   const on = (id: AppInstruction) => !scope.instructionsOff?.includes(id);
@@ -100,18 +111,20 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     );
   }
   switch (thread.mode) {
-    case "board":
+    case "board": {
+      const files = readingFiles(thread);
       lines.push(
         "",
         noPages(thread.scope)
           ? thread.cwd
-            ? "Mode: Chat. You can read and search files in the workspace, but not edit them or run commands, and you have no page access: answer from the conversation and the files, plus web search and fetch when they are available. Do not ask to run commands."
+            ? `Mode: Chat. ${files} You have no page access: answer from the conversation and the files, plus web search and fetch when they are available.`
             : "Mode: Chat. You have no file, shell or page access in this thread: answer from the conversation, plus web search and fetch when they are available. Do not ask to run commands."
           : thread.approval === "readonly"
-            ? `Access: Read-only. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} You can read pages but not create or change them. Answer from what you read, plus web search and fetch when they are available. Do not ask to run commands.`
-            : `Access: Board. ${thread.cwd ? "You can read and search files in the workspace, but not edit them or run commands." : "You have no file or shell access in this thread."} Work through the page tools, plus web search and fetch when they are available. Do not ask to run commands. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits.`
+            ? `Access: Read-only. ${files} You can read pages but not create or change them. Answer from what you read, plus web search and fetch when they are available.`
+            : `Access: Board. ${files} Work through the page tools, plus web search and fetch when they are available. Do not check pages out to files (page_read toFile): edit large pages with page_grep, page_read offset/limit and page_patch edits.`
       );
       break;
+    }
     case "code":
       lines.push("", `Access: ${APPROVAL_LABEL[thread.approval] ?? "Edits"}. You can read and edit files and run commands in the workspace, subject to the user's approval settings.`);
       break;

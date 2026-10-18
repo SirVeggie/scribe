@@ -421,11 +421,13 @@ export function gitCommonDir(cwd: string): string | null {
 }
 
 /**
- * Codex config for a sandboxed Code thread on Windows. Without a selected Windows sandbox Codex
+ * Codex config for a sandboxed thread on Windows. Without a selected Windows sandbox Codex
  * silently turns workspace-write into read-only (#322); the unelevated one needs no admin setup.
+ * Read-only selects it too, so the reading rungs' commands run sandboxed without asking (#720).
  */
 export function windowsSandboxConfig(sandbox: SandboxMode, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
-  if (platform !== "win32" || sandbox !== "workspace-write") return {};
+  if (platform !== "win32" || sandbox === "danger-full-access") return {};
+  if (sandbox === "read-only") return { "windows.sandbox": "unelevated" };
   const gitDir = gitCommonDir(cwd);
   return {
     "windows.sandbox": "unelevated",

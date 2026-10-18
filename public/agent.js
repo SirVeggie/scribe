@@ -113,8 +113,8 @@
   ];
   /** The access ladder (#719), lowest first: APPROVALS in src/agent/types.ts. */
   const APPROVALS = [
-    { id: "readonly", label: "Read-only", detail: "Read files and pages; no edits, commands or page changes" },
-    { id: "board", label: "Board", detail: "Read files; create and change pages; no edits or commands" },
+    { id: "readonly", label: "Read-only", detail: "Read files and pages; read-only commands; no edits or page changes" },
+    { id: "board", label: "Board", detail: "Read files; create and change pages; read-only commands; no edits" },
     { id: "edits", label: "Edits", detail: "Accept edits in the workspace; ask before commands and edits outside it" },
     { id: "auto", label: "Auto review", detail: "A classifier approves safe calls and asks for the rest (Claude)" },
     { id: "full", label: "Full access", detail: "Approve everything automatically" },

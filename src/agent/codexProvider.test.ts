@@ -72,7 +72,7 @@ test("windowsSandboxConfig selects the unelevated sandbox and opens a worktree's
       "sandbox_workspace_write.writable_roots": [path.join(main, ".git")],
     });
     assert.deepEqual(windowsSandboxConfig("workspace-write", wt, "linux"), {});
-    assert.deepEqual(windowsSandboxConfig("read-only", wt, "win32"), {});
+    assert.deepEqual(windowsSandboxConfig("read-only", wt, "win32"), { "windows.sandbox": "unelevated" });
     assert.deepEqual(windowsSandboxConfig("danger-full-access", wt, "win32"), {});
     const config = threadOptions(thread({ approval: "auto" }), wt, "win32").config as Record<string, unknown>;
     assert.equal(config["windows.sandbox"], "unelevated");
@@ -783,7 +783,7 @@ test("Codex turn overrides retain custom mode read-only restrictions at every ap
       assert.deepEqual(turnPermissionOverrides(limited, "/work").sandboxPolicy, { type: "readOnly", networkAccess: false });
       const config = threadOptions(limited, "/work", "win32").config as Record<string, unknown>;
       assert.equal(config["sandbox_workspace_write.network_access"], false);
-      assert.equal(config["windows.sandbox"], undefined);
+      assert.equal(config["windows.sandbox"], "unelevated");
     }
   }
 });

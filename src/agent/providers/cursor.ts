@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cursorToolsOff, customKey, modeOff, scribeToolsOff } from "../customModes.js";
+import { cursorToolsOff, customKey, modeOff, readShell, scribeToolsOff } from "../customModes.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -164,8 +164,12 @@ export function cursorAutoReview(thread: Pick<Thread, "mode" | "approval">): boo
   return thread.mode !== "board" && thread.approval !== "full";
 }
 
-/** Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be asked. */
-export function wantsHostShell(thread: Pick<Thread, "mode" | "approval" | "custom">, enabled: boolean): boolean {
+/**
+ * Whether Scribe runs this thread's shell commands itself, asking first: only where the user would be
+ * asked. Read-only and Board with a workspace always do (#720), since Cursor's own shell has no sandbox here.
+ */
+export function wantsHostShell(thread: Pick<Thread, "mode" | "approval" | "custom"> & { cwd?: string | null }, enabled: boolean): boolean {
+  if (readShell(thread)) return true;
   return enabled && !modeOff(thread, "shell") && thread.mode === "code" && thread.approval === "edits";
 }
 

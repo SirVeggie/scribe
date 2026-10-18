@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { claudeToolsOff, customKey, scribeToolsOff } from "../customModes.js";
+import { claudeToolsOff, customKey, readShell, scribeToolsOff } from "../customModes.js";
 import { randomUUID } from "node:crypto";
 import { ClaudeUsageDelta, claudeBillingSource, claudePlanSnapshot } from "../claudeUsage.js";
 import { planLimitsFromRateLimitInfo } from "../planLimits.js";
@@ -48,6 +48,8 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const BOARD_SERVER = "scribe";
 /** Claude Code's read tools: a Pages thread with a workspace gets these and no others for files (#718). */
 const PAGES_READ_TOOLS = ["Read", "Grep", "Glob"];
+/** The shell on the reading rungs (#720): no sandbox on Windows, so gateShell has the user approve each command. */
+const READ_SHELL_TOOLS = process.platform === "win32" ? ["Bash", "PowerShell"] : ["Bash"];
 
 const EFFORT_LABELS: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
@@ -803,6 +805,13 @@ class ClaudeSession implements ProviderSession {
             ],
           },
           {
+            // Read-only and Board: every command asks the user, also ones the user's settings allow (#720).
+            matcher: "Bash|PowerShell",
+            // The host refuses an unanswered command after its own wait; the turn's stop still aborts it.
+            timeout: 7 * 24 * 60 * 60,
+            hooks: [async (hookInput, _toolUseId, { signal }) => this.gateShell(hookInput as { tool_name?: string; tool_input?: unknown; tool_use_id?: string }, signal)],
+          },
+          {
             // Web off or limited: calls the setting does not cover ask the user (see gateWeb).
             // A hook, so it also holds where tools pass without asking (allowedTools, full access).
             matcher: "WebSearch|WebFetch",
@@ -828,7 +837,8 @@ class ClaudeSession implements ProviderSession {
     };
     if (board) {
       // Read-only and Board: with a workspace, they read and search files there (#718).
-      const reads = pagesReadsFiles(thread) ? PAGES_READ_TOOLS : [];
+      // Their shell is allowed here only so dontAsk lets it through to gateShell, which asks every time (#720).
+      const reads = [...(pagesReadsFiles(thread) ? PAGES_READ_TOOLS : []), ...(readShell(thread) ? READ_SHELL_TOOLS : [])];
       options.tools = [...reads, ...webTools, "Skill", "TodoWrite"];
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...reads, ...webTools, "Skill", "TodoWrite"];
     } else {
@@ -877,6 +887,23 @@ class ClaudeSession implements ProviderSession {
     if (!this.ctx.webRequest) return deny("Web access is off for this thread.");
     const result = await this.ctx.webRequest(thread.id, call, { signal });
     return result.allowed ? allow() : deny(result.message ?? "The user did not allow this web request.");
+  }
+
+  /**
+   * PreToolUse for shell calls: on the Read-only and Board rungs the user approves each command
+   * (canUseTool), and anything that goes wrong refuses it. Other rungs go on as before.
+   */
+  private async gateShell(inp: { tool_name?: string; tool_input?: unknown; tool_use_id?: string }, signal: AbortSignal): Promise<HookJSONOutput> {
+    if (this.thread.mode !== "board") return { continue: true };
+    const deny = (reason: string): HookJSONOutput => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+    try {
+      const input = isPlainRecord(inp.tool_input) ? inp.tool_input : {};
+      const result = await this.canUseTool(inp.tool_name ?? "Bash", input, { signal, ...(inp.tool_use_id ? { toolUseID: inp.tool_use_id } : {}) });
+      if (result.behavior !== "allow") return deny(result.message);
+      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+    } catch {
+      return deny("The command could not be approved.");
+    }
   }
 
   /**
@@ -1271,8 +1298,8 @@ class ClaudeSession implements ProviderSession {
         return { behavior: "deny", message: "The question was cancelled." };
       }
     }
-    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
-      return { behavior: "deny", message: pagesReadsFiles(this.thread) ? `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools, file reads and web search are available.` : `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools and web search are available.` };
+    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : []), ...(readShell(this.thread) ? READ_SHELL_TOOLS : [])].includes(name)) {
+      return { behavior: "deny", message: pagesReadsFiles(this.thread) ? `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools, file reads, commands the user approves and web search are available.` : `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools and web search are available.` };
     }
     const described = describeTool(name, input, this.thread.cwd);
     const mcpServer = this.userServers().find((server) => name.startsWith(`mcp__${server.name}__`));
