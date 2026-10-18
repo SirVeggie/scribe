@@ -5,9 +5,10 @@ continuation through the decision form.
 
 ## Implemented
 
-Form replies save a card-level continuation request and user comment. The daemon
-selects requests through the existing worker scheduler, including outside ready
-columns when the card records its originating ready inbox. Dependencies, worker
+Form replies save a card-level continuation request and user comment, and immediately
+move the card to its originating ready inbox (or the first ready inbox when none
+is recorded). Continue uses the same move. The daemon also moves previously saved
+pending requests into ready. Dependencies, worker
 stop state, inbox pause, live claims, capacity and page permissions gate dispatch.
 The request remains pending while these conditions prevent work.
 
@@ -22,8 +23,8 @@ waits retain their lifecycle ownership and read saved answers when they resume;
 they do not get another pending continuation. This change does not interrupt or
 reschedule already-owned runs when blockers are added during them.
 
-Cards without a recorded ready inbox need to be moved to an eligible ready inbox
-before dispatch. Setup/provider failures keep the request and pause the worker
+If the board has no ready inbox, requests remain saved until one is available.
+Setup/provider failures keep the request and pause the worker
 using the existing error handling; restarting the worker retries it.
 
 The sections below retain the original investigation and design rationale.

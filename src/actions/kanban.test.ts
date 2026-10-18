@@ -970,7 +970,7 @@ test("a reply goes into the running turn of the card's holder, and records how",
   assert.equal(card(done, 2).col, "ready");
 });
 
-test("a reply saves a durable continuation without starting, claiming or moving the card", () => {
+test("a reply immediately moves its pending continuation to ready without starting or claiming", () => {
   const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
   card(start, 2).col = "rev";
   card(start, 2).thread = "th1";
@@ -980,7 +980,9 @@ test("a reply saves a durable continuation without starting, claiming or moving 
   assert.equal(outcome.deliver, undefined);
   const state = applyStateOps(start, outcome.ops);
   const c = card(state, 2);
-  assert.equal(c.col, "rev");
+  assert.equal(c.col, "ready");
+  assert.equal(c.from, "ready");
+  assert.equal(c.doneAt, undefined);
   assert.equal(c.claim, undefined);
   assert.equal(c.assignee, "Opus");
   const request = c.continuation as { id: string; thread: string; comment: string };
@@ -1000,6 +1002,21 @@ test("a reply never directly starts a waiting or missing chat", () => {
   assert.equal(gone.deliver, undefined);
   const state = applyStateOps(start, gone.ops);
   assert.ok(card(state, 2).continuation);
+});
+
+test("Continue immediately returns to the original paused ready inbox and Dismiss leaves it there", () => {
+  const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
+  start.columns.push({ id: "ready2", title: "Second inbox", role: "agent", paused: true } as typeof start.columns[number]);
+  Object.assign(card(start, 3), { assignee: "Opus", from: "ready2", blockedBy: ["c1"] });
+  const queued = run(start, "continue", { card: 3 }, userCtx()).state;
+  assert.equal(card(queued, 3).col, "ready2");
+  assert.equal(card(queued, 3).from, "ready2");
+  assert.equal(card(queued, 3).doneAt, undefined);
+  assert.equal(card(queued, 3).claim, undefined);
+  assert.ok(card(queued, 3).continuation);
+  const dismissed = run(queued, "continue", { card: 3, dismiss: true }, userCtx()).state;
+  assert.equal(card(dismissed, 3).col, "ready2");
+  assert.equal(card(dismissed, 3).continuation, undefined);
 });
 
 test("a form reply on a person's card offers Ask without resuming or claiming the old chat", () => {

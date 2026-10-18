@@ -65,13 +65,13 @@ function answer(state: State, num = 1): State {
   return applyStateOps(state, out.ops);
 }
 
-test("form answers wait on dependencies outside ready, then resume once under the worker lease", () => {
+test("form answers immediately enter ready, wait on dependencies, then resume once under the worker lease", () => {
   const state = board({ run: { since: 5 } });
   Object.assign(card(state, 1), { col: "in", from: "ready", thread: "old", threadAssignee: "Opus", blockedBy: ["c2"] });
   card(state, 2).assignee = "Someone";
   const pending = answer(answer(state));
   const c = ctx({ old: ended({ kind: "done" }) }).c;
-  assert.equal(card(pending, 1).col, "in");
+  assert.equal(card(pending, 1).col, "ready");
   assert.equal(card(pending, 1).claim, undefined);
   assert.equal((card(pending, 1).comments as unknown[]).length, 2);
   assert.equal(drive(pending, c), null);
@@ -88,17 +88,17 @@ test("form answers wait on dependencies outside ready, then resume once under th
   assert.equal((card(done, 1).claim as { thread: string }).thread, "old");
 });
 
-test("pending continuations respect stop, pause, ownership, origin and permission gates", () => {
-  for (const gate of ["stopped", "stop", "pause", "claim", "origin", "permission"]) {
+test("pending continuations respect stop, pause, ownership, missing inbox and permission gates", () => {
+  for (const gate of ["stopped", "stop", "pause", "claim", "noInbox", "permission"]) {
     const state = board({ run: { since: 5 } });
     (state.cards as Card[]).splice(1);
     Object.assign(card(state, 1), { col: "in", from: "ready" });
+    if (gate === "noInbox") state.columns = [{ id: "in", title: "Inbox" }];
     const pending = answer(state);
     if (gate === "stopped") worker(pending).run = null;
     if (gate === "stop") worker(pending).stop = true;
     if (gate === "pause") (pending.columns as State[])[1].paused = true;
     if (gate === "claim") card(pending, 1).claim = { holder: "Other", thread: "foreign" };
-    if (gate === "origin") delete card(pending, 1).from;
     const out = drive(pending, ctx({}, { mayStart: () => gate === "permission" ? "denied" : null }).c);
     assert.equal(out?.launch, undefined, gate);
     assert.ok(card(apply(pending, out), 1).continuation, gate);
@@ -148,6 +148,18 @@ test("a persisted pending request can be scheduled after a board reload", () => 
   Object.assign(card(state, 1), { col: "in", from: "ready" });
   const reloaded = JSON.parse(JSON.stringify(answer(state)));
   assert.equal(drive(reloaded, ctx().c)!.launch?.ref.card, 1);
+});
+
+test("older pending requests move into ready even while the worker is stopped", () => {
+  const state = board();
+  Object.assign(card(state, 1), { col: "in", from: "ready", continuation: { id: "saved", assignee: "Opus" }, blockedBy: ["c2"] });
+  const out = drive(state, ctx().c)!;
+  assert.equal(out.launch, undefined);
+  const ready = apply(state, out);
+  assert.equal(card(ready, 1).col, "ready");
+  assert.equal(card(ready, 1).claim, undefined);
+  assert.ok(card(ready, 1).continuation);
+  assert.equal(drive(ready, ctx().c), null);
 });
 
 test("a running worker with no chat gets its first ready card launched, under a step lease", () => {

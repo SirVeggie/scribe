@@ -121,6 +121,7 @@ test("older boards' direct Continue calls persist requests without sending or cl
   const { tab } = store.openFromTemplate("builtin:kanban", { title: "Deferred", preset: "agent" });
   const thread = host.createThread({ provider: "pi", mode: "board", scope: { kind: "page", ref: tab.id } });
   store.writeState(tab.id, { ops: [
+    { op: "set", path: "columns", value: [{ id: "todo" }, { id: "ready", role: "agent" }] },
     { op: "set", path: "settings", value: { workers: { sol: { name: "Sol" } } } },
     { op: "set", path: "cards", value: [{ id: "pending", num: 12, col: "todo", title: "Blocked", assignee: "Sol", thread: thread.id, threadAssignee: "Sol", blockedBy: ["other"] }] },
   ] });
@@ -128,7 +129,7 @@ test("older boards' direct Continue calls persist requests without sending or cl
   const saved = (store.get(tab.id)!.state.cards as any[])[0];
   assert.ok(saved.continuation);
   assert.equal(saved.claim, undefined);
-  assert.equal(saved.col, "todo");
+  assert.equal(saved.col, "ready");
   assert.equal(userItems(thread.id).length, 0);
 });
 

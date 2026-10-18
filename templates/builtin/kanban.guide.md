@@ -6,7 +6,8 @@ Work on this board with `page_action`. Actions read the latest state and apply t
 
 {{actions}}
 
-Form answers and Continue requests are saved before scheduling. They wait for dependencies,
+Form answers and Continue requests are saved and immediately move the card to its originating
+ready inbox (or the first ready inbox if none is recorded). They wait there for dependencies,
 the assigned worker to be running, an unpaused originating ready inbox, a free slot and
 page permissions. The daemon resumes the previous chat (or starts a fresh one if it is gone)
 and claims the card only when it dispatches. Dismiss cancels a pending request. Replies to

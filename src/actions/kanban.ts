@@ -81,6 +81,14 @@ function continuationRequest(state: BoardState, card: Card, comment?: string): N
   return { id: newId("ct"), assignee: str(card.assignee), ...(card.thread && sameWorker ? { thread: card.thread } : {}), ...(comment ? { comment } : {}) };
 }
 
+/** Waiting continuations belong in their ready inbox, even while that inbox is paused. */
+export function continuationReadyOps(state: BoardState, card: Card, now: number): unknown[] {
+  if (card.archived || columnById(state, card.col)?.role === "agent") return [];
+  const ready = [card.claim?.from, card.from].map((id) => columnById(state, str(id))).find((col) => col?.role === "agent")
+    ?? roleColumn(state, "agent");
+  return ready ? moveOps(state, card, ready, now) : [];
+}
+
 /** The blocked status a card shows while its agent waits on the user. */
 function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }>["asking"]>): string {
   if (asking.kind === "approval") return `Waiting for your approval: ${asking.title}`;
@@ -631,7 +639,10 @@ export const kanbanActions: ActionSet = {
         const comment = str(args.comment);
         if (comment && !arr<Comment>(card.comments).some((cm) => cm.id === comment && cm.by === "user")) throw new ActionError("User comment not found");
         const continuation = args.dismiss ? null : continuationRequest(state, card, comment || undefined);
-        return { ops: [{ op: "merge", path: cardPath(card), value: { continuation } }], result: { deferred: !args.dismiss } };
+        return { ops: [
+          { op: "merge", path: cardPath(card), value: { continuation } },
+          ...(!args.dismiss ? continuationReadyOps(state, card, ctx.now) : []),
+        ], result: { deferred: !args.dismiss } };
       },
     },
     list: {
@@ -1029,6 +1040,7 @@ export const kanbanActions: ActionSet = {
     }
     ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
     ops.push({ op: "merge", path: cardPath(card), value: { continuation: continuationRequest(state, card, id) } });
+    ops.push(...continuationReadyOps(state, card, ctx.now));
     return { ops, result: { num: card.num, deferred: true }, events };
   },
   replyDelivered(state, deliver, delivered, ctx) {

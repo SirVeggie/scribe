@@ -8,6 +8,7 @@ import {
   claimFrom,
   columnById,
   columns,
+  continuationReadyOps,
   compactUsage,
   moveOps,
   returnColumn,
@@ -630,6 +631,8 @@ export function driveWorkers(state: BoardState, ctx: DriveContext): DriveOutcome
   // Assignment changes and archiving cancel requests rather than reviving them later.
   const cancelled = cards(state).filter((c) => c.continuation && (c.archived || !sameName(c.assignee, c.continuation.assignee) || !workerList(state).some(([, w]) => sameName(w.name, c.assignee))));
   if (cancelled.length) return { ops: cancelled.map((c) => ({ op: "merge", path: cardPath(c), value: { continuation: null } })), result: null };
+  const readyOps = cards(state).filter((c) => c.continuation).flatMap((c) => continuationReadyOps(state, c, ctx.now));
+  if (readyOps.length) return { ops: readyOps, result: null };
   const idleClaim = cards(state).find((c) => {
     if (!c.continuation || !c.claim?.thread || c.claim.thread !== c.continuation.thread) return false;
     const info = ctx.thread(c.claim.thread);
