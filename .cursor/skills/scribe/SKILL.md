@@ -470,7 +470,8 @@ await scribe.agent.merge(threadId);                        // idle Code thread: 
 await scribe.agent.card(threadId, { card: 12, title, text }); // Kanban: a card comment into the running turn (steered, else queued); { delivered: null } when idle
 await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban Continue: the thread reads the card again and goes on (other pages' threads need a click)
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
-const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, customModes: [{ id, label, detail, base }] (start({ customMode: id }); base is its highest rung), approvals: the rungs, defaults }
+const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, customModes: [{ id, label, detail, base }] (start({ customMode: id }); base is its highest rung), approvals: the rungs, defaults, favorites: ["claude:opus", …] }
+scribe.agent.onOptions((o) => paintPicker(o));             // options() again whenever the user stars or unstars a model (after options())
 const unsubscribe = scribe.agent.onLimits((limits) => paintLimits(limits)); // updates after limits(); call unsubscribe() to stop listening
 const { ok: limitsOk, limits } = await scribe.agent.limits(); // provider plan usage; also subscribes this page to updates
 if (limitsOk) paintLimits(limits);                         // render the initial snapshot
@@ -483,6 +484,8 @@ await scribe.agent.start(prompt, { cwd: path, approval: "edits", provider: "clau
 `scribe.agent.limits()` resolves to `{ ok, limits }`, where `limits` is keyed by provider. Each report has `at` (epoch milliseconds) and `windows` (`id`, `label`, `utilization` as a fraction where `1` means 100% used, optional `resetsAt` in epoch milliseconds), and may include `availability`, `detail`, `ordinaryUsageAllowed`, and `overage`. Missing providers have no report.
 
 `scribe.agent.onLimits(fn)` calls `fn(limits)` with the full provider map whenever provider usage changes after this page calls `limits()`. Register the listener before calling `limits()` to receive changes during the initial request, and render the returned snapshot for the initial display. The returned unsubscribe function removes that listener.
+
+`favorites` lists the models the user starred in the app's model picker, as `"provider:id"` strings in star order. A page with its own model picker should list these first, as the app does, and keep them current with `scribe.agent.onOptions(fn)`: after the page calls `options()`, `fn` gets the full options again whenever a star changes. It returns an unsubscribe function.
 
 #### Agent runs: let Scribe see a chat through
 

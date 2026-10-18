@@ -1068,6 +1068,14 @@ ${POINTER_DRAG_JS}
           console.error(err);
         }
       });
+    } else if (data.type === "scribe-agent-options") {
+      agentOptionsListeners.slice().forEach(function (fn) {
+        try {
+          fn(data.options || {});
+        } catch (err) {
+          console.error(err);
+        }
+      });
     } else if (data.type === "scribe-agent-steps") {
       agentStepListeners.slice().forEach(function (fn) {
         try {
@@ -1226,6 +1234,7 @@ ${POINTER_DRAG_JS}
   var agentListeners = [];
   var agentStepListeners = [];
   var agentLimitListeners = [];
+  var agentOptionsListeners = [];
   var AGENT_ASK_MS = 10 * 60 * 1000;
 
   function agentText(value) {
@@ -1402,9 +1411,16 @@ ${POINTER_DRAG_JS}
       var ms = opts && typeof opts.timeoutMs === "number" ? Math.max(1000, opts.timeoutMs) : 600000;
       return agentCall({ op: "wait", threadId: agentText(threadId), timeoutMs: ms }, ms + 5000);
     },
-    /** What start() can pick from: { ok, providers, models (id, label, efforts, params), modes, approvals, defaults }. */
+    /** What start() can pick from: { ok, providers, models (id, label, efforts, params), modes, approvals, defaults, favorites ("provider:id", star order) }. Also subscribes this page to onOptions updates. */
     options: function () {
       return agentCall({ op: "options" });
+    },
+    /** fn(options) after options() whenever the user stars or unstars a model. Returns an unsubscribe function. */
+    onOptions: function (fn) {
+      agentOptionsListeners.push(fn);
+      return function () {
+        agentOptionsListeners = agentOptionsListeners.filter(function (item) { return item !== fn; });
+      };
     },
     /** Provider plan usage: { ok, limits: { [provider]: { at, windows: [{ id, label, utilization, resetsAt? }], availability?, detail?, ordinaryUsageAllowed?, overage? } } }. Missing providers have no report. Also subscribes this page to onLimits updates. */
     limits: function () {

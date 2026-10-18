@@ -8444,6 +8444,7 @@
     } catch (err) {
       notice(err.message);
     }
+    pageOptionsChanged();
   }
 
   /** The chat a cycling shortcut applies to: the one in focus, else the most prominent one open. */
@@ -10734,6 +10735,16 @@
       app()?.postToPage?.(id, { type: "scribe-agent-limits", limits: pageLimits() });
     }
   }
+  /** Pages that called scribe.agent.options(): they get it again when a model is starred or unstarred. */
+  const pageOptionsWatch = new Set();
+
+  async function pageOptionsChanged() {
+    const open = new Set((app()?.tabs?.() || []).map((tab) => tab.id));
+    for (const id of pageOptionsWatch) if (!open.has(id)) pageOptionsWatch.delete(id);
+    if (!pageOptionsWatch.size) return;
+    const options = await pageOptions();
+    for (const id of pageOptionsWatch) app()?.postToPage?.(id, { type: "scribe-agent-options", options });
+  }
   const PAGE_STEPS = 4;
 
   /** The running turn's last few steps, as the collapsed dock shows them: [{ key, kind, text }]. Empty once it stops. */
@@ -11089,6 +11100,8 @@
             fast: defaultChoice.modelParams.fast === "true",
           }
         : null,
+      // Starred models as "provider:id", in star order, as the app's model picker lists them first.
+      favorites: [...favoriteModels()],
     };
   }
 
@@ -11213,6 +11226,7 @@
         showPageThread(thread.id, data.where === "dock" ? "dock" : "sidebar", { reveal: true });
         return { ok: true };
       case "options":
+        pageOptionsWatch.add(tab.id);
         return pageOptions();
       case "limits":
         pageLimitWatch.add(tab.id);
