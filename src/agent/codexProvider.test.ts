@@ -22,6 +22,7 @@ const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "
   mode: "code",
   approval: "edits",
   web: "on",
+  cwd: null,
   ...over,
 });
 
