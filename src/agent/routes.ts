@@ -366,6 +366,8 @@ export function agentRouter(host: AgentHost): express.Router {
             ...(body.scope ? { scope: parseScope(body.scope) } : {}),
             // A board worker the user set to use helpers without asking.
             ...(body.helpersAllowed === true ? { helpersAllowed: true } : {}),
+            // A one-off chat a page starts with no tools at all (#729).
+            ...(body.noTools === true ? { noTools: true } : {}),
           },
           { remember: body.remember !== false }
         ),

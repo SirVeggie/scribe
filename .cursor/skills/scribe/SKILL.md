@@ -479,7 +479,22 @@ const { path } = await scribe.agent.pickFolder();          // the user picks a f
 const { actions } = await scribe.agent.actions();         // the template's right-click agent actions: [{ id, label, description, selection, context }]
 await scribe.agent.runAction("triage-card", { context: { card: "#12 Fix login" } }); // run one from the page's own menu (inside a click)
 await scribe.agent.start(prompt, { cwd: path, approval: "edits", provider: "claude", model: "sonnet", effort: "high", worktree: true });
+await scribe.agent.delete(threadId);                       // delete one of this page's threads (a running turn stops first)
 ```
+
+#### One-off chats: images in, text out, no tools
+
+For a page that only needs a model's answer about what it sends (read the text in an image, classify, rewrite, translate), start the chat with `tools: false` and send the input with it. Such a thread has no tools at all: no pages, files, shell, web, MCP servers or memory, on every provider, whatever the prompt says. It runs Read-only with no folder and web off, so it needs no folder approval and costs a single model call with no tool round trips.
+
+```js
+const { ok, threadId } = await scribe.agent.start("Transcribe all text in the image. Reply with the text only.",
+  { title: "OCR", tools: false, images: [file], provider, model, effort: "low" });
+const { reply } = await scribe.agent.wait(threadId);
+await scribe.agent.delete(threadId);                       // keep the user's chat list clear of one-off chats
+```
+
+- `images` (on `start` and `send`): up to 10 images, 8 MB each: Blobs or Files (a paste or drop), `data:` URLs, or asset ids or URLs of this page. A bad one resolves `{ ok: false, error }` with `too_many_images`, `image_too_large`, `not_an_image` or `image_not_found`, and nothing is sent. Any thread takes them, not only one without tools.
+- `delete` takes only the page's own threads. Delete a one-off chat once the page has its reply (or kept what it needs); leave it when the user may want to see the conversation.
 
 `scribe.agent.limits()` resolves to `{ ok, limits }`, where `limits` is keyed by provider. Each report has `at` (epoch milliseconds) and `windows` (`id`, `label`, `utilization` as a fraction where `1` means 100% used, optional `resetsAt` in epoch milliseconds), and may include `availability`, `detail`, `ordinaryUsageAllowed`, and `overage`. Missing providers have no report.
 

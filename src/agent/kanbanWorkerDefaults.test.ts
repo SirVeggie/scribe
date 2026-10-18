@@ -66,7 +66,7 @@ test("page launch forwards card context through the bridge into the first messag
       return url === "/threads" ? { thread: { id: "new" } } : {};
     },
   });
-  vm.runInContext(fn(bridge, "agentSettings"), context);
+  vm.runInContext([fn(bridge, "agentSettings"), fn(chat, "pageImages")].join("\n"), context);
   vm.runInContext(chat.match(/^  async function pageRequest\([^]*?^  }/m)![0], context);
   await vm.runInContext("pageRequest({ id: 'board' }, { ...agentSettings({ cardContext: 42 }), op: 'start', prompt: 'Question' })", context);
   assert.equal(calls[1].url, "/threads/new/messages");

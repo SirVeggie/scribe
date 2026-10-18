@@ -126,11 +126,27 @@ export function modeKeepsServer(thread: Limited, name: string): boolean {
   return mcp === "all" || (mcp !== "none" && mcp.includes(name));
 }
 
-type Rung = Limited & { approval?: ApprovalPolicy };
+type Rung = Limited & { approval?: ApprovalPolicy; noTools?: true };
 
-/** What of a custom mode (and the Read-only rung's page tools) a provider session cannot change while it runs; part of every restart and spare key. */
+/** What of a custom mode (and the Read-only rung's page tools, or no tools at all) a provider session cannot change while it runs; part of every restart and spare key. */
 export function customKey(thread: Rung): string {
-  return (thread.custom?.off.join(",") ?? "") + (thread.approval === "readonly" ? ";readonly" : "");
+  return (thread.custom?.off.join(",") ?? "") + (thread.approval === "readonly" ? ";readonly" : "") + (thread.noTools ? ";notools" : "");
+}
+
+/**
+ * The settings a thread without tools (#729) always has, whatever it was asked for: Read-only, web
+ * off, no workspace, worktree, custom mode, plan turn or helpers.
+ */
+export function settleNoTools(thread: Thread): void {
+  if (!thread.noTools) return;
+  thread.mode = "board";
+  thread.approval = "readonly";
+  thread.web = "off";
+  thread.cwd = null;
+  thread.useWorktree = false;
+  delete thread.custom;
+  delete thread.planNext;
+  delete thread.helpersAllowed;
 }
 
 /**

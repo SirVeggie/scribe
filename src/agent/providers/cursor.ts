@@ -656,6 +656,10 @@ class CursorSession implements ProviderSession {
   private async options(): Promise<AgentOptions> {
     const t = this.thread;
     const models = this.provider.cachedModels().length ? this.provider.cachedModels() : await this.provider.models();
+    if (t.noTools) {
+      // No tools at all (#729): no built-ins, and no custom tools (Scribe's board, web, user servers).
+      return { model: modelSelection(t, models), tools: [], mode: "agent", local: { cwd: this.cwd(), store: await store(), settingSources: [], autoReview: false, customTools: {} } };
+    }
     this.board ??= new BoardTools(this.ctx.boardMcp, t.id, !noPages(t.scope), scribeToolsOff(t));
     // Scribe runs these itself, so its hooks can hold them (the board tools ask from their own process, see mcp.ts).
     const own: Record<string, SDKCustomTool> = await this.userTools();

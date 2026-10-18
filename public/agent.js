@@ -11063,9 +11063,19 @@
       // As of its last turn, so a board can tell a finished chat whose branch is still unmerged.
       ...(openWorktree(t) ? { worktree: { branch: t.worktree.branch, ahead: t.worktree.ahead || 0, dirty: Boolean(t.worktree.dirty) } } : {}),
       ...(t.usage ? { usage: t.usage } : {}),
+      ...(t.noTools ? { tools: false } : {}),
       // While Scribe sees the thread through for the page (start's run option, or watch), and once that ended.
       ...(t.run ? { run: t.run } : {}),
     };
+  }
+
+  /** Images a page sends with start or send (the bridge read them as base64): [{ name, mimeType, data }], at most 10. */
+  function pageImages(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter((img) => img && typeof img === "object" && typeof img.data === "string" && img.data && /^image\//.test(String(img.mimeType || "")))
+      .slice(0, 10)
+      .map((img) => ({ name: String(img.name || "image").slice(0, 200), mimeType: String(img.mimeType), data: img.data }));
   }
 
   /** start's run option and watch's settings, as the daemon takes them. */
@@ -11532,7 +11542,9 @@
       case "start": {
         if (!prompt) return { ok: false, error: "empty_prompt" };
         if (prompt.length > PAGE_PROMPT_MAX) return { ok: false, error: "prompt_too_long" };
-        const settings = pageThreadSettings(data);
+        // tools: false is a one-off chat with no tools at all (#729): Read-only, no folder, web off.
+        const noTools = data.tools === false;
+        const settings = pageThreadSettings(noTools ? { ...data, mode: undefined, approval: "readonly", customMode: undefined, cwd: undefined, worktree: false, web: "off", helpers: false } : data);
         if (settings.error) return { ok: false, error: settings.error };
         const may = await pageMayWrite(tab, activated);
         if (!may.ok) return may;
@@ -11547,6 +11559,7 @@
           remember: false,
           scope: { kind: "page", ref: tab.id },
           ...(title ? { title } : {}),
+          ...(noTools ? { noTools: true } : {}),
         });
         S.threads.set(created.id, created);
         S.details.set(created.id, { items: [], byId: new Map(), turns: new Map() });
@@ -11556,7 +11569,7 @@
           if (watched) S.threads.set(created.id, watched);
         }
         pageSentAt.set(created.id, Date.now());
-        const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page", ...(data.cardContext != null ? { cardContext: data.cardContext } : {}) });
+        const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images), ...(data.cardContext != null ? { cardContext: data.cardContext } : {}) });
         showPageThread(created.id, data.show, { reveal: activated });
         return { ok: true, threadId: created.id, queued: Boolean(sent.queued) };
       }
@@ -11572,7 +11585,7 @@
         }
         await ensureDetail(thread.id);
         pageSentAt.set(thread.id, Date.now());
-        const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page" });
+        const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images) });
         showPageThread(thread.id, data.show, { reveal: activated });
         return { ok: true, queued: Boolean(sent.queued) };
       }
@@ -11607,6 +11620,12 @@
         });
         if (sent.delivered && own) pageSentAt.set(thread.id, Date.now());
         return { ok: true, delivered: sent.delivered || null };
+      }
+      case "delete": {
+        // One of the page's own threads, e.g. a one-off chat whose reply it has read. Its turn stops first.
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        await api("DELETE", `/threads/${encodeURIComponent(thread.id)}`);
+        return { ok: true };
       }
       case "watch": {
         // Hand a thread of the page's to Scribe to see through: limit waits, resumes, merges (#285).

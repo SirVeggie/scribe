@@ -185,6 +185,12 @@ export type Thread = {
    * counts as trusted content: untrusted models and helpers need the user's say-so to see it.
    */
   tainted?: boolean;
+  /**
+   * No tools at all (#729): no MCP servers (Scribe's own included) and no built-in file, shell or web
+   * tools, for one-off chats a page starts (OCR, classify, rewrite). Set when the thread is made and
+   * never changed; the thread stays Read-only, web off, with no workspace.
+   */
+  noTools?: true;
   /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
   helperOf?: string;
   /** The user let this thread's agent start helpers (agent_run) without asking again: Allow for this thread, or a board worker set to use helpers unasked. */

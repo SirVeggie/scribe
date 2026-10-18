@@ -92,6 +92,11 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       "User slips: when a report or request most likely comes from a slip on the user's side (a process or build they did not restart, a wrong file or setting, a forgotten step, a detail they overlooked, a request that contradicts what they said earlier), say so and check with them in a short line before changing code or pages to work around it. Do not add code that only covers a one-off slip during development. This is for cases where such a slip is the likely explanation, not a reason to doubt ordinary requests; when unsure, ask rather than build around it."
     );
   }
+  if (thread.noTools) {
+    // A one-off chat a page started (#729): the page's prompt is the task, and there is nothing to call.
+    lines.push("", "Tools: this thread has none: no files, shell, web, pages or memory. Answer from the conversation and any attached images alone. Do not try to call a tool or ask to run anything.");
+    return lines.join("\n");
+  }
   lines.push("");
   if (noPages(thread.scope)) {
     lines.push(

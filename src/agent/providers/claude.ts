@@ -845,6 +845,17 @@ class ClaudeSession implements ProviderSession {
       options.allowedTools = options.allowedTools?.filter((name) => !off.includes(name));
       options.disallowedTools = [...(options.disallowedTools ?? []), ...off];
     }
+    if (thread.noTools) {
+      // No tools at all (#729): no built-ins, no MCP servers, no skills or commands from settings
+      // files, and a hook that refuses anything that still turns up.
+      const reason = "This thread has no tools. Answer from the conversation alone.";
+      options.tools = [];
+      options.allowedTools = [];
+      options.mcpServers = {};
+      options.settingSources = [];
+      options.hooks = { PreToolUse: [{ hooks: [async () => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } })] }] };
+      options.canUseTool = async () => ({ behavior: "deny", message: reason });
+    }
     return options;
   }
 

@@ -1265,6 +1265,62 @@ ${POINTER_DRAG_JS}
     return out;
   }
 
+  var AGENT_MAX_IMAGES = 10;
+  var AGENT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+  /** One image for start or send: a Blob or File, a data: URL, or an asset id or URL this page may fetch. */
+  function agentImage(item) {
+    var loaded;
+    if (item instanceof Blob) {
+      loaded = Promise.resolve(item);
+    } else if (typeof item === "string" && item.indexOf("data:") === 0) {
+      // Read as is: the page's CSP need not let it fetch data: URLs.
+      var parts = /^data:(image\\/[\\w.+-]+);base64,(.+)$/.exec(item);
+      if (!parts) return Promise.reject(new Error("not_an_image"));
+      if (Math.floor((parts[2].length * 3) / 4) > AGENT_MAX_IMAGE_BYTES) return Promise.reject(new Error("image_too_large"));
+      return Promise.resolve({ name: "image", mimeType: parts[1], data: parts[2] });
+    } else if (typeof item === "string" && item) {
+      var url = /^[a-z][a-z0-9+.-]*:|^\\//i.test(item) ? item : assetUrl(item);
+      loaded = fetch(url).then(function (res) {
+        if (!res.ok) throw new Error("image_not_found");
+        return res.blob();
+      });
+    } else {
+      return Promise.reject(new Error("not_an_image"));
+    }
+    return loaded.then(function (blob) {
+      if (!/^image\\//.test(blob.type || "")) throw new Error("not_an_image");
+      if (blob.size > AGENT_MAX_IMAGE_BYTES) throw new Error("image_too_large");
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var data = String(reader.result || "");
+          resolve({ name: blob.name || "image", mimeType: blob.type, data: data.slice(data.indexOf(",") + 1) });
+        };
+        reader.onerror = function () {
+          reject(new Error("image_unreadable"));
+        };
+        reader.readAsDataURL(blob);
+      });
+    });
+  }
+
+  /** opts.images as the board takes them, then the call; an image that won't do resolves { ok: false, error }. */
+  function withImages(message, images, timeoutMs) {
+    if (images == null) return agentCall(message, timeoutMs);
+    var list = Array.isArray(images) ? images : [images];
+    if (list.length > AGENT_MAX_IMAGES) return Promise.resolve({ ok: false, error: "too_many_images" });
+    return Promise.all(list.map(agentImage)).then(
+      function (read) {
+        message.images = read;
+        return agentCall(message, timeoutMs);
+      },
+      function (err) {
+        return { ok: false, error: String((err && err.message) || err) };
+      }
+    );
+  }
+
   /** The thread settings a page may pass to start(); Scribe checks them against the page's permissions. */
   function agentSettings(opts) {
     var out = {};
@@ -1279,6 +1335,7 @@ ${POINTER_DRAG_JS}
       }
     });
     if (opts.web === "on" || opts.web === "limited" || opts.web === "off") out.web = opts.web;
+    if (opts.tools === false) out.tools = false;
     if (Number.isInteger(opts.cardContext) && opts.cardContext > 0) out.cardContext = opts.cardContext;
     if (opts.run === true) out.run = {};
     else if (opts.run && typeof opts.run === "object") out.run = agentRun(opts.run);
@@ -1303,17 +1360,25 @@ ${POINTER_DRAG_JS}
      * helper agents without asking the user each time) }. run: true or { tag, data, merge,
      * resumePrompt } hands the thread to Scribe to see through (see watch).
      * cardContext: a card number attaches this page's full card and images to the first message.
+     * images: up to 10 images (Blobs, Files, data: URLs, or asset ids or URLs; 8 MB each) for the
+     * first message. tools: false is a one-off chat with no tools at all (no pages, files, shell or
+     * web; Read-only, no folder), for OCR, classifying or rewriting what the prompt and images hold.
      */
     start: function (prompt, opts) {
-      var message = agentSettings(opts || {});
+      opts = opts || {};
+      var message = agentSettings(opts);
       message.op = "start";
       message.prompt = agentText(prompt);
-      return agentCall(message, AGENT_ASK_MS);
+      return withImages(message, opts.images, AGENT_ASK_MS);
     },
-    /** Send to one of this page's threads; queued when it is still working: { ok, queued }. */
+    /** Send to one of this page's threads; queued when it is still working: { ok, queued }. opts: { show, images (as in start) }. */
     send: function (threadId, prompt, opts) {
       opts = opts || {};
-      return agentCall({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) }, AGENT_ASK_MS);
+      return withImages({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) }, opts.images, AGENT_ASK_MS);
+    },
+    /** Delete one of this page's threads, e.g. a one-off chat once its reply is read; a running turn stops first: { ok }. */
+    delete: function (threadId) {
+      return agentCall({ op: "delete", threadId: agentText(threadId) });
     },
     /**
      * Open a thread in Scribe's chat (needs a click): { ok }. Any thread the user has, not only this

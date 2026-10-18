@@ -839,7 +839,9 @@ class PiSession implements ProviderSession {
       }
     }
     sessionManager ??= sdk.SessionManager.create(cwd, sessionDir());
-    const custom = await this.customTools();
+    // A thread without tools (#729) gets neither Scribe's tools nor the built-ins.
+    const none = Boolean(this.thread.noTools);
+    const custom = none ? [] : await this.customTools();
     const { session } = await sdk.createAgentSession({
       cwd,
       agentDir: agentDir(),
@@ -849,7 +851,7 @@ class PiSession implements ProviderSession {
       settingsManager,
       resourceLoader,
       sessionManager,
-      tools: [...builtinTools(this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread)), ...custom.map((t) => t.name)],
+      tools: none ? [] : [...builtinTools(this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread)), ...custom.map((t) => t.name)],
       customTools: custom,
     });
     await session.bindExtensions({});

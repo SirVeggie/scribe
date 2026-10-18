@@ -504,6 +504,21 @@ export function mcpConfig(ctx: Pick<SessionContext, "boardMcp">, threadId: strin
   };
 }
 
+/**
+ * A thread without tools (#729): no Scribe MCP server, and Codex's own shell, image viewer, agents,
+ * apps and plugins off. Codex has no switch for its patch tool; the read-only sandbox (web off, no
+ * network) keeps it from writing, and Scribe refuses any approval such a thread asks for.
+ */
+export const NO_TOOLS_CONFIG: RpcRecord = {
+  "features.shell_tool": false,
+  "features.multi_agent": false,
+  "features.memories": false,
+  "features.goals": false,
+  "features.plugins": false,
+  "tools.view_image": false,
+  "apps._default.enabled": false,
+};
+
 /** A bridged tool as a Codex dynamic tool for `thread/start`. */
 export function dynamicToolSpec(tool: Pick<BridgedTool, "name" | "server" | "tool" | "description" | "inputSchema">): RpcRecord {
   return { type: "function", name: tool.name, description: tool.description || `${tool.server}: ${tool.tool}`, inputSchema: tool.inputSchema };
@@ -1036,14 +1051,15 @@ export class CodexSession implements ProviderSession {
     try {
       await rpc.call("initialize", { clientInfo: { name: "scribe", title: "Scribe", version: "1.0.0" }, capabilities: { experimentalApi: true } });
       rpc.notify("initialized");
-      const tools = await this.userTools();
+      const none = Boolean(this.thread.noTools);
+      const tools = none ? [] : await this.userTools();
       // thread/resume takes no tool list: a resumed thread keeps the dynamic tools it started with.
       const dynamicTools = tools.length ? { dynamicTools: tools.map(dynamicToolSpec) } : {};
       const options = {
         ...threadOptions(this.thread, this.cwd()),
         developerInstructions: this.instructions,
         config: {
-          ...mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread)),
+          ...(none ? NO_TOOLS_CONFIG : mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread))),
           ...threadOptions(this.thread, this.cwd()).config as RpcRecord,
         },
       };

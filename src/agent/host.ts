@@ -60,7 +60,7 @@ import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanApprovals, cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
-import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, READ_SHELL_WAIT_MS, readShell, threadCustom } from "./customModes.js";
+import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, READ_SHELL_WAIT_MS, readShell, settleNoTools, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
@@ -371,6 +371,11 @@ function editsInsideWorkspace(t: Thread, paths: string[] | undefined): boolean {
 function autoApproval(t: Thread | undefined, req: ApprovalRequest): Promise<ApprovalDecision> | null {
   const allow = req.options.find((o) => o.kind === "allow_once") ?? req.options.find((o) => o.kind === "allow_always");
   const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
+  if (t?.noTools) {
+    // A thread without tools (#729): anything a provider still offers is refused, never asked.
+    const note = "This thread has no tools. Answer from the conversation alone.";
+    return reject ? Promise.resolve({ optionId: reject.id, note }) : Promise.reject(new Error(note));
+  }
   if (req.boardTool && allow) {
     return Promise.resolve({ optionId: allow.id });
   }
@@ -1443,7 +1448,7 @@ export class AgentHost {
   }
 
   /** remember: false for threads a page starts (board workers), so they leave the user's defaults alone. */
-  createThread(input: ThreadPatch & { scope?: ThreadScope }, { remember = true }: { remember?: boolean } = {}): ThreadView {
+  createThread(input: ThreadPatch & { scope?: ThreadScope; noTools?: boolean }, { remember = true }: { remember?: boolean } = {}): ThreadView {
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
     // A draft thread (saved unsent) leaves the spare for the thread the user goes on to start.
@@ -1452,7 +1457,7 @@ export class AgentHost {
     // createSession also refuses that spare: its MCP still reports this id.
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     if (input.draft) thread.draft = input.draft;
-    if (input.helpersAllowed) thread.helpersAllowed = true;
+    if (input.helpersAllowed && !thread.noTools) thread.helpersAllowed = true;
     // A New page becomes a real page once it has a thread, even one that has not sent anything.
     if (thread.scope.kind === "page" && thread.scope.ref) store.promoteDraft(thread.scope.ref);
     this.threads.set(thread.id, thread);
@@ -1475,7 +1480,7 @@ export class AgentHost {
   }
 
   /** A thread with defaults filled in, not stored. createThread and warmDraft agree on it, so a warmed spare matches. */
-  private draftThread(input: ThreadPatch & { scope?: ThreadScope }): Thread {
+  private draftThread(input: ThreadPatch & { scope?: ThreadScope; noTools?: boolean }): Thread {
     const prefs = this.prefs();
     const provider = input.provider ?? prefs.provider;
     const scope: ThreadScope = input.scope ?? { kind: "global", ref: null };
@@ -1528,6 +1533,10 @@ export class AgentHost {
       updatedAt: now,
       activityAt: now,
     };
+    if (input.noTools) {
+      thread.noTools = true;
+      settleNoTools(thread);
+    }
     return thread;
   }
 
@@ -1614,6 +1623,8 @@ export class AgentHost {
       else delete next.hooksOff;
     }
     if (patch.draft !== undefined) next.draft = patch.draft;
+    // A thread without tools keeps none, whatever the pickers asked for (#729).
+    settleNoTools(next);
     // An archived thread is done with its agent browser.
     if (next.archived && !thread.archived) void closeThreadBrowser(id);
     if (next.provider !== thread.provider || next.mode !== thread.mode || next.custom !== thread.custom || next.approval !== thread.approval || next.cwd !== thread.cwd || next.web !== thread.web || JSON.stringify(next.scope) !== JSON.stringify(thread.scope)) this.effectivePermissions.delete(id);
@@ -4435,6 +4446,7 @@ export class AgentHost {
    */
   async toolGate(threadId: string, call: ToolGateCall, signal?: AbortSignal): Promise<ToolGateResult> {
     const thread = this.threads.get(threadId);
+    if (thread?.noTools) return { allowed: false, reason: "This thread has no tools. Answer from the conversation alone." };
     const run = this.runs.get(threadId);
     if (!thread || thread.hooksOff || this.hooks.idle("tool_call", true, Boolean(run?.hooks.suspect))) return { allowed: true };
     if (call.toolId) run?.hooks.gated.add(call.toolId);
