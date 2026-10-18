@@ -472,6 +472,8 @@ await scribe.agent.card(threadId, { card: 12, title, resume: true }); // Kanban 
 await scribe.agent.show(threadId, { where: "sidebar" });   // open a thread in the chat (inside a click); any of the user's threads
 const opts = await scribe.agent.options();                 // { providers, models: { claude: [{ id, label, efforts, params }] }, customModes: [{ id, label, detail, base }] (start({ customMode: id }); base is its highest rung), approvals: the rungs, defaults, favorites: ["claude:opus", …] }
 scribe.agent.onOptions((o) => paintPicker(o));             // options() again whenever the user stars or unstars a model (after options())
+const pick = await scribe.agent.pickModel(button, { provider, model }); // the app's model picker under button (inside a click): { ok, provider, model, label }
+scribe.agent.modelPicker(button, { value: { provider, model }, onChange: (v) => save(v) }); // or let a button of the page open it and show the choice
 const unsubscribe = scribe.agent.onLimits((limits) => paintLimits(limits)); // updates after limits(); call unsubscribe() to stop listening
 const { ok: limitsOk, limits } = await scribe.agent.limits(); // provider plan usage; also subscribes this page to updates
 if (limitsOk) paintLimits(limits);                         // render the initial snapshot
@@ -500,7 +502,9 @@ await scribe.agent.delete(threadId);                       // keep the user's ch
 
 `scribe.agent.onLimits(fn)` calls `fn(limits)` with the full provider map whenever provider usage changes after this page calls `limits()`. Register the listener before calling `limits()` to receive changes during the initial request, and render the returned snapshot for the initial display. The returned unsubscribe function removes that listener.
 
-`favorites` lists the models the user starred in the app's model picker, as `"provider:id"` strings in star order. A page with its own model picker should list these first, as the app does, and keep them current with `scribe.agent.onOptions(fn)`: after the page calls `options()`, `fn` gets the full options again whenever a star changes. It returns an unsubscribe function.
+To let the user choose a model, don't build a picker: open the app's own. `scribe.agent.pickModel(anchor, { provider, model })` (inside a click) opens Scribe's model picker over the page, below `anchor` (an element, or `{ left, top, width, height }` in the page), with the user's starred models, search and stars, and `{ provider, model }` checked. It resolves `{ ok: true, provider, model, label }`, or `{ ok: false, error: "cancelled" }` when the user closes it. `scribe.agent.modelPicker(button, { value, placeholder, onChange })` wires a button the page styles itself: it shows the chosen model's label (`placeholder`, default "Default model", while `value` is null), opens the picker on click and calls `onChange({ provider, model })`. It returns `{ value(), set(value), destroy() }`. Pass the choice to `start({ provider, model })`; effort and other settings stay the page's.
+
+`favorites` lists the models the user starred in the app's model picker, as `"provider:id"` strings in star order. A page that must list models itself (a whole table of them) should list these first, as the app does, and keep them current with `scribe.agent.onOptions(fn)`: after the page calls `options()`, `fn` gets the full options again whenever a star changes. It returns an unsubscribe function.
 
 #### Agent runs: let Scribe see a chat through
 

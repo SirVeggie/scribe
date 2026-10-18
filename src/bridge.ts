@@ -1487,6 +1487,80 @@ ${POINTER_DRAG_JS}
         agentOptionsListeners = agentOptionsListeners.filter(function (item) { return item !== fn; });
       };
     },
+    /**
+     * The app's own model picker (favourites, search, stars), opened over the page below anchor
+     * (an element, or { left, top, width, height } in the page): { ok, provider, model, label }, or
+     * { ok: false, error: "cancelled" } once the user closes it. Needs a click. opts: { provider, model } to check.
+     */
+    pickModel: function (anchor, opts) {
+      if (!hasGesture()) {
+        console.warn("[scribe] scribe.agent.pickModel needs a click or key press; ignored");
+        return Promise.resolve({ ok: false, error: "no_gesture" });
+      }
+      opts = opts || {};
+      var box = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect() : anchor || {};
+      return agentCall({
+        op: "pickModel",
+        rect: { left: Number(box.left) || 0, top: Number(box.top) || 0, width: Number(box.width) || 0, height: Number(box.height) || 0 },
+        provider: agentText(opts.provider),
+        model: agentText(opts.model),
+      }, AGENT_ASK_MS);
+    },
+    /**
+     * Make the page's own button a model picker: it shows the chosen model's label and opens
+     * pickModel on click. opts: { value: { provider, model }, placeholder, onChange(value) }.
+     * Returns { value(), set(value), destroy() }.
+     */
+    modelPicker: function (el, opts) {
+      opts = opts || {};
+      var value = opts.value && opts.value.model ? { provider: String(opts.value.provider || ""), model: String(opts.value.model) } : null;
+      var labels = {};
+      var open = false;
+      var wasOpen = false;
+      function paint() {
+        el.textContent = value ? labels[value.provider + ":" + value.model] || value.model : opts.placeholder || "Default model";
+      }
+      function onDown() {
+        // A click on the button while the picker is open closes it (the frame takes focus), not reopens it.
+        wasOpen = open;
+      }
+      function onClick() {
+        if (wasOpen) {
+          wasOpen = false;
+          return;
+        }
+        open = true;
+        agent.pickModel(el, value || {}).then(function (r) {
+          open = false;
+          if (!r || !r.ok) return;
+          value = { provider: r.provider, model: r.model };
+          labels[r.provider + ":" + r.model] = r.label;
+          paint();
+          if (typeof opts.onChange === "function") opts.onChange({ provider: r.provider, model: r.model });
+        });
+      }
+      el.addEventListener("pointerdown", onDown);
+      el.addEventListener("click", onClick);
+      paint();
+      agent.options().then(function (o) {
+        var models = (o && o.models) || {};
+        Object.keys(models).forEach(function (provider) {
+          (models[provider] || []).forEach(function (m) { labels[provider + ":" + m.id] = m.label; });
+        });
+        paint();
+      });
+      return {
+        value: function () { return value ? { provider: value.provider, model: value.model } : null; },
+        set: function (next) {
+          value = next && next.model ? { provider: String(next.provider || ""), model: String(next.model) } : null;
+          paint();
+        },
+        destroy: function () {
+          el.removeEventListener("pointerdown", onDown);
+          el.removeEventListener("click", onClick);
+        },
+      };
+    },
     /** Provider plan usage: { ok, limits: { [provider]: { at, windows: [{ id, label, utilization, resetsAt? }], availability?, detail?, ordinaryUsageAllowed?, overage? } } }. Missing providers have no report. Also subscribes this page to onLimits updates. */
     limits: function () {
       return agentCall({ op: "limits" });

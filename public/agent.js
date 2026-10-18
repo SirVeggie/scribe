@@ -1332,13 +1332,17 @@
 
   let openMenuEl = null;
   let openMenuAnchor = null;
+  let openMenuOnClose = null;
 
   function closeMenu() {
     if (openMenuEl) {
+      const onClose = openMenuOnClose;
       openMenuEl.remove();
       openMenuEl = null;
       openMenuAnchor = null;
+      openMenuOnClose = null;
       document.removeEventListener("mousedown", onMenuOutside, true);
+      onClose?.();
     }
   }
 
@@ -1366,7 +1370,7 @@
    * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
    * Opening again from the anchor whose menu is already open closes it instead.
    */
-  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity } = {}) {
+  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null } = {}) {
     // A re-render can swap the menu's button for a new one of the same kind while the menu stays open.
     if (openMenuEl && (openMenuAnchor === anchor || (!openMenuAnchor?.isConnected && openMenuAnchor?.className === anchor.className))) {
       closeMenu();
@@ -1528,6 +1532,7 @@
     positionMenu();
     openMenuEl = menu;
     openMenuAnchor = anchor;
+    openMenuOnClose = onClose;
     setTimeout(() => document.addEventListener("mousedown", onMenuOutside, true), 0);
     return menu;
   }
@@ -5668,35 +5673,9 @@
       }
     }
 
-    /** Starred models only, plus the current one; "Show all models" opens the full, searchable list. */
-    modelMenu(anchor, { all = false } = {}) {
+    modelMenu(anchor) {
       const s = this.settings();
-      const favs = new Set(favoriteModels());
-      const showAll = all || !favs.size;
-      const items = [];
-      for (const provider of PROVIDERS) {
-        const status = S.config.providers.find((p) => p.id === provider);
-        const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (s.provider === provider && s.model === m.id));
-        if (!showAll && !models.length) continue;
-        if (!models.length) {
-          items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
-          items.push({ label: status?.available ? "Loading models…" : status?.detail || "Not available", disabled: true });
-          continue;
-        }
-        items.push(...modelMenuItems(provider, models, (m) => ({
-          label: m.label,
-          detail: m.id !== m.label ? m.id : m.description,
-          search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
-          checked: s.provider === provider && s.model === m.id,
-          disabled: !status?.available,
-          star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
-          run: () => this.updateSettings(provider === s.provider ? { model: m.id } : { provider, model: m.id }),
-        }), status && !status.available ? " — unavailable" : ""));
-      }
-      if (!showAll) {
-        items.push({ separator: true }, { label: "Show all models", icon: "more", run: () => this.modelMenu(anchor, { all: true }) });
-      }
-      openMenu(anchor, items, { search: showAll, width: 300, placeholder: "Search models · ☆ to favourite" });
+      openModelMenu(anchor, s, (provider, model) => this.updateSettings(provider === s.provider ? { model } : { provider, model }));
     }
 
     effortMenu(anchor) {
@@ -8695,6 +8674,68 @@
 
   /* ---------- favourite models and cycling ---------- */
 
+  /**
+   * The model picker: starred models only, plus the current one; "Show all models" opens the full,
+   * searchable list. pick(provider, model) runs on a choice. Chats and pages (scribe.agent.pickModel) share it.
+   */
+  function openModelMenu(anchor, current, pick, { all = false, onClose = null } = {}) {
+    const favs = new Set(favoriteModels());
+    const showAll = all || !favs.size;
+    const items = [];
+    for (const provider of PROVIDERS) {
+      const status = S.config.providers.find((p) => p.id === provider);
+      const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (current.provider === provider && current.model === m.id));
+      if (!showAll && !models.length) continue;
+      if (!models.length) {
+        items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
+        items.push({ label: status?.available ? "Loading models…" : status?.detail || "Not available", disabled: true });
+        continue;
+      }
+      items.push(...modelMenuItems(provider, models, (m) => ({
+        label: m.label,
+        detail: m.id !== m.label ? m.id : m.description,
+        search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
+        checked: current.provider === provider && current.model === m.id,
+        disabled: !status?.available,
+        star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
+        run: () => pick(provider, m.id),
+      }), status && !status.available ? " — unavailable" : ""));
+    }
+    if (!showAll) {
+      items.push({ separator: true }, { label: "Show all models", icon: "more", run: () => openModelMenu(anchor, current, pick, { all: true, onClose }) });
+    }
+    return openMenu(anchor, items, { search: showAll, width: 300, placeholder: "Search models · ☆ to favourite", onClose });
+  }
+
+  /**
+   * scribe.agent.pickModel (#732): the app's model picker over the page, below `rect` (the page's
+   * element, in this window's coordinates). Resolves with the choice, or cancelled once it closes without one.
+   */
+  function pagePickModel(rect, current) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        resolve(result);
+      };
+      const box = { left: rect.left, top: rect.top, right: rect.left + rect.width, bottom: rect.top + rect.height, width: rect.width, height: rect.height };
+      // Not an element of this document: openMenu only measures it, and any click outside the menu closes it.
+      const anchor = { className: "", isConnected: true, getBoundingClientRect: () => box, contains: () => false };
+      const pick = (provider, model) => finish({ ok: true, provider, model, label: modelInfo(provider, model)?.label || model });
+      // "Show all models" closes the menu and opens the full list in the same click: only a close that leaves no menu cancels.
+      const onClose = () => setTimeout(() => { if (openMenuAnchor !== anchor) finish({ ok: false, error: "cancelled" }); }, 0);
+      const menu = openModelMenu(anchor, current, pick, { onClose });
+      if (!menu) {
+        finish({ ok: false, error: "cancelled" });
+        return;
+      }
+      // The click came from the page's frame: take focus, so the next click in the frame blurs this window and closes the menu.
+      menu.tabIndex = -1;
+      if (!menu.querySelector(".ag-menu-search")) menu.focus({ preventScroll: true });
+    });
+  }
+
   function modelKey(provider, id) {
     return `${provider}:${id}`;
   }
@@ -11508,6 +11549,13 @@
       case "options":
         pageOptionsWatch.add(tab.id);
         return pageOptions();
+      case "pickModel": {
+        // The app's own picker, opened over the page by a click on it (#732).
+        if (!activated) return { ok: false, error: "no_gesture" };
+        const r = data.rect || {};
+        const rect = { left: Number(r.left) || 0, top: Number(r.top) || 0, width: Number(r.width) || 0, height: Number(r.height) || 0 };
+        return pagePickModel(rect, { provider: typeof data.provider === "string" ? data.provider : null, model: typeof data.model === "string" ? data.model : null });
+      }
       case "limits":
         pageLimitWatch.add(tab.id);
         return { ok: true, limits: pageLimits() };

@@ -4231,6 +4231,14 @@
       return;
     }
     const activated = frameActivated(frameId);
+    const frame = frames.get(frameId);
+    if (data.op === "pickModel" && frame) {
+      // The page measured its element in its own frame; the picker opens in this window.
+      const box = frame.el.getBoundingClientRect();
+      const scale = frame.el.offsetWidth ? box.width / frame.el.offsetWidth : 1;
+      const r = data.rect || {};
+      data.rect = { left: box.left + (Number(r.left) || 0) * scale, top: box.top + (Number(r.top) || 0) * scale, width: (Number(r.width) || 0) * scale, height: (Number(r.height) || 0) * scale };
+    }
     chat.pageRequest(tab, data, { activated }).then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
   }
 
