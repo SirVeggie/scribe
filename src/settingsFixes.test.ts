@@ -7,6 +7,52 @@ import { memoryStore } from "./audio/settings.js";
 
 const source = (name: string) => fs.readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8");
 
+test("speech settings explain an older backend and preserve the editor after an HTML save response", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Speech settings backend compatibility test" });
+  try {
+    const page = await browser.newPage();
+    const service = new AudioService({ sources: () => [], store: memoryStore() });
+    let olderBackend = true, htmlSave = true, saves = 0;
+    await page.route("http://audio.test/**", route => {
+      const req = route.request();
+      if (new URL(req.url()).pathname === "/api/audio/sources") {
+        saves++;
+        if (htmlSave) return route.fulfill({ status: 404, contentType: "text/html", body: "<!DOCTYPE html><html>Cannot POST /api/audio/sources</html>" });
+        return route.fulfill({ json: service.saveSource(req.postDataJSON()) });
+      }
+      const view = service.view();
+      if (olderBackend) delete (view as any).profiles;
+      return route.fulfill({ json: view });
+    });
+    await page.goto("http://audio.test/");
+    await page.addScriptTag({ content: `window.scribeAudio = { refresh: async () => (await fetch("/api/audio/settings")).json(), device: () => "" };` });
+    for (const name of ["select.js", "audio-settings.js"]) await page.addScriptTag({ content: source(name) });
+    await page.evaluate(async () => {
+      const settings = (window as any).scribeAudioSettings;
+      document.body.append(...settings.sections); await settings.refresh();
+    });
+    const restart = page.getByRole("status").filter({ hasText: "Restart Scribe to use multiple speech-to-text sources." });
+    await restart.waitFor();
+    assert.equal(await page.getByRole("button", { name: "Add source", exact: true }).isDisabled(), true);
+    assert.equal(saves, 0);
+    olderBackend = false;
+    await page.evaluate(() => (window as any).scribeAudioSettings.refresh());
+    await page.getByRole("button", { name: "Add source", exact: true }).click();
+    await page.locator("#audio-name").fill("Local");
+    await page.locator("#audio-url").fill("http://localhost:9000/v1");
+    await page.locator("#audio-key").fill("keep-this-key");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await restart.waitFor();
+    assert.equal(await page.locator("#audio-name").inputValue(), "Local");
+    assert.equal(await page.locator("#audio-key").inputValue(), "keep-this-key");
+    assert.equal(await page.getByRole("button", { name: "Save", exact: true }).isEnabled(), true);
+    htmlSave = false;
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("radio", { name: "Use Local by default" }).waitFor();
+    assert.equal(service.view().profiles[0].custom?.hasKey, true);
+  } finally { await browser.close(); }
+});
+
 test("background picker renders real previews, toggles choices, and disposes effects", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Settings background picker test" });
   try {
