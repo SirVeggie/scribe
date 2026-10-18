@@ -3,7 +3,7 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { contextBlock, contextChipKey, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
+import { cleanInstructionsOff, contextBlock, contextChipKey, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions } from "./prompt.js";
 import type { ContextChip, Thread } from "./types.js";
 
 const page = (id: string, title = id): ContextChip => ({ kind: "page", id, key: `scribe:${id}`, title });
@@ -71,6 +71,18 @@ test("every thread is told to check a message that looks meant for another threa
   for (const t of [thread({}), thread({ mode: "code", cwd: "/work" }), thread({ provider: "claude", mode: "ask" })]) {
     assert.match(threadInstructions(t, {}), /Wrong thread: .*ask in one short line whether it was meant for this thread/);
   }
+});
+
+test("optional app instructions are on by default and left out once turned off", () => {
+  const thread = { provider: "claude", mode: "code", cwd: "/work", scope: { kind: "global", ref: null } } as Thread;
+  const all = threadInstructions(thread, {});
+  for (const re of [/Wrong thread: /, /User slips: .*check with them in a short line before changing code/, /Code blocks: /, /rename it with thread_update \(title\)/]) assert.match(all, re);
+  const none = threadInstructions(thread, { instructionsOff: ["wrongThread", "userSlip", "codeBlocks", "threadTitle"] });
+  for (const re of [/Wrong thread: /, /User slips: /, /Code blocks: /, /rename it with thread_update/]) assert.doesNotMatch(none, re);
+  // The workspace move is not optional.
+  assert.match(none, /This thread: When the work moves to a folder outside the workspace/);
+  assert.doesNotMatch(threadInstructions({ ...thread, mode: "board" } as Thread, { instructionsOff: ["threadTitle"] }), /This thread:/);
+  assert.deepEqual(cleanInstructionsOff(["userSlip", "bogus", "userSlip", 3]), ["userSlip"]);
 });
 
 test("a thread on a blank New page is told that the page it shows takes that page's place", () => {

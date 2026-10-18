@@ -92,6 +92,13 @@
     { id: "browser", label: "Browser tools" },
     { id: "threads", label: "Read other threads" },
   ];
+  /** Optional app instructions (APP_INSTRUCTIONS in src/agent/prompt.ts), on unless listed in prefs.instructionsOff. */
+  const APP_INSTRUCTIONS = [
+    { id: "wrongThread", label: "Check a message that looks meant for another thread" },
+    { id: "userSlip", label: "Point out a likely slip of yours before working around it", hint: "Such as a stale build you didn't restart or a forgotten step: the agent says so in a short line instead of adding code for it." },
+    { id: "codeBlocks", label: "Name the language of code blocks" },
+    { id: "threadTitle", label: "Rename the thread when its subject changes" },
+  ];
   const APPROVALS = [
     { id: "ask", label: "Ask first", detail: "Ask before edits and commands that are not allowlisted" },
     { id: "edits", label: "Auto-edit", detail: "Accept file edits, ask before commands" },
@@ -10157,6 +10164,27 @@
         memoryActions
       );
 
+      const instructions = el("section", "settings-section");
+      instructions.append(helpHeading("App instructions", "Guidance Scribe adds to every chat's instructions. Turned off, it is left out of new chats."));
+      for (const { id, label, hint } of APP_INSTRUCTIONS) {
+        const control = switchControl(
+          () => !(prefs().instructionsOff || []).includes(id),
+          () => {
+            const before = prefs().instructionsOff || [];
+            const next = before.includes(id) ? before.filter((x) => x !== id) : [...before, id];
+            S.config.prefs = { ...prefs(), instructionsOff: next };
+            api("PUT", "/prefs", { instructionsOff: next })
+              .then((saved) => { S.config.prefs = saved; })
+              .catch((err) => {
+                S.config.prefs = { ...prefs(), instructionsOff: before };
+                control.setAttribute("aria-checked", String(!before.includes(id)));
+                notice(err.message);
+              });
+          }
+        );
+        instructions.append(settingRow(label, control, { id: `ag-instruction-${id}`, ...(hint ? { hint } : {}) }));
+      }
+
       const sources = el("section", "settings-section");
       this.sources = el("div", "ag-sources");
       const sourceActions = el("div", "settings-actions");
@@ -10320,10 +10348,11 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, helpers, forkSummaries, memory, hooks, coverage, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, helpers, forkSummaries, memory, instructions, hooks, coverage, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
+        { label: "Instructions", sections: [instructions] },
         { label: "Memory", sections: [memory] },
         { label: "Helpers & utilities", sections: [helpers, utilities, forkSummaries] },
         { label: "Hooks", sections: [hooks, coverage] },

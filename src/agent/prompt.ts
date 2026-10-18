@@ -20,7 +20,21 @@ export type ScopeInfo = {
   helpers?: boolean;
   /** Shared memory is on: the memories that apply to this thread (global, and its workspace's), newest first. */
   memories?: Memory[];
+  /** Optional app instructions the user turned off in Agent settings (APP_INSTRUCTIONS ids). */
+  instructionsOff?: string[];
 };
+
+/**
+ * Behavioural app instructions the user can turn off in Agent settings (public/agent.js lists them
+ * with labels). Tool rules, mode, page access and the like are not optional and are not here.
+ */
+export const APP_INSTRUCTIONS = ["codeBlocks", "wrongThread", "userSlip", "threadTitle"] as const;
+export type AppInstruction = (typeof APP_INSTRUCTIONS)[number];
+
+export function cleanInstructionsOff(value: unknown): AppInstruction[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((id): id is AppInstruction => (APP_INSTRUCTIONS as readonly string[]).includes(id)))];
+}
 
 /**
  * Scribe servers in the user's own Cursor MCP config. A Cursor chat loads them next to Scribe's own
@@ -53,12 +67,22 @@ function duplicateScribe(thread: Thread): string {
  */
 export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   const server = thread.provider === "cursor" ? BOARD_MCP : "scribe";
-  const lines = [
-    "You are running inside Scribe, the user's local hub for notes, pages and coding work. The user reads your replies in Scribe's chat panel, rendered as Markdown.",
-    "Code blocks: always give a fenced block its language (```ts, ```powershell, ```json, ```bash, ```text for plain output). The chat shows it in the block's header and highlights the code by it.",
-    "Wrong thread: the user runs many chats side by side and sometimes sends a message to the wrong one. When a message in a thread with earlier turns has nothing to do with the work so far, and does not say it is a new topic (\"separate question\", \"also\", \"unrelated, but\"), ask in one short line whether it was meant for this thread before you edit files, run commands or change pages, and say what this thread has been about. If they confirm, go ahead. Do not ask about follow-ups that build on the conversation, the first message of a thread, or messages a page's code sent.",
-    "",
-  ];
+  const on = (id: AppInstruction) => !scope.instructionsOff?.includes(id);
+  const lines = ["You are running inside Scribe, the user's local hub for notes, pages and coding work. The user reads your replies in Scribe's chat panel, rendered as Markdown."];
+  if (on("codeBlocks")) {
+    lines.push("Code blocks: always give a fenced block its language (```ts, ```powershell, ```json, ```bash, ```text for plain output). The chat shows it in the block's header and highlights the code by it.");
+  }
+  if (on("wrongThread")) {
+    lines.push(
+      "Wrong thread: the user runs many chats side by side and sometimes sends a message to the wrong one. When a message in a thread with earlier turns has nothing to do with the work so far, and does not say it is a new topic (\"separate question\", \"also\", \"unrelated, but\"), ask in one short line whether it was meant for this thread before you edit files, run commands or change pages, and say what this thread has been about. If they confirm, go ahead. Do not ask about follow-ups that build on the conversation, the first message of a thread, or messages a page's code sent."
+    );
+  }
+  if (on("userSlip")) {
+    lines.push(
+      "User slips: when a report or request most likely comes from a slip on the user's side (a process or build they did not restart, a wrong file or setting, a forgotten step, a detail they overlooked, a request that contradicts what they said earlier), say so and check with them in a short line before changing code or pages to work around it. Do not add code that only covers a one-off slip during development. This is for cases where such a slip is the likely explanation, not a reason to doubt ordinary requests; when unsure, ask rather than build around it."
+    );
+  }
+  lines.push("");
   if (noPages(thread.scope)) {
     lines.push(
       `Pages: this thread has no access to Scribe pages (the user set its Scribe scope to None). The MCP server named \`${server}\` has its web, thread and browser tools here, plus file tools where the mode permits them. Do not try to read or show pages.`
@@ -134,11 +158,12 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       `MCP servers: this thread gets the servers in Scribe's own MCP list; Code chats also inherit Keeper from Claude Code when Scribe has no Keeper entry. Not available here, even where a skill says to use one: ${names}. Do not search for their tools. Do what you can without them, and say in your reply what you could not do or check because of it; the user can add a server under Agent settings, MCP servers.`
     );
   }
-  lines.push(
+  const rename = on("threadTitle") ? " when its subject has changed and the title no longer fits, rename it with thread_update (title)." : "";
+  const move =
     thread.mode === "board" || thread.helperOf
-      ? "This thread: when its subject has changed and the title no longer fits, rename it with thread_update (title)."
-      : "This thread: when its subject has changed and the title no longer fits, rename it with thread_update (title). When the work moves to a folder outside the workspace for more than a file or two, ask to move the workspace there with thread_update (workspace) instead of having each file access approved; the change applies when your turn ends, so end the turn after the call."
-  );
+      ? ""
+      : " When the work moves to a folder outside the workspace for more than a file or two, ask to move the workspace there with thread_update (workspace) instead of having each file access approved; the change applies when your turn ends, so end the turn after the call.";
+  if (rename || move) lines.push(`This thread:${rename}${move}`);
   lines.push(
     "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. The user is asked to allow it first; thread_access says why. Threads the user tags with # in a chat message are already granted read access individually, including outside those scopes."
   );

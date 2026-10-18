@@ -17,7 +17,7 @@ import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTr
 import { syncDependencies } from "./deps.js";
 import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
-import { contextBlock, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
+import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, pageKeysIn, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
@@ -985,6 +985,7 @@ export class AgentHost {
       cursorHostShell: saved.cursorHostShell === true,
       helpers: saved.helpers !== false,
       memory: saved.memory !== false,
+      instructionsOff: cleanInstructionsOff(saved.instructionsOff),
       hookRules: savedRules(saved.hookRules),
       disabledModes: cleanDisabledModes(saved.disabledModes),
       customModes: cleanCustomModes(saved.customModes),
@@ -1003,6 +1004,7 @@ export class AgentHost {
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
     if (patch.helpers !== undefined) next.helpers = patch.helpers === true;
     if (patch.memory !== undefined) next.memory = patch.memory !== false;
+    if (patch.instructionsOff !== undefined) next.instructionsOff = cleanInstructionsOff(patch.instructionsOff);
     if (patch.hookRules !== undefined) {
       next.hookRules = normalizeRules(patch.hookRules);
       this.ruleDetectors = null;
@@ -1863,6 +1865,7 @@ export class AgentHost {
   private scopeInfo(thread: Thread): ScopeInfo {
     const info = this.scopePages(thread);
     if (this.prefs().searxngUrl) info.webSearch = true;
+    if (this.prefs().instructionsOff.length) info.instructionsOff = this.prefs().instructionsOff;
     if (this.prefs().helpers && !thread.helperOf && !modeOff(thread, "helpers")) info.helpers = true;
     if (this.prefs().memory) info.memories = memoriesFor(this.memories(), this.memoryWorkspace(thread), this.runs.get(thread.id)?.memoryOwner ?? memoryOwner(thread));
     if (thread.provider === "claude") {
