@@ -32,6 +32,11 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
     default: "ask", risky: true,
   },
   {
+    id: "audio.microphoneStream", label: "Stream the live microphone to this page",
+    detail: "The page receives every microphone sample while it runs, not just a clip at the end. Scribe shows a recording indicator and stop control.",
+    default: "ask", risky: true,
+  },
+  {
     id: "audio.transcribe", label: "Turn speech into text",
     detail: "Send audio to the speech-to-text source in Settings. With a hosted source, the audio leaves this PC.",
     default: "ask", risky: false,

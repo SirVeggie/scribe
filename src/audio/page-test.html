@@ -3,7 +3,7 @@
 <style>body{font:16px system-ui;background:var(--bg);color:var(--text);padding:24px}button{margin:4px;padding:8px}pre{white-space:pre-wrap}meter{display:block;margin:12px 0}</style>
 <h1>Page audio test</h1>
 <p>Choose a speech source in Settings → Audio before testing Listen.</p>
-<button id="listen">Listen</button><button id="record">Record clip</button>
+<button id="listen">Listen</button><button id="record">Record clip</button><button id="stream">Live stream</button>
 <button id="stop" disabled>Stop</button><button id="cancel" disabled>Cancel</button>
 <meter id="level" min="0" max="1" value="0" aria-label="Microphone level"></meter>
 <pre id="output" role="status">Ready</pre>
@@ -11,17 +11,42 @@
 let session;
 const output = document.getElementById('output');
 const stopButton = document.getElementById('stop'), cancelButton = document.getElementById('cancel');
-async function start(kind) {
-  session = await scribe.audio[kind]({ maxMs: 30000 });
+async function start(kind, maxMs = 30000) {
+  if (kind === 'stream') document.getElementById('level').dataset.peak = '0';
+  session = await scribe.audio[kind]({ maxMs });
   output.textContent = session.ok ? 'Recording' : JSON.stringify(session);
   stopButton.disabled = cancelButton.disabled = !session.ok;
   if (session.ok) {
+    if (session.stream) {
+      const context = new AudioContext({ sampleRate: session.sampleRate });
+      const analyser = context.createAnalyser(); analyser.fftSize = 1024;
+      context.createMediaStreamSource(session.stream).connect(analyser);
+      const samples = new Float32Array(analyser.fftSize), meter = document.getElementById('level');
+      let frame;
+      meter.dataset.peak = '0'; delete output.dataset.end;
+      const measure = () => {
+        analyser.getFloatTimeDomainData(samples);
+        const rms = Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
+        meter.value = Math.min(1, rms * 3);
+        meter.dataset.peak = String(Math.max(Number(meter.dataset.peak), rms));
+        frame = requestAnimationFrame(measure);
+      };
+      session.onend = reason => {
+        cancelAnimationFrame(frame); void context.close(); meter.value = 0;
+        output.dataset.end = reason; output.textContent = 'Ended: ' + reason;
+        stopButton.disabled = cancelButton.disabled = true;
+      };
+      await context.resume(); measure();
+      cancelButton.disabled = true;
+      return;
+    }
     session.onlevel = value => { document.getElementById('level').value = value; };
     session.onstate = state => { output.textContent = state; };
   }
 }
 document.getElementById('listen').onclick = () => start('listen');
 document.getElementById('record').onclick = () => start('record');
+document.getElementById('stream').onclick = () => start('stream');
 stopButton.onclick = async () => {
   const result = await session.stop();
   output.textContent = result.blob ? JSON.stringify({ ok: result.ok, bytes: result.blob.size, mimeType: result.mimeType, durationMs: result.durationMs }) : JSON.stringify(result);

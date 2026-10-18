@@ -74,7 +74,8 @@ Facts the design rests on, checked in the code:
 
 1. **The shell owns the devices.** Only shell code calls `getUserMedia` and owns the output mixer.
    Pages never get `allow="microphone"`. A page asks the shell to listen or record, and gets text or
-   a finished clip back. Reasons: one browser permission for one origin; a recording indicator the
+   a finished clip back, or a relayed live stream with the separate B2 permission. Reasons: one
+   browser permission for one origin; a recording indicator the
    page cannot hide or fake; one place for the stop button, the time cap, the volume and the mute;
    and revoking a page's permission takes effect at once (an iframe `allow` attribute only changes
    on reload).
@@ -285,6 +286,27 @@ live.stop();
   Scribe's marker and stop control think it closed, start without a gesture once the browser has
   remembered the grant, and hold the device against the chat's capture. Relaying keeps the six
   principles true at the cost of a few tens of milliseconds.
+
+#### Implementation
+
+`scribe.audio.stream({ maxMs })` returns `{ ok: true, stream, sampleRate, onend, stop() }`.
+It needs a click, a visible page, and only `audio.microphoneStream` (ask by default, risky).
+That permission explains that every sample reaches the page, rather than just a finished clip.
+Failure resolves `{ ok: false, error }`.
+
+The shell uses the same capture reservation, indicator, stop control and five-minute cap as
+recording. A static `/audio-stream-worklet.js` module taps capture into mono Float32 packets of
+20 ms, transferred over a MessageChannel to the page. The module is also served as a data-free
+shared file on page origins, so its playback processor loads from the iframe's own origin.
+No blob module, cross-origin module request or iframe microphone delegation is needed.
+
+The page creates an AudioContext at the shell's sample rate and feeds the packets through a
+60 ms jitter buffer into a MediaStreamAudioDestinationNode. Above 200 ms it discards the oldest
+samples back to 60 ms. Underruns rebuffer. It never connects the live samples to speakers.
+
+On stop, hiding, cap, shell stop/device loss or permission revocation, the shell sends an end
+message (`stopped`, `hidden`, `max`, `user`, `revoked`) and closes its port. The bridge closes
+its port and context and stops the destination tracks. Close/reload use `stopped`.
 
 ## Phase C: playing audio, notification sounds (todo)
 
@@ -505,7 +527,7 @@ permissions and the indicator. C adds the mixer. D adds `speak`. R reuses all of
    (it works only in Chrome and Edge, not in the desktop app's WebView2, and sends audio to Google
    or Microsoft without saying so) and no local Whisper pack in the first cut.
 2. The shell captures; pages get text or a finished clip, or the live stream relayed by the shell
-   behind the risky `audio.microphoneStream` permission (B2). Pages never get `getUserMedia`.
+   behind the separate, risky `audio.microphoneStream` permission (B2). Pages never get `getUserMedia`.
 3. Dictation inserts text and does not send it, unless the user turns "Send after dictation" on.
 4. Record-then-transcribe first; live partial transcripts come with phase R's streaming work.
 5. Notification sounds are off until the user turns them on.

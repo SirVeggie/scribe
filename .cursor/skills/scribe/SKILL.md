@@ -569,10 +569,11 @@ and have the submit button call `scribe.reply` with the answers and a one-line s
 
 ### Microphone and speech-to-text: scribe.audio
 
-Scribe owns the microphone; pages receive text or a finished clip, never a live stream.
-`scribe.audio.listen` and `scribe.audio.record` require a click every time and a visible page.
+Scribe owns the microphone; pages receive text, a finished clip, or a relayed live stream.
+`scribe.audio.listen`, `scribe.audio.record` and `scribe.audio.stream` require a click every time and a visible page.
 Listen asks once for `audio.microphone` and `audio.transcribe`; record asks only for the microphone.
-Both default to ask. Microphone grants reset when an agent rewrites the page's code.
+Stream asks only for the separate, riskier `audio.microphoneStream` permission: the page receives
+every sample while it runs. All microphone permissions default to ask and reset when an agent rewrites the page's code.
 
 ```js
 const session = await scribe.audio.listen({ language: "en", prompt: "Names used here", maxMs: 30000 });
@@ -590,6 +591,26 @@ if (rec.ok) {
 }
 const caps = await scribe.audio.available(); // { mic, stt, reason? }
 ```
+
+For visualisers or your own processing, `scribe.audio.stream` returns a real mono `MediaStream`
+inside the page at `live.sampleRate`, relayed from the shell with about 60 ms of buffering:
+
+```js
+const live = await scribe.audio.stream({ maxMs: 30000 });
+if (live.ok) {
+  const context = new AudioContext({ sampleRate: live.sampleRate });
+  const analyser = context.createAnalyser();
+  context.createMediaStreamSource(live.stream).connect(analyser);
+  live.onend = reason => { void context.close(); }; // stopped | hidden | max | user | revoked
+  // From a Stop button: await live.stop();
+}
+```
+
+The stream stops its tracks and closes its playback context when it ends. `stopped` means the
+page called `stop()` (also close/reload), `hidden` means the page or shell became hidden, `max`
+means the time cap, `user` means the shell stop control or device ended, and `revoked` means
+permission was withdrawn. A handler assigned just after an early end still receives its reason.
+Do not request iframe microphone delegation; only the shell opens the device.
 
 `scribe.audio.transcribe` needs `audio.transcribe`; granted uploads do not need a click.
 With a hosted speech source, audio leaves this PC. Pages can send audio Blobs up to 25 MB;

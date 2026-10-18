@@ -27,7 +27,7 @@ export const PDFJS_PATH = /^\/(build\/pdf(\.worker)?\.min\.mjs|(cmaps|standard_f
 /** Data-free files every page may load: the injected tooltip script and the file viewer's libraries. */
 function sharedFile(req: express.Request): boolean {
   if (req.method !== "GET") return false;
-  if (req.path === "/tooltip.js" || VENDOR_PATH.test(req.path)) return true;
+  if (req.path === "/tooltip.js" || req.path === "/audio-stream-worklet.js" || VENDOR_PATH.test(req.path)) return true;
   return req.path.startsWith("/vendor/pdfjs/") && PDFJS_PATH.test(req.path.slice("/vendor/pdfjs".length));
 }
 

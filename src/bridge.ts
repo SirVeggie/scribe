@@ -1712,9 +1712,74 @@ ${POINTER_DRAG_JS}
       return session;
     });
   }
+  async function streamAudio(opts) {
+    if (!hasGesture()) return { ok: false, error: "no_gesture" };
+    var result, context, port, node, destination, reason, callback, pending = [], pendingSamples = 0;
+    var live = { ok: true, stream: null, sampleRate: 0,
+      get onend() { return callback; },
+      set onend(fn) {
+        callback = fn;
+        if (reason && typeof fn === "function") Promise.resolve().then(function () { if (callback === fn) { try { fn(reason); } catch (_) {} } });
+      },
+      stop: function () {
+        if (reason) return Promise.resolve({ ok: true, reason: reason });
+        return askBoard({ type: "scribe-audio", op: "stop", sessionId: result.sessionId }, 30000).then(function (reply) {
+          end(reply.reason || "stopped"); return reply;
+        });
+      }
+    };
+    function end(why) {
+      if (reason) return;
+      reason = why;
+      pending = []; pendingSamples = 0;
+      if (port) { port.onmessage = null; port.close(); }
+      if (node) { node.disconnect(); node.port.close(); }
+      destination?.stream.getTracks().forEach(function (track) { track.stop(); });
+      if (context) void context.close().catch(function () {});
+      window.removeEventListener("pagehide", pageHidden);
+      if (typeof callback === "function") { try { callback(reason); } catch (_) {} }
+    }
+    function pageHidden() { end("hidden"); }
+    try {
+      opts = opts || {};
+      result = await askBoard({ type: "scribe-audio", op: "stream", maxMs: opts.maxMs }, 120000);
+      if (!result.ok) return result;
+      port = result.port;
+      // The static module is served on the page's own origin; no blob: CSP exception or CORS is needed.
+      context = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: result.sampleRate });
+      destination = context.createMediaStreamDestination();
+      live.stream = destination.stream; live.sampleRate = context.sampleRate;
+      window.addEventListener("pagehide", pageHidden);
+      port.onmessage = function (event) {
+        if (event.data?.end) { end(event.data.end); return; }
+        var frame = event.data?.frame;
+        if (!(frame instanceof ArrayBuffer) || reason) return;
+        if (node) node.port.postMessage({ frame: frame }, [frame]);
+        else {
+          pending.push(frame); pendingSamples += frame.byteLength / 4;
+          while (pendingSamples > result.sampleRate * .2 && pending.length) pendingSamples -= pending.shift().byteLength / 4;
+        }
+      };
+      await context.audioWorklet.addModule(new URL("/audio-stream-worklet.js", location.href).href);
+      if (reason) return live;
+      node = new AudioWorkletNode(context, "scribe-mic-playback", { numberOfInputs: 0, outputChannelCount: [1] });
+      node.connect(destination);
+      node.onprocessorerror = function () { void live.stop(); };
+      pending.forEach(function (frame) { node.port.postMessage({ frame: frame }, [frame]); });
+      pending = []; pendingSamples = 0;
+      await context.resume();
+      return live;
+    } catch (_) {
+      if (reason) return live;
+      end("stopped");
+      if (result?.ok) void askBoard({ type: "scribe-audio", op: "stop", sessionId: result.sessionId }, 30000);
+      return { ok: false, error: "unavailable" };
+    }
+  }
   var audio = {
     listen: function (opts) { return startAudio("listen", opts); },
     record: function (opts) { return startAudio("record", opts); },
+    stream: function (opts) { return streamAudio(opts); },
     transcribe: function (blob, opts) {
       if (!(blob instanceof Blob) || !blob.type.startsWith("audio/")) return Promise.resolve({ ok: false, error: "invalid_audio" });
       if (blob.size > 25 * 1024 * 1024) return Promise.resolve({ ok: false, error: "too_large" });

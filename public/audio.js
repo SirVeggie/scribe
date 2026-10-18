@@ -30,14 +30,15 @@
       }).catch(reject);
     });
   }
-  async function captureLocal({ owner, maxMs = 300000, onLevel = () => {}, onState = () => {} } = {}) {
+  async function captureLocal({ owner, maxMs = 300000, onLevel = () => {}, onState = () => {}, live = false, onFrame = () => {} } = {}) {
     if (active) throw Object.assign(new Error("The microphone is already recording."), { audioError: "busy" });
-    if (!available().mic) throw new Error("Microphone recording is unavailable in this browser.");
+    if (!navigator.mediaDevices?.getUserMedia || (!live && !window.MediaRecorder)) throw new Error("Microphone recording is unavailable in this browser.");
     const token = { cancel: () => { token.cancelled = true; }, owner, cancelled: false };
     active = token;
-    let stream, context, timer, frame, recorder, session;
+    let stream, context, timer, frame, recorder, session, tap;
     const clean = () => {
       clearTimeout(timer); cancelAnimationFrame(frame);
+      if (tap) { tap.port.onmessage = null; tap.port.close(); tap.disconnect(); }
       stream?.getTracks().forEach(track => track.stop());
       void context?.close().catch(() => {});
       if (active === token || active === session) active = null;
@@ -47,6 +48,30 @@
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true,
         autoGainControl: true, ...(id ? { deviceId: { exact: id } } : {}) } });
       if (token.cancelled) { clean(); throw new Error("Recording cancelled."); }
+      if (live) {
+        context = new (window.AudioContext || window.webkitAudioContext)();
+        await context.audioWorklet.addModule("/audio-stream-worklet.js");
+        if (token.cancelled) { clean(); throw new Error("Recording cancelled."); }
+        tap = new AudioWorkletNode(context, "scribe-mic-capture");
+        tap.port.onmessage = event => { if (session?.state === "recording" && event.data?.frame) onFrame(event.data.frame); };
+        context.createMediaStreamSource(stream).connect(tap).connect(context.destination);
+        await context.resume();
+        if (token.cancelled) { clean(); throw new Error("Recording cancelled."); }
+        let state = "recording", resolveEnd;
+        const ended = new Promise(resolve => { resolveEnd = resolve; });
+        session = { owner, ended, sampleRate: context.sampleRate, get state() { return state; },
+          stop(reason = "stopped") {
+            if (state === "recording") { state = "stopped"; clean(); onState(state); resolveEnd(reason); }
+            return ended;
+          },
+          cancel(reason = "stopped") { return session.stop(reason); } };
+        active = session;
+        stream.getTracks().forEach(track => track.addEventListener("ended", () => session.stop("user")));
+        tap.onprocessorerror = () => session.stop("user");
+        onState("recording");
+        timer = setTimeout(() => session.stop("max"), Math.min(300000, Math.max(1, maxMs)));
+        return session;
+      }
       const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find(type => MediaRecorder.isTypeSupported(type));
       recorder = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: 32000 });
       const chunks = [];

@@ -1480,6 +1480,7 @@ test("page permissions are kept per page, reset by an agent rewrite, and not exp
   assert.equal(store.pagePermissions("page").size, 0);
   store.setPagePermission("page", "agent.unattended", "allow");
   store.setPagePermission("page", "audio.microphone", "allow");
+  store.setPagePermission("page", "audio.microphoneStream", "allow");
   store.setPagePermission("page", "audio.transcribe", "allow");
   store.setPagePermission("page", "agent.chat", "deny");
   // A per-folder permission has no blanket allow: it is stored as ask, with its folders.
@@ -1501,6 +1502,7 @@ test("page permissions are kept per page, reset by an agent rewrite, and not exp
 
   assert.equal(again.resetRiskyPermissions("page"), true);
   assert.equal(again.pagePermissions("page").has("audio.microphone"), false);
+  assert.equal(again.pagePermissions("page").has("audio.microphoneStream"), false);
   assert.equal(again.pagePermissions("page").get("audio.transcribe")?.value, "allow");
   assert.equal(again.pagePermissions("page").size, 1);
   assert.equal(again.resetRiskyPermissions("page"), false);

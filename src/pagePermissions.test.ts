@@ -18,6 +18,7 @@ test("permissions without a grant are at their defaults", () => {
     views.map((v) => [v.id, v.value]),
     [
       ["audio.microphone", "ask"],
+      ["audio.microphoneStream", "ask"],
       ["audio.transcribe", "ask"],
       ["agent.chat", "allow"],
       ["agent.unattended", "ask"],
@@ -26,6 +27,15 @@ test("permissions without a grant are at their defaults", () => {
     ]
   );
   assert.deepEqual(views.find((v) => v.id === "agent.workspace")?.folders, []);
+});
+
+test("live microphone requires its own permission and accepts allow, deny and ask", () => {
+  const need = { perm: "audio.microphoneStream" };
+  assert.equal(checkPermission(new Map([["audio.microphone", grant("allow")]]), need), "ask");
+  for (const value of ["allow", "deny", "ask"] as const) {
+    assert.equal(checkPermission(new Map([[need.perm, grant(value)]]), need), value);
+  }
+  assert.equal(permissionViews(new Map()).find(p => p.id === need.perm)?.risky, true);
 });
 
 test("a folder grant covers its subfolders up to its approval", () => {

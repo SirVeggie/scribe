@@ -26,6 +26,10 @@ test("content origin serves the injected tooltip script while rejecting other sh
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type")!, /javascript/);
     assert.equal(await response.text(), fs.readFileSync(path.join(publicDir, "tooltip.js"), "utf8"));
+    const worklet = await fetch(base + "/audio-stream-worklet.js");
+    assert.equal(worklet.status, 200);
+    assert.match(worklet.headers.get("content-type")!, /javascript/);
+    assert.equal(await worklet.text(), fs.readFileSync(path.join(publicDir, "audio-stream-worklet.js"), "utf8"));
     // The file viewer's shared libraries pass the gate (#654); other vendor files do not.
     for (const url of ["/vendor/highlight.js", "/vendor/marked.js", "/vendor/purify.js", "/vendor/pdfjs/build/pdf.min.mjs", "/vendor/pdfjs/build/pdf.worker.min.mjs", "/vendor/pdfjs/cmaps/UniJIS-UCS2-H.bcmap", "/vendor/pdfjs/wasm/openjpeg.wasm"]) {
       assert.equal((await fetch(base + url)).status, 200, url);
@@ -117,6 +121,8 @@ test("a page's origin serves only that page, and its routes answer only its own 
     assert.equal((await onHost(port, own, "/api/tabs")).status, 403);
     assert.equal((await onHost(port, own, "/blob/pa_1")).status, 200);
     assert.equal((await onHost(port, own, "/tooltip.js")).status, 200);
+    assert.equal((await onHost(port, own, "/audio-stream-worklet.js")).status, 200);
+    assert.equal((await onHost(port, own, "/audio-stream-worklet.js", { method: "POST" })).status, 403);
     assert.equal((await onHost(port, "app.localhost", "/api/tabs")).status, 403, "other *.localhost names are not the board");
     // The board's own API: no other origin writes through it, and a rebound DNS name is refused.
     assert.equal((await onHost(port, "127.0.0.1", "/api/tabs", { method: "POST", headers: { origin: `http://${own}:${port}` } })).status, 403);

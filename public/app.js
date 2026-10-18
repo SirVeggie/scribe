@@ -693,8 +693,9 @@
       return;
     }
     if (msg.type === "page_permission") {
-      if (msg.value !== "allow" && (msg.perm === "audio.microphone" ||
-        (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id);
+      if (msg.value !== "allow" && ((msg.perm === "audio.microphone" && pageAudioSessions.get(msg.id)?.mode !== "stream") ||
+        (msg.perm === "audio.microphoneStream" && pageAudioSessions.get(msg.id)?.mode === "stream") ||
+        (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
       return;
     }
     if (msg.type === "folders") {
@@ -4646,8 +4647,8 @@
   audioStop.type = "button"; audioStop.className = "page-audio-stop";
   audioStop.textContent = "Stop recording"; audioStop.hidden = true;
   audioStop.addEventListener("click", () => {
-    if (pageAudioActive?.capture) pageAudioActive.capture.stop();
-    else if (pageAudioActive) cancelPageAudio(pageAudioActive.tabId);
+    if (pageAudioActive?.capture) pageAudioActive.capture.stop("user");
+    else if (pageAudioActive) cancelPageAudio(pageAudioActive.tabId, "user");
   });
   document.querySelector("header.chrome")?.append(audioStop);
   function pageAudioVisible(id) { return !document.hidden && views.shownIds().has(id) && !!frames.get(id)?.el.isConnected; }
@@ -4662,17 +4663,25 @@
       } else marker?.remove();
     }
   }
-  function cancelPageAudio(id) {
+  function endPageAudioStream(session, reason) {
+    if (session.mode !== "stream" || session.endReason) return;
+    session.endReason = reason;
+    session.port?.postMessage({ end: reason });
+    session.port?.close(); session.port = null;
+  }
+  function cancelPageAudio(id, reason = "stopped") {
     const session = pageAudioSessions.get(id);
     if (!session) return;
-    session.cancelled = true; session.controller.abort(); session.capture?.cancel();
+    endPageAudioStream(session, reason);
+    session.pagePort?.close(); session.pagePort = null;
+    session.cancelled = true; session.controller.abort(); session.capture?.cancel(reason);
     window.scribeAudio?.cancel(session.owner);
     pageAudioSessions.delete(id);
     if (pageAudioActive === session) pageAudioActive = null;
     paintPageAudio();
   }
   function checkPageAudioVisibility() {
-    for (const [id] of pageAudioSessions) if (!pageAudioVisible(id)) cancelPageAudio(id);
+    for (const [id] of pageAudioSessions) if (!pageAudioVisible(id)) cancelPageAudio(id, "hidden");
   }
   document.addEventListener("visibilitychange", checkPageAudioVisibility);
   setInterval(checkPageAudioVisibility, 100);
@@ -4681,6 +4690,7 @@
     const data = event.data, id = frameIdByWindow(event.source), tab = id ? findAnyTab(id) : null;
     const reply = result => {
       const transfer = result?.buffer instanceof ArrayBuffer ? [result.buffer] : [];
+      if (result?.port) transfer.push(result.port);
       event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, event.origin, transfer);
     };
     const api = window.scribeAudio;
@@ -4699,12 +4709,12 @@
         if (result.ok && result.blob) return reply({ ok: true, buffer: await result.blob.arrayBuffer(), mimeType: result.blob.type, durationMs: result.durationMs });
         return reply(result);
       }
-      if (!["listen", "record", "transcribe"].includes(data.op)) return reply({ ok: false, error: "unknown_op" });
+      if (!["listen", "record", "stream", "transcribe"].includes(data.op)) return reply({ ok: false, error: "unknown_op" });
       if (data.op !== "transcribe" && !frameActivated(id)) return reply({ ok: false, error: "no_gesture" });
       if (data.op !== "transcribe" && !pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
       const entry = frames.get(id), revision = entry.revision, generation = entry.el.dataset?.audioGeneration;
       const need = data.op === "listen" ? [{ perm: "audio.microphone" }, { perm: "audio.transcribe" }]
-        : { perm: data.op === "record" ? "audio.microphone" : "audio.transcribe" };
+        : { perm: data.op === "stream" ? "audio.microphoneStream" : data.op === "record" ? "audio.microphone" : "audio.transcribe" };
       // Uploaded clips can run without a gesture once granted; prompting still needs a click.
       if (data.op === "transcribe" && !frameActivated(id)) {
         const grants = await window.scribePermissions.query(tab);
@@ -4732,11 +4742,15 @@
       pageAudioSessions.set(id, session); pageAudioActive = session; paintPageAudio();
       const emit = payload => { if (!session.cancelled) event.source?.postMessage({ type: "scribe-audio-event", sessionId: session.id, ...payload }, event.origin); };
       try {
+        if (data.op === "stream") {
+          const channel = new MessageChannel(); session.port = channel.port1; session.pagePort = channel.port2;
+        }
         const pendingTimer = setTimeout(() => {
           if (pageAudioSessions.get(id) === session) cancelPageAudio(id);
         }, Math.max(1, deadline - Date.now()));
         try {
           session.capture = await api.capture({ owner: session.owner,
+            live: data.op === "stream", onFrame: buffer => session.port?.postMessage({ frame: buffer }, [buffer]),
             maxMs: Number.isFinite(data.maxMs) ? Math.min(300000, Math.max(1, data.maxMs)) : 300000,
             onLevel: level => emit({ level }), onState: state => emit({ state }) });
         } finally { clearTimeout(pendingTimer); }
@@ -4746,6 +4760,17 @@
           return reply({ ok: false, error: "cancelled" });
         }
         const started = Date.now(); let durationMs;
+        if (data.op === "stream") {
+          session.ended = session.capture.ended.then(reason => {
+            endPageAudioStream(session, reason);
+            if (pageAudioActive === session) pageAudioActive = null;
+            paintPageAudio();
+            return { ok: true, reason: session.endReason };
+          });
+          reply({ ok: true, sessionId: session.id, sampleRate: session.capture.sampleRate, port: session.pagePort });
+          session.pagePort = null;
+          return;
+        }
         session.ended = session.capture.ended.then(async blob => {
           durationMs = Date.now() - started;
           if (pageAudioActive === session) pageAudioActive = null; paintPageAudio();
@@ -4759,9 +4784,11 @@
         });
         reply({ ok: true, sessionId: session.id });
       } catch (err) {
+        const cancelled = session.cancelled;
+        session.pagePort?.close();
         if (pageAudioSessions.get(id) === session) cancelPageAudio(id);
-        reply({ ok: false, error: session.cancelled ? "cancelled" : err.audioError || "no_mic", message: err.message,
-          ...(err.audioError === "denied" ? { permission: "audio.microphone" } : {}) });
+        reply({ ok: false, error: cancelled ? "cancelled" : err.audioError || "no_mic", message: err.message,
+          ...(err.audioError === "denied" ? { permission: data.op === "stream" ? "audio.microphoneStream" : "audio.microphone" } : {}) });
       }
     } catch { reply({ ok: false, error: "unavailable" }); }
   }
