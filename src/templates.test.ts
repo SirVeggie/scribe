@@ -102,7 +102,7 @@ test("parseAgentActions rejects bad ids, placeholders, sections and modes", () =
   assert.throws(() => parseAgentActions([{ ...base, prompt: "{{card}}" }]), /unknown placeholder "card"/);
   assert.throws(() => parseAgentActions([{ ...base, prompt: "{{#selection}}x" }]), /not closed/);
   assert.throws(() => parseAgentActions([{ ...base, prompt: "{{#selection}}x{{/input}}" }]), /does not close/);
-  assert.throws(() => parseAgentActions([{ ...base, thread: { mode: "code" } }]), /board or ask/);
+  assert.throws(() => parseAgentActions([{ ...base, thread: { mode: "code" } }]), /board, ask or readonly/);
   assert.throws(() => parseAgentActions([{ ...base, thread: { cwd: "C:/" } }]), /not a thread setting/);
   assert.throws(() => parseAgentActions([{ ...base, where: ["toolbar"] }]), /where must list/);
 });

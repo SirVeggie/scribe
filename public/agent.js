@@ -3527,7 +3527,7 @@
     }
 
     /**
-     * Quick settings for a new thread: the page in front in Pages mode, or a workspace in Code mode.
+     * Quick settings for a new thread: the page in front on Board, or a workspace on Auto review.
      * A pick changes the draft in place, so what is already written stays.
      */
     presetList(s) {
@@ -6543,7 +6543,7 @@
   function newThreadMenu(anchor, view) {
     const tab = activeTab();
     const items = [{ header: "New thread for" }];
-    if (tab) items.push({ label: tab.title, detail: "This page (Pages mode)", icon: "page", run: () => view.startDraft({ kind: "page", ref: tab.id }) });
+    if (tab) items.push({ label: tab.title, detail: "This page (Board)", icon: "page", run: () => view.startDraft({ kind: "page", ref: tab.id }) });
     if (tab?.folderId) items.push({ label: folderPath(tab.folderId), detail: "This folder", icon: "folder", run: () => view.startDraft({ kind: "folder", ref: tab.folderId }) });
     items.push({ label: "Global", detail: "Not tied to a page or folder", icon: "globe", run: () => view.startDraft({ kind: "global", ref: null }) });
     items.push({ separator: true });
@@ -10287,7 +10287,7 @@
           ),
           {
             id: "ag-presets-label",
-            hint: "An empty chat lists the page in front (Pages mode, full web, scoped to that page) and your workspaces (Code mode, Auto review, limited web, no worktree). Picking one sets the new thread up that way.",
+            hint: "An empty chat lists the page in front (Board, full web, scoped to that page) and your workspaces (Auto review, limited web, no worktree). Picking one sets the new thread up that way.",
           }
         ),
         settingRow(

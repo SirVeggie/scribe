@@ -2722,7 +2722,8 @@ textarea.ag-q-input {
   color: var(--ag-warn);
 }
 
-.ag-pill.mode-board {
+.ag-pill.ap-readonly,
+.ag-pill.ap-board {
   color: var(--accent);
 }
 

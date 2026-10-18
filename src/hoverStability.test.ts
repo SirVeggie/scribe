@@ -177,10 +177,11 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const button = (text, cls, fn, tip) => { const n = el('button', cls); if (typeof text === 'string') n.textContent = text; else n.append(text); n.onclick = fn; if (tip) n.dataset.tooltip = tip; return n; };
       const modelInfo = () => ({ label: 'Model', efforts: [] }), providerIcon = icon;
       const MODES = [{ id: 'plan', label: 'Plan' }], WEB_MODES = [{ id: 'off', label: 'Off' }];
+      const APPROVALS = [{ id: 'readonly', label: 'Read-only' }, { id: 'board', label: 'Board' }, { id: 'edits', label: 'Edits' }], approvalDetail = (a) => a.label, customDetail = () => '';
       const webMode = () => 'off', webEnforced = () => true;
       const openWorktree = () => null, usageChip = () => null, contextMeter = () => el('span', 'context', 'Context');
       const bindHoverTip = () => {}, worktreePendingTip = value => String(value), sendKey = () => 'enter';
-      const settings = { provider: 'test', model: 'test', mode: 'plan', cwd: 'workspace', useWorktree: false };
+      const settings = { provider: 'test', model: 'test', mode: 'plan', approval: 'edits', cwd: 'workspace', useWorktree: false };
       const view = {
         audioComposer: { paint() {}, toggle() {} },
         settings: () => settings, thread: () => null, bar: document.querySelector('#bar'), sendSlot: document.querySelector('#tail'),

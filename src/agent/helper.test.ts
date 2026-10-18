@@ -71,7 +71,7 @@ after(async () => {
 });
 
 function parent(approval: ApprovalPolicy = "full"): string {
-  return host.createThread({ provider: "codex", mode: "ask", approval, cwd: null, scope: { kind: "global", ref: null } }).id;
+  return host.createThread({ provider: "codex", mode: "code", approval, cwd: null, scope: { kind: "global", ref: null } }).id;
 }
 
 /** Give a thread a running turn, so the user can be asked. */
@@ -131,7 +131,7 @@ test("a helper runs the brief on the named model with the caller's settings and 
   assert.equal(helper.titleLocked, true);
   assert.equal(helper.helperOf, id);
   assert.equal(helper.model, "local/qwen-coder");
-  assert.equal(helper.mode, "ask");
+  assert.equal(helper.mode, "code");
   assert.equal(helper.approval, "full");
   assert.deepEqual(helper.scope, { kind: "workspace", ref: null });
   assert.match(asked[0].input.text, /A brief from the agent this helper thread works for/);
@@ -154,25 +154,28 @@ test("a helper runs the brief on the named model with the caller's settings and 
   }
 });
 
-test("new helpers inherit or reduce file mode and follow-ups retain the selected mode", async () => {
+test("new helpers inherit or lower the rung and follow-ups keep it", async () => {
   host.setPrefs({ helpers: true });
-  const id = host.createThread({ provider: "codex", mode: "code", approval: "full", cwd: dir, scope: { kind: "workspace", ref: dir } }).id;
-  for (const mode of [undefined, "plan", "ask"] as const) {
+  const id = host.createThread({ provider: "codex", approval: "full", cwd: dir, scope: { kind: "workspace", ref: dir } }).id;
+  // access is the rung; the old mode names still work (plan plans first on the parent's rung, ask is Board).
+  const cases = [[undefined, "code", "full"], ["auto", "code", "auto"], ["readonly", "board", "readonly"], ["plan", "plan", "full"], ["ask", "board", "board"]] as const;
+  for (const [access, mode, approval] of cases) {
     asked.length = 0;
-    const result = await host.runHelper(id, { task: "inspect the files", title: "Inspect files", provider: "pi", mode });
+    const result = await host.runHelper(id, { task: "inspect the files", title: "Inspect files", provider: "pi", mode: access });
     const helper = host.getThread(String(result.thread))!;
-    assert.equal(helper.mode, mode ?? "code");
-    assert.equal(asked[0].thread.mode, mode ?? "code");
+    assert.equal(helper.mode, mode, String(access));
+    assert.equal(helper.approval, approval, String(access));
+    assert.equal(asked[0].thread.mode, mode);
     assert.equal(helper.cwd, dir);
-    assert.equal(helper.approval, "full");
     assert.equal(helper.web, host.getThread(id)!.web);
     assert.deepEqual(helper.scope, { kind: "workspace", ref: dir });
-    await host.runHelper(id, { task: "inspect again", thread: helper.id, mode: "code" });
-    assert.equal(host.getThread(helper.id)!.mode, mode ?? "code");
+    await host.runHelper(id, { task: "inspect again", thread: helper.id, mode: "full" });
+    assert.equal(host.getThread(helper.id)!.approval, approval);
   }
+  // A plan-first parent's helpers plan first too.
   host.updateThread(id, { mode: "plan" });
-  const result = await host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "ask" });
-  assert.equal(host.getThread(String(result.thread))!.mode, "ask");
+  const result = await host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "edits" });
+  assert.deepEqual([host.getThread(String(result.thread))!.mode, host.getThread(String(result.thread))!.approval], ["plan", "edits"]);
 });
 
 test("a helper of a thread in a worktree keeps the user's folder as its workspace", async () => {
@@ -189,29 +192,36 @@ test("a helper of a thread in a worktree keeps the user's folder as its workspac
   assert.deepEqual(helper.scope, { kind: "workspace", ref: dir });
 });
 
-test("helpers cannot raise file mode or cross the Pages tool boundary", async () => {
+test("helpers may not exceed their parent's rung", async () => {
   host.setPrefs({ helpers: true });
-  for (const mode of ["code", "plan", "ask", "board"] as const) {
-    const id = host.createThread({ provider: "codex", mode, approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
-    const denied = { code: ["board"], plan: ["code", "board"], ask: ["code", "plan", "board"], board: ["code", "plan", "ask"] }[mode];
-    for (const requested of [...denied, "invalid", ""]) {
-      await assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: requested }), /Helper mode .* is not allowed/);
+  const rungs = ["readonly", "board", "edits", "auto", "full"] as const;
+  for (const [at, approval] of rungs.entries()) {
+    const id = host.createThread({ provider: "codex", approval, cwd: null, scope: { kind: "global", ref: null } }).id;
+    for (const requested of rungs.slice(at + 1)) {
+      await assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: requested }), /may not exceed this thread's/);
+    }
+    for (const requested of ["invalid", ""]) {
+      await assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: requested }), /Unknown helper access/);
     }
   }
-  const id = host.createThread({ provider: "codex", mode: "board", approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
-  const result = await host.runHelper(id, { task: "inspect the pages", title: "Inspect files", provider: "pi", mode: "board" });
+  const plan = host.createThread({ provider: "codex", mode: "plan", approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
+  await assert.rejects(host.runHelper(plan, { task: "inspect", title: "Inspect files", provider: "pi", mode: "code" }), /plans first/);
+  const board = host.createThread({ provider: "codex", approval: "board", cwd: null, scope: { kind: "global", ref: null }, helpersAllowed: true }).id;
+  await assert.rejects(host.runHelper(board, { task: "inspect", title: "Inspect files", provider: "pi", mode: "plan" }), /needs an editing rung/);
+  // A Board thread's helper works on the same pages.
+  const result = await host.runHelper(board, { task: "inspect the pages", title: "Inspect files", provider: "pi", mode: "board" });
   assert.equal(host.getThread(String(result.thread))!.mode, "board");
   assert.deepEqual(host.getThread(String(result.thread))!.scope, { kind: "global", ref: null });
 });
 
-test("helper mode is rechecked if the parent changes while approval is pending", async () => {
+test("a helper's rung is rechecked if the parent changes while approval is pending", async () => {
   host.setPrefs({ helpers: true });
-  const id = host.createThread({ provider: "codex", mode: "code", approval: "ask", cwd: null, scope: { kind: "workspace", ref: null } }).id;
+  const id = host.createThread({ provider: "codex", approval: "edits", cwd: null, scope: { kind: "workspace", ref: null } }).id;
   running(id);
   const internals = host as unknown as Internals;
-  const rejected = assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "plan" }), /not allowed from ask mode/);
+  const rejected = assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "edits" }), /may not exceed this thread's board rung/);
   const request = await approvalFor(id);
-  host.updateThread(id, { mode: "ask" });
+  host.updateThread(id, { approval: "board" });
   host.resolveApproval(request.itemId, "once");
   await rejected;
   internals.runs.delete(id);
