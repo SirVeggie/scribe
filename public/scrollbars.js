@@ -243,7 +243,8 @@
   }
 
   const surfaceOf = node => {
-    for (let el = node instanceof Element ? node : node.parentElement; el; el = el.parentElement) if (surfaces.has(el)) return el;
+    // An attribute change on <html> passes its parentElement: null.
+    for (let el = node instanceof Element ? node : node?.parentElement; el; el = el.parentElement) if (surfaces.has(el)) return el;
     return null;
   };
 
