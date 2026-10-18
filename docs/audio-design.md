@@ -258,6 +258,34 @@ scribe.audio.available();                                    // { mic, stt }
 - The kanban board is the first user: a mic button in the card dialog's description and comment
   fields is a natural follow-up, not part of this phase.
 
+### B2: the live microphone stream (user's answer on #562)
+
+The user wants pages to be able to get the live microphone too (visualisers, custom processing,
+a page's own voice activity detection), behind a second, riskier permission. The shell still owns
+the device: it does **not** add `allow="microphone"` to page iframes. It relays the audio instead.
+
+```js
+const live = await scribe.audio.stream({ maxMs });   // needs a click; asks for audio.microphoneStream
+live.stream;                 // a real MediaStream inside the page: feed it to an AudioContext, a <canvas> visualiser, MediaRecorder
+live.sampleRate;             // the shell capture's rate (48000 usually)
+live.onend = (reason) => …;  // "stopped" | "hidden" | "max" | "user" | "revoked"
+live.stop();
+```
+
+- Shell: the same capture (lock, marker, stop control, stop-on-hide, 5-minute cap) with an
+  `AudioWorkletNode` tapping the mic and posting Float32 frames (mono, about 20 ms each) through a
+  `MessagePort` given to the frame, buffers transferred.
+- Bridge: the page side builds an `AudioContext` and a worklet that plays the frames into a
+  `MediaStreamAudioDestinationNode`; `live.stream` is that node's stream. A small jitter buffer
+  (about 60 ms) absorbs postMessage timing. The page never touches `getUserMedia`.
+- Permission `audio.microphoneStream` ("Stream the live microphone to this page", default ask,
+  risky). It is separate from `audio.microphone` because the page gets every sample while the
+  capture runs, not a clip at the end. Risky means it resets when an agent rewrites the page.
+- Why relay and not `allow="microphone"`: with delegation the page could keep the mic open after
+  Scribe's marker and stop control think it closed, start without a gesture once the browser has
+  remembered the grant, and hold the device against the chat's capture. Relaying keeps the six
+  principles true at the cost of a few tens of milliseconds.
+
 ## Phase C: playing audio, notification sounds (todo)
 
 - The mixer in `public/audio.js` (above). Sound files in `public/sounds/` (short, under 50 KB each,
@@ -391,6 +419,9 @@ type VoiceSession = {
 };
 ```
 
+**Superseded:** the user chose B first, local only (see "Decisions" below). The original
+recommendation follows for the record.
+
 Recommendation: build **A first** (it meets the latency goal with the least code and tells us
 whether the two-layer idea feels right), keep the interface honest so **B** can follow for people
 without a realtime provider and for local, private use. B also needs one provider addition: a
@@ -421,25 +452,41 @@ of its own agent chats as the back. Permissions: `audio.microphone`, plus a new 
 by the minute), plus `agent.chat` when a thread is attached. The session shows the same recording
 marker and stop control as a capture, and ends when the tab is hidden for more than a grace period.
 
+### Decisions (user's answers on #562)
+
+- **Backend B (cascade) first, local only.** No OpenAI Realtime or Gemini Live. Backend A stays a
+  possible later `VoiceSession` implementation but is not planned.
+- **Scope:** the front talks only to the thread it was opened on; it cannot start new threads.
+- **Approvals:** never by voice. The front says what is waiting; the user clicks.
+- **Opening:** not answered; the default stands: voice mode is opened by a click, no wake word.
+
+What "local only" means for each stage. Each is an OpenAI-compatible endpoint the user runs, set up
+as a source in Settings → Audio (the custom source type from #714), so no new engine code is needed
+per server:
+
+| Stage | Local server examples | Endpoint |
+|-------|----------------------|----------|
+| STT | whisper.cpp server, faster-whisper-server / Speaches | `/audio/transcriptions` |
+| Front model | Ollama, LM Studio, llama.cpp server (a 1–8B instruct model) | `/chat/completions` with `stream: true` |
+| TTS | Kokoro-FastAPI, Piper behind Speaches; "This browser" `speechSynthesis` as a no-setup fallback | `/audio/speech` |
+
+Local Whisper servers transcribe whole utterances, not streams. That is fine here: the shell's
+voice activity detector ends the utterance (about 300 ms of silence), and a local GPU transcribes a
+short utterance in 100–300 ms. The front model's first sentence goes to TTS as soon as it ends, so
+the target is about 1 s from end of speech to first sound.
+
 ### Steps
 
-1. **R0, spike** (throwaway): a test page that runs backend A against the user's OpenAI source and
-   a rough backend B, and measures time to first sound, interruption behaviour and cost per minute.
-   Decides A-first or B-first with numbers.
+1. **R0, spike** (throwaway): a test page that runs the local cascade (VAD → local STT → local
+   model streaming → sentence-chunked local TTS) and measures end-of-speech → first sound, each
+   stage's share, and barge-in behaviour. Picks the default engines and the VAD settings.
 2. **R1**: voice mode on a thread, front only: talk, hear answers from the digest, `status` and
    `read`. No delegation.
-3. **R2**: `delegate`, `steer`, `stop`, live updates, voice items in the transcript.
+3. **R2**: `delegate`, `steer`, `stop`, `answer`, live updates, voice items in the transcript.
 4. **R3**: `scribe.voice` for pages.
-5. **R4**: the second backend.
 
-### Open questions for phase R
-
-- Which realtime provider does the user have or want (OpenAI Realtime, Gemini Live), or is a
-  local, private cascade the priority?
-- Should the front be able to start new threads ("start a new chat in agent-board and ask it to
-  …"), or only talk to the thread it was opened on?
-- Voice approvals: never, or with a read-back and a confirm word?
-- Is a wake word or always-listening mode wanted, or is voice mode always opened by a click?
+R0 needs only #567's capture; R1 needs the text-to-speech card (#565) and the mixer (#564), and a
+streaming one-shot call on the agent providers or a direct streaming chat call to the local source.
 
 ## Order of work
 
@@ -457,7 +504,8 @@ permissions and the indicator. C adds the mixer. D adds `speak`. R reuses all of
 1. Speech engines come from the existing OpenAI-compatible sources; no browser speech recognition
    (it works only in Chrome and Edge, not in the desktop app's WebView2, and sends audio to Google
    or Microsoft without saying so) and no local Whisper pack in the first cut.
-2. The shell captures; pages get text or a finished clip, never the live microphone.
+2. The shell captures; pages get text or a finished clip, or the live stream relayed by the shell
+   behind the risky `audio.microphoneStream` permission (B2). Pages never get `getUserMedia`.
 3. Dictation inserts text and does not send it, unless the user turns "Send after dictation" on.
 4. Record-then-transcribe first; live partial transcripts come with phase R's streaming work.
 5. Notification sounds are off until the user turns them on.
