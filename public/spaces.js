@@ -753,6 +753,10 @@ window.createSpaces = function createSpaces(host) {
   return {
     activeId: () => data.activeId,
     ids: () => data.spaces.map((space) => space.id),
+    /** The active space (with its home folder and lens, #260), or null before spaces are used. */
+    current,
+    list: () => data.spaces,
+    colorOf,
     apply,
     show,
     close,

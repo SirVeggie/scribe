@@ -81,6 +81,7 @@
   const settingsToggle = document.getElementById("settings-toggle");
   const themeList = document.getElementById("theme-list");
   const smoothScrollToggle = document.getElementById("smooth-scroll");
+  const spaceSuggestToggle = document.getElementById("space-suggest");
   const showClearToggle = document.getElementById("show-clear");
   const tightSmallToggle = document.getElementById("tight-small");
   const uiFxToggle = document.getElementById("ui-fx");
@@ -126,6 +127,7 @@
   const TOGGLE_HOVER_OPEN_MS = 500;
   const THEME_KEY = "scribe.theme";
   const SMOOTH_SCROLL_KEY = "scribe.smoothScroll";
+  const SPACE_SUGGEST_KEY = "scribe.spaceSuggest";
   /** Also read by the inline script in index.html so the first paint already hides Clear. */
   const SHOW_CLEAR_KEY = "scribe.showClear";
   /** What a page link without a mode or modifier does: "tab", "peek", or "split". */
@@ -341,6 +343,8 @@
     describe: describeForCard,
     openThread: (id) => window.scribeChat?.openThread?.(id),
   });
+  /** Set once createSpaces has run (the Library is made first). */
+  let spacesReady = null;
   const library = window.createLibrary({
     pages: libraryPages,
     folders: () => state.folders,
@@ -391,6 +395,12 @@
     clearStripSlot,
     openThread: (id) => window.scribeChat?.openThread?.(id),
     pageStatus: (id) => window.scribeChat?.pageStatus?.(id) || null,
+    pageThreads: (id) => window.scribeChat?.pageThreads?.(id) || 0,
+    // Spaces are made below; the Library only asks once it draws.
+    space: () => spacesReady?.current() || null,
+    spaces: () => spacesReady?.list() || [],
+    spaceColor: (space) => spacesReady?.colorOf(space) || null,
+    applySpaces: (view) => spacesReady?.apply(view),
     icons: { file: FILE_SVG, pin: PIN_SVG, folderInstructions: FOLDER_INSTRUCTIONS_SVG },
   });
   const views = window.createViews({
@@ -433,6 +443,7 @@
       hoverCard.hide?.();
     },
   });
+  spacesReady = spaces;
   const newPageView = window.createNewPage({
     templates: () => state.templates,
     builtins: () => state.builtinTemplates,
@@ -458,6 +469,7 @@
   applySideWidth(Number(localStorage.getItem(SIDE_WIDTH_KEY)) || 280);
   applyTheme(loadTheme(), false);
   applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
+  applyFlag(spaceSuggestToggle, SPACE_SUGGEST_KEY, false);
   applyFlag(showClearToggle, SHOW_CLEAR_KEY, true);
   applyFlag(tightSmallToggle, TIGHT_SMALL_KEY, true);
   document.documentElement.classList.toggle("hide-clear", !flagOn(showClearToggle));
@@ -668,6 +680,9 @@
       spaces.apply(msg.spaces);
       views.prune();
       invalidate();
+      // A space's home folder or lens may have changed, and the chat list's This space filter.
+      library.render();
+      window.scribeChat?.spaceChanged?.();
       return;
     }
     if (msg.type === "page_permission") {
@@ -3427,10 +3442,48 @@
   }
 
   /** Gives a Library page a tab (or focuses it). `before` places it in the strip; null means the end of its group. */
+  /** Pages already offered a space switch this session, so the offer comes once. */
+  const spaceOffered = new Set();
+
+  /**
+   * Opening a page from another space's home folder offers to switch there (#260), when the user
+   * turned that on. Only the offer: the page opens here either way.
+   */
+  function suggestSpace(id) {
+    if (!flagOn(spaceSuggestToggle) || spaceOffered.has(id) || state.tabs.some((tab) => tab.id === id)) {
+      return;
+    }
+    const page = findAnyTab(id);
+    const folders = new Map(state.folders.map((folder) => [folder.id, folder]));
+    const chain = new Set();
+    for (let at = page?.folderId ? folders.get(page.folderId) : null; at && !chain.has(at.id); at = at.parentId ? folders.get(at.parentId) : null) {
+      chain.add(at.id);
+    }
+    const active = spaces.activeId();
+    const target = spaces.list().find((space) => space.id !== active && space.home && chain.has(space.home));
+    if (!target || chain.has(spaces.current()?.home)) {
+      return;
+    }
+    spaceOffered.add(id);
+    showNotice(`“${page.title}” is in ${target.name}'s home folder`, {
+      action: {
+        label: `Switch to ${target.name}`,
+        run: async () => {
+          await closeTab(id);
+          await spaces.switchTo(target.id);
+          void openPage(id);
+        },
+      },
+    });
+  }
+
   async function openPage(id, { activate = true, before } = {}) {
     if (childId) {
       showInMain(id);
       return;
+    }
+    if (activate) {
+      suggestSpace(id);
     }
     unreadLibrary.delete(id);
     if (activate) {
@@ -5541,6 +5594,8 @@
     tabs: () => state.tabs,
     closed: () => state.closed,
     folders: () => state.folders,
+    /** The active space, with its home folder (#260); null before spaces are used. */
+    space: () => spaces.current(),
     connected: () => state.connected,
     openLink: (target, event, { anchor = "", mode = null } = {}) => views.open(target, views.modeFromEvent(event) || mode, { anchor, background: event?.button === 1 }),
     resolvePages: (targets) => views.resolve(targets),
@@ -5660,6 +5715,7 @@
     }
   });
   smoothScrollToggle.addEventListener("click", () => toggleFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY));
+  spaceSuggestToggle.addEventListener("click", () => toggleFlag(spaceSuggestToggle, SPACE_SUGGEST_KEY));
   showClearToggle.addEventListener("click", () => toggleFlag(showClearToggle, SHOW_CLEAR_KEY));
   tightSmallToggle.addEventListener("click", () => toggleFlag(tightSmallToggle, TIGHT_SMALL_KEY));
   uiFxToggle.addEventListener("click", () => toggleFlag(uiFxToggle, UI_FX_KEY));

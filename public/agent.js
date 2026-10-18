@@ -218,7 +218,7 @@
      * chips are saved on the thread too (thread.draft); attached files only live here.
      */
     composers: new Map(),
-    filter: ["here", "workspaces", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
+    filter: ["here", "space", "workspaces", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
     search: "",
     hidePageThreads: localStorage.getItem(LS.hidePage) !== "0",
     /** Extra rows revealed per grouping key via "Show 10 more". */
@@ -6944,6 +6944,8 @@
     const seg = el("div", "ag-seg small");
     for (const [id, label] of [
       ["here", "Here"],
+      // Threads started in the active space (#260), once the user has spaces.
+      ...(app()?.space?.() ? [["space", "This space"]] : []),
       ["workspaces", "Workspaces"],
       ["all", "All"],
       ["archived", "Archived"],
@@ -6999,6 +7001,8 @@
       const q = S.search.trim().toLowerCase();
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
+      const spaceId = S.filter === "space" ? app()?.space?.()?.id : null;
+      if (spaceId) threads = threads.filter((t) => t.space === spaceId);
       // Threads with no scope at all group here too, under No workspace.
       if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t) || t.scope.kind === "workspace");
       const hiddenDirs = hiddenWorkspaceKeys();
@@ -7342,7 +7346,18 @@
 
   function defaultScope() {
     const tab = activeTab();
-    return tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null };
+    if (!tab) return { kind: "global", ref: null };
+    // A page inside the space's home folder starts its chats on that whole folder (#260).
+    const home = app()?.space?.()?.home;
+    return home && inFolderTree(tab.folderId, home) ? { kind: "folder", ref: home } : { kind: "page", ref: tab.id };
+  }
+
+  function inFolderTree(folderId, rootId) {
+    const byId = new Map((app()?.folders?.() || []).map((f) => [f.id, f]));
+    for (let at = folderId ? byId.get(folderId) : null, guard = 0; at && guard < 50; at = at.parentId ? byId.get(at.parentId) : null, guard++) {
+      if (at.id === rootId) return true;
+    }
+    return false;
   }
 
   /* ---------- full window ---------- */
@@ -12231,7 +12246,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openThread, openAsk, pendingAsks, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

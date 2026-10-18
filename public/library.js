@@ -9,6 +9,7 @@ window.createLibrary = function createLibrary(host) {
   const countEl = document.getElementById("library-count");
   const newFolderBtn = document.getElementById("library-new-folder");
   const moreBtn = document.getElementById("library-more");
+  const lensBtn = document.getElementById("library-lens");
   const cleanupDlg = document.getElementById("cleanup");
   const cleanupAge = document.getElementById("cleanup-age");
   const cleanupUnit = document.getElementById("cleanup-unit");
@@ -70,6 +71,13 @@ window.createLibrary = function createLibrary(host) {
   let drag = null;
   let cleanupReq = 0;
   let cleanupTimer = 0;
+  /** The active space's lens as last drawn (#260): which pages it shows, or null while it is off. */
+  let lensView = null;
+  /** Search past the lens for the current query ("Search all pages"). */
+  let searchAll = false;
+  /** About answers by phrase: { ids: Set | null, at, loading, error }. The daemon caches them per index version too. */
+  const aboutCache = new Map();
+  const ABOUT_TTL = 30000;
 
   const lineEl = document.createElement("div");
   lineEl.className = "lib-drop-line";
@@ -199,15 +207,19 @@ window.createLibrary = function createLibrary(host) {
     renderDeferred = false;
     model = buildModel();
     countEl.textContent = String(model.pages.length);
+    renderLensButton();
     // A hidden Library keeps its model current; the rows are drawn when it is shown (setPaneOpen, tab switch).
     if (!host.paneOpen()) {
       return;
     }
+    lensView = computeLens();
     const focused = rowKey(document.activeElement);
     // Rows that did not change stay in the page: a rebuilt row loses its hover and blinks (#407).
     const rows = document.createDocumentFragment();
     if (query && hits) {
       renderHits(rows);
+    } else if (lensView) {
+      renderLensTree(rows);
     } else {
       renderTree(rows, null, 0);
       const empty = model.pages.length === 0 && model.folders.length === 0;
@@ -229,28 +241,485 @@ window.createLibrary = function createLibrary(host) {
     }
   }
 
-  function renderTree(out, folderId, depth) {
+  /** The folder tree; with a lens, only the folders and pages it shows. */
+  function renderTree(out, folderId, depth, lens = null) {
     for (const folder of foldersOf(folderId)) {
+      if (lens && !lens.folders.has(folder.id)) {
+        continue;
+      }
       const open = !collapsed.has(folder.id);
       out.appendChild(folderRow(folder, depth, open));
       if (open) {
-        renderTree(out, folder.id, depth + 1);
+        renderTree(out, folder.id, depth + 1, lens);
       }
     }
     for (const page of pagesOf(folderId)) {
-      out.appendChild(pageRow(page, depth));
+      if (!lens || lens.ids.has(page.id)) {
+        out.appendChild(pageRow(page, depth));
+      }
     }
   }
 
+  /* ---------- lens (#260) ---------- */
+
+  function currentSpace() {
+    return window.scribeLens ? host.space?.() || null : null;
+  }
+
+  /** The active space's lens while it is on: the pages it shows and the folders on their way. */
+  function computeLens() {
+    const space = currentSpace();
+    const lens = space && window.scribeLens.lensOf(space);
+    if (!lens?.on) {
+      return null;
+    }
+    const subtrees = new Map();
+    const levels = new Map();
+    const home = space.home && model.folderById.has(space.home) ? space.home : null;
+    const ctx = {
+      spaceId: space.id,
+      home,
+      now: Date.now(),
+      subtree: (id) => {
+        if (!subtrees.has(id)) subtrees.set(id, subtree(id));
+        return subtrees.get(id);
+      },
+      folderOf: (pageId) => model.pageById.get(pageId)?.folderId || null,
+      isUnread: (id) => host.isUnread(id),
+      chats: (id) => host.pageThreads?.(id) || 0,
+      access: (page) => {
+        const key = page.folderId || "";
+        if (!levels.has(key)) levels.set(key, inheritedLevel(page.folderId));
+        return window.scribeLens.accessOf(page, levels.get(key));
+      },
+      about: aboutIds,
+    };
+    const ids = new Set(model.pages.filter((page) => window.scribeLens.matches(page, lens, ctx)).map((page) => page.id));
+    const folders = new Set();
+    for (const id of ids) {
+      for (const folderId of chainOf(folderOfPage(model.pageById.get(id)))) folders.add(folderId);
+    }
+    // The home folder stays in sight, empty or not, so pages can be dropped into it.
+    if (home && lens.conditions.some((cond) => cond.type === "home" && !cond.not)) {
+      for (const folderId of chainOf(home)) folders.add(folderId);
+    }
+    const waiting = lens.conditions.some((cond) => cond.type === "about" && !aboutCache.get(cond.text)?.ids);
+    const aboutError = lens.conditions.map((cond) => cond.type === "about" && aboutCache.get(cond.text)?.error).find(Boolean) || null;
+    return { space, lens, ids, folders, waiting, aboutError };
+  }
+
+  /** Pages about a phrase, as the daemon last answered; null until it has. */
+  function aboutIds(text) {
+    const entry = aboutCache.get(text);
+    if (!entry || (!entry.loading && Date.now() - entry.at > ABOUT_TTL)) {
+      void fetchAbout(text);
+    }
+    return entry?.ids || null;
+  }
+
+  async function fetchAbout(text) {
+    const entry = aboutCache.get(text) || { ids: null, at: 0, loading: false, error: null };
+    entry.loading = true;
+    aboutCache.set(text, entry);
+    const res = await fetch(`/api/search/about?q=${encodeURIComponent(text)}`).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
+    entry.loading = false;
+    entry.at = Date.now();
+    if (res?.ok && Array.isArray(data.ids)) {
+      entry.ids = new Set(data.ids);
+      entry.error = null;
+    } else {
+      entry.error = data.error || "Semantic search is unavailable";
+    }
+    render();
+  }
+
+  function renderLensButton() {
+    if (!lensBtn) {
+      return;
+    }
+    const space = currentSpace();
+    lensBtn.hidden = !space;
+    const on = Boolean(space && window.scribeLens.lensOf(space).on);
+    lensBtn.classList.toggle("on", on);
+    lensBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  /** The line over a lensed Library: whose lens, how much it shows, and the way out. */
+  function lensLine(shown) {
+    const line = document.createElement("div");
+    line.className = "lib-lens-line";
+    line.style.setProperty("--space", host.spaceColor?.(lensView.space) || "var(--accent)");
+    const text = document.createElement("span");
+    text.className = "lib-lens-text";
+    text.textContent = `${lensView.space.name} · ${shown} of ${model.pages.length} pages`;
+    if (lensView.waiting && !lensView.aboutError) {
+      text.textContent += " · finding pages…";
+    }
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "lib-lens-link";
+    all.textContent = "Show all";
+    all.addEventListener("click", () => void setLensOn(false));
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "lib-lens-link";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => openLensEditor());
+    line.append(text, all, edit);
+    return line;
+  }
+
+  function renderLensTree(out) {
+    out.appendChild(lensLine(lensView.ids.size));
+    if (lensView.aboutError) {
+      const meta = document.createElement("div");
+      meta.className = "side-meta";
+      meta.textContent = `About: ${lensView.aboutError}`;
+      out.appendChild(meta);
+    }
+    renderTree(out, null, 0, lensView);
+    // The strip is never filtered, so its tabs that the lens leaves out are listed under it.
+    const open = model.pages.filter((page) => host.isOpen(page.id) && !page.temp && !lensView.ids.has(page.id));
+    if (open.length) {
+      const meta = document.createElement("div");
+      meta.className = "side-meta lib-lens-group";
+      meta.textContent = "Open in this space";
+      out.appendChild(meta);
+      for (const page of open) {
+        out.appendChild(pageRow(page, 0, { path: pathOf(folderOfPage(page)) }));
+      }
+    }
+    none.hidden = lensView.ids.size > 0 || open.length > 0 || lensView.folders.size > 0;
+    none.textContent = lensView.waiting ? "Finding pages…" : "No pages match this space's lens";
+  }
+
+  async function saveSpace(patch) {
+    const space = currentSpace();
+    if (!space) {
+      return false;
+    }
+    const res = await send("PATCH", `/api/spaces/${encodeURIComponent(space.id)}`, patch);
+    if (!res.ok) {
+      host.showNotice((await res.json().catch(() => ({}))).error || "Could not save the space");
+      return false;
+    }
+    host.applySpaces?.(await res.json());
+    render();
+    return true;
+  }
+
+  function setLensOn(on) {
+    const space = currentSpace();
+    if (!space) {
+      return Promise.resolve(false);
+    }
+    return saveSpace({ lens: { ...window.scribeLens.lensOf(space), on } });
+  }
+
+  /** Folder menu: make the folder the active space's home (#260), or stop. */
+  function homeItem(folderId) {
+    const space = currentSpace();
+    if (!space) {
+      return null;
+    }
+    const isHome = space.home === folderId;
+    return { label: `Home of ${space.name}`, checked: isHome, action: () => void saveSpace({ home: isHome ? null : folderId }) };
+  }
+
+  const CONDITION_TYPES = [
+    ["home", "In the home folder"],
+    ["folder", "In a folder"],
+    ["madeIn", "Made in a space"],
+    ["madeBy", "Made by"],
+    ["madeFrom", "Made from a page or folder"],
+    ["workspace", "Workspace"],
+    ["age", "Age"],
+    ["kind", "Kind of page"],
+    ["about", "About (semantic)"],
+    ["access", "Agent access"],
+    ["flag", "Pinned, unread or has chats"],
+  ];
+
+  function selectOf(options, value, label) {
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", label);
+    for (const [id, text] of options) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = text;
+      select.appendChild(option);
+    }
+    if (value !== undefined && options.some(([id]) => id === value)) {
+      select.value = value;
+    }
+    return select;
+  }
+
+  function folderOptions() {
+    const out = [];
+    const walk = (parentId) => {
+      for (const folder of foldersOf(parentId)) {
+        out.push([folder.id, pathOf(folder.id)]);
+        walk(folder.id);
+      }
+    };
+    walk(null);
+    return out;
+  }
+
+  /** One condition's controls in the lens editor; read() gives the condition back, or null. */
+  function conditionRow(cond, space) {
+    const row = document.createElement("div");
+    row.className = "lens-cond";
+    const name = document.createElement("span");
+    name.className = "lens-cond-name";
+    name.textContent = CONDITION_TYPES.find(([type]) => type === cond.type)?.[1] || cond.type;
+    const controls = document.createElement("div");
+    controls.className = "lens-cond-controls";
+    const selects = [];
+    const addSelect = (options, value, label) => {
+      const select = selectOf(options, value, label);
+      controls.appendChild(select);
+      selects.push(select);
+      return select;
+    };
+    const addInput = (type, value, label) => {
+      const input = document.createElement("input");
+      input.type = type;
+      input.value = value ?? "";
+      input.setAttribute("aria-label", label);
+      input.spellcheck = false;
+      controls.appendChild(input);
+      return input;
+    };
+    let read = () => ({ type: cond.type });
+    const L = window.scribeLens;
+    switch (cond.type) {
+      case "home": {
+        const note = document.createElement("span");
+        note.className = "lens-cond-note";
+        const home = space.home && model.folderById.has(space.home) ? pathOf(space.home) : null;
+        note.textContent = home || "No home folder set";
+        controls.appendChild(note);
+        break;
+      }
+      case "folder": {
+        const select = addSelect(folderOptions(), cond.folders?.[0], "Folder");
+        read = () => (select.value ? { type: "folder", folders: [select.value] } : null);
+        break;
+      }
+      case "madeIn": {
+        const spaces = (host.spaces?.() || []).filter((item) => item.id !== space.id).map((item) => [item.id, item.name]);
+        const select = addSelect([["this", "This space"], ...spaces], cond.spaces?.[0], "Space");
+        read = () => ({ type: "madeIn", spaces: [select.value] });
+        break;
+      }
+      case "madeBy": {
+        const select = addSelect([["me", "You"], ["agent", "An agent"]], cond.by, "Made by");
+        read = () => ({ type: "madeBy", by: select.value });
+        break;
+      }
+      case "madeFrom": {
+        // Boards and other template pages are where agent work usually starts from.
+        const pages = model.pages.filter((page) => page.templateId).map((page) => [`page:${page.id}`, page.title]);
+        const folders = folderOptions().map(([id, path]) => [`folder:${id}`, `${path}/`]);
+        const value = cond.target ? `${cond.target.kind}:${cond.target.id}` : undefined;
+        const select = addSelect([...pages, ...folders], value, "Page or folder");
+        read = () => {
+          const [kind, ...rest] = select.value.split(":");
+          return select.value ? { type: "madeFrom", target: { kind, id: rest.join(":") } } : null;
+        };
+        break;
+      }
+      case "workspace": {
+        const known = [...new Set(model.pages.map((page) => page.workspace).filter(Boolean))].sort();
+        if (known.length) {
+          const select = addSelect(known.map((path) => [path, path]), cond.path, "Workspace");
+          read = () => (select.value ? { type: "workspace", path: select.value } : null);
+        } else {
+          const input = addInput("text", cond.path, "Workspace folder");
+          input.placeholder = "Folder on disk";
+          read = () => (input.value.trim() ? { type: "workspace", path: input.value.trim() } : null);
+        }
+        break;
+      }
+      case "age": {
+        const basis = addSelect(Object.entries(L.BASIS_LABEL), cond.basis || "activity", "Based on");
+        const days = addInput("number", cond.days ?? 30, "Days");
+        days.min = "1";
+        days.className = "lens-days";
+        const unit = document.createElement("span");
+        unit.className = "lens-cond-note";
+        unit.textContent = "days or less";
+        controls.appendChild(unit);
+        read = () => (Number(days.value) > 0 ? { type: "age", basis: basis.value, days: Number(days.value) } : null);
+        break;
+      }
+      case "kind": {
+        const select = addSelect(Object.entries(L.KIND_LABEL), cond.kinds?.[0], "Kind");
+        read = () => ({ type: "kind", kinds: [select.value] });
+        break;
+      }
+      case "about": {
+        const input = addInput("text", cond.text, "Topic");
+        input.placeholder = "A topic, e.g. audio";
+        read = () => (input.value.trim() ? { type: "about", text: input.value.trim() } : null);
+        break;
+      }
+      case "access": {
+        const select = addSelect(Object.entries(L.LEVEL_LABEL), cond.levels?.[0], "Access level");
+        read = () => ({ type: "access", levels: [select.value] });
+        break;
+      }
+      case "flag": {
+        const select = addSelect(Object.entries(L.FLAG_LABEL), cond.flag, "Flag");
+        read = () => ({ type: "flag", flag: select.value });
+        break;
+      }
+    }
+    const not = document.createElement("button");
+    not.type = "button";
+    not.className = "lens-not";
+    not.textContent = "Not";
+    not.setAttribute("aria-pressed", cond.not ? "true" : "false");
+    not.addEventListener("click", () => not.setAttribute("aria-pressed", not.getAttribute("aria-pressed") === "true" ? "false" : "true"));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "lens-remove";
+    remove.setAttribute("aria-label", "Remove condition");
+    remove.textContent = "×";
+    remove.addEventListener("click", () => row.remove());
+    row.append(name, controls, not, remove);
+    for (const select of selects) {
+      window.createSelect?.(select);
+    }
+    row.read = () => {
+      const value = read();
+      return value && (not.getAttribute("aria-pressed") === "true" ? { ...value, not: true } : value);
+    };
+    return row;
+  }
+
+  /** The active space's lens and home folder (#260). */
+  function openLensEditor() {
+    closeMenu();
+    const space = currentSpace();
+    if (!space) {
+      return;
+    }
+    const lens = window.scribeLens.lensOf(space);
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm lens-editor";
+    dialog.setAttribute("aria-labelledby", "lens-editor-title");
+    const form = document.createElement("form");
+    const title = document.createElement("h2");
+    title.id = "lens-editor-title";
+    title.textContent = `${space.name} lens`;
+    const fields = document.createElement("div");
+    fields.className = "lens-fields";
+
+    const onRow = document.createElement("div");
+    onRow.className = "setting-row";
+    const onLabel = document.createElement("span");
+    onLabel.id = "lens-on-label";
+    onLabel.textContent = "Show only matching pages";
+    const onToggle = document.createElement("button");
+    onToggle.type = "button";
+    onToggle.className = "pill-toggle";
+    onToggle.role = "switch";
+    onToggle.setAttribute("aria-labelledby", onLabel.id);
+    // Setting a lens up for the first time is asking to see it.
+    onToggle.setAttribute("aria-checked", lens.on || !space.lens ? "true" : "false");
+    onToggle.addEventListener("click", () => onToggle.setAttribute("aria-checked", onToggle.getAttribute("aria-checked") === "true" ? "false" : "true"));
+    onRow.append(onLabel, onToggle);
+
+    const homeField = document.createElement("div");
+    homeField.className = "template-field";
+    const homeLabel = document.createElement("label");
+    homeLabel.textContent = "Home folder";
+    const homeSelect = selectOf([["", "None"], ...folderOptions()], space.home && model.folderById.has(space.home) ? space.home : "", "Home folder");
+    homeField.append(homeLabel, homeSelect);
+    const homeHelp = document.createElement("p");
+    homeHelp.className = "help";
+    homeHelp.textContent = "Pages made in this space go here when no folder is given.";
+    homeField.appendChild(homeHelp);
+
+    const matchField = document.createElement("div");
+    matchField.className = "template-field";
+    const matchLabel = document.createElement("label");
+    matchLabel.textContent = "Show pages that match";
+    const matchSelect = selectOf([["all", "All conditions"], ["any", "Any condition"]], lens.match, "Show pages that match");
+    matchField.append(matchLabel, matchSelect);
+
+    const list = document.createElement("div");
+    list.className = "lens-conds";
+    for (const cond of lens.conditions) {
+      list.appendChild(conditionRow(cond, space));
+    }
+    const add = selectOf([["", "Add condition…"], ...CONDITION_TYPES], "", "Add condition");
+    const addWrap = document.createElement("div");
+    addWrap.className = "lens-add";
+    addWrap.appendChild(add);
+
+    fields.append(onRow, homeField, matchField, list, addWrap);
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => dialog.close());
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "primary";
+    save.textContent = "Save";
+    actions.append(cancel, save);
+    form.append(title, fields, actions);
+    dialog.appendChild(form);
+    document.body.appendChild(dialog);
+    const homeWrap = window.createSelect?.(homeSelect);
+    window.createSelect?.(matchSelect);
+    const addSelectWrap = window.createSelect?.(add);
+    add.addEventListener("change", () => {
+      if (!add.value) {
+        return;
+      }
+      list.appendChild(conditionRow({ type: add.value }, { ...space, home: homeSelect.value || null }));
+      add.value = "";
+      addSelectWrap?.syncSelect?.();
+    });
+    homeSelect.addEventListener("change", () => homeWrap?.syncSelect?.());
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const conditions = [...list.children].map((row) => row.read()).filter(Boolean);
+      save.disabled = true;
+      const ok = await saveSpace({
+        home: homeSelect.value || null,
+        lens: { on: onToggle.getAttribute("aria-checked") === "true", match: matchSelect.value, conditions },
+      });
+      save.disabled = false;
+      if (ok) {
+        dialog.close();
+      }
+    });
+    dialog.addEventListener("close", () => dialog.remove(), { once: true });
+    dialog.showModal();
+  }
+
   function renderHits(out) {
-    const rows = hits || [];
-    none.hidden = rows.length > 0;
+    let rows = hits || [];
+    const lensed = Boolean(lensView && !searchAll);
+    if (lensed) {
+      rows = rows.filter((hit) => lensView.ids.has(hit.id));
+    }
+    none.hidden = rows.length > 0 || lensed;
     none.textContent = "No matching pages";
     if (rows.length) {
       const meta = document.createElement("div");
       meta.className = "side-meta";
-      meta.textContent =
-        rows.length < hitTotal
+      meta.textContent = lensed
+        ? `${rows.length} matching page${rows.length === 1 ? "" : "s"} in ${lensView.space.name}`
+        : rows.length < hitTotal
           ? `Showing ${rows.length} of ${hitTotal} matches`
           : `${hitTotal} matching page${hitTotal === 1 ? "" : "s"}`;
       out.appendChild(meta);
@@ -258,6 +727,18 @@ window.createLibrary = function createLibrary(host) {
     for (const hit of rows) {
       const live = model.pageById.get(hit.id) || hit;
       out.appendChild(pageRow(live, 0, { path: pathOf(folderOfPage(live)), snippet: hit.snippet }));
+    }
+    if (lensed) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "lib-lens-all";
+      const outside = (hits || []).length - rows.length;
+      more.textContent = rows.length ? `Search all pages${outside ? ` (${outside} more)` : ""}` : `No matches in ${lensView.space.name} · Search all pages`;
+      more.addEventListener("click", () => {
+        searchAll = true;
+        render();
+      });
+      out.appendChild(more);
     }
   }
 
@@ -937,6 +1418,7 @@ window.createLibrary = function createLibrary(host) {
     search.value = "";
     query = "";
     hits = null;
+    searchAll = false;
     render();
     return true;
   }
@@ -947,6 +1429,9 @@ window.createLibrary = function createLibrary(host) {
   }
 
   async function runSearch() {
+    if (search.value.trim() !== query) {
+      searchAll = false;
+    }
     query = search.value.trim();
     if (!query) {
       hits = null;
@@ -1314,6 +1799,7 @@ window.createLibrary = function createLibrary(host) {
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
       { label: "Agent access", submenu: () => agentAccessItems({ kind: "folder", id }) },
+      homeItem(id),
       "sep",
       { label: "Delete folder…", danger: true, action: () => deleteFolder(id) },
     ]);
@@ -1332,6 +1818,7 @@ window.createLibrary = function createLibrary(host) {
       { label: "Open folder…", action: () => openDiskFolder(null) },
       { label: "Expand all", disabled: model.folders.length === 0, action: () => setAllCollapsed(false) },
       { label: "Collapse all", disabled: model.folders.length === 0, action: () => setAllCollapsed(true) },
+      currentSpace() && { label: "Edit lens…", action: () => openLensEditor() },
       "sep",
       { label: "Clean up tabs…", action: () => openCleanup() },
       { label: "Trash", action: () => host.openTrash() },
@@ -2050,6 +2537,7 @@ window.createLibrary = function createLibrary(host) {
       clearTimeout(searchTimer);
       query = "";
       hits = null;
+      searchAll = false;
       render();
       return;
     }
@@ -2091,6 +2579,16 @@ window.createLibrary = function createLibrary(host) {
     }
   });
   moreBtn.addEventListener("click", libraryMenu);
+  lensBtn?.addEventListener("click", () => {
+    const space = currentSpace();
+    if (space) {
+      void setLensOn(!window.scribeLens.lensOf(space).on);
+    }
+  });
+  lensBtn?.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openLensEditor();
+  });
   menu.addEventListener("contextmenu", (event) => event.preventDefault());
   document.addEventListener("pointerdown", (event) => {
     // The "…" button toggles its own menu on click, so leave that to it.

@@ -7,7 +7,7 @@
   <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml" sizes="any">
   <link rel="stylesheet" href="./fonts.css">
   <script src="./fonts.js"></script>
-  <link rel="stylesheet" href="./app.css?v=77">
+  <link rel="stylesheet" href="./app.css?v=78">
   <link rel="stylesheet" href="./agent.css?v=34">
   <link rel="stylesheet" href="./audio.css">
   <link rel="stylesheet" href="./harness.css?v=2">
@@ -198,6 +198,9 @@
             <button type="button" id="library-new-folder" class="side-head-icon" aria-label="New folder">
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 3.5h4.2l1.5 1.5h7.3v8.5h-13z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 7.2v4.2M5.9 9.3h4.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
             </button>
+            <button type="button" id="library-lens" class="side-head-icon" aria-label="Space lens" data-tooltip="Space lens" aria-pressed="false" hidden>
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 3h12l-4.6 5.4v4.4l-2.8 1.4V8.4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+            </button>
             <button type="button" id="library-more" class="side-head-icon" aria-label="Library actions" aria-haspopup="menu">
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>
             </button>
@@ -252,6 +255,10 @@
         <div class="setting-row">
           <span id="show-clear-label">Clear button in the top bar</span>
           <button type="button" class="pill-toggle" id="show-clear" role="switch" aria-checked="true" aria-labelledby="show-clear-label"></button>
+        </div>
+        <div class="setting-row">
+          <span id="space-suggest-label">Offer to switch to a page's space</span>
+          <button type="button" class="pill-toggle" id="space-suggest" role="switch" aria-checked="false" aria-labelledby="space-suggest-label"></button>
         </div>
       </section>
       <section class="settings-section">
@@ -455,7 +462,8 @@
   <script src="./dom-sync.js?v=3"></script>
   <script src="./hovercard.js?v=7"></script>
   <script src="./select.js?v=2"></script>
-  <script src="./library.js?v=14"></script>
+  <script src="./lens.js?v=1"></script>
+  <script src="./library.js?v=15"></script>
   <script src="./trash.js?v=2"></script>
   <script src="./popout.js?v=2"></script>
   <script src="./views.js?v=7"></script>
@@ -467,19 +475,19 @@
   <script src="./audio-composer.js"></script>
   <script src="./preview.js?v=3"></script>
   <script src="./permissions.js?v=1"></script>
-  <script src="./spaces.js?v=2"></script>
+  <script src="./spaces.js?v=3"></script>
   <script src="./glfx.js?v=4"></script>
   <script src="./orb.js?v=6"></script>
   <script src="./newpage.js?v=5"></script>
   <script src="./aurora.js?v=2"></script>
   <script src="./chromefx.js?v=1"></script>
   <script src="./starfx.js?v=1"></script>
-  <script src="./app.js?v=90"></script>
+  <script src="./app.js?v=91"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
   <script src="./agent-render.js?v=14"></script>
-  <script src="./agent.js?v=63"></script>
+  <script src="./agent.js?v=64"></script>
   <script src="./harness.js?v=2"></script>
   <script src="./desktop.js?v=10"></script>
 </body>
