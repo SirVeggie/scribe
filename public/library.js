@@ -960,6 +960,21 @@ window.createLibrary = function createLibrary(host) {
     closeMenu();
     menu.replaceChildren();
     menu.classList.remove("lib-picker");
+    fillMenu(menu, items);
+    showMenuAt(point);
+  }
+
+  function fillMenu(container, items) {
+    container.onkeydown = (event) => {
+      if (event.target.closest('[role="menu"]') !== container) return;
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = [...container.querySelectorAll("button:not(:disabled)")].filter((button) => button.closest('[role="menu"]') === container);
+      const index = buttons.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+        : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    };
     let lastWasSep = true;
     for (const item of items) {
       if (!item) {
@@ -969,7 +984,7 @@ window.createLibrary = function createLibrary(host) {
         if (!lastWasSep) {
           const sep = document.createElement("div");
           sep.className = "menu-sep";
-          menu.appendChild(sep);
+          container.appendChild(sep);
           lastWasSep = true;
         }
         continue;
@@ -978,21 +993,77 @@ window.createLibrary = function createLibrary(host) {
       btn.type = "button";
       btn.role = "menuitem";
       btn.textContent = item.label;
+      if (item.checked != null) {
+        btn.role = "menuitemradio";
+        btn.setAttribute("aria-label", item.label);
+        btn.setAttribute("aria-checked", String(item.checked));
+        btn.classList.add("lib-menu-choice");
+      }
+      if (item.detail) {
+        btn.dataset.tooltip = item.detail;
+        btn.setAttribute("aria-description", item.detail);
+      }
       btn.disabled = Boolean(item.disabled);
       if (item.danger) {
         btn.classList.add("danger");
       }
-      btn.addEventListener("click", () => {
-        closeMenu();
-        item.action();
-      });
-      menu.appendChild(btn);
+      if (item.submenu) {
+        const wrap = document.createElement("div");
+        wrap.className = "lib-menu-branch";
+        const arrow = document.createElement("span");
+        arrow.className = "lib-menu-arrow";
+        arrow.innerHTML = CHEVRON_SVG;
+        btn.append(arrow);
+        btn.setAttribute("aria-haspopup", "menu");
+        btn.setAttribute("aria-expanded", "false");
+        const sub = document.createElement("div");
+        sub.className = "tab-menu lib-submenu";
+        sub.role = "menu";
+        sub.setAttribute("aria-label", item.label);
+        sub.hidden = true;
+        const hide = () => { sub.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+        const show = () => {
+          if (!sub.hidden) return;
+          sub.replaceChildren();
+          fillMenu(sub, item.submenu());
+          sub.hidden = false;
+          btn.setAttribute("aria-expanded", "true");
+          const box = btn.getBoundingClientRect();
+          const width = sub.offsetWidth;
+          sub.style.left = Math.max(8, box.right + width > window.innerWidth - 8 ? box.left - width : box.right) + "px";
+          sub.style.top = Math.max(8, Math.min(box.top - 4, window.innerHeight - sub.offsetHeight - 8)) + "px";
+        };
+        btn.addEventListener("click", show);
+        wrap.addEventListener("pointerenter", show);
+        wrap.addEventListener("pointerleave", hide);
+        wrap.addEventListener("focusout", (event) => { if (!wrap.contains(event.relatedTarget)) hide(); });
+        btn.addEventListener("keydown", (event) => {
+          if (event.key !== "ArrowRight") return;
+          event.preventDefault();
+          show();
+          sub.querySelector("button:not(:disabled)")?.focus();
+        });
+        sub.addEventListener("keydown", (event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          btn.focus();
+          hide();
+        });
+        wrap.append(btn, sub);
+        container.append(wrap);
+      } else {
+        btn.addEventListener("click", () => {
+          closeMenu();
+          item.action?.();
+        });
+        container.appendChild(btn);
+      }
       lastWasSep = false;
     }
-    if (menu.lastElementChild?.classList.contains("menu-sep")) {
-      menu.lastElementChild.remove();
+    if (container.lastElementChild?.classList.contains("menu-sep")) {
+      container.lastElementChild.remove();
     }
-    showMenuAt(point);
   }
 
   function showMenuAt(point) {
@@ -1053,7 +1124,7 @@ window.createLibrary = function createLibrary(host) {
       fromStrip && !tab.temp && { label: "Show in Library", action: () => reveal(id) },
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
-      { label: "Agent access…", action: () => editAgentAccess({ kind: "page", id }) },
+      { label: "Agent access", submenu: () => agentAccessItems({ kind: "page", id }) },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: tab.workspace ? "Change workspace…" : "Set workspace…", action: () => host.pickPageWorkspace(id) },
       { label: "Copy key", action: () => host.copyTabKey(id) },
@@ -1160,91 +1231,43 @@ window.createLibrary = function createLibrary(host) {
     return names.join("/") || id;
   }
 
-  /** A page's or folder's agent access (#269): its level, where it came from, and the grants chats on it hold. */
-  function editAgentAccess(target) {
-    const current = () => (target.kind === "page" ? host.findAny(target.id) : model.folderById.get(target.id));
-    if (!current()) return;
-    const el = (tag, cls, text) => {
-      const node = document.createElement(tag);
-      if (cls) node.className = cls;
-      if (text != null) node.textContent = text;
-      return node;
-    };
+  /** Access levels and existing grants, shared by page and folder context menus. */
+  function agentAccessItems(target) {
+    const item = target.kind === "page" ? host.findAny(target.id) : model.folderById.get(target.id);
+    if (!item) return [];
     const nameOf = (t) => (t.kind === "page" ? `“${host.findAny(t.id)?.title || t.id}”` : `${folderPathOf(t.id)}/`);
-    const dlg = el("dialog", "confirm permissions agent-access");
-    const form = el("form");
-    form.method = "dialog";
-    const head = el("h2", "", "Agent access");
-    const rows = el("div", "permissions-rows");
-    const actions = el("div", "confirm-actions");
-    const done = el("button", "", "Done");
-    done.type = "submit";
-    actions.append(done);
-    form.append(head, rows, actions);
-    dlg.append(form);
-
     const save = async (body) => {
       const url = target.kind === "page" ? `/api/tabs/${encodeURIComponent(target.id)}/access` : `/api/folders/${encodeURIComponent(target.id)}/access`;
       const res = await send("PUT", url, body);
       if (!res.ok) {
         host.showNotice((await res.json().catch(() => ({}))).error || "Could not change agent access");
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      if (target.kind === "folder" && data.folder) model.folderById.set(target.id, { ...current(), ...data.folder, access: data.folder.access });
-      render(data.tab);
-    };
-
-    const render = (fresh) => {
-      const item = fresh || current();
-      if (!item) return;
-      rows.replaceChildren();
-      const set = target.kind === "page" ? (item.agentHidden ? "restricted" : item.access?.level) : item.access?.level;
-      const inherited = inheritedLevel(target.kind === "page" ? item.folderId : item.parentId);
-      // Nothing set is Normal, or Open under an Open folder.
-      const own = set || (inherited === "public" ? "public" : "open");
-      const row = el("div", "permission-row");
-      const text = el("div", "permission-text");
-      const levels = target.kind === "page" ? ACCESS_LEVELS : ACCESS_LEVELS.map((l) => (l.id === "restricted" ? { ...l, detail: "Only chats on each page itself." } : l));
-      // A stricter parent folder decides; say that instead of what this level alone would do.
-      const detail = inherited && (set ? LEVEL_RANK[inherited] > LEVEL_RANK[set] : inherited !== "open")
-        ? `A parent folder makes it ${levels.find((l) => l.id === inherited).label}.`
-        : levels.find((l) => l.id === own)?.detail || "";
-      text.append(el("div", "permission-label", target.kind === "page" ? item.title : folderPathOf(target.id)), el("div", "permission-detail", detail));
-      const select = el("select");
-      select.setAttribute("aria-label", "Agent access level");
-      for (const level of levels) {
-        const opt = el("option", "", level.label);
-        opt.value = level.id;
-        select.append(opt);
-      }
-      select.value = own;
-      select.addEventListener("change", () => save({ level: select.value }));
-      row.append(text, window.createSelect ? window.createSelect(select) : select);
-      rows.append(row);
-      const origin = target.kind === "page" ? item.access?.origin : null;
-      if (origin) rows.append(el("div", "permission-detail agent-access-origin", `Created from ${nameOf(origin)}`));
-      const grants = item.access?.grants || [];
-      if (grants.length) {
-        rows.append(el("div", "permission-label agent-access-head", "Chats here also reach"));
-        const list = el("div", "permission-folders");
-        for (const grant of grants) {
-          const line = el("div", "permission-folder");
-          const remove = el("button", "permission-remove", "Remove");
-          remove.type = "button";
-          remove.addEventListener("click", () => save({ removeGrants: [grant] }));
-          line.append(el("span", "permission-path", nameOf(grant)), remove);
-          list.append(line);
-        }
-        rows.append(list);
       }
     };
-
-    render();
-    document.body.append(dlg);
-    dlg.addEventListener("close", () => dlg.remove(), { once: true });
-    dlg.showModal();
-    done.focus();
+    const set = target.kind === "page" && item.agentHidden ? "restricted" : item.access?.level;
+    const inherited = inheritedLevel(target.kind === "page" ? item.folderId : item.parentId);
+    const own = set || (inherited === "public" ? "public" : "open");
+    const items = ACCESS_LEVELS.map((level) => ({
+      label: level.label,
+      checked: level.id === own,
+      detail: target.kind === "folder" && level.id === "restricted" ? "Only chats on each page itself." : level.detail,
+      action: () => save({ level: level.id }),
+    }));
+    if (inherited && (set ? LEVEL_RANK[inherited] > LEVEL_RANK[set] : inherited !== "open")) {
+      items.push("sep", { label: `Parent folder: ${ACCESS_LEVELS.find((l) => l.id === inherited).label}`, disabled: true });
+    }
+    if (target.kind === "page" && item.access?.origin) {
+      items.push("sep", { label: `Created from ${nameOf(item.access.origin)}`, disabled: true });
+    }
+    if (item.access?.grants?.length) {
+      items.push("sep", {
+        label: "Chats here also reach",
+        submenu: () => item.access.grants.map((grant) => ({
+          label: `Remove ${nameOf(grant)}`,
+          action: () => save({ removeGrants: [grant] }),
+        })),
+      });
+    }
+    return items;
   }
 
   function folderMenu(event, id) {
@@ -1265,7 +1288,7 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
-      { label: "Agent access…", action: () => editAgentAccess({ kind: "folder", id }) },
+      { label: "Agent access", submenu: () => agentAccessItems({ kind: "folder", id }) },
       "sep",
       { label: "Delete folder…", danger: true, action: () => deleteFolder(id) },
     ]);

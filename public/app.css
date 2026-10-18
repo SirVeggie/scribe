@@ -2798,6 +2798,32 @@ button.settings-close svg {
   background: var(--border);
 }
 
+.lib-menu-branch > button {
+  width: 100%;
+}
+
+.lib-menu-arrow {
+  display: flex;
+  margin-left: auto;
+  padding-left: 16px;
+}
+
+.lib-submenu {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+}
+
+.tab-menu .lib-menu-choice::before {
+  content: "";
+  width: 12px;
+  margin-right: 6px;
+}
+
+.tab-menu .lib-menu-choice[aria-checked="true"]::before {
+  content: "✓";
+}
+
 .tab-menu.lib-picker {
   width: 260px;
 }
