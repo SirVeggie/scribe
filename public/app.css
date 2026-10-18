@@ -2806,6 +2806,7 @@ button.settings-close svg {
   display: flex;
   margin-left: auto;
   padding-left: 16px;
+  transform: translateX(3px);
 }
 
 .lib-submenu {
