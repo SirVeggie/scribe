@@ -2638,6 +2638,50 @@ textarea.ag-q-input {
   color: var(--muted);
 }
 
+/* The textarea over a see-through copy of its text, where inline mentions are drawn as pills. */
+.ag-input-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.ag-compose-row .ag-input-wrap {
+  flex: 1;
+}
+
+.ag-input-wrap > .ag-textarea {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* With mentions in it, the layer draws the text and the textarea only the caret and selection. */
+.ag-input-wrap.marked > .ag-textarea {
+  color: transparent;
+  caret-color: var(--heading);
+}
+
+.ag-input-marks {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--heading);
+  border: 0 solid transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.ag-input-mark {
+  color: rgb(var(--accent-rgb));
+  background: rgba(var(--accent-rgb), 0.14);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1.5px rgba(var(--accent-rgb), 0.18);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
 .ag-bar {
   display: flex;
   align-items: center;

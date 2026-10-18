@@ -344,14 +344,39 @@
   const FILE_LIMITS = { count: 10, image: 8 * 1024 * 1024, file: 20 * 1024 * 1024, total: 50 * 1024 * 1024 };
   const MENTION_LIMIT = 20;
 
-  /** The @ or # token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix; start/end cover the whole token. */
-  function mentionAt(value, cursor, prefix = "@") {
-    const before = value.slice(0, cursor);
-    const m = (prefix === "#" ? /(^|[\s])#([^\s#]*)$/ : /(^|[\s])@([^\s@]*)$/).exec(before);
-    if (!m) return null;
-    const start = before.length - 1 - m[2].length;
+  /** Longest query the picker searches for: past it, the @ was not a mention. */
+  const MENTION_QUERY_MAX = 60;
+
+  /**
+   * The @ or # token around the caret. Keep in sync with src/agent/mention.ts. query is the typed prefix
+   * (spaces allowed, since page titles have them); start/end cover the whole token. floor is where an
+   * inline mention ends, so its own text is not read as a new query.
+   */
+  function mentionAt(value, cursor, prefix = "@", floor = 0) {
+    const before = value.slice(floor, cursor);
+    const m = (prefix === "#" ? /(^|\s)#((?:[^\s#][^#\n]*)?)$/ : /(^|\s)@((?:[^\s@][^@\n]*)?)$/).exec(before);
+    if (!m || m[2].length > MENTION_QUERY_MAX) return null;
+    const start = cursor - 1 - m[2].length;
+    if (start > 0 && !/\s/.test(value[start - 1])) return null;
     const rest = (prefix === "#" ? /^[^\s#]*/ : /^[^\s@]*/).exec(value.slice(cursor))?.[0] || "";
     return { start, end: cursor + rest.length, query: m[2] };
+  }
+
+  /** How well a picker row's name fits the query, for ordering pages and folders together. */
+  function mentionScore(name, query) {
+    const n = String(name || "").toLowerCase();
+    const q = query.trim().toLowerCase();
+    if (!q) return 0;
+    if (n === q) return 5;
+    if (n.startsWith(q)) return 4;
+    if (n.split(/[\s/._-]+/).some((w) => w.startsWith(q))) return 3;
+    if (n.includes(q)) return 2;
+    return q.split(/\s+/).every((w) => n.includes(w)) ? 1 : 0;
+  }
+
+  /** The text an inline mention puts in the composer. */
+  function mentionToken(chip) {
+    return `${chip.kind === "thread" ? "#" : "@"}${chipLabel(chip)}`;
   }
 
   /** A slash token at the caret, bounded by whitespace so paths stay ordinary text. */
@@ -4992,15 +5017,30 @@
       this.input.rows = 1;
       this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
       this.input.addEventListener("input", () => {
+        this.syncInline();
         this.autosize();
         this.updatePicker();
         this.warm();
       });
       this.input.addEventListener("keydown", (event) => this.onKey(event));
       this.input.addEventListener("keyup", (event) => {
-        if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") this.updatePicker();
+        if (!/^(Arrow(Left|Right|Up|Down)|Home|End|Page(Up|Down))$/.test(event.key)) return;
+        this.snapSelection(event.key === "ArrowLeft" || event.key === "ArrowUp" || event.key === "Home" || event.key === "PageUp" ? -1 : 1);
+        this.updatePicker();
       });
-      this.input.addEventListener("click", () => this.updatePicker());
+      this.input.addEventListener("click", () => {
+        this.snapSelection(0);
+        this.updatePicker();
+      });
+      this.input.addEventListener("scroll", () => {
+        if (this.inputMarks) this.inputMarks.scrollTop = this.input.scrollTop;
+      });
+      // Inline mentions are drawn as pills behind the text, in a layer that wraps like the textarea.
+      this.inputWrap = el("div", "ag-input-wrap");
+      this.inputMarks = el("div", "ag-input-marks");
+      this.inputMarks.ariaHidden = "true";
+      this.inputMarks.hidden = true;
+      this.inputWrap.append(this.inputMarks, this.input);
       this.input.addEventListener("paste", (event) => this.onPaste(event));
       this.input.addEventListener("focus", () => {
         this.renderContext();
@@ -5023,10 +5063,10 @@
       this.helperApprovals.hidden = true;
       box.append(this.slash, this.helperApprovals, this.helperDock, this.forkNote, this.ctxRow);
       if (this.floating) {
-        box.append(this.input);
+        box.append(this.inputWrap);
       } else {
         const row = el("div", "ag-compose-row");
-        row.append(this.input, this.sendSlot);
+        row.append(this.inputWrap, this.sendSlot);
         this.status = el("span", "dock-status");
         const strip = el("div", "ag-compose-bar");
         strip.append(this.status, this.bar);
@@ -5089,6 +5129,7 @@
     autosize() {
       const node = this.input;
       if (!node) return;
+      this.renderMarks();
       const max = this.variant === "full" ? 320 : 220;
       const sizer = this.inputSizer?.isConnected ? this.inputSizer : (this.inputSizer = this.makeInputSizer());
       const width = node.offsetWidth;
@@ -5131,6 +5172,7 @@
         row.append(chip);
       }
       this.mentions.forEach((chip, index) => {
+        if (chip.inline) return;
         const node = el("span", "ag-chip small");
         node.dataset.tooltip = chipTitle(chip);
         node.append(icon(chipIcon(chip)), el("span", null, chipLabel(chip)));
@@ -5163,20 +5205,15 @@
       return items.some((it) => it.kind === "user" && !it.dropped && (it.context || []).some((c) => c.kind === "page" && c.id === tab.id));
     }
 
-    /** Pages, folders and files already on this message or earlier in the thread. */
+    /**
+     * Items already mentioned inline in this message, which the picker leaves out. Ones attached
+     * earlier in the thread stay pickable so the text can point at them; the daemon sends each once.
+     */
     knownMentionKeys() {
       const keys = new Set();
-      const add = (chip) => {
-        const key = chipKey(chip);
+      for (const chip of this.mentions) {
+        const key = chip.inline && chipKey(chip);
         if (key) keys.add(key);
-      };
-      for (const chip of this.mentions) add(chip);
-      const tab = activeTab();
-      if (tab && this.pageInThread(tab)) keys.add(`page:${tab.id}`);
-      const items = S.details.get(this.threadId)?.items || [];
-      for (const it of items) {
-        if (it.kind !== "user" || it.dropped) continue;
-        for (const chip of it.context || []) if (chip.kind !== "thread") add(chip);
       }
       return keys;
     }
@@ -5193,7 +5230,7 @@
         }
         chips.push(chip);
       };
-      for (const chip of this.mentions) {
+      for (const { inline, start, end, token, ...chip } of this.mentions) {
         if (chip.kind === "page" && this.pageInThread(chip)) continue;
         push(chip);
       }
@@ -5204,14 +5241,195 @@
       return chips;
     }
 
+    /** A message taken back into the composer: chips whose text is still in it become inline again. */
     restoreContextChips(context) {
-      this.mentions = Array.isArray(context) ? context.map((c) => ({ ...c })) : [];
+      const value = this.input?.value || "";
+      this.mentions = Array.isArray(context)
+        ? context.map((c) => (chipKey(c) && value.includes(mentionToken(c)) ? { ...c, inline: true, token: mentionToken(c), start: -1, end: -1 } : { ...c }))
+        : [];
+      this.inputPrev = null;
+    }
+
+    /* ----- inline mentions: picked items stay in the text as one unit, drawn as a pill ----- */
+
+    inlineMentions() {
+      return this.mentions.filter((c) => c.inline).sort((a, b) => a.start - b.start);
+    }
+
+    /** After an edit, move the inline mentions after it and drop the ones it cut into. */
+    syncInline() {
+      const prev = this.inputPrev ?? "";
+      const next = this.input.value;
+      this.inputPrev = next;
+      if (prev === next) return;
+      const caret = this.input.selectionEnd ?? next.length;
+      const delta = next.length - prev.length;
+      const shortest = Math.min(prev.length, next.length);
+      // The caret sits after the inserted text, which tells where a repeated letter went in.
+      let a = 0;
+      while (a < shortest && prev[a] === next[a]) a++;
+      a = Math.max(0, Math.min(a, caret - Math.max(0, delta)));
+      let b = 0;
+      while (b < shortest - a && prev[prev.length - 1 - b] === next[next.length - 1 - b]) b++;
+      const cutEnd = prev.length - b;
+      const gone = [];
+      this.mentions = this.mentions.filter((chip) => {
+        if (!chip.inline || chip.end <= a) return true;
+        if (chip.start < cutEnd) {
+          gone.push({ ...chip });
+          return false;
+        }
+        chip.start += delta;
+        chip.end += delta;
+        return true;
+      });
+      // Undo puts a deleted mention's text back where it was: bring the mention back with it.
+      const putBack = (this.inlineGone || []).filter((g) => g.start >= a && g.end <= next.length - b && next.slice(g.start, g.end) === g.token);
+      for (const g of putBack) if (!this.mentions.some((c) => c.inline && c.start < g.end && c.end > g.start)) this.mentions.push(g);
+      this.inlineGone = [...gone, ...(this.inlineGone || []).filter((g) => !putBack.includes(g))].slice(0, 8);
+      if (this.mentionDismissed) {
+        const at = this.mentionDismissed.start;
+        const moved = at < a ? at : at >= cutEnd ? at + delta : null;
+        this.mentionDismissed = moved === null ? null : { ...this.mentionDismissed, start: moved };
+      }
+      this.reconcileInline();
+    }
+
+    /** Text set by code (a restored draft, a failed send) carries no edits: find each mention's text again. */
+    reconcileInline() {
+      const value = this.input.value;
+      this.inputPrev = value;
+      const taken = [];
+      for (const chip of this.inlineMentions()) {
+        const token = chip.token || mentionToken(chip);
+        chip.token = token;
+        const free = (s) => !taken.some(([ts, te]) => s < te && s + token.length > ts);
+        let start = value.slice(chip.start, chip.end) === token && free(chip.start) ? chip.start : -1;
+        for (let from = 0; start < 0; ) {
+          const found = value.indexOf(token, from);
+          if (found < 0) break;
+          if (free(found)) start = found;
+          from = found + 1;
+        }
+        if (start < 0) {
+          // Its text is gone: keep the item attached as an ordinary chip.
+          delete chip.inline;
+          delete chip.start;
+          delete chip.end;
+          delete chip.token;
+          this.ctxStale = true;
+          continue;
+        }
+        chip.start = start;
+        chip.end = start + token.length;
+        taken.push([chip.start, chip.end]);
+      }
+      if (this.ctxStale) {
+        this.ctxStale = false;
+        this.renderContext();
+      }
+    }
+
+    /** Draw the pills: the same text as the textarea, see-through, with each mention marked. */
+    renderMarks() {
+      const marks = this.inputMarks;
+      if (!marks) return;
+      if (this.inputPrev !== this.input.value) this.reconcileInline();
+      const inline = this.inlineMentions();
+      this.inputWrap.classList.toggle("marked", inline.length > 0);
+      if (!inline.length) {
+        if (!marks.hidden) {
+          marks.hidden = true;
+          marks.replaceChildren();
+        }
+        return;
+      }
+      const cs = getComputedStyle(this.input);
+      for (const prop of ["font", "letterSpacing", "wordSpacing", "tabSize", "paddingTop", "paddingBottom", "paddingLeft", "textIndent", "borderTopWidth", "borderLeftWidth"]) {
+        marks.style[prop] = cs[prop];
+      }
+      // Leave room for the textarea's scrollbar, so both wrap at the same width.
+      const bar = this.input.offsetWidth - this.input.clientWidth - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+      marks.style.paddingRight = `${parseFloat(cs.paddingRight) + Math.max(0, bar)}px`;
+      const value = this.input.value;
+      const parts = [];
+      let at = 0;
+      for (const chip of inline) {
+        parts.push(value.slice(at, chip.start));
+        parts.push(el("mark", "ag-input-mark", value.slice(chip.start, chip.end)));
+        at = chip.end;
+      }
+      parts.push(`${value.slice(at)}\n`);
+      marks.replaceChildren(...parts);
+      marks.hidden = false;
+      marks.scrollTop = this.input.scrollTop;
+    }
+
+    /** Keep the caret and selection edges out of a mention. dir -1/1 prefers its start/end, 0 the nearer one. */
+    snapSelection(dir) {
+      const inline = this.inlineMentions();
+      if (!inline.length) return;
+      const node = this.input;
+      const s = node.selectionStart;
+      const e = node.selectionEnd;
+      const inside = (p) => inline.find((c) => p > c.start && p < c.end);
+      if (s === e) {
+        const c = inside(s);
+        if (!c) return;
+        const p = dir < 0 ? c.start : dir > 0 ? c.end : s - c.start <= c.end - s ? c.start : c.end;
+        node.setSelectionRange(p, p);
+        return;
+      }
+      const cs = inside(s);
+      const ce = inside(e);
+      if (cs || ce) node.setSelectionRange(cs ? cs.start : s, ce ? ce.end : e, node.selectionDirection);
+    }
+
+    /** Arrows step over a mention, Backspace and Delete remove all of it. True when the key was handled. */
+    inlineKey(event) {
+      if (event.altKey || event.metaKey || event.isComposing) return false;
+      const inline = this.inlineMentions();
+      if (!inline.length) return false;
+      const node = this.input;
+      const s = node.selectionStart;
+      const e = node.selectionEnd;
+      const back = event.key === "Backspace" || event.key === "ArrowLeft";
+      if (event.key === "Backspace" || event.key === "Delete") {
+        if (s !== e) {
+          // Widen a selection that cuts into a mention, then let the key delete it.
+          this.snapSelection(0);
+          return false;
+        }
+        const chip = inline.find((c) => (back ? c.end === s : c.start === s));
+        if (!chip) return false;
+        event.preventDefault();
+        node.setSelectionRange(chip.start, chip.end);
+        if (!document.execCommand("delete")) {
+          node.setRangeText("", chip.start, chip.end, "end");
+          node.dispatchEvent(new Event("input"));
+        }
+        return true;
+      }
+      if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !event.ctrlKey) {
+        const forward = node.selectionDirection === "backward" ? s : e;
+        const anchor = node.selectionDirection === "backward" ? e : s;
+        if (!event.shiftKey && s !== e) return false;
+        const chip = inline.find((c) => (back ? c.end === forward : c.start === forward));
+        if (!chip) return false;
+        event.preventDefault();
+        const to = back ? chip.start : chip.end;
+        if (!event.shiftKey) node.setSelectionRange(to, to);
+        else node.setSelectionRange(Math.min(anchor, to), Math.max(anchor, to), to < anchor ? "backward" : "forward");
+        return true;
+      }
+      return false;
     }
 
     hidePicker() {
       this.slash.hidden = true;
       this.slash.classList.remove("loading");
       this.slash.removeAttribute("aria-busy");
+      this.mentionOpen = null;
       this.mentionLoading = false;
       this.mentionGen += 1;
       clearTimeout(this.mentionTimer);
@@ -5577,10 +5795,20 @@
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
+          // Stay closed for this @ until Ctrl+Space, or until it is deleted and typed again.
+          if (this.mentionOpen) this.mentionDismissed = { start: this.mentionOpen.start };
           this.hidePicker();
           return;
         }
       }
+      if (event.key === " " && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        this.mentionDismissed = null;
+        this.mentionDead = null;
+        void this.updatePicker();
+        return;
+      }
+      if (this.inlineKey(event)) return;
       // Shift+Enter always inserts a line. Ctrl+Enter always sends. Plain Enter follows Chat settings.
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         const mod = event.ctrlKey || event.metaKey;
@@ -5620,13 +5848,32 @@
         await this.showSlash(slash.query);
         return;
       }
-      const threadMention = mentionAt(value, cur, "#");
-      const mention = threadMention ? { ...threadMention, thread: true } : mentionAt(value, cur);
-      if (mention) {
+      const mention = this.input.selectionEnd === cur ? this.mentionAtCaret(value, cur) : null;
+      const dismissed = this.mentionDismissed;
+      if (dismissed && value[dismissed.start] !== "@" && value[dismissed.start] !== "#") this.mentionDismissed = null;
+      const dead = this.mentionDead;
+      const quiet =
+        mention &&
+        ((this.mentionDismissed && mention.start === this.mentionDismissed.start) ||
+          // A query that found nothing finds nothing longer either: stop searching as it grows.
+          (dead && dead.start === mention.start && dead.thread === Boolean(mention.thread) && mention.query.startsWith(dead.query)));
+      if (mention && !quiet) {
         this.showMentions(mention);
         return;
       }
       if (!this.slash.hidden || this.mentionLoading) this.hidePicker();
+    }
+
+    /** The @ or # query at the caret, not counting the text of mentions already placed before it. */
+    mentionAtCaret(value, cur) {
+      const inline = this.inlineMentions();
+      if (inline.some((c) => cur > c.start && cur < c.end)) return null;
+      const floor = Math.max(0, ...inline.filter((c) => c.end <= cur).map((c) => c.end));
+      const thread = mentionAt(value, cur, "#", floor);
+      const page = mentionAt(value, cur, "@", floor);
+      // With spaces allowed both can match ("#a @b"): the later one is being typed.
+      if (thread && (!page || thread.start > page.start)) return { ...thread, thread: true };
+      return page;
     }
 
     async showSlash(typed) {
@@ -5714,7 +5961,7 @@
 
     async loadMentions(mention, gen) {
       if (gen !== this.mentionGen) return;
-      const q = mention.query;
+      const q = mention.query.trim();
       const taken = this.knownMentionKeys();
       if (mention.thread) {
         if (this.slash.hidden || !this.slash.hasAttribute("aria-busy")) {
@@ -5761,7 +6008,8 @@
       const q = query.toLowerCase();
       return (app()?.folders?.() || [])
         .map((f) => ({ kind: "folder", id: f.id, path: folderPath(f.id) || f.name }))
-        .filter((f) => f.path && !taken.has(`folder:${f.id}`) && (!q || f.path.toLowerCase().includes(q)))
+        .filter((f) => f.path && !taken.has(`folder:${f.id}`) && (!q.trim() || mentionScore(f.path, q) > 0))
+        .sort((a, b) => mentionScore(b.path, q) - mentionScore(a.path, q))
         .slice(0, 8);
     }
 
@@ -5772,7 +6020,8 @@
         const data = await res.json();
         const q = query.toLowerCase();
         return (data.folders || [])
-          .filter((f) => f.path && !taken.has(`folder:${f.id}`) && (!q || String(f.path).toLowerCase().includes(q)))
+          .filter((f) => f.path && !taken.has(`folder:${f.id}`) && (!q.trim() || mentionScore(f.path, q) > 0))
+          .sort((a, b) => mentionScore(b.path, q) - mentionScore(a.path, q))
           .slice(0, 8)
           .map((f) => ({ kind: "folder", id: f.id, path: f.path }));
       } catch {
@@ -5813,11 +6062,11 @@
       if (!tab) return [];
       const q = query.toLowerCase();
       const items = [];
-      if (!taken.has(`page:${tab.id}`) && (!q || "this".startsWith(q) || String(tab.title || "").toLowerCase().includes(q))) {
+      if (!taken.has(`page:${tab.id}`) && (!q.trim() || "this".startsWith(q) || mentionScore(tab.title, q) > 0)) {
         items.push({ kind: "page", id: tab.id, key: tab.key, title: tab.title, folder: "@this" });
       }
       const path = tab.folderId ? folderPath(tab.folderId) : "";
-      if (path && !taken.has(`folder:${tab.folderId}`) && (!q || path.toLowerCase().includes(q))) {
+      if (path && !taken.has(`folder:${tab.folderId}`) && (!q.trim() || mentionScore(path, q) > 0)) {
         items.push({ kind: "folder", id: tab.folderId, path });
       }
       return items;
@@ -5829,11 +6078,18 @@
       this.slash.replaceChildren();
       const here = mention.thread ? [] : this.hereMentions(mention.query, this.knownMentionKeys());
       const hereKeys = new Set(here.map(chipKey));
+      // Pages and folders in one list, best match first; the icon tells them apart.
+      const q = mention.query;
+      const ranked = [
+        ...pages.filter((p) => !hereKeys.has(chipKey(p))).map((item, rank) => ({ item, rank, score: mentionScore(item.title, q) })),
+        ...folders.filter((f) => !hereKeys.has(chipKey(f))).map((item, rank) => ({ item, rank, score: Math.max(mentionScore(item.path, q), mentionScore(String(item.path).split("/").pop(), q)) })),
+      ];
+      // The search ranks pages by more than their titles: a page it found keeps its place among equals.
+      ranked.sort((x, y) => y.score - x.score || x.rank - y.rank);
       const sections = [
         { title: "Here", items: here },
         { title: "Threads", items: threads },
-        { title: "Pages", items: pages.filter((p) => !hereKeys.has(chipKey(p))) },
-        { title: "Folders", items: folders.filter((f) => !hereKeys.has(chipKey(f))) },
+        { title: "Library", items: ranked.map((r) => r.item) },
         { title: "Files", items: files },
       ];
       let first = true;
@@ -5855,8 +6111,16 @@
         }
       }
       if (!this.slash.querySelector(".ag-slash-item")) {
-        this.slash.append(el("div", "ag-slash-empty", loading ? "Searching…" : mention.thread ? "No matching threads" : "No matching pages, folders or files"));
+        if (!loading) {
+          // Nothing fits: get out of the way, and don't search again while this query only grows.
+          this.mentionDead = { start: mention.start, query: mention.query, thread: Boolean(mention.thread) };
+          this.slash.hidden = true;
+          this.mentionOpen = null;
+          return;
+        }
+        this.slash.append(el("div", "ag-slash-empty", "Searching…"));
       }
+      this.mentionOpen = mention;
       this.slash.hidden = false;
     }
 
@@ -5870,33 +6134,39 @@
           : item.kind === "folder"
             ? { kind: "folder", id: item.id, path: item.path }
             : { kind: "file", path: item.path };
+      const key = chipKey(chip);
+      const done = () => {
+        this.hidePicker();
+        this.renderContext();
+        this.autosize();
+        this.focus();
+      };
+      if (key && this.knownMentionKeys().has(key)) return done();
+      // The same item attached as a chip (from the page, an earlier draft) moves into the text.
+      const attached = this.mentions.findIndex((c) => !c.inline && key && chipKey(c) === key);
+      if (attached < 0 && this.mentions.length >= MENTION_LIMIT) {
+        notice(`Up to ${MENTION_LIMIT} mentions per message`);
+        return done();
+      }
+      if (attached >= 0) this.mentions.splice(attached, 1);
       const value = this.input.value;
       const cur = this.input.selectionStart ?? value.length;
-      const at = mention || mentionAt(value, cur);
-      if (at) {
-        const next = `${value.slice(0, at.start)}${value.slice(at.end)}`;
-        this.input.value = next;
-        this.input.setSelectionRange(at.start, at.start);
+      const at = this.mentionAtCaret(value, cur) || mention || { start: cur, end: cur };
+      const token = mentionToken(chip);
+      const space = /^\s/.test(value.slice(at.end)) ? "" : " ";
+      const delta = token.length + space.length - (at.end - at.start);
+      for (const c of this.mentions) {
+        if (c.inline && c.start >= at.end) {
+          c.start += delta;
+          c.end += delta;
+        }
       }
-      const key = chipKey(chip);
-      if (key && this.knownMentionKeys().has(key)) {
-        this.hidePicker();
-        this.autosize();
-        this.focus();
-        return;
-      }
-      if (this.mentions.length >= MENTION_LIMIT) {
-        notice(`Up to ${MENTION_LIMIT} mentions per message`);
-        this.hidePicker();
-        this.autosize();
-        this.focus();
-        return;
-      }
-      this.mentions.push(chip);
-      this.hidePicker();
-      this.renderContext();
-      this.autosize();
-      this.focus();
+      this.input.value = `${value.slice(0, at.start)}${token}${space}${value.slice(at.end)}`;
+      const caret = at.start + token.length + 1;
+      this.input.setSelectionRange(caret, caret);
+      this.mentions.push({ ...chip, inline: true, token, start: at.start, end: at.start + token.length });
+      this.inputPrev = this.input.value;
+      done();
     }
 
     async stop() {
