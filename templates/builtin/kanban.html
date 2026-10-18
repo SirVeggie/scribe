@@ -4960,7 +4960,7 @@
   // and its card waiting until the provider confirms the reset and sends it on; when it is done,
   // Scribe merges its worktree branch, and asks the agent to fix a branch that won't merge, then acts
   // on the run's outcome and releases it.
-  var FOLDER_MODES = { code: true, plan: true };
+  var FOLDER_MODES = { code: true };
   /** Cards one agent chat may take before the board starts a fresh one. */
   var MAX_CARDS_PER_AGENT = 3;
   /** How much of the card goes in a worker's prompt (the page's prompts are capped at 20000 characters). */
@@ -5074,8 +5074,8 @@
     if (mode === "ask" || mode === "board") return a === "readonly" ? "readonly" : "board";
     return RUNG_LABELS[a] ? a : "auto";
   }
-  /** How the worker's chats run: board on the reading rungs, plan when it plans first, else code. */
-  function workerMode(w) { return READ_RUNGS[workerRung(w)] ? "board" : str(w && w.mode) === "plan" ? "plan" : "code"; }
+  /** How the worker's chats run: board on the reading rungs, else code. */
+  function workerMode(w) { return READ_RUNGS[workerRung(w)] ? "board" : "code"; }
   /** Fixed board defaults: never inherit the last settings used in a chat. */
   function workerDefaults(opts, provider) {
     var available = ((opts && opts.providers) || []).filter(function (p) { return p.available; });
@@ -5364,7 +5364,7 @@
     var parts = [modelLabel(w)];
     if (w.effort) parts.push(str(w.effort));
     if (w.fast === "true") parts.push("fast");
-    parts.push(RUNG_LABELS[workerRung(w)] + (mode === "plan" ? " · plan first" : ""));
+    parts.push(RUNG_LABELS[workerRung(w)]);
     if (str(w.customMode)) parts.push("custom mode");
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (FOLDER_MODES[mode] && w.worktree) parts.push("worktree");
@@ -6574,20 +6574,10 @@
     var rung = workerRung(w);
     var rungs = (opts.approvals || []).length ? opts.approvals : Object.keys(RUNG_LABELS).map(function (id) { return { id: id, label: RUNG_LABELS[id] }; });
     row("Access", enhanced(workerSelect(rungs.map(function (a) { return [a.id, a.label]; }), rung, "Access", function (v) {
-      // The rung decides the mode: board on the reading rungs; plan first stays on above them.
-      set({ approval: v, mode: READ_RUNGS[v] ? "board" : mode === "plan" ? "plan" : "code" });
+      // The rung decides the mode: board on the reading rungs. Workers have no plan gate (#687).
+      set({ approval: v, mode: READ_RUNGS[v] ? "board" : "code" });
       rebuild();
     })), (rungs.filter(function (a) { return a.id === rung; })[0] || {}).detail);
-    if (!READ_RUNGS[rung]) {
-      var plan = el("label", "check");
-      var planBox = el("input", "switch");
-      planBox.type = "checkbox";
-      planBox.checked = mode === "plan";
-      planBox.addEventListener("change", function () { set({ mode: planBox.checked ? "plan" : "code" }); });
-      plan.appendChild(planBox);
-      plan.appendChild(document.createTextNode("Plan first"));
-      row("", plan);
-    }
     var customs = opts.customModes || [];
     if (customs.length || str(w.customMode)) {
       var customIds = customs.map(function (m) { return m.id; });
