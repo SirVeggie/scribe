@@ -40,6 +40,9 @@ window.createLibrary = function createLibrary(host) {
 
   const FOLDER_SVG =
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 3.5h4.2l1.5 1.5h7.3v8.5h-13z" fill="currentColor"/></svg>';
+  // A folder on disk (#707): the folder with a slot.
+  const DISK_FOLDER_SVG =
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill-rule="evenodd" d="M1.5 3.5h4.2l1.5 1.5h7.3v8.5h-13zM5 8.5v2.6h6V8.5z" fill="currentColor"/></svg>';
   const CHEVRON_SVG =
     '<svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M5.5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   // Agent access level markers on rows (#727); Normal ("open") has none.
@@ -761,10 +764,15 @@ window.createLibrary = function createLibrary(host) {
     el.dataset.depth = String(depth);
     el.style.setProperty("--depth", String(depth));
 
-    const icon = document.createElement("span");
-    icon.className = "fileicon";
-    icon.innerHTML = host.icons.file;
-    el.appendChild(icon);
+    if (page.file) {
+      // A file page shows its kind instead of the page icon (#707).
+      el.appendChild(window.scribeFiles.badge(page.file.path));
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "fileicon";
+      icon.innerHTML = host.icons.file;
+      el.appendChild(icon);
+    }
 
     if (host.isUnread(page.id)) {
       const dot = document.createElement("span");
@@ -821,13 +829,15 @@ window.createLibrary = function createLibrary(host) {
   function folderRow(folder, depth, open) {
     const el = document.createElement("div");
     const unreadInside = !open && hasUnreadPage(folder.id);
+    const onDisk = Boolean(window.scribeFiles.diskPath(model.folders, folder.id));
     el.className =
       "side-row lib-row lib-folder" +
       (open ? " expanded" : "") +
+      (onDisk ? " on-disk" : "") +
       (drag?.id === folder.id && drag.kind === "folder" ? " lib-drag-source" : "");
     el.role = "treeitem";
     el.tabIndex = 0;
-    el.ariaLabel = `${folder.name} (folder)` + (unreadInside ? " (unread)" : "");
+    el.ariaLabel = `${folder.name} (folder${onDisk ? " on disk" : ""})` + (unreadInside ? " (unread)" : "");
     el.ariaLevel = String(depth + 1);
     el.dataset.kind = "folder";
     el.dataset.id = folder.id;
@@ -842,7 +852,7 @@ window.createLibrary = function createLibrary(host) {
 
     const icon = document.createElement("span");
     icon.className = "lib-folder-icon";
-    icon.innerHTML = FOLDER_SVG;
+    icon.innerHTML = onDisk ? DISK_FOLDER_SVG : FOLDER_SVG;
     el.appendChild(icon);
 
     const text = document.createElement("span");
@@ -852,6 +862,12 @@ window.createLibrary = function createLibrary(host) {
     title.textContent = folder.name;
     text.appendChild(title);
     el.appendChild(text);
+    if (folder.disk) {
+      const chip = document.createElement("span");
+      chip.className = "lib-disk-path";
+      chip.textContent = folder.disk;
+      el.appendChild(chip);
+    }
 
     if (unreadInside) {
       const dot = document.createElement("span");
@@ -1089,6 +1105,66 @@ window.createLibrary = function createLibrary(host) {
     host.showNotice(`Opened ${data.folder.name}: ${count === 1 ? "1 file" : `${count} files`}${data.truncated ? " (stopped at the file limit)" : ""}`);
   }
 
+  /** The New file submenu: an empty file of that kind in the folder (its disk location, else the default). */
+  function newFileItems(folderId) {
+    return [
+      { label: "Markdown", action: () => host.newFile("md", folderId) },
+      { label: "Text", action: () => host.newFile("txt", folderId) },
+      { label: "Other…", action: () => host.newFile("other", folderId) },
+    ];
+  }
+
+  /** Link a Library folder to a disk folder (#707); files already there get pages. */
+  async function linkDiskFolder(id) {
+    const folder = model.folderById.get(id);
+    const picked = await window.scribeChat?.pickWorkspace?.(folder?.disk || lastDiskPath, { title: "Link to disk folder", hint: "", action: "Link", used: false });
+    if (!picked) {
+      return;
+    }
+    lastDiskPath = picked;
+    const res = await send("PUT", `/api/folders/${encodeURIComponent(id)}/disk`, { path: picked });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 409 && data.folderId) {
+      const choice = await host.choose(`${data.error}. A disk folder can have one Library folder.`, [{ value: "go", label: "Go to that folder" }]);
+      if (choice === "go") {
+        revealFolder(data.folderId);
+      }
+      return;
+    }
+    if (!res.ok) {
+      host.showNotice(data.error || "Could not link the folder");
+      return;
+    }
+    await rescanDiskFolder(id, true);
+  }
+
+  async function unlinkDiskFolder(id) {
+    const res = await send("PUT", `/api/folders/${encodeURIComponent(id)}/disk`, { path: null });
+    if (!res.ok) {
+      host.showNotice("Could not unlink the folder");
+    }
+  }
+
+  async function rescanDiskFolder(id, quiet = false) {
+    const res = await send("POST", `/api/folders/${encodeURIComponent(id)}/rescan`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      host.showNotice(data.error || "Could not rescan the folder");
+      return;
+    }
+    if (data.added || !quiet) {
+      host.showNotice(data.added ? `Added ${data.added === 1 ? "1 file" : `${data.added} files`} from disk` : "No new files on disk");
+    }
+  }
+
+  function revealFolder(id) {
+    host.setPaneOpen(true);
+    expandChain(id);
+    render();
+    rowFor("folder", id)?.scrollIntoView({ block: "nearest" });
+    flash("folder", id);
+  }
+
   async function createFolder(parentId = null) {
     if (query) {
       clearSearch();
@@ -1111,9 +1187,34 @@ window.createLibrary = function createLibrary(host) {
 
   async function deletePage(id) {
     const page = model.pageById.get(id);
-    const res = await send("DELETE", `/api/tabs/${encodeURIComponent(id)}?permanent=true`);
+    let recycle = false;
+    // A file page's file can go to the Recycle Bin with it (#707): ask, unless told not to.
+    if (page?.file && !page.file.copy) {
+      const mode = host.fileSettings().deleteFiles;
+      if (mode === "trash") {
+        recycle = true;
+      } else if (!mode) {
+        const name = page.file.path.split(/[\\/]/).pop();
+        const check = { label: "Don't ask again", checked: false };
+        const choice = await host.choose(`Delete “${page.title}”. Also move ${name} to the Recycle Bin?`, [
+          { value: "keep", label: "Keep the file" },
+          { value: "trash", label: "Recycle the file", danger: true },
+        ], { check });
+        if (!choice) {
+          return;
+        }
+        if (check.checked) {
+          void host.setDeleteFiles(choice);
+        }
+        recycle = choice === "trash";
+      }
+    }
+    const res = await send("DELETE", `/api/tabs/${encodeURIComponent(id)}?permanent=true${recycle ? "&file=trash" : ""}`);
     if (res.ok) {
-      host.showNotice(`Deleted “${page?.title ?? "page"}”`, { undo: true });
+      host.showNotice(`Deleted “${page?.title ?? "page"}”${recycle ? " and moved its file to the Recycle Bin" : ""}`, { undo: true });
+    } else if (recycle) {
+      const data = await res.json().catch(() => ({}));
+      host.showNotice(data.error || "Could not delete the page");
     }
   }
 
@@ -1332,7 +1433,22 @@ window.createLibrary = function createLibrary(host) {
     page.folderId = folderId || undefined;
     render();
     flash("page", id);
-    const res = await send("POST", `/api/tabs/${encodeURIComponent(id)}/move`, { folderId, index, close });
+    let res = await send("POST", `/api/tabs/${encodeURIComponent(id)}/move`, { folderId, index, close });
+    if (res.status === 409 && page.file) {
+      // The file moves with the page (#707), and one of that name is already there.
+      const data = await res.json().catch(() => ({}));
+      const choice = await host.choose(data.error || "A file of that name is already in that folder.", [{ value: "both", label: "Keep both" }]);
+      if (choice === "both") {
+        res = await send("POST", `/api/tabs/${encodeURIComponent(id)}/move`, { folderId, index, close, keepBoth: true });
+      }
+      if (!res.ok) {
+        page.folderId = before.folderId;
+        page.libPos = before.libPos;
+        if (choice) host.showNotice("Could not move the page");
+        host.rerender();
+      }
+      return;
+    }
     if (!res.ok) {
       page.folderId = before.folderId;
       page.libPos = before.libPos;
@@ -1795,6 +1911,11 @@ window.createLibrary = function createLibrary(host) {
       { label: "Move to…", action: () => openMovePicker({ kind: "folder", id }, point) },
       { label: "Open file here…", action: () => openDiskFile(id) },
       { label: "Open folder here…", action: () => openDiskFolder(id) },
+      { label: "New file here", submenu: () => newFileItems(id) },
+      "sep",
+      { label: folder.disk ? "Change disk folder…" : "Link to disk folder…", action: () => linkDiskFolder(id) },
+      folder.disk && { label: "Unlink from disk", action: () => unlinkDiskFolder(id) },
+      window.scribeFiles.diskPath(model.folders, id) && { label: "Rescan disk folder", action: () => rescanDiskFolder(id) },
       "sep",
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
@@ -1816,6 +1937,7 @@ window.createLibrary = function createLibrary(host) {
     openMenu({ x: box.left, y: box.bottom + 4 }, [
       { label: "Open file…", action: () => openDiskFile(null) },
       { label: "Open folder…", action: () => openDiskFolder(null) },
+      { label: "New file", submenu: () => newFileItems(null) },
       { label: "Expand all", disabled: model.folders.length === 0, action: () => setAllCollapsed(false) },
       { label: "Collapse all", disabled: model.folders.length === 0, action: () => setAllCollapsed(true) },
       currentSpace() && { label: "Edit lens…", action: () => openLensEditor() },

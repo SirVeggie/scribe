@@ -410,8 +410,11 @@ return glow(c,e);}`;
     const body = root.querySelector(".newpage-body");
     const lede = root.querySelector(".newpage-lede");
     const askBtn = root.querySelector(".newpage-ask");
-    const grid = root.querySelector(".newpage-templates");
-    const gridHead = root.querySelector(".newpage-templates-head");
+    const grid = root.querySelector(".newpage-templates:not(.newpage-files)");
+    const gridHead = root.querySelector(".newpage-templates-head:not(.newpage-files-head)");
+    const files = root.querySelector(".newpage-files");
+    const filesHead = root.querySelector(".newpage-files-head");
+    const where = root.querySelector(".newpage-where");
     const intentWord = root.querySelector(".newpage-intent-word");
     const intentTitle = root.querySelector(".newpage-intent-title");
     askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
@@ -494,6 +497,39 @@ return glow(c,e);}`;
       btn.append(icon, text);
       btn.addEventListener("click", () => host.pick(template));
       return btn;
+    }
+
+    /** The Files section (#707): a new file in the Library folder of the page this screen opened from. */
+    function fileCard(kind, title, label, name) {
+      const btn = el("button", "newpage-card newpage-file-card");
+      btn.type = "button";
+      const badge = window.scribeFiles.badge(name);
+      badge.textContent = label;
+      btn.append(badge, el("span", "newpage-card-title", title));
+      btn.addEventListener("click", () => host.createFile?.(kind));
+      return btn;
+    }
+
+    function renderFiles(target) {
+      filesHead.hidden = !host.createFile;
+      files.hidden = !host.createFile;
+      where.hidden = !host.createFile;
+      if (!host.createFile) return;
+      files.replaceChildren(
+        fileCard("md", "Markdown", "MD", "a.md"),
+        fileCard("txt", "Text", "TXT", "a.txt"),
+        fileCard("other", "Other…", ".*", "a.txt")
+      );
+      const parts = [];
+      if (target.folder) parts.push(["In ", target.folder]);
+      parts.push(target.location ? ["on disk in ", target.location] : ["asks where on disk"]);
+      where.replaceChildren(
+        ...parts.flatMap(([text, strong], i) => {
+          const out = [document.createTextNode((i ? " · " : "") + text)];
+          if (strong) out.push(el("b", null, strong));
+          return out;
+        })
+      );
     }
 
     /** Built-ins that already have a local copy show once, as the copy. */
@@ -581,10 +617,12 @@ return glow(c,e);}`;
       const threads = covering ? 1 : host.threads(tab.id);
       const working = covering || host.working(tab.id);
       const list = threads ? [] : templateList();
-      const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description])]);
+      const target = host.fileTarget?.() || {};
+      const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description]), target]);
       if (shown === tab.id && drawn === key) return;
       // The same call with more known about it (its title) keeps the word it is on.
       const sameIntent = Boolean(intent) && shown === tab.id && lastIntent === intent.itemId;
+      if (shown !== tab.id) host.refreshFiles?.();
       shown = tab.id;
       drawn = key;
       root.classList.toggle("has-thread", threads > 0);
@@ -597,6 +635,7 @@ return glow(c,e);}`;
       // Keep the existing text and template cards in place while they fade away.
       if (threads > 0) return;
       lede.textContent = "Start from a template, or ask the agent to make something here.";
+      renderFiles(target);
       gridHead.hidden = !list.length;
       grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
     }
@@ -612,7 +651,7 @@ return glow(c,e);}`;
       /** Focus a starting control only while the page has no thread. */
       focus() {
         if (!current || host.threads(current.id) > 0) return;
-        (grid.querySelector("button") || askBtn).focus({ preventScroll: true });
+        (files.querySelector("button") || grid.querySelector("button") || askBtn).focus({ preventScroll: true });
       },
     };
   };

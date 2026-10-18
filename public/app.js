@@ -401,6 +401,9 @@
     spaces: () => spacesReady?.list() || [],
     spaceColor: (space) => spacesReady?.colorOf(space) || null,
     applySpaces: (view) => spacesReady?.apply(view),
+    newFile: (kind, folderId) => createFile(kind, folderId),
+    fileSettings: () => fileSettings,
+    setDeleteFiles: (mode) => saveFileSettings({ deleteFiles: mode }),
     icons: { file: FILE_SVG, pin: PIN_SVG, folderInstructions: FOLDER_INSTRUCTIONS_SVG },
   });
   const views = window.createViews({
@@ -448,6 +451,10 @@
     templates: () => state.templates,
     builtins: () => state.builtinTemplates,
     pick: fillFromTemplate,
+    fileTarget: () => newFileTarget(draftFolder()),
+    createFile: (kind) => createFile(kind, draftFolder()),
+    // The Files section says where a new file goes, which can follow a changed default.
+    refreshFiles: () => void loadFileSettings().then(() => draftActive() && render()),
     threads: (id) => window.scribeChat?.pageThreads?.(id) || 0,
     working: (id) => window.scribeChat?.pageStatus?.(id) || null,
     openChat: () => window.scribeChat?.shortcut("dock"),
@@ -1520,6 +1527,7 @@
     { label: "Classifier", sections: window.scribeMlSettings.sections },
     { label: "Audio", sections: window.scribeAudioSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
+    { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
   ], {
     close: closeSettings,
@@ -1712,6 +1720,17 @@
       el.classList.add("dragging");
     }
     el.setAttribute("aria-label", tab.title);
+    // A file page shows its kind (#707).
+    const fileName = tab.file?.path || "";
+    let fileBadge = el.querySelector(".file-badge");
+    if ((fileBadge?.dataset.name || "") !== fileName) {
+      fileBadge?.remove();
+      if (fileName) {
+        fileBadge = window.scribeFiles.badge(fileName);
+        fileBadge.dataset.name = fileName;
+        el.insertBefore(fileBadge, el.querySelector(".tab-title"));
+      }
+    }
     let pin = el.querySelector(".tab-pin");
     if (tab.pinned) {
       if (!pin) {
@@ -3569,9 +3588,23 @@
     return { text: `agent · ${name}`, threadId: actor.thread, at: actor.at };
   }
 
-  function choose(message, buttons) {
+  /** opts.check: { label, checked } adds a checkbox; its state is written back to opts.check.checked. */
+  function choose(message, buttons, opts = {}) {
     choiceMessage.textContent = message;
     choiceActions.replaceChildren();
+    choiceMessage.parentElement.querySelector(".choice-check")?.remove();
+    let box = null;
+    if (opts.check) {
+      const label = document.createElement("label");
+      label.className = "template-check choice-check";
+      box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = Boolean(opts.check.checked);
+      const text = document.createElement("span");
+      text.textContent = opts.check.label;
+      label.append(box, text);
+      choiceMessage.after(label);
+    }
     const cancel = document.createElement("button");
     cancel.type = "submit";
     cancel.value = "cancel";
@@ -3593,7 +3626,10 @@
     return new Promise((resolve) => {
       choiceDlg.addEventListener(
         "close",
-        () => resolve(choiceDlg.returnValue && choiceDlg.returnValue !== "cancel" ? choiceDlg.returnValue : null),
+        () => {
+          if (box) opts.check.checked = box.checked;
+          resolve(choiceDlg.returnValue && choiceDlg.returnValue !== "cancel" ? choiceDlg.returnValue : null);
+        },
         { once: true }
       );
     });
@@ -3976,6 +4012,108 @@
     if (data?.tab && !data.tab.closedAt) {
       focusWhenOpened(data.tab.id);
     }
+  }
+
+  /* ---------- files on disk (#707) ---------- */
+
+  const filesDefaultBtn = document.getElementById("files-default");
+  const filesDeleteTrack = document.getElementById("files-delete");
+  const DELETE_FILE_MODES = [
+    { id: "", name: "Ask" },
+    { id: "trash", name: "Recycle the file" },
+    { id: "keep", name: "Keep the file" },
+  ];
+  const NEW_FILE_NAMES = { md: "Untitled.md", txt: "Untitled.txt" };
+  /** Where new files go and what deleting a file page does (the daemon keeps them). */
+  let fileSettings = {};
+
+  async function loadFileSettings() {
+    const res = await fetch("/api/files/settings").catch(() => null);
+    const data = res?.ok ? await res.json().catch(() => null) : null;
+    if (data?.settings) fileSettings = data.settings;
+    renderFileSettings();
+    return fileSettings;
+  }
+
+  async function saveFileSettings(patch) {
+    const res = await fetch("/api/files/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).catch(() => null);
+    const data = res ? await res.json().catch(() => ({})) : {};
+    if (!res?.ok) {
+      showNotice(data.error || "Could not save the setting");
+      return false;
+    }
+    fileSettings = data.settings || {};
+    renderFileSettings();
+    return true;
+  }
+
+  function renderFileSettings() {
+    filesDefaultBtn.textContent = fileSettings.defaultLocation || "Choose…";
+    filesDeleteTrack.replaceChildren(
+      ...DELETE_FILE_MODES.map((item) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = item.name;
+        btn.setAttribute("aria-pressed", String((fileSettings.deleteFiles || "") === item.id));
+        btn.addEventListener("click", () => void saveFileSettings({ deleteFiles: item.id || null }));
+        return btn;
+      })
+    );
+  }
+
+  filesDefaultBtn.addEventListener("click", async () => {
+    const current = fileSettings.defaultLocation || "";
+    const dir = await window.scribeChat?.pickWorkspace?.(current, { title: "New files go to", hint: "", action: "Use folder", used: false, clear: current ? "No default" : undefined });
+    if (dir === null || dir === undefined) return;
+    await saveFileSettings({ defaultLocation: dir || null });
+  });
+  void loadFileSettings();
+
+  /** The Library folder of the page that was in front when the New page opened. */
+  function draftFolder() {
+    return findAnyTab(state.draftFrom)?.folderId || null;
+  }
+
+  /** Where a new file in this Library folder lands: its disk location, else the default, else nowhere yet. */
+  function newFileTarget(folderId) {
+    const folder = folderId ? state.folders.find((item) => item.id === folderId) : null;
+    const disk = folder ? window.scribeFiles.diskPath(state.folders, folder.id) : null;
+    return { folderId: folder?.id || null, folder: folder?.name || null, disk, location: disk || fileSettings.defaultLocation || null };
+  }
+
+  async function postNewFile(body) {
+    const res = await fetch("/api/files/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+    return { res, data: res ? await res.json().catch(() => ({})) : {} };
+  }
+
+  /** A new empty file as a page in Library folder folderId (kind md, txt, or other: the user names it). */
+  async function createFile(kind, folderId) {
+    const pick = window.scribeChat?.pickWorkspace;
+    const target = newFileTarget(folderId);
+    const body = { folderId: target.folderId };
+    if (kind === "other") {
+      const sep = /\\/.test(target.location || "") ? "\\" : "/";
+      const start = target.location ? `${target.location.replace(/[\\/]+$/, "")}${sep}untitled.txt` : "";
+      const picked = await pick?.(start, { files: "save", title: "New file", hint: "", action: "Create", name: "untitled.txt" });
+      if (!picked) return;
+      body.file = picked;
+    } else {
+      body.name = NEW_FILE_NAMES[kind] || NEW_FILE_NAMES.md;
+    }
+    let { res, data } = await postNewFile(body);
+    if (res?.status === 409 && data.needsLocation) {
+      // Nothing is created until there is a folder on disk for it.
+      const remember = { label: "Use this folder for new files from now on", checked: true };
+      const dir = await pick?.("", { title: "Where should new files go?", hint: `${body.name} needs a folder on disk. Pick one to create it there.`, action: "Create", used: false, remember });
+      if (!dir) return;
+      ({ res, data } = await postNewFile({ ...body, location: dir, remember: remember.checked }));
+      if (res?.ok && remember.checked) void loadFileSettings();
+    }
+    if (!res?.ok || !data.tab) {
+      showNotice(data.error || "Could not create the file");
+      return;
+    }
+    focusWhenOpened(data.tab.id);
   }
 
   /** The HTTP reply and the WebSocket upsert race; select now if the tab already arrived, else when it does. */

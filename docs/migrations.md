@@ -1,5 +1,15 @@
 # Migrations
 
+## `folders.disk` column and the `files` meta key (#707, additive, schema still 3)
+
+- **What changed:** A Library folder can stand for a disk folder: `folders.disk TEXT` holds its absolute path (`Folder.disk`). Subfolders without one inherit `<parent's location>\<name>`; renaming or moving one whose disk folder exists pins that path as its own link. Open folder now links the folder it makes (and updates the folder already linked to that disk folder instead of making a second one); one Library folder per disk folder. The meta table gains a `files` key (JSON `{ defaultLocation?, deleteFiles?: "trash" | "keep" }`): where new files go when the target folder is not on disk, and what deleting a file page does with its file. The daemon watches each linked disk folder (one recursive `fs.watch` per root; nested and equal links share it) and gives new files there pages.
+- **Why no version bump:** Existing rows read as null (not on disk), so nothing is watched or moved until a folder is linked. `ensureFolderDiskColumn` checks `PRAGMA table_info(folders)` before `ALTER TABLE`. A board without the `files` key has no default location and asks before deleting a file. `SCHEMA_VERSION` stays `3`.
+- **Export format:** unchanged; disk paths are on this PC.
+- **Protocol:** additive: `disk` on folders; `PUT /api/folders/:fid/disk`, `POST /api/folders/:fid/rescan`, `GET` / `PUT /api/files/settings`, `POST /api/files/create` (409 `needsLocation` or `exists`), `keepBoth` on `POST /api/tabs/:id/move` (409 `exists`; the board moving a file page into a folder on disk moves its file, agents only move the page), `file=trash` on `DELETE /api/tabs/:id?permanent=true`. All board UI only. `VERSION` stays as is.
+- **Where:** `src/diskFolders.ts`, `src/schema.ts`, `src/dbMigrate.ts` (`ensureFolderDiskColumn`), `src/db.ts` (`readMetaJson`, `writeMetaJson`), `src/types.ts`, `src/store.ts` (`folderDiskPath`, `setFolderDisk`, `createFile`, `moveFileWithPage`, `watchDisk`, `diskChanged`), `src/http.ts`, `public/files.js`, `public/library.js`, `public/app.js`, `public/newpage.js`, `public/agent.js` (`pickWorkspace` `remember`).
+- **How to verify:** `src/diskFolders.test.ts`.
+- **When to remove:** Keep. This is the current schema.
+
 ## `tabs.made_in` column, space home folders and lenses (#260, additive, schema still 3)
 
 - **What changed:** Spaces can have a home folder and a Library lens (`home`, `lens` on each space in the `spaces` meta JSON). A page records the space it was made in as `tabs.made_in TEXT` (the active space for the user's pages, the space a chat was started in for an agent's), and a new page without a folder goes to that space's home folder (for an agent, only when it could still reach a page there). Threads (`agent.sqlite`, JSON) gain `space`. The lens is evaluated in the board (`public/lens.js`); its About condition asks `GET /api/search/about`, which caches each phrase until the index changes.

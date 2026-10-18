@@ -102,6 +102,7 @@ html[data-theme="neutral"] {
   --accent-ring: rgba(255, 255, 255, 0.35);
   --file-icon: #8e8e96;
   --file-glow: drop-shadow(0 0 4px rgba(255, 255, 255, 0.16));
+  --disk: #d8b56a;
   --logo: #333338;
   --danger: #ff8a8a;
   --pin-rgb: 226, 190, 140;
@@ -5213,4 +5214,112 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 
 .lens-cond-note.lens-unit {
   flex: none;
+}
+
+/* ---------- files on disk (#707) ---------- */
+
+/* A file page's kind, in place of the page icon in the Library and before the title in tabs. */
+.file-badge {
+  flex: 0 0 auto;
+  min-width: 22px;
+  padding: 2px 3px;
+  border-radius: 3px;
+  font: 600 8.5px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.file-badge.k-md { background: rgba(110, 170, 255, 0.18); color: #8fbaff; }
+.file-badge.k-json { background: rgba(240, 190, 90, 0.18); color: #f0c46a; }
+.file-badge.k-code { background: rgba(120, 160, 255, 0.18); color: #9db4ff; }
+.file-badge.k-txt { background: rgba(200, 200, 210, 0.14); color: #c9c9d0; }
+.file-badge.k-img { background: rgba(120, 210, 150, 0.18); color: #8fd8a6; }
+.file-badge.k-pdf { background: rgba(240, 110, 110, 0.18); color: #f08f8f; }
+
+html[data-theme="cream"] .file-badge.k-md { background: rgba(40, 90, 170, 0.14); color: #2b5aa0; }
+html[data-theme="cream"] .file-badge.k-json { background: rgba(160, 110, 20, 0.16); color: #85590c; }
+html[data-theme="cream"] .file-badge.k-code { background: rgba(60, 80, 170, 0.14); color: #3a4c9c; }
+html[data-theme="cream"] .file-badge.k-txt { background: rgba(70, 48, 22, 0.1); color: #5b4c3d; }
+html[data-theme="cream"] .file-badge.k-img { background: rgba(40, 130, 70, 0.14); color: #26703f; }
+html[data-theme="cream"] .file-badge.k-pdf { background: rgba(170, 40, 40, 0.12); color: #9a2a24; }
+
+.lib-page .file-badge {
+  opacity: 0.7;
+}
+
+.lib-page.open .file-badge,
+.lib-page.active .file-badge {
+  opacity: 1;
+}
+
+/* Library folders on disk: the disk colour, and the linked path on the row. */
+.lib-folder.on-disk .lib-folder-icon {
+  color: var(--disk);
+}
+
+.lib-disk-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--disk);
+  opacity: 0.85;
+}
+
+html[data-theme="cream"] {
+  --disk: #87610f;
+}
+
+/* New page: the Files section above the templates. */
+.newpage-files {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.newpage-files[hidden],
+.newpage-where[hidden] {
+  display: none;
+}
+
+.newpage-file-card {
+  min-height: 0;
+  align-items: center;
+  padding: 9px 14px;
+  border-radius: 10px;
+}
+
+.newpage-file-card .file-badge {
+  font-size: 9px;
+}
+
+.newpage-where {
+  align-self: stretch;
+  margin: 10px 0 0;
+  font-size: 12px;
+  text-align: left;
+  color: var(--muted);
+}
+
+.newpage-where b {
+  font-weight: 500;
+  color: var(--disk);
+}
+
+.choice-check {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+/* Settings → Files: a long default path stays on one line. */
+.files-default {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

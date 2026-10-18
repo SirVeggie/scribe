@@ -1818,6 +1818,7 @@
    * opts.files: "open" lists files too and picks one; "save" picks where to save (input holds the
    * full path, and browsing keeps its file name; opts.name is the fallback). opts.action names the button.
    */
+  /** opts.remember: { label, checked } adds a checkbox under the path; its state is written back to it. */
   function pickWorkspace(initial, opts = {}) {
     const files = opts.files === "open" || opts.files === "save" ? opts.files : "";
     const sep = (dir) => (/\\/.test(dir) || /^[A-Za-z]:/.test(dir) ? "\\" : "/");
@@ -1901,6 +1902,15 @@
       if (opts.clear) actions.append(button(opts.clear, "ag-btn", () => finish("")));
       actions.append(button("Cancel", "ag-btn", () => finish(null)));
       panel.append(...(hint.textContent ? [title, hint, row] : [title, row]));
+      if (opts.remember) {
+        const box = el("input");
+        box.type = "checkbox";
+        box.checked = Boolean(opts.remember.checked);
+        box.addEventListener("change", () => { opts.remember.checked = box.checked; });
+        const check = el("label", "ag-check ag-ws-remember");
+        check.append(box, el("span", null, opts.remember.label));
+        panel.append(check);
+      }
       if (used.childElementCount) panel.append(used);
       panel.append(browser, actions);
       load(input.value.trim());

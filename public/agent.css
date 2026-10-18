@@ -5116,6 +5116,11 @@ html.tight-small .agent-full {
   width: min(620px, calc(100vw - 40px));
 }
 
+.ag-ws-remember {
+  margin-top: 10px;
+  color: var(--muted);
+}
+
 .ag-ws-row {
   display: flex;
   gap: 8px;

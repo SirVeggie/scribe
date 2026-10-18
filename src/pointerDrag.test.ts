@@ -123,7 +123,7 @@ test("Library and Spaces drags commit once and defer refreshes until release", a
       .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<link\b[^>]*>/gi, "");
     await page.route("http://lists.test/", route => route.fulfill({ contentType: "text/html", body: html }));
     await page.goto("http://lists.test/");
-    await loadShellScripts(page, { scripts: ["pointer-drag.js", "dom-sync.js", "select.js", "library.js", "spaces.js"] });
+    await loadShellScripts(page, { scripts: ["pointer-drag.js", "dom-sync.js", "select.js", "files.js", "library.js", "spaces.js"] });
     await page.evaluate(() => {
       const w = window as any;
       w.requests = [];

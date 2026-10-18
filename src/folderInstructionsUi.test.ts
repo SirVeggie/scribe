@@ -15,7 +15,7 @@ test("folder instructions menu, resizing, save, cancel and indicator", async () 
     await page.route("http://scribe-fixture.test/", route => route.fulfill({ contentType: "text/html", body: html }));
     await page.goto("http://scribe-fixture.test/");
     await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") });
-    await loadShellScripts(page, { scripts: ["pointer-drag.js", "dom-sync.js", "select.js", "library.js"] });
+    await loadShellScripts(page, { scripts: ["pointer-drag.js", "dom-sync.js", "select.js", "files.js", "library.js"] });
     await page.evaluate(() => {
       const w = window as any;
       document.documentElement.removeAttribute("data-restoring");
