@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { dataDir } from "../config.js";
 import { log } from "../log.js";
 import { syncDependencies } from "./deps.js";
-import { git } from "./git.js";
+import { git, snapshotTree } from "./git.js";
 import { claudeDir } from "./permissions.js";
 import type { ThreadWorktree } from "./types.js";
 
@@ -50,13 +51,8 @@ async function currentBranch(dir: string): Promise<string | null> {
 /** Changed or untracked files, from `git status --porcelain`. */
 async function dirtyFiles(dir: string): Promise<string[]> {
   const res = await git(["status", "--porcelain", "-z", "--untracked-files=normal"], dir, { timeoutMs: 30_000 });
-  if (res.code !== 0) return [];
+  if (res.code !== 0) throw new Error(`Could not read worktree status: ${res.stderr.trim()}`);
   return res.stdout.split("\0").filter(Boolean).map((entry) => entry.slice(3));
-}
-
-async function countAhead(dir: string, from: string): Promise<number> {
-  const res = await git(["rev-list", "--count", `${from}..HEAD`], dir, { timeoutMs: 10_000 });
-  return res.code === 0 ? Number(res.stdout.trim()) || 0 : 0;
 }
 
 /** Folders to link in from the main checkout: Claude Code's worktree.symlinkDirectories, else node_modules. */
@@ -172,7 +168,7 @@ export type WorktreeStatus = {
   exists: boolean;
   /** Uncommitted files in the worktree. */
   dirty: string[];
-  /** Commits on the worktree branch that the base branch does not have. */
+  /** Commits on the worktree branch with no equivalent patch on the current base. */
   ahead: number;
   /** The main checkout's branch, and whether merging can go ahead there. */
   mainBranch: string | null;
@@ -188,15 +184,62 @@ export async function worktreeStatus(wt: ThreadWorktree): Promise<WorktreeStatus
 
 async function countAheadOf(wt: ThreadWorktree): Promise<number> {
   const from = wt.base && (await branchExists(wt.repo, wt.base)) ? wt.base : wt.baseCommit;
-  const res = await git(["rev-list", "--count", `${from}..refs/heads/${wt.branch}`], wt.repo, { timeoutMs: 10_000 });
-  return res.code === 0 ? Number(res.stdout.trim()) || 0 : 0;
+  // Keep unique merge commits: unlike git cherry (or --no-merges), this does not hide
+  // changes introduced by a merge's conflict resolution.
+  const res = await git(["rev-list", "--count", "--cherry-pick", "--right-only", `${from}...refs/heads/${wt.branch}`], wt.repo, { timeoutMs: 30_000 });
+  const count = Number(res.stdout.trim());
+  if (res.code !== 0 || !/^\d+$/.test(res.stdout.trim())) throw new Error(`Could not compare worktree commits: ${res.stderr.trim()}`);
+  return count;
 }
 
 /** Commits and uncommitted changes, cheap enough to refresh after each turn. */
 export async function worktreeProgress(wt: ThreadWorktree): Promise<{ ahead: number; dirty: boolean }> {
   if (!fs.existsSync(wt.path)) return { ahead: 0, dirty: false };
-  const [ahead, dirty] = await Promise.all([countAhead(wt.path, wt.baseCommit), dirtyFiles(wt.path)]);
+  const [ahead, dirty] = await Promise.all([countAheadOf(wt), dirtyFiles(wt.path)]);
   return { ahead, dirty: dirty.length > 0 };
+}
+
+/** Whether both the index and working copy's changes already exist in the committed base.
+ * A private index keeps this independent of dirty files in the main checkout. Failed or
+ * ambiguous checks keep the worktree; nothing is applied to either checkout's files/index.
+ */
+async function dirtyAlreadyLanded(wt: ThreadWorktree): Promise<boolean> {
+  const base = wt.base ? `refs/heads/${wt.base}` : wt.baseCommit;
+  const status = await git(["status", "--porcelain=v2", "-z", "--untracked-files=normal"], wt.path);
+  // A tree snapshot cannot represent a submodule's uncommitted files.
+  if (status.code !== 0 || status.stdout.split("\0").some((entry) => /^[12u] \S+ S/.test(entry))) return false;
+  const staged = await git(["write-tree"], wt.path);
+  const working = await snapshotTree(wt.path);
+  if (staged.code !== 0 || !working) return false;
+  const tmp = path.join(os.tmpdir(), `scribe-landed-${crypto.randomBytes(8).toString("hex")}`);
+  const env = { GIT_INDEX_FILE: tmp };
+  try {
+    if ((await git(["read-tree", base], wt.repo, { env })).code !== 0) return false;
+    for (const tree of new Set([staged.stdout.trim(), working])) {
+      const patch = await git(["diff", "--no-ext-diff", "--no-textconv", "--binary", "--full-index", "HEAD", tree], wt.path);
+      if (patch.code !== 0) return false;
+      if (!patch.stdout) continue;
+      const check = await git(["apply", "--cached", "--reverse", "--check", "--whitespace=nowarn", "-"], wt.repo, { env, input: patch.stdout });
+      if (check.code !== 0) return false;
+    }
+    return true;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+/** Work still absent from the current base, for idle cleanup and its stale list. */
+export async function worktreeRemaining(wt: ThreadWorktree): Promise<{ ahead: number; dirty: boolean }> {
+  if ((await currentBranch(wt.path)) !== wt.branch) throw new Error("The worktree changed branches.");
+  // Never clean up a paused rebase/merge, even when its current files appear to have landed.
+  const dir = await git(["rev-parse", "--absolute-git-dir"], wt.path);
+  if (dir.code !== 0 || !dir.stdout.trim()) throw new Error("Could not read the worktree's Git directory.");
+  if (["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer"].some((name) => fs.existsSync(path.join(dir.stdout.trim(), name)))) {
+    throw new Error("The worktree has an unfinished Git operation.");
+  }
+  const progress = await worktreeProgress(wt);
+  if (progress.dirty && await dirtyAlreadyLanded(wt)) progress.dirty = false;
+  return progress;
 }
 
 /** Commit everything in the worktree so closing it loses nothing. Returns false when there was nothing to commit. */
@@ -314,7 +357,7 @@ async function rebaseOntoBase(wt: ThreadWorktree, base: string): Promise<boolean
 export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: number }> {
   if (!wt.base) throw new Error("The worktree was made from a detached HEAD, so there is no branch to merge into. Use Leave branch instead.");
   let status = await worktreeStatus(wt);
-  if (status.dirty.length) {
+  if (status.dirty.length && !(await dirtyAlreadyLanded(wt))) {
     throw new Error(`The worktree has ${status.dirty.length} uncommitted file${status.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch, which commits them for you.`);
   }
   if (status.mainBranch !== wt.base) {

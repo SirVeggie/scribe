@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { revertTrees, snapshotTree } from "./git.js";
-import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeRemaining, worktreeStatus } from "./worktree.js";
 
 let root = "";
 let repo = "";
@@ -66,6 +66,7 @@ test("a worktree branches from HEAD, links node_modules, and keeps the link out 
   assert.ok(await commitAll(wt, "change a"));
   assert.deepEqual(await worktreeProgress(wt), { ahead: 1, dirty: false });
   assert.deepEqual(await mergeWorktree(wt), { commits: 1 });
+  assert.deepEqual(await worktreeProgress(wt), { ahead: 0, dirty: false }, "merged commits stop counting against the original starting commit (#709)");
   assert.equal(fs.readFileSync(path.join(repo, "src", "a.txt"), "utf8"), "two\n");
   await removeWorktree(wt);
   assert.ok(!fs.existsSync(wt.path));
@@ -193,6 +194,142 @@ test("idle worktrees close when empty and are listed as stale when they hold cha
     for (const wt of [worked, fresh]) {
       await discardWorktree(wt);
     }
+  }
+});
+
+test("equivalent commits count as landed, while additional work stays ahead (#709)", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "Equivalent patch");
+  try {
+    fs.writeFileSync(path.join(wt.path, "equivalent.txt"), "same patch\n");
+    await commitAll(wt, "original commit");
+    const original = sh(wt.path, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(repo, "equivalent.txt"), "same patch\n");
+    sh(repo, "add", "-A");
+    sh(repo, "commit", "-q", "-m", "landed through another thread");
+    assert.notEqual(sh(repo, "rev-parse", "HEAD"), original);
+    assert.equal(sh(repo, "rev-list", "--count", `main..${wt.branch}`), "1");
+    assert.equal((await worktreeStatus(wt)).ahead, 0);
+    assert.deepEqual(await worktreeRemaining(wt), { ahead: 0, dirty: false });
+    fs.writeFileSync(path.join(wt.path, "still-local.txt"), "keep me\n");
+    await commitAll(wt, "additional work");
+    assert.equal((await worktreeRemaining(wt)).ahead, 1);
+    assert.equal(await dropBranchIfEmpty(wt), false);
+  } finally {
+    await discardWorktree(wt);
+  }
+});
+
+test("dirty changes already committed on base are recognized without changing either index (#709)", async () => {
+  fs.writeFileSync(path.join(repo, "delete-landed.txt"), "delete\n");
+  fs.writeFileSync(path.join(repo, "rename-landed.txt"), "rename\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-q", "-m", "prepare dirty recovery");
+  const { worktree: wt } = await createWorktree(repo, repo, "Dirty recovery");
+  try {
+    for (const dir of [wt.path, repo]) {
+      fs.writeFileSync(path.join(dir, "src", "a.txt"), "recovered edit\n");
+      fs.unlinkSync(path.join(dir, "delete-landed.txt"));
+      fs.renameSync(path.join(dir, "rename-landed.txt"), path.join(dir, "renamed-landed.txt"));
+      fs.writeFileSync(path.join(dir, "binary-landed.bin"), Buffer.from([0, 255, 1, 128]));
+      fs.writeFileSync(path.join(dir, "untracked-landed.txt"), "recovered untracked\n");
+    }
+    sh(wt.path, "add", "src/a.txt", "rename-landed.txt", "renamed-landed.txt");
+    assert.equal((await worktreeRemaining(wt)).dirty, true, "uncommitted main-checkout files do not count as landed");
+    sh(repo, "add", "-A");
+    sh(repo, "commit", "-q", "-m", "recover dirty work elsewhere");
+    const localStatus = sh(wt.path, "status", "--porcelain");
+    const localIndex = sh(wt.path, "write-tree");
+    fs.writeFileSync(path.join(repo, "main-uncommitted.txt"), "unrelated staged main work\n");
+    sh(repo, "add", "main-uncommitted.txt");
+    const mainIndex = sh(repo, "write-tree");
+    assert.deepEqual(await worktreeRemaining(wt), { ahead: 0, dirty: false });
+    assert.equal(sh(wt.path, "status", "--porcelain"), localStatus);
+    assert.equal(sh(wt.path, "write-tree"), localIndex);
+    assert.equal(sh(repo, "write-tree"), mainIndex);
+    // A staged blob must not disappear just because the working file has landed.
+    fs.writeFileSync(path.join(wt.path, "src", "a.txt"), "unique staged edit\n");
+    sh(wt.path, "add", "src/a.txt");
+    fs.writeFileSync(path.join(wt.path, "src", "a.txt"), "recovered edit\n");
+    assert.equal((await worktreeRemaining(wt)).dirty, true);
+    sh(wt.path, "reset", "-q", "HEAD", "--", "src/a.txt");
+    fs.writeFileSync(path.join(wt.path, "untracked-landed.txt"), "a new local edit\n");
+    assert.equal((await worktreeRemaining(wt)).dirty, true);
+    fs.writeFileSync(path.join(wt.path, "untracked-landed.txt"), "recovered untracked\n");
+    assert.deepEqual(await mergeWorktree(wt), { commits: 0 }, "Merge can close a dirty worktree once all of its changes landed");
+  } finally {
+    sh(repo, "reset", "-q", "HEAD", "--", "main-uncommitted.txt");
+    fs.rmSync(path.join(repo, "main-uncommitted.txt"), { force: true });
+    await discardWorktree(wt);
+  }
+});
+
+test("unique merge commits are kept even when their constituent patches landed elsewhere (#709)", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "Keep merge resolution");
+  const side = `${wt.branch}-side`;
+  try {
+    sh(wt.path, "checkout", "-q", "-b", side);
+    fs.writeFileSync(path.join(wt.path, "merge-side.txt"), "side\n");
+    await commitAll(wt, "side patch");
+    sh(wt.path, "checkout", "-q", wt.branch);
+    sh(wt.path, "merge", "-q", "--no-ff", "-m", "unique merge", side);
+    fs.writeFileSync(path.join(repo, "merge-side.txt"), "side\n");
+    sh(repo, "add", "-A");
+    sh(repo, "commit", "-q", "-m", "same side patch elsewhere");
+    assert.equal((await worktreeRemaining(wt)).ahead, 1, "a unique merge is never silently excluded like git cherry excludes merges");
+  } finally {
+    await discardWorktree(wt);
+    sh(repo, "branch", "-D", side);
+  }
+});
+
+test("unfinished Git operations and failed base comparisons prevent cleanup (#709)", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "Keep interrupted work");
+  try {
+    const marker = path.resolve(wt.path, sh(wt.path, "rev-parse", "--git-path", "MERGE_HEAD"));
+    fs.writeFileSync(marker, `${sh(wt.path, "rev-parse", "HEAD")}\n`);
+    await assert.rejects(worktreeRemaining(wt), /unfinished Git operation/);
+    fs.unlinkSync(marker);
+    await assert.rejects(worktreeRemaining({ ...wt, base: null, baseCommit: "missing-base" }), /Could not compare/);
+  } finally {
+    await discardWorktree(wt);
+  }
+});
+
+test("a merge closes quiet worktrees whose work landed with it and keeps busy or unused ones (#709)", async () => {
+  const { AgentHost } = await import("./host.js");
+  const target = (await createWorktree(repo, repo, "Other committed work")).worktree;
+  const recovered = (await createWorktree(repo, repo, "Other dirty work")).worktree;
+  const busy = (await createWorktree(repo, repo, "Other busy work")).worktree;
+  const unused = (await createWorktree(repo, repo, "Other unused work")).worktree;
+  const donor = (await createWorktree(repo, repo, "Merge for other chats")).worktree;
+  for (const wt of [target, busy, donor]) {
+    fs.writeFileSync(path.join(wt.path, "shared-landed.txt"), "landed elsewhere\n");
+    await commitAll(wt, wt.branch);
+  }
+  for (const wt of [recovered, donor]) fs.writeFileSync(path.join(wt.path, "dirty-landed.txt"), "dirty recovery\n");
+  await commitAll(donor, "recover another chat's dirty file");
+  const threads = new Map([target, recovered, busy, unused, donor].map((wt) => [wt.branch, {
+    id: wt.branch, title: wt.branch, cwd: wt.path, worktree: wt, useWorktree: true, nativeId: wt.branch,
+  }]));
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    threads, runs: new Map([[busy.branch, {}]]), resuming: new Set(), status: new Map(), queues: new Map(), pageRuns: new Map(), sessions: new Map(), closed: false,
+    db: { saveThread() {}, listTurns: () => [] },
+    addItem() {}, emitThread() {}, flushNow() {},
+  });
+  try {
+    await host.finishWorktree(donor.branch, "merge");
+    for (const wt of [target, recovered, donor]) {
+      assert.equal(fs.existsSync(wt.path), false);
+      assert.equal(threads.get(wt.branch)?.worktree.closed?.how, "merged");
+      assert.equal(threads.get(wt.branch)?.useWorktree, true);
+      assert.equal(sh(repo, "branch", "--list", wt.branch), "");
+    }
+    assert.equal(fs.existsSync(busy.path), true, "a running thread is left alone even if its patches have landed");
+    assert.equal(fs.existsSync(unused.path), true, "a newly opened worktree remains ready for its first turn");
+    await host.expireWorktree(busy.branch, busy);
+    assert.equal(fs.existsSync(busy.path), true, "cleanup rechecks a thread that became busy");
+  } finally {
+    for (const wt of [target, recovered, busy, unused, donor]) await discardWorktree(wt);
   }
 });
 

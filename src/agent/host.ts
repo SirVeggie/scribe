@@ -15,7 +15,7 @@ import { addTargets, effectiveLevel, pageReach, sameTarget, type AccessPage, typ
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
-import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeStatus, type WorktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeRemaining, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, implementText, pageKeysIn, planTurnNote, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
@@ -4748,6 +4748,7 @@ export class AgentHost {
       this.emitThread(id);
     }
     this.flushNow();
+    if (how === "merge") await this.closeLandedWorktrees(wt.repo).catch((err) => log(`Checking other landed worktrees failed: ${(err as Error).message}`));
     return { ok: true, message };
   }
 
@@ -4770,12 +4771,12 @@ export class AgentHost {
    * folder (forks and helpers share it), under the thread that used it last. Leaves out a worktree
    * while any of its threads is busy, queued or held by a page run (a board worker's).
    */
-  private async idleWorktrees(): Promise<Array<{ thread: Thread; wt: ThreadWorktree; usedAt: number; ahead: number; dirty: boolean }>> {
+  private async idleWorktrees(minIdleMs = WORKTREE_IDLE_MS, repo?: string): Promise<Array<{ thread: Thread; wt: ThreadWorktree; usedAt: number; ahead: number; dirty: boolean }>> {
     const now = Date.now();
     const groups = new Map<string, Thread[]>();
     for (const thread of this.threads.values()) {
       const wt = openWorktree(thread);
-      if (wt) groups.set(workspaceKey(wt.path), [...(groups.get(workspaceKey(wt.path)) ?? []), thread]);
+      if (wt && (!repo || workspaceKey(wt.repo) === workspaceKey(repo))) groups.set(workspaceKey(wt.path), [...(groups.get(workspaceKey(wt.path)) ?? []), thread]);
     }
     const out = [];
     for (const threads of groups.values()) {
@@ -4789,8 +4790,8 @@ export class AgentHost {
       // A helper's turns count, but the worktree is listed and kept under a thread of the user's.
       const owner = (used.find((u) => !u.t.helperOf) ?? used[0]).t;
       const wt = openWorktree(owner)!;
-      if (now - usedAt < WORKTREE_IDLE_MS || !fs.existsSync(wt.path)) continue;
-      const progress = await worktreeProgress(wt).catch(() => null);
+      if (now - usedAt < minIdleMs || !fs.existsSync(wt.path)) continue;
+      const progress = await worktreeRemaining(wt).catch(() => null);
       if (progress) out.push({ thread: owner, wt, usedAt, ...progress });
     }
     return out;
@@ -4812,8 +4813,25 @@ export class AgentHost {
       });
   }
 
-  private async expireWorktree(threadId: string, wt: ThreadWorktree): Promise<void> {
+  /** A merge can land another thread's patches too; close that folder without waiting days. */
+  private async closeLandedWorktrees(repo: string): Promise<void> {
+    for (const { thread, wt, ahead, dirty } of await this.idleWorktrees(0, repo)) {
+      if (ahead || dirty || this.closed) continue;
+      // Leave newly opened, unused worktrees available for their first turn.
+      const status = await worktreeStatus(wt);
+      if ((await headCommit(wt.path)) === wt.baseCommit && !status.dirty.length) continue;
+      await this.expireWorktree(thread.id, wt, true).catch((err) => log(`${thread.id}: closing its landed worktree failed: ${(err as Error).message}`));
+    }
+  }
+
+  private async expireWorktree(threadId: string, wt: ThreadWorktree, landed = false): Promise<void> {
     const ids = [threadId, ...this.sharers(threadId, wt).map((t) => t.id)];
+    // Git checks yield: a message or helper may have started since the sweep collected this folder.
+    const remaining = await worktreeRemaining(wt);
+    if (remaining.ahead || remaining.dirty || ids.some((id) => {
+      const run = this.pageRuns.get(id);
+      return this.runs.has(id) || this.resuming.has(id) || (this.status.get(id) ?? "idle") !== "idle" || this.queues.get(id)?.length || (run && run.phase !== "ended");
+    })) return;
     // The provider process runs in the folder; Windows will not remove a folder in use.
     for (const id of ids) {
       this.sessions.get(id)?.dispose();
@@ -4834,13 +4852,14 @@ export class AgentHost {
         ...cur,
         cwd: wt.home,
         useWorktree: own,
-        worktree: { ...wt, ahead: 0, dirty: false, closed: { how: own ? "expired" : "left", at } },
+        worktree: { ...wt, ahead: 0, dirty: false, closed: { how: own ? (landed ? "merged" : "expired") : "left", at } },
         nativeId: own ? cur.nativeId : null,
       };
       this.threads.set(id, next);
       this.db.saveThread(next);
       const after = own ? "The next message opens a new one." : "The next message starts a new agent session in the folder.";
-      this.addItem(id, null, { kind: "notice", level: "info", text: `Removed the worktree on ${wt.branch}: it held no changes and had no turns for ${days} days. ${after}` });
+      const reason = landed ? "its changes already landed on its base" : `it held no changes absent from its base and had no turns for ${days} days`;
+      this.addItem(id, null, { kind: "notice", level: "info", text: `Removed the worktree on ${wt.branch}: ${reason}. ${after}` });
       this.emitThread(id);
     }
     this.flushNow();
