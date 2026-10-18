@@ -17,7 +17,7 @@ export class AudioService {
   view() {
     const settings = this.store.read();
     const { custom, ...stt } = settings.stt;
-    const sources = this.sources().map(({ id, name }) => ({ id, name }));
+    const sources = this.sources().map(({ id, name, baseUrl }) => ({ id, name, baseUrl }));
     const profiles = this.profiles(settings).map(({ custom, ...profile }) => ({ ...profile,
       ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) }));
     return { stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },

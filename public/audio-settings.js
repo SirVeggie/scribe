@@ -1,6 +1,5 @@
 (() => {
   "use strict";
-  const restartMessage = "Restart Scribe to use multiple speech-to-text sources.";
   const section = document.createElement("section"); section.className = "settings-section audio-settings";
   const heading = document.createElement("h3"); heading.textContent = "Speech-to-text";
   const help = document.createElement("button"); help.type = "button"; help.className = "search-help"; help.textContent = "?";
@@ -37,8 +36,11 @@
   const source = row("Source", "source", "select", form);
   const url = row("URL", "url", "url", form); url.placeholder = "https://api.openai.com/v1";
   const key = row("API key", "key", "password", form); key.autocomplete = "new-password";
+  let customUrl = "";
+  url.addEventListener("input", () => { customUrl = url.value; });
   function customFields() {
-    url.closest(".setting-row").hidden = source.value !== "__custom__";
+    url.readOnly = source.value !== "__custom__";
+    url.value = url.readOnly ? view.sources.find(s => s.id === source.value)?.baseUrl || "" : customUrl;
     key.closest(".setting-row").hidden = source.value !== "__custom__";
   }
   const model = row("Model", "model", "text", form); model.placeholder = "whisper-1";
@@ -53,11 +55,10 @@
   formActions.append(button("Cancel", () => { form.hidden = true; add.hidden = false; }), submit);
   form.append(formActions);
   const add = button("Add source", () => edit(null)); const addActions = document.createElement("div");
-  add.disabled = true;
   addActions.className = "settings-actions"; addActions.append(add); section.append(addActions);
   function edit(profile) {
     editing = profile; name.value = profile?.name || ""; model.value = profile?.model || "whisper-1";
-    language.value = profile?.language || ""; url.value = profile?.custom?.baseUrl || ""; key.value = "";
+    language.value = profile?.language || ""; customUrl = profile?.custom?.baseUrl || ""; key.value = "";
     key.placeholder = profile?.custom?.hasKey ? "Saved (type to replace)" : "Optional";
     source.replaceChildren(); option(source, "__custom__", "Custom");
     view.sources.forEach(s => option(source, s.id, s.name)); source.value = profile?.source || "__custom__";
@@ -66,13 +67,7 @@
   }
   async function request(path, method, body = {}) {
     const res = await fetch("/api/audio/" + path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    let result;
-    try { result = await res.json(); } catch { /* A running older backend can return an HTML 404. */ }
-    if (!result || typeof result !== "object") {
-      throw new Error(res.status === 404 || res.ok ? restartMessage : `Cannot update speech-to-text settings (HTTP ${res.status}).`);
-    }
-    if (!res.ok) throw new Error(result.error || "Cannot update speech-to-text settings.");
-    return result;
+    const result = await res.json(); if (!res.ok) throw new Error(result.error); return result;
   }
   async function change(path, method, body) {
     try { await request(path, method, body); await refresh(); return true; }
@@ -135,15 +130,11 @@
     mic.parentElement.syncSelect();
   }
   async function refresh() {
-    add.disabled = true;
     try {
       view = await window.scribeAudio.refresh();
+      renderSources();
       send.setAttribute("aria-checked", String(view.input.sendAfterDictation));
       push.setAttribute("aria-checked", String(view.input.pushToTalk));
-      list.replaceChildren();
-      if (!Array.isArray(view.profiles)) throw new Error(restartMessage);
-      renderSources();
-      add.disabled = false;
       status.textContent = "";
       await devices();
     } catch (err) { status.textContent = err.message; }
@@ -152,7 +143,8 @@
   function save() {
     const body = { input: { sendAfterDictation: send.getAttribute("aria-checked") === "true", pushToTalk: push.getAttribute("aria-checked") === "true" } };
     saving = saving.then(async () => {
-      await request("settings", "PUT", body);
+      const res = await fetch("/api/audio/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const result = await res.json(); if (!res.ok) throw new Error(result.error);
       await window.scribeAudio.refresh(); status.textContent = "";
     }).catch(err => { status.textContent = err.message; });
     return saving;
