@@ -1147,6 +1147,17 @@ body.resizing-side .side-pane {
   opacity: 0.55;
 }
 
+.lib-access {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.lib-access.inherited {
+  opacity: 0.35;
+}
+
 .lib-row .tab-close {
   opacity: 0;
   transition: opacity var(--dur-fast) ease;

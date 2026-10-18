@@ -391,7 +391,7 @@
     clearStripSlot,
     openThread: (id) => window.scribeChat?.openThread?.(id),
     pageStatus: (id) => window.scribeChat?.pageStatus?.(id) || null,
-    icons: { file: FILE_SVG, pin: PIN_SVG, agentHidden: AGENT_HIDDEN_SVG, agentHiddenTitle: AGENT_HIDDEN_TITLE, folderInstructions: FOLDER_INSTRUCTIONS_SVG },
+    icons: { file: FILE_SVG, pin: PIN_SVG, folderInstructions: FOLDER_INSTRUCTIONS_SVG },
   });
   const views = window.createViews({
     startPaneDrag,

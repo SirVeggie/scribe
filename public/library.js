@@ -41,6 +41,14 @@ window.createLibrary = function createLibrary(host) {
     '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 3.5h4.2l1.5 1.5h7.3v8.5h-13z" fill="currentColor"/></svg>';
   const CHEVRON_SVG =
     '<svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M5.5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // Agent access level markers on rows (#727); Normal ("open") has none.
+  const accessSvg = (d) => `<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="${d}" fill="currentColor"/></svg>`;
+  const ACCESS_SVG = {
+    public: accessSvg("M4.5 7V5a3.5 3.5 0 0 1 6.8-1.2l-1.4.5A2 2 0 0 0 6 5v2h6.5A1.5 1.5 0 0 1 14 8.5v4a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-4A1.5 1.5 0 0 1 3.5 7z"),
+    ask: accessSvg("M5 8V3.2a1 1 0 0 1 2 0V7h.4V2.2a1 1 0 0 1 2 0V7h.4V3a1 1 0 0 1 2 0v5.2l.6-1.2a1 1 0 0 1 1.8.9l-1.9 4.3A3.5 3.5 0 0 1 9.1 14.5H8A4 4 0 0 1 4 10.5V5a1 1 0 0 1 1-1z"),
+    trusted: accessSvg("M8 1.5l5.5 2.2v4.1c0 3.3-2.4 5.7-5.5 7-3.1-1.3-5.5-3.7-5.5-7V3.7z"),
+    restricted: accessSvg("M4.5 7V5a3.5 3.5 0 0 1 7 0v2h1A1.5 1.5 0 0 1 14 8.5v4a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-4A1.5 1.5 0 0 1 3.5 7zM6 7h4V5a2 2 0 0 0-4 0z"),
+  };
 
   const collapsed = new Set(loadCollapsed());
   /** Latest tree model; rebuilt on every render. */
@@ -274,10 +282,7 @@ window.createLibrary = function createLibrary(host) {
 
     const icon = document.createElement("span");
     icon.className = "fileicon";
-    icon.innerHTML = page.agentHidden ? host.icons.agentHidden : host.icons.file;
-    if (page.agentHidden) {
-      icon.dataset.tooltip = host.icons.agentHiddenTitle;
-    }
+    icon.innerHTML = host.icons.file;
     el.appendChild(icon);
 
     if (host.isUnread(page.id)) {
@@ -299,6 +304,9 @@ window.createLibrary = function createLibrary(host) {
       text.appendChild(path);
     }
     el.appendChild(text);
+
+    const access = accessMarker(page.agentHidden ? "restricted" : page.access?.level, page.folderId);
+    if (access) el.appendChild(access);
 
     if (page.pinned) {
       const pin = document.createElement("span");
@@ -378,6 +386,8 @@ window.createLibrary = function createLibrary(host) {
       instructions.dataset.tooltip = "Custom agent instructions";
       el.appendChild(instructions);
     }
+    const access = accessMarker(folder.access?.level, folder.parentId);
+    if (access) el.appendChild(access);
     const count = document.createElement("span");
     count.className = "lib-count";
     count.textContent = String(countPages(folder.id));
@@ -1219,6 +1229,21 @@ window.createLibrary = function createLibrary(host) {
       if (own && (!level || LEVEL_RANK[own] > LEVEL_RANK[level])) level = own;
     }
     return level;
+  }
+
+  /** The row's access icon (#727): the effective level, dimmed when it comes from a parent folder; null for Normal. */
+  function accessMarker(own, parentId) {
+    const inherited = inheritedLevel(parentId);
+    const fromParent = Boolean(inherited && (!own || LEVEL_RANK[inherited] > LEVEL_RANK[own]));
+    const level = fromParent ? inherited : own;
+    if (!level || level === "open") return null;
+    const label = ACCESS_LEVELS.find((l) => l.id === level).label + (fromParent ? " (from parent folder)" : "");
+    const marker = document.createElement("span");
+    marker.className = "lib-access" + (fromParent ? " inherited" : "");
+    marker.innerHTML = ACCESS_SVG[level];
+    marker.setAttribute("aria-label", `Agent access: ${label}`);
+    marker.dataset.tooltip = `Agent access: ${label}`;
+    return marker;
   }
 
   function folderPathOf(id) {
