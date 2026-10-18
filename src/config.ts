@@ -86,6 +86,26 @@ export function pageIdFromHost(hostname: string): string | undefined {
   return undefined;
 }
 
+/**
+ * A worktree's UI preview runs on an origin of its own (#703): w-ab12cd34.localhost for chat
+ * th_ab12cd34. Its scripts are an agent's, so they must not run as the board; that origin gets the
+ * worktree's files and the data-free shared ones, nothing else. Other ids use wx<hex of the id>.
+ */
+export function previewHost(threadId: string): string {
+  const label = /^th_[0-9a-f]+$/.test(threadId) ? `w-${threadId.slice(3)}` : `wx${Buffer.from(threadId, "utf8").toString("hex")}`;
+  return label + PAGE_HOST_SUFFIX;
+}
+
+/** The chat a preview host names, or undefined for any other host. */
+export function previewThreadFromHost(hostname: string): string | undefined {
+  const host = hostname.toLowerCase();
+  if (!host.endsWith(PAGE_HOST_SUFFIX)) return undefined;
+  const label = host.slice(0, -PAGE_HOST_SUFFIX.length);
+  if (/^w-[0-9a-f]{1,61}$/.test(label)) return `th_${label.slice(2)}`;
+  if (/^wx(?:[0-9a-f]{2}){1,30}$/.test(label)) return Buffer.from(label.slice(2), "hex").toString("utf8");
+  return undefined;
+}
+
 export function pageOrigin(id: string): string {
   return `http://${pageHost(id)}:${PORT}`;
 }

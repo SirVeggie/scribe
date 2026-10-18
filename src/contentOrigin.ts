@@ -1,5 +1,5 @@
 import type express from "express";
-import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost } from "./config.js";
+import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost, previewHost, previewThreadFromHost } from "./config.js";
 
 /** A tab page's origin (t-ab12cd34.localhost) or the shared content origin (127.0.0.2): never the board's. */
 export function isContentHost(req: express.Request): boolean {
@@ -31,6 +31,16 @@ function sharedFile(req: express.Request): boolean {
   return req.path.startsWith("/vendor/pdfjs/") && PDFJS_PATH.test(req.path.slice("/vendor/pdfjs".length));
 }
 
+/**
+ * What a worktree preview's origin (#703) takes from the daemon rather than the worktree: the vendored
+ * libraries and the appearance seed. Everything else there is the worktree's own files.
+ */
+export function previewShared(req: express.Request): boolean {
+  if (req.method !== "GET") return false;
+  if (VENDOR_PATH.test(req.path) || req.path === "/api/appearance/bootstrap.js") return true;
+  return req.path.startsWith("/vendor/pdfjs/") && PDFJS_PATH.test(req.path.slice("/vendor/pdfjs".length));
+}
+
 /** The page routes a page's own script calls (src/bridge.ts), each for its own tab id. */
 function pageApi(req: express.Request): boolean {
   const { method, path } = req;
@@ -57,14 +67,22 @@ function crossOrigin(req: express.Request): boolean {
   }
 }
 
-/** Where /view/:id lives: on that page's own origin, keeping the port and query it came with. */
-function viewRedirect(req: express.Request, id: string): string {
+/** The same path on another host, keeping the port and query the request came with. */
+function hostRedirect(req: express.Request, host: string, path: string): string {
   const port = /:(\d+)$/.exec(req.get("host") ?? "")?.[1];
   const query = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
-  return `http://${pageHost(id)}${port ? `:${port}` : ""}${req.path}${query}`;
+  return `http://${host}${port ? `:${port}` : ""}${path}${query}`;
 }
 
+const PREVIEW_PATH = /^\/preview\/([^/]+)(\/.*)?$/;
+
 export function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (previewThreadFromHost(req.hostname) !== undefined) {
+    // Agent-written scripts: the worktree's files (worktreePreviewSite) and previewShared, read only.
+    if (req.method === "GET") next();
+    else res.status(405).set("Allow", "GET").type("text").send("Previews are read only.");
+    return;
+  }
   if (isContentHost(req)) {
     const page = framePageId(req);
     if (sharedFile(req) || (req.method === "GET" && BLOB_PATH.test(req.path))) {
@@ -82,7 +100,7 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
       }
       // A page is only served on its own origin, so another page's script cannot load it into its own.
       if (page === id) next();
-      else res.redirect(302, viewRedirect(req, id));
+      else res.redirect(302, hostRedirect(req, pageHost(id), req.path));
       return;
     }
     // Page routes answer only on a page's own origin, and only to that page's own script. Which
@@ -110,6 +128,23 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
   if (req.method !== "GET" && req.method !== "HEAD" && crossOrigin(req)) {
     // Page scripts and websites cannot write through the board's API; only the board UI and local tools can.
     res.status(403).json({ error: "The board's API does not answer other origins" });
+    return;
+  }
+  const preview = PREVIEW_PATH.exec(req.path);
+  if (preview || req.path === "/preview") {
+    // A worktree's UI runs on its chat's own origin, never the board's (#703).
+    if (req.method !== "GET" || !preview) {
+      res.status(404).type("text").send("Not found.");
+      return;
+    }
+    let thread: string;
+    try {
+      thread = decodeURIComponent(preview[1]);
+    } catch {
+      res.status(404).type("text").send("Not found.");
+      return;
+    }
+    res.redirect(302, hostRedirect(req, previewHost(thread), preview[2] ?? "/"));
     return;
   }
   if (req.path === "/view" || req.path.startsWith("/view/") || req.path.startsWith("/blob/")) {

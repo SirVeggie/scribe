@@ -14,9 +14,9 @@ The MCP process can come and go with Cursor. The daemon stays up so Scribe does 
 
 ## Preview UI changes in a worktree
 
-In an open worktree's branch menu, choose **Preview UI**. The browser opens `/preview/<thread-id>/`, serving that worktree's `public/index.html`, CSS, JavaScript and other public files directly. Reload to see edits; preview responses are not cached. Use `/preview/<thread-id>/<public-file>` for a specific file.
+In an open worktree's branch menu, choose **Preview UI**. The browser opens the chat's own preview origin, `http://w-<thread hex>.localhost:4747/` (`/preview/<thread-id>/` on the board redirects there), serving that worktree's `public/index.html`, CSS, JavaScript and other public files directly. Reload to see edits; preview responses are not cached. Add `<public-file>` to the path for a specific file.
 
-Only open worktrees registered by Scribe can be previewed, over loopback and GET only. Hidden files, traversal and links outside `public/` are refused. Closing the worktree ends its preview. The preview uses the running daemon's APIs and live data: actions there change the same pages and threads as the normal UI. Server changes still need a separate daemon or rebuild/restart. UI assets should use relative URLs (such as `./agent.css`); API and shared `/vendor/` URLs stay rooted at the daemon.
+Only open worktrees registered by Scribe can be previewed, over loopback and GET only. Hidden files, traversal and links outside `public/` are refused. Closing the worktree ends its preview. The preview's scripts are an agent's, so they run on an origin of their own and get none of the board's data: no API routes and no WebSocket, only the shared `/vendor/` libraries and the appearance seed (`/api/appearance/bootstrap.js`). It shows layout and styling, not live pages and threads; to try a change against real data, run a separate daemon from the worktree. UI assets should use relative URLs (such as `./agent.css`).
 
 ## Setup on a new PC
 

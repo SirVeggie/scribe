@@ -43,7 +43,7 @@ import {
 import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
-import { worktreePreviewRouter } from "./worktreePreview.js";
+import { worktreePreviewSite } from "./worktreePreview.js";
 import { agentRouter } from "./agent/routes.js";
 import { readScopedFile } from "./agent/readFile.js";
 import { openFileForAgent } from "./agent/openFile.js";
@@ -143,6 +143,8 @@ export async function startHttp(): Promise<http.Server> {
   const app = express();
   app.disable("x-powered-by");
   app.use(contentOriginGate);
+  // A worktree's UI preview, on its chat's own origin (#703); other hosts go on.
+  app.use(worktreePreviewSite(id => agentHost?.getThread(id)?.worktree));
   // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
   // directly could answer its own access request or move a folder into its scope.
   app.use(["/api/agent", "/api/export", "/api/import", "/api/trash", "/api/undo", "/api/library/cleanup", "/api/settings/index", "/api/folders", "/api/ml/settings", "/api/audio/settings"], (req, res, next) => {
@@ -190,7 +192,6 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
   app.use("/api/audio", audioRouter(new AudioService({ sources: () => agentHost?.modelSources() ?? [] }), new PageAudio(id => store.pagePermissions(id))));
   app.use(noteAgentSession);
-  app.use("/preview", worktreePreviewRouter(id => agentHost?.getThread(id)?.worktree));
   app.use(express.static(publicDir));
   // pdf.js for PDF file pages: the library, its worker, and the fonts, CMaps and decoders it fetches.
   app.use("/vendor/pdfjs", (req, res, next) => (PDFJS_PATH.test(req.path) ? next() : res.status(404).end()),
