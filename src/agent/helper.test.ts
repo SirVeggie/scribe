@@ -157,8 +157,8 @@ test("a helper runs the brief on the named model with the caller's settings and 
 test("new helpers inherit or lower the rung and follow-ups keep it", async () => {
   host.setPrefs({ helpers: true });
   const id = host.createThread({ provider: "codex", approval: "full", cwd: dir, scope: { kind: "workspace", ref: dir } }).id;
-  // access is the rung; the old mode names still work (plan plans first on the parent's rung, ask is Board).
-  const cases = [[undefined, "code", "full"], ["auto", "code", "auto"], ["readonly", "board", "readonly"], ["plan", "plan", "full"], ["ask", "board", "board"]] as const;
+  // access is the rung; the old mode names still work (plan is Board, ask is Board).
+  const cases = [[undefined, "code", "full"], ["auto", "code", "auto"], ["readonly", "board", "readonly"], ["plan", "board", "board"], ["ask", "board", "board"]] as const;
   for (const [access, mode, approval] of cases) {
     asked.length = 0;
     const result = await host.runHelper(id, { task: "inspect the files", title: "Inspect files", provider: "pi", mode: access });
@@ -172,10 +172,6 @@ test("new helpers inherit or lower the rung and follow-ups keep it", async () =>
     await host.runHelper(id, { task: "inspect again", thread: helper.id, mode: "full" });
     assert.equal(host.getThread(helper.id)!.approval, approval);
   }
-  // A plan-first parent's helpers plan first too.
-  host.updateThread(id, { mode: "plan" });
-  const result = await host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: "edits" });
-  assert.deepEqual([host.getThread(String(result.thread))!.mode, host.getThread(String(result.thread))!.approval], ["plan", "edits"]);
 });
 
 test("a helper of a thread in a worktree keeps the user's folder as its workspace", async () => {
@@ -204,10 +200,7 @@ test("helpers may not exceed their parent's rung", async () => {
       await assert.rejects(host.runHelper(id, { task: "inspect", title: "Inspect files", provider: "pi", mode: requested }), /Unknown helper access/);
     }
   }
-  const plan = host.createThread({ provider: "codex", mode: "plan", approval: "full", cwd: null, scope: { kind: "global", ref: null } }).id;
-  await assert.rejects(host.runHelper(plan, { task: "inspect", title: "Inspect files", provider: "pi", mode: "code" }), /plans first/);
   const board = host.createThread({ provider: "codex", approval: "board", cwd: null, scope: { kind: "global", ref: null }, helpersAllowed: true }).id;
-  await assert.rejects(host.runHelper(board, { task: "inspect", title: "Inspect files", provider: "pi", mode: "plan" }), /needs an editing rung/);
   // A Board thread's helper works on the same pages.
   const result = await host.runHelper(board, { task: "inspect the pages", title: "Inspect files", provider: "pi", mode: "board" });
   assert.equal(host.getThread(String(result.thread))!.mode, "board");

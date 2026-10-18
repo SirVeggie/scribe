@@ -35,7 +35,6 @@ function sink(): RunSink & { texts: string[] } {
     beforeWrite: async () => {},
     approval: async () => ({ optionId: "deny" }),
     question: async () => ({ skipped: true }),
-    plan: async () => ({ accepted: false }),
     todos: noop,
     usage: noop,
     notice: noop,

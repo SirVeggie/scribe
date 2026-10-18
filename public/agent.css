@@ -2727,7 +2727,7 @@ textarea.ag-q-input {
   color: var(--accent);
 }
 
-.ag-pill.mode-plan {
+.ag-pill.mode-plan.on {
   color: #9fc3ff;
 }
 

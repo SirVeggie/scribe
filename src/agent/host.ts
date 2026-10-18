@@ -1557,6 +1557,8 @@ export class AgentHost {
       forgetGuides(id);
     }
     if (typeof patch.model === "string") next.model = patch.model;
+    // The old plan mode from an older client: the next message is a plan turn (#721).
+    if (patch.planNext === true) next.planNext = true;
     if (next.provider !== thread.provider || next.model !== thread.model) {
       // A new model starts with the effort and params last picked for it.
       const choice = modelChoice(this.prefs(), next.provider, next.model);

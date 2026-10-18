@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { bridgeAsks } from "./mcpBridge.js";
 import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, resolveServer, serversForThread, setServerEnabled, writeMcpFile } from "./mcpConfig.js";
 
-const thread = (mode: "code" | "ask" | "plan" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
+const thread = (mode: "code" | "ask" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
 
 test("Codex TOML imports stdio and HTTP servers while preserving token environment references", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-codex-mcp-"));
@@ -77,12 +77,12 @@ test("servers reach threads by mode, enabled, and workspace layer", () => {
       "S:\\Proj": { mcpServers: { shared: { command: "local" }, docs: { enabled: false }, db: { command: "db", approve: "auto" } } },
     },
   });
-  const names = (mode: "code" | "plan" | "board", cwd: string | null) => serversForThread(thread(mode, cwd), file, null).map((s) => s.name).sort();
+  const names = (mode: "code" | "board", cwd: string | null) => serversForThread(thread(mode, cwd), file, null).map((s) => s.name).sort();
   assert.deepEqual(names("code", null), ["board", "docs", "shared"]);
   assert.deepEqual(names("board", null), ["board"]);
   assert.deepEqual(names("code", "s:/proj/sub"), ["board", "db", "shared"]);
   assert.deepEqual(names("code", "S:\\Projector"), ["board", "docs", "shared"]);
-  const shared = serversForThread(thread("plan", "S:\\Proj"), file, null).find((s) => s.name === "shared");
+  const shared = serversForThread(thread("code", "S:\\Proj"), file, null).find((s) => s.name === "shared");
   assert.equal(shared?.command, "local");
   assert.equal(shared?.layer, "S:\\Proj");
   assert.equal(serversForThread(thread("code", "S:\\Proj"), file, null).find((s) => s.name === "db")?.approve, "auto");
@@ -111,7 +111,7 @@ test("Code chats inherit only Keeper, using the home workspace for worker worktr
     assert.deepEqual(global.map((s) => s.name), ["keeper"]);
     assert.equal(global[0].command, "global");
     assert.equal(global[0].approve, "ask");
-    for (const mode of ["ask", "plan", "board"] as const) {
+    for (const mode of ["ask", "board"] as const) {
       assert.deepEqual(serversForThread(thread(mode, ws), empty, home), []);
     }
     const wt = { ...thread("code", path.join(home, "worktree")), worktree: { home: ws, repo: ws, path: path.join(home, "worktree"), branch: "worker", base: "master", baseCommit: "", links: [], createdAt: 0 } };

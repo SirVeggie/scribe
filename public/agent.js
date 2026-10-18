@@ -76,10 +76,9 @@
     return parseRung(p.approvals?.[provider] || p.approval) || "edits";
   }
 
-  /** How a provider runs a thread, which follows its rung (#719): board on Read-only and Board, else code or plan (plan first). For MCP servers' mode lists. */
+  /** How a provider runs a thread, which follows its rung (#719): board on Read-only and Board, else code. For MCP servers' mode lists. */
   const MODES = [
     { id: "code", label: "Code" },
-    { id: "plan", label: "Plan" },
     { id: "board", label: "Read-only and Board" },
   ];
   /** A rung from older data: "ask" (Ask first) is Edits now. Null when it is none. Same as parseApproval in src/agent/types.ts. */
@@ -92,8 +91,8 @@
     return APPROVALS.findIndex((a) => a.id === id);
   }
   /** The mode that goes with a rung. Same as settleAccess in src/agent/types.ts. */
-  function accessMode(approval, plan) {
-    return READ_RUNGS.has(approval) ? "board" : plan ? "plan" : "code";
+  function accessMode(approval) {
+    return READ_RUNGS.has(approval) ? "board" : "code";
   }
   /** Tool groups a custom mode can turn off (ModeCapability in src/agent/customModes.ts). */
   const MODE_TOOLS = [
@@ -167,6 +166,7 @@
     { name: "folder", description: "This thread belongs to the current page's folder" },
     { name: "workspace", description: "Set the workspace folder" },
     { name: "global", description: "Not tied to a page or folder" },
+    { name: "plan", description: "Plan this message first, without changing files", hint: "<task>" },
   ];
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
   // The same symbols used by the floating chat orb, drawn as crisp static marks.
@@ -2092,10 +2092,9 @@
       note.textContent = customModeNotes(offNow()).join(" ");
       note.hidden = !note.textContent;
       web.disabled = offNow().includes("web");
-      // At most the highest rung, and plan first needs an editing one.
+      // At most the highest rung.
       for (const option of approval.options) option.disabled = Boolean(option.value) && rungRank(option.value) > rungRank(base.value);
       if (approval.selectedOptions[0]?.disabled) approval.value = "";
-      plan.boxes[0].disabled = READ_RUNGS.has(base.value);
     };
     base.addEventListener("change", sync);
     mcp.addEventListener("change", sync);
@@ -2755,16 +2754,17 @@
       // Page and folder threads start on Board, others on the provider's last rung; a custom mode caps it (#719).
       let approval = parseRung(d.settings.approval) || parseRung(custom?.approval) || (scoped ? "board" : approvalFor(provider));
       if (custom && rungRank(approval) > rungRank(custom.base)) approval = custom.base;
-      const plan = d.settings.mode ? d.settings.mode === "plan" : custom ? Boolean(custom.plan) : !scoped && p.mode === "plan";
       return {
         id: null,
         provider,
         model,
         effort: d.settings.effort !== undefined ? d.settings.effort : choice.effort,
         modelParams: d.settings.modelParams || choice.modelParams,
-        mode: accessMode(approval, plan),
+        mode: accessMode(approval),
         ...(custom ? { custom: { ...custom, max: custom.base } } : {}),
         approval,
+        // A custom mode that plans first turns the Plan chip on for the first message (#721).
+        planNext: Boolean(custom?.plan),
         web: custom?.off.includes("web") ? "off" : webMode(d.settings.web, webMode(p.web)),
         cwd,
         // Last choice made in this workspace.
@@ -3234,6 +3234,10 @@
     }
 
     async applyLocalSlash(name) {
+      if (name === "plan") {
+        this.setPlan(true);
+        return;
+      }
       if (name === "clear") {
         newThread(this, true);
         return;
@@ -3745,8 +3749,14 @@
       const row = el("div", `ag-user${queued ? " queued" : ""}`);
       row.dataset.itemId = item.id;
       const bubble = el("div", "ag-user-bubble");
-      if (item.context?.length || item.images?.length || item.files?.length) {
+      if (item.plan || item.context?.length || item.images?.length || item.files?.length) {
         const chips = el("div", "ag-chips");
+        if (item.plan) {
+          // Sent as a plan turn (#721).
+          const chip = el("span", "ag-chip small");
+          chip.append(icon("todo"), el("span", null, "Plan"));
+          chips.append(chip);
+        }
         for (const c of item.context || []) {
           const chip = el("span", "ag-chip small");
           chip.dataset.tooltip = chipTitle(c);
@@ -4636,11 +4646,11 @@
       else {
         const note = keepNote(el("textarea", "ag-input small"), `plan:${it.id}`);
         note.rows = 2;
-        note.placeholder = "What should change? (for Request changes)";
+        note.placeholder = "Notes for the implementation, or what should change";
         const actions = el("div", "ag-card-actions");
         actions.append(
-          button("Accept and build", "ag-btn small primary", () => api("POST", `/plans/${encodeURIComponent(it.requestId)}`, { accepted: true }).catch((err) => notice(err.message))),
-          button("Request changes", "ag-btn small", () => api("POST", `/plans/${encodeURIComponent(it.requestId)}`, { accepted: false, note: note.value }).catch((err) => notice(err.message)))
+          button("Accept and build", "ag-btn small primary", () => api("POST", `/threads/${encodeURIComponent(it.threadId)}/plans/${encodeURIComponent(it.id)}`, { accepted: true, note: note.value }).catch((err) => notice(err.message))),
+          button("Request changes", "ag-btn small", () => api("POST", `/threads/${encodeURIComponent(it.threadId)}/plans/${encodeURIComponent(it.id)}`, { accepted: false, note: note.value }).catch((err) => notice(err.message)))
         );
         node.append(note, actions);
       }
@@ -5243,6 +5253,20 @@
       this.renderContext();
     }
 
+    /** Whether the Plan chip is on (#721): this composer's choice for the thread ("" for a new one), else the thread's planNext. */
+    planOn() {
+      const t = this.thread();
+      const key = t?.id || "";
+      if (this.planChips?.has(key)) return this.planChips.get(key);
+      return Boolean(t ? t.planNext : this.settings().planNext);
+    }
+
+    setPlan(on) {
+      this.planChips ??= new Map();
+      this.planChips.set(this.thread()?.id || "", on);
+      this.renderComposerBar();
+    }
+
     /** Drop the composer's files, freeing their preview URLs. */
     clearAttachments() {
       for (const file of this.attachments) if (file.url) URL.revokeObjectURL(file.url);
@@ -5269,13 +5293,21 @@
         bar.append(eff);
       }
       {
-        // One access picker (#719): the rung, plan first, and the user's own modes.
+        // One access picker (#719): the rung and the user's own modes.
         const ap = APPROVALS.find((a) => a.id === s.approval) || APPROVALS[2];
         const detail = s.custom ? `${s.custom.name}: ${ap.label}. ${customDetail(s.custom, s.custom.max)}` : approvalDetail(ap, s.provider);
-        const apBtn = button("", `ag-pill ap-${ap.id}${s.mode === "plan" ? " mode-plan" : ""}`, (event) => this.accessMenu(event.currentTarget), detail);
+        const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.accessMenu(event.currentTarget), detail);
         apBtn.append(icon("shield"), el("span", null, s.custom ? `${s.custom.name} · ${ap.label}` : ap.label));
-        if (s.mode === "plan") apBtn.append(el("span", "ag-tag tiny", "plan"));
         bar.append(apBtn);
+      }
+      {
+        // The Plan chip (#721): the next message is a plan turn; it turns itself off once sent.
+        const on = this.planOn();
+        const planBtn = button("", `ag-pill toggle mode-plan${on ? " on" : ""}`, () => this.setPlan(!this.planOn()), "Plan the next message first, without changing files (/plan)");
+        planBtn.append(icon("todo"));
+        if (this.variant !== "dock") planBtn.append(el("span", null, "Plan"));
+        planBtn.setAttribute("aria-pressed", String(on));
+        bar.append(planBtn);
       }
       if (t?.effectivePermissions?.provider === s.provider) {
         const p = t.effectivePermissions;
@@ -5295,7 +5327,7 @@
         wtBtn.setAttribute("aria-label", `Worktree ${wt.branch}`);
         bindHoverTip(wtBtn, () => worktreeTip(openWorktree(this.thread()) || wt));
         bar.append(wtBtn);
-      } else if ((s.mode === "code" || s.mode === "plan") && s.cwd && !t?.stats.turns) {
+      } else if (s.mode === "code" && s.cwd && !t?.stats.turns) {
         const wtBtn = button("", `ag-pill ag-wt-icon toggle${s.useWorktree ? " on" : ""}`, () => this.setWorktree(!this.settings().useWorktree));
         wtBtn.append(icon("git"));
         wtBtn.setAttribute("aria-label", s.useWorktree ? "Worktree on first message. Click to turn off." : "Works in the folder. Click to use a worktree.");
@@ -5472,11 +5504,10 @@
       openMenu(anchor, items, { width: 240 });
     }
 
-    /** The access ladder (#719): rungs up to the custom mode's highest, plan first, and the user's own modes. */
+    /** The access ladder (#719): rungs up to the custom mode's highest, and the user's own modes. */
     accessMenu(anchor) {
       const s = this.settings();
       const max = s.custom?.max || "full";
-      const plan = s.mode === "plan";
       // With scope None there are no pages to change, so Board reads like Read-only.
       const noPages = s.scope?.kind === "workspace";
       const items = APPROVALS.map((a) => ({
@@ -5485,18 +5516,8 @@
         checked: s.approval === a.id,
         danger: a.id === "full",
         disabled: rungRank(a.id) > rungRank(max),
-        run: () => this.updateSettings({ approval: a.id, mode: accessMode(a.id, plan) }),
+        run: () => this.updateSettings({ approval: a.id, mode: accessMode(a.id) }),
       }));
-      items.push(
-        { separator: true },
-        {
-          label: "Plan first",
-          detail: READ_RUNGS.has(s.approval) ? "Needs Edits or higher" : "Investigate and propose a plan before changing anything",
-          checked: plan,
-          disabled: READ_RUNGS.has(s.approval),
-          run: () => this.updateSettings({ mode: plan ? "code" : "plan" }),
-        }
-      );
       const custom = customModes();
       if (custom.length || s.custom) items.push({ separator: true });
       for (const m of custom) {
@@ -5717,7 +5738,7 @@
       }
       const s = this.settings();
       const folders = this.localFolderMentions(q, taken);
-      const wantFiles = (s.mode === "code" || s.mode === "plan") && s.cwd;
+      const wantFiles = s.mode === "code" && s.cwd;
       // Keep the previous results (and scroll position) until the latest search completes.
       if (this.slash.hidden || !this.slash.hasAttribute("aria-busy")) {
         this.renderMentionPicker({ pages: [], folders, files: [], mention, loading: true });
@@ -5989,7 +6010,16 @@
         await this.applyLocalSlash(localCmd[1].toLowerCase());
         return;
       }
-      const actionCmd = /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
+      // "/plan <task>" sends a plan turn (#721); "/plan" alone turns the Plan chip on.
+      const planCmd = /^\/plan(?:\s+|$)/i.exec(text);
+      if (planCmd && !text.slice(planCmd[0].length).trim() && !this.attachments.length) {
+        this.input.value = "";
+        this.hidePicker();
+        this.autosize();
+        this.setPlan(true);
+        return;
+      }
+      const actionCmd = planCmd ? null : /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
       const actionTab = actionCmd ? activeTab() : null;
       const action = actionTab ? pageActions(actionTab, "slash").find((a) => a.id === actionCmd[1]) : null;
       if (action) {
@@ -6030,6 +6060,10 @@
       this.renderContext();
       this.hidePicker();
       const sent = this.thread();
+      const planKey = sent?.id || "";
+      const plan = Boolean(planCmd) || this.planOn();
+      const planChoice = this.planChips?.get(planKey);
+      this.planChips?.delete(planKey);
       let archiveAfterSend = this.archiveOnSend;
       if (sent) {
         // Sent, so no longer a draft; the daemon clears its copy when the message arrives.
@@ -6079,7 +6113,9 @@
         }
         this.stick = true;
         // dock: the host watches a floating-chat turn for a new page on its way (pageIntent.ts).
-        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, ...(this.variant === "dock" ? { dock: true } : {}) });
+        // plan: false too, so a planNext the user turned off is dropped.
+        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(this.variant === "dock" ? { dock: true } : {}) });
+        this.renderComposerBar();
         if (archiveAfterSend) {
           const from = archiveAfterSend;
           if (this.threadId === id) this.archiveOnSend = null;
@@ -6091,6 +6127,7 @@
         notice(err.message);
         if (!this.input.value && !this.attachments.length && !this.mentions.length) {
           this.input.value = text;
+          if (planChoice !== undefined) this.planChips.set(planKey, planChoice);
           this.attachments = held;
           this.mentions = heldMentions;
           this.autosize();
@@ -10658,7 +10695,7 @@
   /* ---------- board.agent: pages that start and continue their own threads ---------- */
 
   const PAGE_PROMPT_MAX = 20000;
-  /** Older pages' mode names, still accepted (#719): code keeps the rung, plan plans first, ask and board are Board. */
+  /** Older pages' mode names, still accepted (#719): code keeps the rung, plan also plans the first message (#721), ask and board are Board. */
   const PAGE_MODES = new Set(["board", "ask", "code", "plan", "readonly"]);
   /**
    * A page-started thread's mode and rung, from scribe.agent.start's approval and older mode. With
@@ -10671,10 +10708,10 @@
     if (legacy === "board" || legacy === "ask") approval = asked === "readonly" ? "readonly" : "board";
     else if (legacy && READ_RUNGS.has(approval) && !asked) approval = "auto";
     if (custom && rungRank(approval) > rungRank(custom.base)) approval = custom.base;
-    return { mode: accessMode(approval, legacy === "plan" || (!legacy && Boolean(custom?.plan))), approval };
+    return { mode: accessMode(approval), approval };
   }
   /** Modes that need a folder. A thread with a folder on any rung needs it approved (agent.workspace): Read-only and Board read files there (#718). */
-  const FOLDER_MODES = new Set(["code", "plan"]);
+  const FOLDER_MODES = new Set(["code"]);
   /** board.agent.wait calls by thread id. */
   const pageWaiters = new Map();
   /** When a page last sent to each thread: until the thread has been active since, it is not done with it. */
@@ -11036,10 +11073,10 @@
           })),
         ])
       ),
-      // Older pages pick a mode; the rung (approvals) decides now (#719). plan: plan first.
+      // Older pages pick a mode; the rung (approvals) decides now (#719). plan: the first message is a plan turn (#721).
       modes: [
         { id: "board", label: "Board", detail: APPROVALS[1].detail, needsFolder: false },
-        { id: "plan", label: "Plan first", detail: "Investigate and propose a plan before changing anything", needsFolder: true },
+        { id: "plan", label: "Plan first", detail: "Plan the first message before changing anything", needsFolder: true },
       ],
       // The user's own modes: start a thread in one with customMode; base is its highest rung.
       customModes: customModes().map((m) => ({ id: m.id, label: m.name, detail: m.description || customDetail(m, m.base), base: m.base })),
@@ -11129,6 +11166,8 @@
       web: webMode(data.web, custom?.web || webMode(p.web)),
       cwd: cwd || null,
       useWorktree: folderMode && data.worktree === true,
+      // The old plan mode: the page's first message is a plan turn (#721).
+      ...(data.mode === "plan" ? { planNext: true } : {}),
       ...(data.helpers === true ? { helpersAllowed: true } : {}),
     };
   }
@@ -11550,7 +11589,7 @@
       return;
     }
     if (next.id === s.approval) return;
-    await view.updateSettings({ approval: next.id, mode: accessMode(next.id, s.mode === "plan") });
+    await view.updateSettings({ approval: next.id, mode: accessMode(next.id) });
     notice(`Access: ${next.label}`);
   }
 

@@ -25,10 +25,9 @@ const thread = (over: Partial<Thread> = {}): Pick<Thread, "model" | "effort" | "
   ...over,
 });
 
-test("sandboxFor: Read-only, Board and Plan are read-only; Full access drops the sandbox", () => {
+test("sandboxFor: Read-only and Board are read-only; Full access drops the sandbox", () => {
   // The rung decides, even on a thread whose mode was not settled.
   assert.equal(sandboxFor(thread({ mode: "code", approval: "readonly" })), "read-only");
-  assert.equal(sandboxFor(thread({ mode: "plan" })), "read-only");
   assert.equal(sandboxFor(thread({ mode: "board" })), "read-only");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "edits" })), "workspace-write");
   assert.equal(sandboxFor(thread({ mode: "code", approval: "auto" })), "workspace-write");
@@ -108,7 +107,7 @@ test("mcpConfig registers the board server as scribe with the thread id", () => 
 });
 
 test("Codex approval modes select the native reviewer without widening the mode sandbox", () => {
-  for (const mode of ["code", "plan", "board"] as const) {
+  for (const mode of ["code", "board"] as const) {
     for (const approval of ["edits", "auto", "full"] as const) {
       const opts = threadOptions(thread({ mode, approval }), "/work");
       assert.equal(opts.approvalsReviewer, approval === "auto" ? "auto_review" : "user");
@@ -245,12 +244,12 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits, isWorker: () => worker,
       ...(mcp ? { mcpServers: () => mcp.servers } : {}) } as SessionContext,
     () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); }, mcp?.bridge);
-  const seen = { text: "", steered: [] as string[], approvals: [] as string[], plans: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
+  const seen = { text: "", steered: [] as string[], approvals: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
   const sink: RunSink = {
     nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart(tool) { seen.tools.push(tool.toolId); },
     toolUpdate(_id, patch) { if (patch.output !== undefined) seen.output = patch.output; }, beforeWrite: async () => {},
     approval: async (req) => { seen.approvals.push(req.tool); return { optionId: "decline" }; },
-    question: async () => ({ answers: { q: ["Yes"] } }), plan: async (req) => { seen.plans.push(req.text); return { accepted: false }; },
+    question: async () => ({ answers: { q: ["Yes"] } }),
     todos() {}, usage() {}, notice(level, text) { seen.notices.push({ level, text }); }, commands() {}, title() {}, steered(id) { seen.steered.push(id); },
   };
   async function start(policy: Record<string, unknown> = {}, tools: Record<string, unknown> = { page_action: {}, page_show: {} }) {
@@ -764,7 +763,7 @@ test("Codex policy update errors or broader observations stop before the next tu
 });
 
 test("Codex per-turn sandbox keeps mode restrictions, networking and worktree git writes", () => {
-  for (const mode of ["code", "plan", "board"] as const) {
+  for (const mode of ["code", "board"] as const) {
     for (const approval of ["edits", "auto", "full"] as const) {
       const overrides = turnPermissionOverrides(thread({ mode, approval, web: "off" }), process.cwd());
       const sandbox = overrides.sandboxPolicy as Record<string, unknown>;

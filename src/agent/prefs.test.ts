@@ -15,13 +15,12 @@ const grok = {
   useWorktree: true,
 };
 
-test("creating a thread remembers model, mode, and the rest, not only approval", () => {
+test("creating a thread remembers model and the rest, not only approval", () => {
   const patch = prefsPatchFromChoices(DEFAULT_PREFS, grok, settingPatch(grok));
   assert.equal(patch.provider, "cursor");
   assert.equal(patch.models?.cursor, "cursor-grok-4.6");
   assert.equal(patch.efforts?.cursor, "high");
   assert.deepEqual(patch.modelParams?.cursor, { context: "1m", fast: "false" });
-  assert.equal(patch.mode, "code");
   assert.equal(patch.approval, "ask");
   assert.equal(patch.web, "limited");
   assert.equal(patch.recentWorkspaces?.[0], "S:\\proj");

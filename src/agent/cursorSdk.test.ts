@@ -43,7 +43,6 @@ test("modelSelection passes only parameters the model takes", () => {
 test("toolLists: the reading rungs are allowlists, web off drops the web tools", () => {
   assert.deepEqual(toolLists({ mode: "code", web: "on" }), { disallowedTools: ["askQuestion"] });
   assert.deepEqual(toolLists({ mode: "code", web: "off" }), { disallowedTools: ["askQuestion", "webSearch", "webFetch", "fetch", "xSearch"] });
-  assert.deepEqual(toolLists({ mode: "plan", web: "limited" }), { disallowedTools: ["askQuestion", "webSearch", "webFetch", "fetch", "xSearch"] });
   const board = toolLists({ mode: "board", web: "off" }).tools!;
   assert.ok(board.includes("mcp"));
   for (const tool of ["shell", "edit", "write", "delete", "webSearch", "webFetch", "task"]) assert.ok(!board.includes(tool), tool);
@@ -60,9 +59,8 @@ test("isSdkAgentId tells SDK agents from old ACP sessions", () => {
   assert.equal(isSdkAgentId(null), false);
 });
 
-test("host shell: only Code and Plan threads that ask, and it drops the built-in shell but keeps mcp", () => {
+test("host shell: only Code threads that ask, and it drops the built-in shell but keeps mcp", () => {
   assert.equal(wantsHostShell({ mode: "code", approval: "edits" }, true), true);
-  assert.equal(wantsHostShell({ mode: "plan", approval: "edits" }, true), true);
   assert.equal(wantsHostShell({ mode: "code", approval: "edits" }, false), false);
   assert.equal(wantsHostShell({ mode: "code", approval: "auto" }, true), false);
   assert.equal(wantsHostShell({ mode: "code", approval: "full" }, true), false);

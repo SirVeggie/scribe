@@ -181,11 +181,11 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const webMode = () => 'off', webEnforced = () => true;
       const openWorktree = () => null, usageChip = () => null, contextMeter = () => el('span', 'context', 'Context');
       const bindHoverTip = () => {}, worktreePendingTip = value => String(value), sendKey = () => 'enter';
-      const settings = { provider: 'test', model: 'test', mode: 'plan', approval: 'edits', cwd: 'workspace', useWorktree: false };
+      const settings = { provider: 'test', model: 'test', mode: 'code', approval: 'edits', cwd: 'workspace', useWorktree: false };
       const view = {
         audioComposer: { paint() {}, toggle() {} },
         settings: () => settings, thread: () => null, bar: document.querySelector('#bar'), sendSlot: document.querySelector('#tail'),
-        renderForkNote() {}, setWorktree(value) { settings.useWorktree = value; },
+        renderForkNote() {}, setWorktree(value) { settings.useWorktree = value; }, planOn: () => false, setPlan() {},
         ${agent.slice(agent.indexOf('    renderComposerBar() {'), agent.indexOf('\n    /**', agent.indexOf('    renderComposerBar() {')))}
       };
       const state = { templates: [{ id: 'one', title: 'Template', fields: [{ key: 'old' }] }], builtinTemplates: [] };

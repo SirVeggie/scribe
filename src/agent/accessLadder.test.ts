@@ -14,14 +14,14 @@ test("old values read as rungs: ask approval is Edits, ask mode is Board", () =>
   assert.equal(parseMode("readonly"), null);
 });
 
-test("stored threads migrate: code + ask is Edits, ask and board are Board, plan keeps its rung", () => {
+test("stored threads migrate: code + ask is Edits, ask and board are Board, plan reads as code", () => {
   assert.deepEqual(settleAccess("code", "ask"), { mode: "code", approval: "edits" });
   assert.deepEqual(settleAccess("code", "full"), { mode: "code", approval: "full" });
   assert.deepEqual(settleAccess("ask", "auto"), { mode: "board", approval: "board" });
   assert.deepEqual(settleAccess("board", "full"), { mode: "board", approval: "board" });
   assert.deepEqual(settleAccess("board", "readonly"), { mode: "board", approval: "readonly" });
-  assert.deepEqual(settleAccess("plan", "ask"), { mode: "plan", approval: "edits" });
-  assert.deepEqual(settleAccess("plan", "auto"), { mode: "plan", approval: "auto" });
+  assert.deepEqual(settleAccess("plan", "ask"), { mode: "code", approval: "edits" });
+  assert.deepEqual(settleAccess("plan", "auto"), { mode: "code", approval: "auto" });
   // The rung decides: a reading rung runs as a board thread.
   assert.deepEqual(settleAccess("code", "readonly"), { mode: "board", approval: "readonly" });
 });
@@ -30,9 +30,9 @@ test("changing the rung moves the mode with it; old mode names still work", () =
   const board = { mode: "board" as const, approval: "board" as const };
   assert.deepEqual(changeAccess(board, { approval: "edits" }, "auto"), { mode: "code", approval: "edits" });
   assert.deepEqual(changeAccess(board, { mode: "code" }, "full"), { mode: "code", approval: "full" });
-  assert.deepEqual(changeAccess(board, { mode: "plan" }, "readonly"), { mode: "plan", approval: "edits" });
-  assert.deepEqual(changeAccess({ mode: "plan", approval: "auto" }, { approval: "full" }, "edits"), { mode: "plan", approval: "full" });
-  assert.deepEqual(changeAccess({ mode: "plan", approval: "auto" }, { approval: "board" }, "edits"), { mode: "board", approval: "board" });
+  assert.deepEqual(changeAccess(board, { mode: "plan" }, "readonly"), { mode: "code", approval: "edits" });
+  assert.deepEqual(changeAccess({ mode: "code", approval: "auto" }, { approval: "full" }, "edits"), { mode: "code", approval: "full" });
+  assert.deepEqual(changeAccess({ mode: "code", approval: "auto" }, { approval: "board" }, "edits"), { mode: "board", approval: "board" });
   assert.deepEqual(changeAccess({ mode: "code", approval: "full" }, { mode: "ask" }, "edits"), { mode: "board", approval: "board" });
   assert.deepEqual(changeAccess({ mode: "code", approval: "full" }, { mode: "board", approval: "readonly" }, "edits"), { mode: "board", approval: "readonly" });
   // A page that still sends Pages mode with an approval gets Board.
@@ -60,10 +60,9 @@ test("the Read-only rung loses Scribe's page writes and restarts its session", (
 });
 
 test("prefs: Ask first is Edits, old mode defaults and cycle lists are dropped", () => {
-  assert.deepEqual(cleanApprovals({ approval: "ask" as never, approvals: { claude: "ask" as never, cursor: "full", bogus: "edits" } as never, mode: "board" }), {
+  assert.deepEqual(cleanApprovals({ approval: "ask" as never, approvals: { claude: "ask" as never, cursor: "full", bogus: "edits" } as never }), {
     approval: "edits",
     approvals: { claude: "edits", cursor: "full" },
-    mode: "code",
   });
   assert.deepEqual(cleanDisabledModes(["code", "ask", "board", "full"]), ["board", "full"]);
 });
@@ -72,7 +71,7 @@ test("board workers: older mode settings launch on their rung", () => {
   assert.deepEqual(workerAccess({ mode: "code", approval: "ask" }), { mode: "code", approval: "edits" });
   assert.deepEqual(workerAccess({ mode: "board", approval: "auto" }), { mode: "board", approval: "board" });
   assert.deepEqual(workerAccess({}), { mode: "code", approval: "auto" });
-  assert.deepEqual(workerAccess({ mode: "plan" }), { mode: "plan", approval: "auto" });
+  assert.deepEqual(workerAccess({ mode: "plan" }), { mode: "code", approval: "auto" });
   const card = { id: "c1", num: 3, title: "T" } as never;
   const launch = workerSettings({ name: "W", mode: "ask", approval: "full", cwd: "C:\\x" }, card);
   assert.equal(launch.mode, "board");

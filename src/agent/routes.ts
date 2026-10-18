@@ -839,7 +839,7 @@ function threadPatch(body: Record<string, unknown>): ThreadPatch {
   // The rung decides (#719); older modes (ask, board) are read as rungs, and "plan" makes the next message a plan turn (#721).
   const mode = parseMode(body.mode);
   if (mode) patch.mode = mode;
-  if (wantsPlan(body.mode)) patch.planNext = true;
+  if (wantsPlan(body.mode) || body.planNext === true) patch.planNext = true;
   if (typeof body.customMode === "string" && body.customMode) patch.customMode = body.customMode;
   else if (body.customMode === null) patch.customMode = null;
   const approval = parseApproval(body.approval);
