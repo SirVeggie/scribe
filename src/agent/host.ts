@@ -3723,7 +3723,10 @@ export class AgentHost {
         this.expireInteraction(pending);
       }
     }
-    if (result.error) {
+    // Providers can report the terminal error both as a live notice and as
+    // the turn result. Keep the failure metadata without repeating its notice.
+    if (result.error && !this.loadItems(threadId).some((item) =>
+      item.turnId === turn.id && item.kind === "notice" && item.level === "error" && item.text === result.error)) {
       this.addItem(threadId, turn.id, { kind: "notice", level: "error", text: result.error });
     }
 

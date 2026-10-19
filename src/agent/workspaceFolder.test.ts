@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { Thread } from "./types.js";
-import type { TurnResult } from "./providers/provider.js";
+import type { RunSink, TurnResult } from "./providers/provider.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-workspace-folder-"));
 process.env.SCRIBE_HOME = dir;
@@ -18,7 +18,7 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function fixture(run: () => Promise<TurnResult> = async () => ({ status: "done" })) {
+function fixture(run: (sink: RunSink) => Promise<TurnResult> = async () => ({ status: "done" })) {
   const host = new AgentHost(() => {});
   hosts.push(host);
   let sessions = 0;
@@ -30,7 +30,7 @@ function fixture(run: () => Promise<TurnResult> = async () => ({ status: "done" 
     sessions++;
     return {
       update() {}, warm: async () => {}, dispose() {}, cancel: async () => {},
-      run: async () => { runs++; return run(); },
+      run: async (_input: unknown, sink: RunSink) => { runs++; return run(sink); },
     };
   };
   const thread = (patch: Partial<Thread> = {}) => host.createThread({
@@ -47,6 +47,27 @@ async function settled(host: InstanceType<typeof AgentHost>, id: string, turns =
   }
   assert.fail("Turn did not settle");
 }
+
+test("terminal errors reuse a live error notice only within the same turn (#748)", async () => {
+  for (const live of ["Selected model is at capacity", "A different error", null]) {
+    const error = "Selected model is at capacity";
+    const f = fixture(async (sink) => {
+      if (live) sink.notice("error", live);
+      return { status: "error", error };
+    });
+    const t = f.thread();
+    for (let n = 1; n <= 2; n++) {
+      f.host.send(t.id, { text: "Try" });
+      const detail = await settled(f.host, t.id, n);
+      const turn = detail.turns[n - 1];
+      assert.equal(turn.status, "error");
+      assert.equal(turn.error, error);
+      const notices = detail.items.filter((it) => it.turnId === turn.id && it.kind === "notice" && it.level === "error");
+      assert.equal(notices.filter((it) => it.kind === "notice" && it.text === error).length, 1);
+      assert.equal(notices.length, live && live !== error ? 2 : 1);
+    }
+  }
+});
 
 test("a deleted worker folder fails clearly before creating a session or worktree, and can be replaced", async () => {
   const f = fixture();
