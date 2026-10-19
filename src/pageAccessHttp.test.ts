@@ -111,6 +111,24 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal((await call("GET", "/api/agent/threads", undefined, undefined, forged)).status, 403);
     assert.equal((await call("GET", "/api/agent/threads", undefined, thread.id)).status, 403, "a chat cannot read other chats or answer its own approvals");
     assert.equal((await call("GET", "/api/export", undefined, "")).status, 403);
+    assert.equal((await call("GET", `/api/export?page=${home.id}`, undefined, thread.id)).status, 403);
+    assert.equal((await call("POST", "/api/library/delete", { pages: [home.id] }, thread.id)).status, 403);
+    const selectionFolder = (await call("POST", "/api/folders", { name: "Selection" })).data.folder;
+    const selectionPage = await show("selection-page");
+    await call("POST", `/api/tabs/${selectionPage.id}/move`, { folderId: selectionFolder.id, index: 0 });
+    const loosePage = await show("selection-loose");
+    const selectedExport = await call("GET", `/api/export?folder=${selectionFolder.id}&page=${loosePage.id}&page=${selectionPage.id}`);
+    assert.equal(selectedExport.status, 200);
+    assert.deepEqual(new Set(selectedExport.data.pages.map((page: any) => page.id || page.key)), new Set([selectionPage.key, loosePage.key]));
+    assert.equal((await call("POST", "/api/library/delete", { pages: [loosePage.id], folders: ["missing"] })).status, 404);
+    assert.equal((await call("GET", `/api/tabs/${loosePage.id}`)).status, 200, "invalid selection leaves every page in place");
+    assert.equal((await call("POST", "/api/library/delete", { pages: "invalid" })).status, 400);
+    const deletedSelection = await call("POST", "/api/library/delete", { pages: [loosePage.id], folders: [selectionFolder.id] });
+    assert.equal(deletedSelection.status, 200);
+    assert.deepEqual(new Set(deletedSelection.data.deleted), new Set([loosePage.id, selectionPage.id]));
+    assert.equal((await call("GET", `/api/tabs/${selectionPage.id}`)).status, 404);
+    assert.equal((await call("POST", "/api/undo", {})).status, 200);
+    assert.equal((await call("GET", `/api/tabs/${selectionPage.id}`)).status, 200);
     assert.equal((await call("GET", "/api/agent/threads")).status, 200, "the local token is the user");
     assert.equal((await call("GET", `/api/tabs/${secret.id}`, undefined, undefined, { ...forged, "sec-fetch-site": "same-origin" })).status, 200, "the board UI in a browser");
 
@@ -123,6 +141,7 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal(await fromPage(home.id, "GET", `/view/${home.id}`), 200);
     assert.equal(await fromPage(home.id, "GET", `/view/${other.id}`), 302);
     assert.equal(await fromPage(home.id, "GET", "/api/tabs"), 403);
+    assert.equal(await fromPage(home.id, "POST", "/api/library/delete", { pages: [home.id] }), 403);
 
     // A Pages-mode chat can read its file page through Scribe, even outside its file roots.
     const filePath = path.join(root, "outside-workspace.md");

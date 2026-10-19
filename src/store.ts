@@ -1286,10 +1286,19 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
-  /** One page, one folder subtree, or the whole Library. */
-  exportFile(scope: { id?: string; folderId?: string } = {}): BoardExportFile {
+  /** One page, folder subtrees, a mixed selection, or the whole Library. */
+  exportFile(scope: { id?: string; folderId?: string; pageIds?: string[]; folderIds?: string[] } = {}): BoardExportFile {
     let tabs: Tab[];
-    if (scope.id) {
+    const selection = scope.pageIds !== undefined || scope.folderIds !== undefined;
+    const selectedFolders = new Set<string>();
+    if (selection) {
+      const pageIds = new Set((scope.pageIds || []).map((id) => this.requireAny(id).id));
+      for (const id of scope.folderIds || []) {
+        if (!this.folders.has(id)) throw new Error(`folder not found: ${id}`);
+        for (const child of this.subtreeFolderIds(id)) selectedFolders.add(child);
+      }
+      tabs = this.treeOrder().filter((tab) => pageIds.has(tab.id) || (tab.folderId && selectedFolders.has(tab.folderId)));
+    } else if (scope.id) {
       tabs = [this.requireAny(scope.id)];
     } else if (scope.folderId) {
       if (!this.folders.has(scope.folderId)) {
@@ -1300,13 +1309,13 @@ export class BoardStore extends EventEmitter {
     } else {
       tabs = this.treeOrder();
     }
-    const templates = scope.id || scope.folderId
+    const templates = scope.id || scope.folderId || selection
       ? [...new Set(tabs.map((tab) => tab.templateId).filter((id): id is string => Boolean(id)))]
           .map((id) => this.templates.get(id))
           .filter((template): template is Template => Boolean(template))
       : [...this.templates.values()];
     const folders = scope.id ? [] : this.listFolders().filter((folder) =>
-      !scope.folderId || this.folderInside(folder.id, scope.folderId)).map((folder) => ({
+      selection ? selectedFolders.has(folder.id) : !scope.folderId || this.folderInside(folder.id, scope.folderId)).map((folder) => ({
         path: this.folderPath(folder.id)!,
         ...(folder.description ? { description: folder.description } : {}),
         ...(folder.instructions ? { instructions: folder.instructions } : {}),
@@ -2178,11 +2187,18 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Open or closed pages to the deleted bin as one undoable batch. */
-  deleteMany(idsOrKeys: string[]): Tab[] {
+  deleteMany(idsOrKeys: string[], folderIds: string[] = []): Tab[] {
     const batch: DeletedBatch = { id: newBatchId(), deletedAt: this.stamp(), tabs: [], folders: [] };
+    const treeIds = new Set<string>();
+    for (const id of folderIds) {
+      this.requireFolder(id);
+      for (const child of this.subtreeFolderIds(id)) treeIds.add(child);
+    }
+    batch.folders = this.listFolders().filter((folder) => treeIds.has(folder.id)).sort((a, b) => this.folderDepth(a) - this.folderDepth(b));
+    const pageIds = new Set([...idsOrKeys, ...this.libraryTabs().filter((tab) => tab.folderId && treeIds.has(tab.folderId)).map((tab) => tab.id)]);
     const wasActive = this.activeId;
     const prevOrder = this.order;
-    for (const idOrKey of idsOrKeys) {
+    for (const idOrKey of pageIds) {
       const located = this.locate(idOrKey);
       if (!located) {
         continue;
@@ -2194,10 +2210,12 @@ export class BoardStore extends EventEmitter {
       this.detach(located);
       batch.tabs.push(located.tab);
     }
-    if (!batch.tabs.length) {
+    if (!batch.tabs.length && !batch.folders.length) {
       return [];
     }
     this.pushDeleted(batch);
+    for (const folder of batch.folders) this.folders.delete(folder.id);
+    if (batch.folders.length) this.foldersDirty = true;
     this.rebuildOrder();
     if (this.activeId && !this.tabs.has(this.activeId)) {
       this.activeId = this.neighborOf(prevOrder, this.activeId);
@@ -2206,6 +2224,7 @@ export class BoardStore extends EventEmitter {
     for (const tab of batch.tabs) {
       this.emit("tab_deleted", tab.id);
     }
+    if (batch.folders.length) this.emitFolders();
     if (wasActive !== this.activeId) {
       this.emit("tab_focused", this.activeId);
     }

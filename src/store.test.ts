@@ -908,6 +908,33 @@ test("folder settings inherit, appear in listings, persist, and clear", () => {
   again.closeDb();
 });
 
+test("a mixed Library selection exports only its pages and subtrees and deletes as one restorable batch", () => {
+  const store = loaded();
+  const work = store.createFolder({ name: "Work" });
+  const child = store.createFolder({ name: "Child", parentId: work.id });
+  const empty = store.createFolder({ name: "Empty" });
+  store.setFolderInstructions(child.id, "Child description", "Child instructions");
+  const a = store.upsert({ key: "a", title: "A", html: "<p>A</p>", folder: "Work" }).tab;
+  const b = store.upsert({ key: "b", title: "B", html: "<p>B</p>", folder: "Work/Child" }).tab;
+  const x = store.upsert({ key: "x", title: "X", html: "<p>X</p>" }).tab;
+  const y = store.upsert({ key: "y", title: "Y", html: "<p>Y</p>" }).tab;
+  const pack = store.exportFile({ pageIds: [a.id, x.id, x.id], folderIds: [work.id, child.id, empty.id] });
+  assert.deepEqual(new Set(pack.pages.map(page => page.key)), new Set([a.key, b.key, x.key]));
+  assert.deepEqual(pack.folders?.map(folder => folder.path).sort(), ["Empty", "Work", "Work/Child"]);
+  assert.equal(pack.folders?.find(folder => folder.path === "Work/Child")?.instructions, "Child instructions");
+  assert.throws(() => store.exportFile({ pageIds: [], folderIds: [] }), /nothing to export/);
+  assert.throws(() => store.exportFile({ folderIds: ["missing"] }), /folder not found/);
+  const deleted = store.deleteMany([a.id, x.id], [work.id, child.id, empty.id]);
+  assert.deepEqual(new Set(deleted.map(tab => tab.id)), new Set([a.id, b.id, x.id]));
+  assert.equal(store.listFolders().length, 0);
+  assert.equal(store.get(y.id)?.title, "Y");
+  store.restoreLast();
+  assert.equal(store.listFolders().length, 3);
+  for (const tab of [a, b, x, y]) assert.ok(store.get(tab.id));
+  assert.equal(store.listFolders().find(folder => folder.id === child.id)?.parentId, work.id);
+  store.closeDb();
+});
+
 test("an empty folder's settings survive export and import", () => {
   const store = loaded();
   const folder = store.createFolder({ name: "Empty" });

@@ -147,7 +147,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use(worktreePreviewSite(id => agentHost?.getThread(id)?.worktree));
   // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
   // directly could answer its own access request or move a folder into its scope.
-  app.use(["/api/agent", "/api/export", "/api/import", "/api/trash", "/api/undo", "/api/library/cleanup", "/api/settings/index", "/api/folders", "/api/ml/settings", "/api/audio/settings"], (req, res, next) => {
+  app.use(["/api/agent", "/api/export", "/api/import", "/api/trash", "/api/undo", "/api/library/delete", "/api/library/cleanup", "/api/settings/index", "/api/folders", "/api/ml/settings", "/api/audio/settings"], (req, res, next) => {
     const read = req.method === "GET" && (req.baseUrl === "/api/folders" || req.baseUrl.endsWith("/settings"));
     if (read || viewerOf(req) !== "agent") {
       next();
@@ -1330,6 +1330,30 @@ export async function startHttp(): Promise<http.Server> {
 
   // Close/delete results list ids this call affected. Do not include closedCount
   // (Library-wide closed pages): agents read it as "this call closed N tabs".
+  app.post("/api/library/delete", async (req, res) => {
+    if (refuseAgent(req, res)) return;
+    const { pages = [], folders = [], recycle = [] } = req.body || {};
+    if (![pages, folders, recycle].every((ids) => Array.isArray(ids) && ids.every((id) => typeof id === "string"))) {
+      res.status(400).json({ error: "pages, folders and recycle must be lists of ids" });
+      return;
+    }
+    try {
+      // Validate the whole selection before touching a file or changing the Library.
+      const knownFolders = new Set(store.listFolders().map((folder) => folder.id));
+      if (folders.some((id: string) => !knownFolders.has(id))) throw new Error("folder not found");
+      const tabs = pages.map((id: string) => {
+        const tab = store.get(id);
+        if (!tab) throw new Error(`tab not found: ${id}`);
+        return tab;
+      });
+      for (const tab of tabs) {
+        if (recycle.includes(tab.id) && tab.file && !tab.file.copy) await recycleFile(tab.file.path);
+      }
+      const deleted = store.deleteMany(pages, folders);
+      res.json({ deleted: deleted.map((tab) => tab.id) });
+    } catch (err) { sendStoreError(res, err); }
+  });
+
   app.delete("/api/tabs/:id", async (req, res) => {
     try {
       const permanent = req.query.permanent === "true" || req.query.permanent === "1";
@@ -1844,9 +1868,18 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.get("/api/export", (_req, res) => {
+  app.get("/api/export", (req, res) => {
     try {
-      const file = store.exportFile();
+      const ids = (value: unknown): string[] => {
+        const values = Array.isArray(value) ? value : [value];
+        if (values.some((id) => typeof id !== "string" || !id)) throw new Error("export ids must be nonempty strings");
+        return values as string[];
+      };
+      const selection = req.query.page !== undefined || req.query.folder !== undefined;
+      const file = store.exportFile(selection ? {
+        pageIds: req.query.page === undefined ? [] : ids(req.query.page),
+        folderIds: req.query.folder === undefined ? [] : ids(req.query.folder),
+      } : {});
       res.setHeader("Content-Disposition", `attachment; filename="${exportAllFilename(file.exportedAt)}"`);
       res.type("json").send(JSON.stringify(file));
     } catch (err) {
