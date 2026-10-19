@@ -52,7 +52,8 @@ import { formatAnswers, parseQuestionInput } from "./agent/questionTool.js";
 import { findSettings, parseShowInput, setSettingsCatalog, settingsCatalog } from "./agent/settingsTool.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
-import { BOARD_SCROLLBAR_CSS } from "./wrapHtml.js";
+import { BOARD_SCROLLBAR_CSS, inlineKit } from "./wrapHtml.js";
+import { spliceHtmlSlot } from "./htmlSlot.js";
 import { searchRouter } from "./search/routes.js";
 import { mlRouter } from "./ml/routes.js";
 import { audioRouter } from "./audio/routes.js";
@@ -348,10 +349,28 @@ export async function startHttp(): Promise<http.Server> {
       const key = optionalString(req.body?.key);
       const existing = key ? store.get(key, viewerOf(req)) : undefined;
       if (existing && !checkReach(req, res, existing)) return;
+      const baseRef = optionalString(req.body?.base);
+      let html = String(req.body?.html ?? "");
+      if (baseRef) {
+        // Same access as GET /api/tabs/:id (page_read): missing or hidden is not found.
+        const baseTab = store.get(baseRef);
+        if (!baseTab) {
+          res.status(404).json({ error: `base page not found: ${baseRef}` });
+          return;
+        }
+        if (!checkReach(req, res, baseTab)) return;
+        if (baseTab.file) {
+          throw new Error(`${baseTab.key} is a file page (${baseTab.file.path}); page_show base needs an HTML page.`);
+        }
+        if (baseTab.templateId) {
+          throw new Error(`This page (${baseTab.key}) is bound to a template and cannot be used as a page_show base.`);
+        }
+        html = spliceHtmlSlot(baseTab.html, html);
+      }
       const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
-        html: String(req.body?.html ?? ""),
+        html,
         activate: req.body?.activate,
         pin: req.body?.pin,
         state: isPlainObject(req.body?.state) ? req.body.state : undefined,
@@ -1842,7 +1861,7 @@ export async function startHttp(): Promise<http.Server> {
     }
     const filename = `${safeFilename(tab.title)}.html`;
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.type("html").send(tab.html);
+    res.type("html").send(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8")));
   });
 
   app.get("/api/export/folder/:fid", (req, res) => {

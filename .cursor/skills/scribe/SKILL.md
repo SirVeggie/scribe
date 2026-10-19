@@ -58,7 +58,8 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 
 - `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`). Scribe stores it as `scribe:clims-12345-analysis`; either form finds the page later.
 - `title`: short tab label
-- `html`: a complete HTML document with inline CSS, or a fragment (Scribe wraps fragments in a dark theme; see Theme)
+- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit, so you write only the content; see Theme and Page kit) or a complete HTML document with inline CSS
+- `base`: a starter page's key, when the user names one; your `html` fills its slot (see Page kit)
 - `htmlPath`: instead of `html`, a local HTML file. In Code mode, write a large page to a temp file (not the workspace) and pass the path so it is not pasted as a tool argument. Same title, state, assets, folder, and background rules as `html`. Mutually exclusive with `html`.
 - `assets`: omit unless the page needs images
 - `background`: omit when the user should look at this tab (default: focus, open it if it was closed, open the browser only if nothing is viewing Scribe). Pass `background: true` when they said *in the background*, *don’t switch tabs*, *stay where I am*, during a **project design** screenshot loop they should not see yet, or when creating a page you will **link to** (a form, investigation, or evidence) rather than put in front of them. A new page with `background: true` is created in the Library without opening a tab.
@@ -202,6 +203,42 @@ Fragment pages (no `<!DOCTYPE html>` / `<html`) are wrapped in a **dark** theme.
 - `--code-bg` — `code` and `pre`
 
 Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall back to them (`color: var(--fg, #222)`): `--fg` is not defined, so the fallback is dark text on `--bg`. A full document skips this wrapper — copy the same `:root` block, or set both background and color yourself so they contrast.
+
+### Page kit: components without CSS
+
+Fragment pages also get Scribe's page kit: ready styles for the usual parts of reports and forms, and form wiring with no script. Write only the content with these classes; do not write CSS or JS for them. Your own `<style>` still wins over the kit where you need something else.
+
+| Write | Gives |
+|---|---|
+| `<p class="lead">` | intro line under the title |
+| `<div class="callout">` (+ `ok` / `warn` / `error`) | a toned note box; info by default |
+| `<span class="badge">` (+ `ok` / `warn` / `error` / `info`) | a small tag, e.g. "recommended" |
+| `<div class="grid">` with `<div class="card">` children (`card rec` for the recommended one) | side-by-side boxes; `style="--min:320px"` on the grid sets the column width |
+| `<ul class="pros">` / `<ul class="cons">` | + and − lists |
+| `<dl class="kv"><dt>Files</dt><dd>12</dd>…</dl>` | key-value rows |
+| `<div class="row">` | a wrapping row of buttons or badges |
+| `<button>` / `<button class="primary">` / `<a class="button">` | app-style buttons |
+
+**Forms.** `<form data-reply>` needs no script: Scribe keeps what the user types as their draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card), check boxes as lists, empty fields left out. On a page without `replyTo` it logs a `submitted` event with `{ answers, summary }` for `page_wait` instead. Radios, check boxes, inputs and textareas are styled like the chat's own question cards.
+
+```html
+<form data-reply>
+  <div class="q"><h3>Which approach?</h3>
+    <label class="opt"><input type="radio" name="approach" value="A" checked> Patch the parser <small>an hour, low risk</small></label>
+    <label class="opt"><input type="radio" name="approach" value="B"> Rewrite it <small>a day</small></label>
+  </div>
+  <div class="q"><h3>How urgent?</h3>
+    <div class="scale"><label><input type="radio" name="urgency" value="1">1</label><label><input type="radio" name="urgency" value="2">2</label><label><input type="radio" name="urgency" value="3">3</label></div>
+    <div class="scale-ends"><span>whenever</span><span>now</span></div>
+  </div>
+  <div class="q"><h3>Anything else?</h3><textarea name="notes"></textarea></div>
+  <button type="submit">Send answers</button>
+</form>
+```
+
+Put each question next to the part of the page it is about; one form can wrap the whole page. Check boxes use `<label class="opt"><input type="checkbox" name="blocks" value="…">`.
+
+**Starter pages.** When the user points you at a page to build from (their own layout or style), pass its key as `base` to `page_show`: your `html` goes into its element marked `data-slot` (else its `<main>`, else its `<body>`), so you write only the content. Its state and assets are not copied.
 
 ## Linking pages
 
@@ -548,7 +585,7 @@ page_show({ key: "card-320-questions", html, background: true,
             replyTo: { page: "scribe:agent-todo", card: 320 } })
 ```
 
-and have the submit button call `scribe.reply` with the answers and a one-line summary:
+With the page kit, `<form data-reply>` does the rest (see Page kit). For your own markup, have the submit button call `scribe.reply` with the answers and a one-line summary:
 
 ```html
 <button type="button" id="send">Send answers</button>

@@ -348,6 +348,10 @@ export async function startMcp(): Promise<void> {
       title: z.string().describe("Tab title."),
       html: z.string().optional().describe("HTML document or fragment. Omit when passing htmlPath."),
       htmlPath: z.string().min(1).optional().describe("Local HTML file to use as the page instead of html."),
+      base: z
+        .string()
+        .optional()
+        .describe("Start from another page: its HTML with your html placed in its element marked data-slot (else its <main>, else its <body>). Use it when the user names a starter page. State and assets are not copied."),
       assets: z
         .array(z.union([z.string(), z.object({ path: z.string(), name: z.string().optional().describe("Name for asset:name. Default: the file's basename.") })]))
         .optional()
@@ -375,7 +379,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Where the page's scribe.reply(data, { summary }) goes on submit. On a form for a Kanban card ({ page: board, card }), it posts on the card as the user's comment and reaches the card's chat; elsewhere it is a reply event for page_wait. null clears it."),
     },
-    async ({ key, title, html: htmlArg, htmlPath, assets, pin, state, background, folder, expectedRevision, replyTo }) => {
+    async ({ key, title, html: htmlArg, htmlPath, base, assets, pin, state, background, folder, expectedRevision, replyTo }) => {
       const resolved = resolveShowHtml(htmlArg, htmlPath);
       if ("error" in resolved) {
         return errorResult(resolved.error);
@@ -393,6 +397,7 @@ export async function startMcp(): Promise<void> {
         key,
         title,
         html,
+        base,
         activate,
         pin,
         state,

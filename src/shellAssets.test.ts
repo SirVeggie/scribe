@@ -26,6 +26,14 @@ test("content origin serves the injected tooltip script while rejecting other sh
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type")!, /javascript/);
     assert.equal(await response.text(), fs.readFileSync(path.join(publicDir, "tooltip.js"), "utf8"));
+    const kitCss = await fetch(base + "/kit.css?v=1");
+    assert.equal(kitCss.status, 200);
+    assert.match(kitCss.headers.get("content-type")!, /css/);
+    assert.equal(await kitCss.text(), fs.readFileSync(path.join(publicDir, "kit.css"), "utf8"));
+    const kitJs = await fetch(base + "/kit.js?v=1");
+    assert.equal(kitJs.status, 200);
+    assert.match(kitJs.headers.get("content-type")!, /javascript/);
+    assert.equal(await kitJs.text(), fs.readFileSync(path.join(publicDir, "kit.js"), "utf8"));
     const worklet = await fetch(base + "/audio-stream-worklet.js");
     assert.equal(worklet.status, 200);
     assert.match(worklet.headers.get("content-type")!, /javascript/);
@@ -34,11 +42,13 @@ test("content origin serves the injected tooltip script while rejecting other sh
     for (const url of ["/vendor/highlight.js", "/vendor/marked.js", "/vendor/purify.js", "/vendor/pdfjs/build/pdf.min.mjs", "/vendor/pdfjs/build/pdf.worker.min.mjs", "/vendor/pdfjs/cmaps/UniJIS-UCS2-H.bcmap", "/vendor/pdfjs/wasm/openjpeg.wasm"]) {
       assert.equal((await fetch(base + url)).status, 200, url);
     }
-    for (const url of ["/app.js", "/app.css", "/vendor/other.js", "/vendor/marked.js/x", "/vendor/pdfjs/package.json", "/vendor/pdfjs/build/pdf.mjs.map", "/vendor/pdfjs/cmaps/../package.json", "/vendor/pdfjs/web/pdf_viewer.mjs", "/api/tabs", "/api/tabs/t_1/file", "/api/agent/threads", "/api/appearance", "/api/appearance/bootstrap.js", "/tooltip.js/extra", "/Tooltip.js"]) {
+    for (const url of ["/app.js", "/app.css", "/vendor/other.js", "/vendor/marked.js/x", "/vendor/pdfjs/package.json", "/vendor/pdfjs/build/pdf.mjs.map", "/vendor/pdfjs/cmaps/../package.json", "/vendor/pdfjs/web/pdf_viewer.mjs", "/api/tabs", "/api/tabs/t_1/file", "/api/agent/threads", "/api/appearance", "/api/appearance/bootstrap.js", "/tooltip.js/extra", "/Tooltip.js", "/Kit.css", "/Kit.js"]) {
       assert.equal((await fetch(base + url)).status, 403, url);
     }
     for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {
       assert.equal((await fetch(base + "/tooltip.js?v=3", { method })).status, 403, method);
+      assert.equal((await fetch(base + "/kit.css?v=1", { method })).status, 403, method);
+      assert.equal((await fetch(base + "/kit.js?v=1", { method })).status, 403, method);
     }
     // Pages run on their own origins (#660); the shared one sends a page there.
     const moved = await fetch(base + "/view/t_ab12cd34?viewer=v1", { redirect: "manual" });
@@ -121,6 +131,8 @@ test("a page's origin serves only that page, and its routes answer only its own 
     assert.equal((await onHost(port, own, "/api/tabs")).status, 403);
     assert.equal((await onHost(port, own, "/blob/pa_1")).status, 200);
     assert.equal((await onHost(port, own, "/tooltip.js")).status, 200);
+    assert.equal((await onHost(port, own, "/kit.css")).status, 200);
+    assert.equal((await onHost(port, own, "/kit.js")).status, 200);
     assert.equal((await onHost(port, own, "/audio-stream-worklet.js")).status, 200);
     assert.equal((await onHost(port, own, "/audio-stream-worklet.js", { method: "POST" })).status, 403);
     assert.equal((await onHost(port, "app.localhost", "/api/tabs")).status, 403, "other *.localhost names are not the board");

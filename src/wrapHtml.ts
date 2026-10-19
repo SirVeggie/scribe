@@ -30,6 +30,10 @@ const PAGE_THEME_CSS = Object.entries(PAGE_THEME)
   .map(([name, value]) => `  ${name}: ${value};`)
   .join("\n");
 
+/** Linked after DEFAULT_CSS on fragment pages. Downloads replace these exact tags with file contents. */
+export const KIT_CSS_TAG = `<link rel="stylesheet" href="/kit.css?v=1">`;
+export const KIT_JS_TAG = `<script src="/kit.js?v=1" defer></script>`;
+
 const DEFAULT_CSS = `
 :root {
   color-scheme: dark;
@@ -83,6 +87,11 @@ blockquote {
 ${BOARD_SCROLLBAR_CSS}
 `.trim();
 
+/** Swap the wrapper's kit <link>/<script> for inline copies so a downloaded page stands alone. */
+export function inlineKit(html: string, read: (file: "kit.css" | "kit.js") => string): string {
+  return html.replaceAll(KIT_CSS_TAG, () => `<style>${read("kit.css")}</style>`).replaceAll(KIT_JS_TAG, () => `<script>${read("kit.js")}</script>`);
+}
+
 export function wrapHtml(title: string, raw: string): string {
   const html = toLf(raw);
   const trimmed = html.trim();
@@ -97,6 +106,8 @@ export function wrapHtml(title: string, raw: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${safeTitle}</title>
 <style>${DEFAULT_CSS}</style>
+${KIT_CSS_TAG}
+${KIT_JS_TAG}
 </head>
 <body>
 ${html}

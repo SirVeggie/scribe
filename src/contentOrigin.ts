@@ -24,10 +24,18 @@ const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify|editor)\.js$/;
 /** The parts of pdfjs-dist a PDF file page loads, under /vendor/pdfjs. */
 export const PDFJS_PATH = /^\/(build\/pdf(\.worker)?\.min\.mjs|(cmaps|standard_fonts|wasm)\/[\w.-]+)$/;
 
-/** Data-free files every page may load: the injected tooltip script and the file viewer's libraries. */
+/** Data-free files every page may load: the injected tooltip script, the page kit, and the file viewer's libraries. */
 function sharedFile(req: express.Request): boolean {
   if (req.method !== "GET") return false;
-  if (req.path === "/tooltip.js" || req.path === "/audio-stream-worklet.js" || VENDOR_PATH.test(req.path)) return true;
+  if (
+    req.path === "/tooltip.js" ||
+    req.path === "/kit.css" ||
+    req.path === "/kit.js" ||
+    req.path === "/audio-stream-worklet.js" ||
+    VENDOR_PATH.test(req.path)
+  ) {
+    return true;
+  }
   return req.path.startsWith("/vendor/pdfjs/") && PDFJS_PATH.test(req.path.slice("/vendor/pdfjs".length));
 }
 

@@ -1,0 +1,227 @@
+/*
+ * Page kit (#630): ready-made components for fragment pages, so an agent writes only the content.
+ * The fragment wrapper (src/wrapHtml.ts) links it; the scribe skill's "Page kit" section lists the
+ * classes. Selectors sit in :where() so a page's own CSS always wins over the kit.
+ */
+:root {
+  --kit-surface: #202024;
+  --kit-sunken: rgba(0, 0, 0, 0.3);
+  --kit-border-strong: rgba(255, 255, 255, 0.14);
+  --kit-heading: #fff;
+  --kit-info: #8fb3d9;
+  --kit-ok: #9db8a4;
+  --kit-warn: #d9b66f;
+  --kit-error: #ff8a8a;
+  --kit-radius: 10px;
+  --kit-btn-bg: rgba(255, 255, 255, 0.05);
+  --kit-btn-bg-hover: rgba(255, 255, 255, 0.1);
+  --kit-btn-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- text ---------- */
+
+:where(.lead) { font-size: 1.05rem; color: var(--muted); margin: 0 0 1.2rem; }
+:where(.small) { font-size: 0.85rem; }
+
+/* ---------- layout ---------- */
+
+:where(.grid) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--min, 240px)), 1fr));
+  gap: 12px;
+  margin: 0.9rem 0;
+}
+:where(.row) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0.65rem 0; }
+
+/* ---------- card: a box; .rec marks the recommended one ---------- */
+
+:where(.card) {
+  background: var(--kit-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--kit-radius);
+  padding: 14px 16px;
+  min-width: 0;
+}
+:where(.card) > :first-child { margin-top: 0; }
+:where(.card) > :last-child { margin-bottom: 0; }
+:where(.card.rec) { border-color: var(--kit-border-strong); box-shadow: inset 0 0 0 1px var(--kit-border-strong); }
+:where(.card) :where(h3, h4) { margin: 0 0 0.5rem; }
+
+/* ---------- callout: info (default), .ok, .warn, .error ---------- */
+
+:where(.callout) {
+  --tone: var(--kit-info);
+  margin: 0.9rem 0;
+  padding: 10px 14px;
+  border-radius: var(--kit-radius);
+  border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
+  background: color-mix(in srgb, var(--tone) 8%, transparent);
+}
+:where(.callout) > :first-child { margin-top: 0; }
+:where(.callout) > :last-child { margin-bottom: 0; }
+:where(.callout) :where(b, strong):first-child { color: var(--tone); }
+
+/* ---------- badge: a small tag, toned like callouts ---------- */
+
+:where(.badge) {
+  --tone: var(--muted);
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: 99px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: 0.1em;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+}
+
+/* Tones for callouts and badges: after both, so a tone class wins over their defaults. */
+:where(.ok) { --tone: var(--kit-ok); }
+:where(.warn) { --tone: var(--kit-warn); }
+:where(.error) { --tone: var(--kit-error); }
+:where(.info) { --tone: var(--kit-info); }
+
+/* ---------- key-value rows: <dl class="kv"><dt>Files</dt><dd>12</dd>…</dl> ---------- */
+
+:where(dl.kv) {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 0.8rem 0;
+}
+:where(dl.kv) dt { color: var(--muted); }
+:where(dl.kv) dd { margin: 0; min-width: 0; }
+
+/* ---------- pros and cons lists ---------- */
+
+:where(ul.pros, ul.cons) { list-style: none; padding-left: 0; }
+:where(ul.pros, ul.cons) li { position: relative; padding-left: 1.3rem; margin: 0.2rem 0; }
+:where(ul.pros, ul.cons) li::before { position: absolute; left: 0.1rem; font-weight: 700; }
+:where(ul.pros) li::before { content: "+"; color: var(--kit-ok); }
+:where(ul.cons) li::before { content: "\2212"; color: var(--kit-error); }
+
+/* ---------- buttons ---------- */
+
+:where(button, .button) {
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 550;
+  color: var(--text);
+  background: var(--kit-btn-bg);
+  box-shadow: var(--kit-btn-shadow);
+  border: 0;
+  border-radius: 7px;
+  min-height: 32px;
+  padding: 0 14px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+:where(button, .button):hover { background: var(--kit-btn-bg-hover); }
+:where(button.primary, .button.primary, form[data-reply] button[type="submit"]) {
+  background: var(--accent);
+  color: #111;
+  box-shadow: none;
+}
+:where(button.primary, .button.primary, form[data-reply] button[type="submit"]):hover { filter: brightness(1.08); }
+:where(button):disabled { opacity: 0.55; cursor: default; filter: none; }
+
+/* ---------- forms ---------- */
+
+/* A question: <div class="q"><h3>…</h3> … options or a field …</div> */
+:where(.q) { margin: 1.1rem 0 1.4rem; }
+:where(.q) > :where(h3, h4, p):first-child { margin-top: 0; }
+:where(.q) :where(h3, h4) { margin-bottom: 0.5rem; }
+
+:where(input[type="text"], input[type="number"], input[type="email"], input[type="url"], input[type="search"],
+       input[type="date"], input:not([type]), textarea, select) {
+  font: inherit;
+  color: var(--text);
+  background: var(--kit-sunken);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  max-width: 100%;
+}
+:where(textarea) { width: 100%; min-height: 90px; resize: vertical; line-height: 1.45; }
+:where(input, textarea, select):focus-visible { outline: none; border-color: var(--kit-border-strong); }
+:where(textarea, input)::placeholder { color: var(--muted); opacity: 0.8; }
+
+/* Option rows: <label class="opt"><input type="radio" name="x" value="a"> Text <small>why</small></label> */
+:where(label.opt) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--kit-sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: pointer;
+}
+:where(label.opt):hover { box-shadow: inset 0 0 0 1px var(--kit-border-strong); }
+:where(label.opt):has(input:checked) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--kit-heading);
+}
+:where(label.opt) small { display: block; color: var(--muted); font-size: 0.85rem; }
+
+/* Radios and check boxes drawn like the chat's question cards, not the browser's. */
+:where(input[type="radio"], input[type="checkbox"]) {
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0.25em 0 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--muted);
+  cursor: pointer;
+  transition: box-shadow 0.12s ease, background 0.12s ease;
+}
+:where(input[type="checkbox"]) { border-radius: 4px; }
+:where(input[type="radio"]):checked { box-shadow: inset 0 0 0 4.5px var(--accent); }
+:where(input[type="checkbox"]):checked {
+  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat;
+  box-shadow: none;
+}
+:where(input[type="radio"], input[type="checkbox"]):focus-visible { outline: 2px solid var(--kit-border-strong); outline-offset: 2px; }
+
+/* A scale: <div class="scale"><label><input type="radio" name="x" value="1">1</label>…</div> */
+:where(.scale) {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 4px;
+  max-width: 520px;
+}
+:where(.scale) label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 32px;
+  border-radius: 7px;
+  background: var(--kit-sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+:where(.scale) input { position: absolute; opacity: 0; pointer-events: none; }
+:where(.scale) label:has(input:checked) { background: var(--accent); color: var(--bg); font-weight: 600; box-shadow: none; }
+:where(.scale) label:has(input:focus-visible) { outline: 2px solid var(--kit-border-strong); outline-offset: 1px; }
+:where(.scale-ends) {
+  display: flex;
+  justify-content: space-between;
+  max-width: 520px;
+  margin-top: 3px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* The reply form's result, written by kit.js next to the submit button. */
+:where(.kit-status) { margin-left: 10px; font-size: 0.88rem; color: var(--muted); }
+:where(.kit-status.ok) { color: var(--kit-ok); }
+:where(.kit-status.error) { color: var(--kit-error); }
