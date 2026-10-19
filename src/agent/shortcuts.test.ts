@@ -5,6 +5,46 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
 
+test("workspace cycling visits every folder and none as thread counts and recency change", async () => {
+  for (const existing of [true, false]) {
+    const currentThread = { cwd: "C:/llm-chat" as string | null };
+    const threads = new Map([
+      ["current", currentThread],
+      ["llm", { cwd: "C:/llm-chat" }],
+      ["valheim", { cwd: "C:/valheim-wake" }],
+      ["last", { cwd: "C:/z-last" }],
+    ]);
+    if (!existing) threads.delete("current");
+    let recent = ["C:/y-recent", "c:\\LLM-CHAT\\"];
+    const visited: (string | null)[] = [];
+    const ctx = vm.createContext({
+      S: { threads },
+      hiddenWorkspaceKeys: () => new Set(),
+      workspaceDir: (t: { cwd: string | null }) => t.cwd,
+      dirKey: (dir: string) => (dir || "").replace(/\\/g, "/").replace(/\/$/, "").toLowerCase(),
+      prefs: () => ({ recentWorkspaces: recent }),
+      notice: () => {}, R: { basename: (dir: string) => dir.split("/").at(-1) },
+      targetView: () => ({
+        settings: () => currentThread,
+        setWorkspace: async (dir: string | null) => {
+          currentThread.cwd = dir;
+          if (dir) recent = [dir, ...recent.filter(item => item !== dir)];
+          visited.push(dir);
+        },
+      }),
+    });
+    const workspaces = source.indexOf("  function threadWorkspaces()");
+    vm.runInContext(source.slice(workspaces, source.indexOf("  /** What the presets", workspaces)), ctx);
+    const cycle = source.indexOf("  function workspaceCycleList(");
+    vm.runInContext(source.slice(cycle, source.indexOf("  /** Scribe access options", cycle)), ctx);
+    for (let i = 0; i < 10; i++) await vm.runInContext("cycleWorkspace()", ctx);
+    assert.deepEqual(visited, [
+      "C:/valheim-wake", "C:/y-recent", "C:/z-last", null, "C:/llm-chat",
+      "C:/valheim-wake", "C:/y-recent", "C:/z-last", null, "C:/llm-chat",
+    ], existing ? "existing thread" : "draft");
+  }
+});
+
 function fixture() {
   const calls: string[] = [];
   const root = (id: string) => ({ contains: (node: any) => node?.owner === id });

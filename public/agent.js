@@ -11970,7 +11970,7 @@
     notice(`Access: ${next.label}`);
   }
 
-  /** Folders existing threads use, then recent ones, plus the current pick if it is not already listed. */
+  /** Known folders in a stable order: cycling changes thread counts and recent-workspace order. */
   function workspaceCycleList(current) {
     const dirs = [];
     const seen = new Set();
@@ -11984,7 +11984,7 @@
     for (const { path: dir } of threadWorkspaces()) add(dir);
     for (const dir of prefs().recentWorkspaces || []) add(dir);
     add(current);
-    return dirs;
+    return dirs.sort((a, b) => dirKey(a).localeCompare(dirKey(b)));
   }
 
   async function cycleWorkspace() {
