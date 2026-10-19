@@ -72,6 +72,11 @@ window.createLibrary = function createLibrary(host) {
   let press = null;
   /** @type {any} */
   let drag = null;
+  let selecting = false;
+  const selected = new Map();
+  let selectionAnchor = null;
+  let selectionRangeBase = null;
+  const itemKey = (item) => `${item.kind}:${item.id}`;
   let cleanupReq = 0;
   let cleanupTimer = 0;
   /** The active space's lens as last drawn (#260): which pages it shows, or null while it is off. */
@@ -209,6 +214,12 @@ window.createLibrary = function createLibrary(host) {
     }
     renderDeferred = false;
     model = buildModel();
+    for (const [key, item] of selected) {
+      if (!(item.kind === "folder" ? model.folderById : model.pageById).has(item.id)) selected.delete(key);
+    }
+    if (selecting && selectionAnchor && !selected.size) selecting = false;
+    list.classList.toggle("lib-selecting", selecting);
+    list.setAttribute("aria-multiselectable", String(selecting));
     countEl.textContent = String(model.pages.length);
     renderLensButton();
     // A hidden Library keeps its model current; the rows are drawn when it is shown (setPaneOpen, tab switch).
@@ -779,7 +790,7 @@ window.createLibrary = function createLibrary(host) {
       (open && host.activeId() === page.id ? " active" : "") +
       (page.pinned ? " pinned" : "") +
       (host.pageStatus?.(page.id) ? ` agent-${host.pageStatus(page.id)}` : "") +
-      (drag?.id === page.id && drag.kind === "page" ? " lib-drag-source" : "");
+      (drag?.items.some((item) => item.id === page.id && item.kind === "page") ? " lib-drag-source" : "");
     el.role = "treeitem";
     el.tabIndex = 0;
     el.ariaLabel = page.title + (open ? " (open)" : "") + (page.pinned ? " (pinned)" : "");
@@ -788,6 +799,7 @@ window.createLibrary = function createLibrary(host) {
     el.dataset.id = page.id;
     el.dataset.depth = String(depth);
     el.style.setProperty("--depth", String(depth));
+    selectionControl(el, { kind: "page", id: page.id }, page.title);
 
     if (page.file) {
       // A file page shows its kind instead of the page icon (#707).
@@ -859,7 +871,7 @@ window.createLibrary = function createLibrary(host) {
       "side-row lib-row lib-folder" +
       (open ? " expanded" : "") +
       (onDisk ? " on-disk" : "") +
-      (drag?.id === folder.id && drag.kind === "folder" ? " lib-drag-source" : "");
+      (drag?.items.some((item) => item.id === folder.id && item.kind === "folder") ? " lib-drag-source" : "");
     el.role = "treeitem";
     el.tabIndex = 0;
     el.ariaLabel = `${folder.name} (folder${onDisk ? " on disk" : ""})` + (unreadInside ? " (unread)" : "");
@@ -869,6 +881,7 @@ window.createLibrary = function createLibrary(host) {
     el.dataset.depth = String(depth);
     el.style.setProperty("--depth", String(depth));
     el.setAttribute("aria-expanded", open ? "true" : "false");
+    selectionControl(el, { kind: "folder", id: folder.id }, folder.name);
 
     const chevron = document.createElement("span");
     chevron.className = "lib-chevron";
@@ -928,6 +941,183 @@ window.createLibrary = function createLibrary(host) {
 
   function visibleRows() {
     return [...list.querySelectorAll(".lib-row")];
+  }
+
+  // Descendants remain covered even when a selected folder is collapsed or filtered out.
+  function coveredBySelection(item) {
+    const value = (item.kind === "folder" ? model.folderById : model.pageById).get(item.id);
+    const parent = item.kind === "folder" ? value?.parentId : value?.folderId;
+    return [...chainOf(parent)].some((id) => selected.has(`folder:${id}`));
+  }
+
+  function selectionItems() {
+    const ordered = [];
+    const walk = (parent) => {
+      for (const folder of foldersOf(parent)) {
+        const item = { kind: "folder", id: folder.id };
+        if (selected.has(itemKey(item))) ordered.push(item);
+        else walk(folder.id);
+      }
+      for (const page of pagesOf(parent)) {
+        const item = { kind: "page", id: page.id };
+        if (selected.has(itemKey(item))) ordered.push(item);
+      }
+    };
+    walk(null);
+    return ordered;
+  }
+
+  function selectionControl(row, item, name) {
+    if (!selecting) return;
+    const covered = coveredBySelection(item);
+    const checked = covered || selected.has(itemKey(item));
+    row.classList.toggle("lib-selected", checked && !covered);
+    row.classList.toggle("lib-covered", covered);
+    row.setAttribute("aria-selected", String(checked));
+    const check = document.createElement("button");
+    check.type = "button";
+    check.className = "lib-check";
+    check.role = "checkbox";
+    check.tabIndex = -1;
+    check.setAttribute("aria-label", `Select ${name}`);
+    check.setAttribute("aria-checked", String(checked));
+    check.setAttribute("aria-disabled", String(covered));
+    row.appendChild(check);
+  }
+
+  function clearSelection() {
+    if (!selecting) return false;
+    selected.clear();
+    selectionAnchor = null;
+    selectionRangeBase = null;
+    selecting = false;
+    render();
+    return true;
+  }
+
+  function selectItem(item, event) {
+    selecting = true;
+    if (event.shiftKey && selectionAnchor) {
+      const rows = visibleRows().map((row) => ({ kind: row.dataset.kind, id: row.dataset.id }));
+      const from = rows.findIndex((row) => itemKey(row) === itemKey(selectionAnchor));
+      const to = rows.findIndex((row) => itemKey(row) === itemKey(item));
+      if (from >= 0 && to >= 0) {
+        selectionRangeBase ||= new Map(selected);
+        selected.clear();
+        for (const [key, value] of selectionRangeBase) selected.set(key, value);
+        const range = rows.slice(Math.min(from, to), Math.max(from, to) + 1);
+        const keys = new Set(range.map(itemKey));
+        for (const entry of range) {
+          // A range must include the entire subtree before it may select its folder.
+          if (entry.kind === "folder" && [...subtree(entry.id)].some((id) =>
+            !keys.has(`folder:${id}`) || pagesOf(id).some((page) => !keys.has(`page:${page.id}`)))) {
+            selected.delete(itemKey(entry));
+            continue;
+          }
+          selected.set(itemKey(entry), entry);
+        }
+      }
+    } else {
+      selectionRangeBase = null;
+      if (!coveredBySelection(item)) {
+        const key = itemKey(item);
+        if (selected.has(key)) selected.delete(key);
+        else selected.set(key, item);
+      }
+      selectionAnchor = item;
+    }
+    if (!selected.size) {
+      selecting = false;
+      selectionAnchor = null;
+    }
+    host.hoverCard.hide();
+    render();
+    rowFor(item.kind, item.id)?.focus({ preventScroll: true });
+  }
+
+  function selectedPages(items) {
+    const folders = new Set(items.filter((item) => item.kind === "folder").flatMap((item) => [...subtree(item.id)]));
+    const pages = new Set(items.filter((item) => item.kind === "page").map((item) => item.id));
+    return model.pages.filter((page) => pages.has(page.id) || folders.has(page.folderId));
+  }
+
+  async function setSelectionWorkspace(items) {
+    const pages = selectedPages(items);
+    if (!pages.length) return;
+    const picked = await window.scribeChat?.pickWorkspace?.(pages[0].workspace || "", {
+      title: "Selected pages workspace", clear: "No workspace",
+    });
+    if (picked === null || picked === undefined) return;
+    for (const page of pages) {
+      const res = await send("POST", `/api/tabs/${encodeURIComponent(page.id)}/workspace`, { workspace: picked || null });
+      if (!res.ok) host.showNotice(`Could not set workspace for “${page.title}”`);
+    }
+  }
+
+  async function deleteSelection(items) {
+    if (!await host.confirm(`Delete ${plural(items.length, "selected item")} and all contents of selected folders?`, "Delete")) return;
+    const files = items.filter((item) => item.kind === "page" && model.pageById.get(item.id)?.file && !model.pageById.get(item.id).file.copy);
+    let recycle = host.fileSettings().deleteFiles === "trash";
+    if (files.length && !host.fileSettings().deleteFiles) {
+      const check = { label: "Don't ask again", checked: false };
+      const choice = await host.choose(`Also move ${plural(files.length, "file")} to the Recycle Bin?`, [
+        { value: "keep", label: "Keep the files" }, { value: "trash", label: "Recycle the files", danger: true },
+      ], { check });
+      if (!choice) return;
+      recycle = choice === "trash";
+      if (check.checked) void host.setDeleteFiles(choice);
+    }
+    const res = await send("POST", "/api/library/delete", {
+      pages: items.filter((item) => item.kind === "page").map((item) => item.id),
+      folders: items.filter((item) => item.kind === "folder").map((item) => item.id),
+      recycle: recycle ? files.map((item) => item.id) : [],
+    });
+    if (!res.ok) {
+      host.showNotice((await res.json().catch(() => ({}))).error || "Could not delete the selected items");
+      return;
+    }
+    clearSelection();
+    render();
+    host.showNotice(`Deleted ${plural(items.length, "item")}`, { undo: true });
+  }
+
+  function selectionActions(point) {
+    const items = selectionItems();
+    const folders = items.filter((item) => item.kind === "folder").map((item) => model.folderById.get(item.id));
+    return [
+      { label: `${plural(items.length, "item")} selected`, disabled: true },
+      { label: "Move to…", action: () => openMovePicker(items, point) },
+      { label: "Export", action: () => host.downloadSelectionExport(items) },
+      { label: "Agent access", submenu: () => ACCESS_LEVELS.map((level) => ({
+        label: level.label, detail: level.detail,
+        action: async () => {
+          for (const item of items) {
+            const res = await send("PUT", `/api/${item.kind === "folder" ? "folders" : "tabs"}/${encodeURIComponent(item.id)}/access`, { level: level.id });
+            if (!res.ok) host.showNotice("Could not change agent access");
+          }
+        },
+      })) },
+      folders.length > 0 && { label: "Agent instructions", action: () => editFolderInstructions(folders[0], folders) },
+      { label: "Set workspace…", disabled: !selectedPages(items).length, action: () => setSelectionWorkspace(items) },
+      "sep",
+      { label: "Delete…", danger: true, action: () => deleteSelection(items) },
+    ];
+  }
+
+  function selectionMenu(event, item) {
+    if (!selecting) return false;
+    if (!selected.has(itemKey(item)) && !coveredBySelection(item)) {
+      selected.clear();
+      selected.set(itemKey(item), item);
+      selectionAnchor = item;
+      selectionRangeBase = null;
+      render();
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const point = pointFor(event);
+    openMenu(point, selectionActions(point));
+    return true;
   }
 
   function flash(kind, id) {
@@ -1505,6 +1695,27 @@ window.createLibrary = function createLibrary(host) {
     }
   }
 
+  /** Insert each kind as a block, using a live next sibling so source positions cannot shift the drop. */
+  async function moveItems(items, folderId, indices) {
+    const excluded = new Set(items.filter((item) => item.kind === "folder").flatMap((item) => [...subtree(item.id)]));
+    if (folderId && excluded.has(folderId)) return;
+    for (const kind of ["folder", "page"]) {
+      const moving = items.filter((item) => item.kind === kind);
+      const ids = new Set(moving.map((item) => item.id));
+      const siblings = () => kind === "folder" ? foldersOf(folderId) : pagesOf(folderId);
+      const remaining = siblings().filter((item) => !ids.has(item.id));
+      let next = remaining[Math.min(indices[kind] ?? remaining.length, remaining.length)]?.id;
+      for (const item of moving.slice().reverse()) {
+        const live = siblings().filter((entry) => entry.id !== item.id);
+        const at = next ? live.findIndex((entry) => entry.id === next) : live.length;
+        if (kind === "folder") await moveFolder(item.id, folderId, at < 0 ? live.length : at);
+        else await movePage(item.id, folderId, at < 0 ? live.length : at);
+        model = buildModel();
+        next = item.id;
+      }
+    }
+  }
+
   function nudge(kind, id, dir) {
     if (kind === "page") {
       const page = model.pageById.get(id);
@@ -1734,6 +1945,7 @@ window.createLibrary = function createLibrary(host) {
   }
 
   function pageMenu(event, id) {
+    if (list.contains(event.target) && selectionMenu(event, { kind: "page", id })) return;
     event.preventDefault();
     event.stopPropagation();
     const tab = host.findAny(id);
@@ -1769,14 +1981,14 @@ window.createLibrary = function createLibrary(host) {
     ]);
   }
 
-  function editFolderInstructions(folder) {
+  function editFolderInstructions(folder, targets = [folder]) {
     const dialog = document.createElement("dialog");
     dialog.className = "confirm folder-instructions";
     dialog.setAttribute("aria-labelledby", "folder-instructions-title");
     const form = document.createElement("form");
     const title = document.createElement("h2");
     title.id = "folder-instructions-title";
-    title.textContent = `${folder.name} instructions`;
+    title.textContent = targets.length > 1 ? `Instructions for ${targets.length} folders` : `${folder.name} instructions`;
     form.appendChild(title);
     const fields = [];
     for (const [key, label, rows] of [["description", "Description", 1], ["instructions", "Instructions", 5]]) {
@@ -1788,13 +2000,17 @@ window.createLibrary = function createLibrary(host) {
       const input = document.createElement("textarea");
       input.id = caption.htmlFor;
       input.rows = rows;
-      input.value = folder[key] || "";
+      const same = targets.every((target) => (target[key] || "") === (folder[key] || ""));
+      input.value = same ? folder[key] || "" : "";
+      if (!same) input.placeholder = "Mixed values";
+      let changed = false;
+      input.addEventListener("input", () => { changed = true; });
       const resize = () => {
         input.style.height = "auto";
         input.style.height = `${input.scrollHeight + 2}px`;
       };
       input.addEventListener("input", resize);
-      fields.push({ key, input, resize });
+      fields.push({ key, input, resize, changed: () => changed });
       wrap.append(caption, input);
       form.appendChild(wrap);
     }
@@ -1813,10 +2029,15 @@ window.createLibrary = function createLibrary(host) {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       save.disabled = true;
-      const values = Object.fromEntries(fields.map(({ key, input }) => [key, input.value]));
-      const res = await send("PUT", `/api/folders/${encodeURIComponent(folder.id)}/instructions`, values);
+      let ok = true;
+      for (const target of targets) {
+        const values = Object.fromEntries(fields.map(({ key, input, changed }) => [key,
+          targets.length === 1 || changed() ? input.value : target[key] || ""]));
+        const res = await send("PUT", `/api/folders/${encodeURIComponent(target.id)}/instructions`, values);
+        if (!res.ok) ok = false;
+      }
       save.disabled = false;
-      if (!res.ok) {
+      if (!ok) {
         host.showNotice("Could not save folder instructions");
         return;
       }
@@ -1922,6 +2143,7 @@ window.createLibrary = function createLibrary(host) {
   }
 
   function folderMenu(event, id) {
+    if (selectionMenu(event, { kind: "folder", id })) return;
     event.preventDefault();
     event.stopPropagation();
     const folder = model.folderById.get(id);
@@ -1958,7 +2180,14 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const box = moreBtn.getBoundingClientRect();
-    openMenu({ x: box.left, y: box.bottom + 4 }, [
+    const point = { x: box.left, y: box.bottom + 4 };
+    openMenu(point, [
+      ...(selecting && selected.size ? [...selectionActions(point), "sep"] : []),
+      { label: selecting ? "Cancel selection" : "Select…", action: () => {
+        if (selecting) clearSelection();
+        else { selecting = true; selectionAnchor = null; selectionRangeBase = null; render(); visibleRows()[0]?.focus(); }
+      } },
+      "sep",
       { label: "Open file…", action: () => openDiskFile(null) },
       { label: "Open folder…", action: () => openDiskFolder(null) },
       { label: "New file", submenu: () => newFileItems(null) },
@@ -1988,11 +2217,11 @@ window.createLibrary = function createLibrary(host) {
   /** "Move to…": a filterable folder list; typing a new name offers to create it. */
   function openMovePicker(item, point) {
     closeMenu();
-    const excluded = item.kind === "folder" ? subtree(item.id) : new Set();
-    const currentParent =
-      item.kind === "folder"
-        ? model.folderById.get(item.id)?.parentId ?? null
-        : folderOfPage(model.pageById.get(item.id) || {});
+    const items = Array.isArray(item) ? item : [item];
+    const excluded = new Set(items.filter((entry) => entry.kind === "folder").flatMap((entry) => [...subtree(entry.id)]));
+    const parents = items.map((entry) => entry.kind === "folder" ? model.folderById.get(entry.id)?.parentId ?? null
+      : folderOfPage(model.pageById.get(entry.id) || {}));
+    const currentParent = parents.every((id) => id === parents[0]) ? parents[0] : undefined;
     const entries = [{ id: null, name: "Library", path: "", depth: 0 }];
     const walk = (parentId, depth) => {
       for (const folder of foldersOf(parentId)) {
@@ -2032,11 +2261,7 @@ window.createLibrary = function createLibrary(host) {
         model = buildModel();
       }
       expandChain(target);
-      if (item.kind === "page") {
-        await movePage(item.id, target, 0);
-      } else {
-        await moveFolder(item.id, target, Number.MAX_SAFE_INTEGER);
-      }
+      await moveItems(items, target, { page: 0, folder: Number.MAX_SAFE_INTEGER });
     };
     const draw = () => {
       const text = input.value.trim().toLowerCase();
@@ -2109,6 +2334,7 @@ window.createLibrary = function createLibrary(host) {
     return {
       kind,
       id,
+      items: [{ kind, id }],
       fromStrip,
       x: 0,
       y: 0,
@@ -2127,7 +2353,7 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const row = event.target.closest(".lib-row");
-    if (!row || event.target.closest(".tab-close, input") || (query && row.dataset.kind === "folder")) {
+    if (!row || event.target.closest(".tab-close, .lib-check, .lib-chevron, input") || (query && row.dataset.kind === "folder")) {
       return;
     }
     press = {
@@ -2165,6 +2391,19 @@ window.createLibrary = function createLibrary(host) {
 
   function beginDrag(event) {
     drag = newDrag(press.kind, press.id, false);
+    if (selecting) {
+      const item = { kind: press.kind, id: press.id };
+      if (!selected.has(itemKey(item)) && !coveredBySelection(item)) {
+        selected.clear();
+        selected.set(itemKey(item), item);
+        selectionAnchor = item;
+        selectionRangeBase = null;
+      }
+      drag.items = selectionItems();
+      const primary = drag.items.find((entry) => entry.kind === "folder") || drag.items[0];
+      drag.kind = primary.kind;
+      drag.id = primary.id;
+    }
     const item = press.kind === "page" ? model.pageById.get(press.id) : model.folderById.get(press.id);
     const ghost = document.createElement("div");
     ghost.className = "lib-ghost";
@@ -2173,14 +2412,15 @@ window.createLibrary = function createLibrary(host) {
     icon.innerHTML = press.kind === "page" ? host.icons.file : FOLDER_SVG;
     const label = document.createElement("span");
     label.className = "tab-title";
-    label.textContent = press.kind === "page" ? item?.title ?? "" : item?.name ?? "";
+    label.textContent = drag.items.length > 1 ? plural(drag.items.length, "item")
+      : press.kind === "page" ? item?.title ?? "" : item?.name ?? "";
     ghost.append(icon, label);
     document.body.appendChild(ghost);
     drag.ghost = ghost;
     drag.x = event.clientX;
     drag.y = event.clientY;
     placeGhost();
-    rowFor(press.kind, press.id)?.classList.add("lib-drag-source");
+    for (const item of drag.items) rowFor(item.kind, item.id)?.classList.add("lib-drag-source");
     host.hoverCard.suspend();
     closeMenu();
     document.body.classList.add("dragging-lib");
@@ -2197,7 +2437,7 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     let target = null;
-    const page = drag.kind === "page" ? host.findAny(drag.id) : null;
+    const page = drag.items.every((item) => item.kind === "page") ? host.findAny(drag.id) : null;
     if (!drag.fromStrip && page) {
       const strip = host.stripSlot(drag.x, drag.y, page);
       if (strip) {
@@ -2233,6 +2473,7 @@ window.createLibrary = function createLibrary(host) {
     }
     measureLibrary();
     const box = drag.box;
+    const moving = new Set(drag.items.map((item) => item.id));
     if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
       return null;
     }
@@ -2240,8 +2481,8 @@ window.createLibrary = function createLibrary(host) {
     const row = hit?.row;
     if (!row) {
       return drag.kind === "page"
-        ? { folderId: null, index: pagesOf(null).filter((p) => p.id !== drag.id).length, into: ROOT }
-        : { folderId: null, index: foldersOf(null).filter((f) => f.id !== drag.id).length, into: ROOT };
+        ? { folderId: null, index: pagesOf(null).filter((p) => !moving.has(p.id)).length, into: ROOT }
+        : { folderId: null, index: foldersOf(null).filter((f) => !moving.has(f.id)).length, into: ROOT };
     }
     const r = hit.rect;
     const frac = (y - r.top) / r.height;
@@ -2255,24 +2496,24 @@ window.createLibrary = function createLibrary(host) {
       if (kind === "folder") {
         return { folderId: id, index: 0, into: id };
       }
-      if (id === drag.id) {
+      if (moving.has(id)) {
         return { noop: true };
       }
       const page = model.pageById.get(id);
       const folderId = folderOfPage(page);
-      const siblings = pagesOf(folderId).filter((p) => p.id !== drag.id);
+      const siblings = pagesOf(folderId).filter((p) => !moving.has(p.id));
       const index = siblings.indexOf(page) + (frac >= 0.5 ? 1 : 0);
       return { folderId, index, line: { top: frac >= 0.5 ? bottom : top, depth } };
     }
 
-    const own = subtree(drag.id);
+    const own = new Set(drag.items.filter((item) => item.kind === "folder").flatMap((item) => [...subtree(item.id)]));
     if (kind === "folder") {
       if (own.has(id)) {
         return { noop: true };
       }
       const folder = model.folderById.get(id);
       const parentId = folder.parentId && model.folderById.has(folder.parentId) ? folder.parentId : null;
-      const siblings = foldersOf(parentId).filter((f) => f.id !== drag.id);
+      const siblings = foldersOf(parentId).filter((f) => !moving.has(f.id));
       const at = siblings.indexOf(folder);
       const expandedWithKids = !collapsed.has(id) && (pagesOf(id).length > 0 || foldersOf(id).length > 0);
       if (frac < 0.3) {
@@ -2281,15 +2522,15 @@ window.createLibrary = function createLibrary(host) {
       if (frac > 0.7 && !expandedWithKids) {
         return { folderId: parentId, index: at + 1, line: { top: bottom, depth } };
       }
-      const inner = foldersOf(id).filter((f) => f.id !== drag.id);
+      const inner = foldersOf(id).filter((f) => !moving.has(f.id));
       return { folderId: id, index: frac > 0.7 ? 0 : inner.length, into: id };
     }
     const page = model.pageById.get(id);
     const folderId = folderOfPage(page);
-    if (folderId && own.has(folderId)) {
+    if (moving.has(id) || (folderId && own.has(folderId))) {
       return { noop: true };
     }
-    const index = foldersOf(folderId).filter((f) => f.id !== drag.id).length;
+    const index = foldersOf(folderId).filter((f) => !moving.has(f.id)).length;
     return { folderId, index, into: folderId ?? ROOT };
   }
 
@@ -2409,6 +2650,7 @@ window.createLibrary = function createLibrary(host) {
     }
     saveCollapsed();
     drag = null;
+    for (const row of visibleRows()) row.classList.remove("lib-drag-source");
     lineEl.classList.remove("on");
     list.classList.remove("lib-drop-root");
     list.querySelector(".lib-drop-into")?.classList.remove("lib-drop-into");
@@ -2439,11 +2681,14 @@ window.createLibrary = function createLibrary(host) {
     if (target.where === "strip") {
       host.clearStripSlot();
       fadeGhost(done.ghost);
-      host.openPage(done.id, { activate: true, before: target.before });
+      for (const item of done.items) host.openPage(item.id, { activate: true, before: target.before });
       render();
       return;
     }
-    if (done.kind === "page") {
+    if (done.items.length > 1) {
+      void moveItems(done.items, target.folderId, { [done.kind]: target.index });
+      fadeGhost(done.ghost);
+    } else if (done.kind === "page") {
       movePage(done.id, target.folderId, target.index);
       landGhost(done.ghost, rowFor("page", done.id));
     } else {
@@ -2543,6 +2788,16 @@ window.createLibrary = function createLibrary(host) {
         return;
       }
       const { kind, id } = row.dataset;
+      if (event.target.closest(".lib-chevron")) {
+        toggleFolder(id);
+        return;
+      }
+      if (selecting || event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.detail <= 1) selectItem({ kind, id }, event);
+        return;
+      }
       if (event.target.closest(".tab-close")) {
         event.stopPropagation();
         deletePage(id);
@@ -2560,6 +2815,7 @@ window.createLibrary = function createLibrary(host) {
     true
   );
   list.addEventListener("dblclick", (event) => {
+    if (selecting || event.ctrlKey || event.metaKey) return;
     const row = event.target.closest(".lib-row");
     if (!row || event.target.closest(".tab-close") || !event.target.closest(".tab-title, .lib-text")) {
       return;
@@ -2582,7 +2838,7 @@ window.createLibrary = function createLibrary(host) {
   list.addEventListener("mousedown", (event) => {
     const row = event.target.closest(".lib-row");
     // Middle click would autoscroll; Shift+click (open in split) would select text.
-    if (row && (event.button === 1 || (event.button === 0 && event.shiftKey && row.dataset.kind === "page"))) {
+    if (row && (event.button === 1 || (event.button === 0 && (selecting || event.ctrlKey || event.metaKey || event.shiftKey)))) {
       event.preventDefault();
     }
   });
@@ -2603,6 +2859,16 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const { kind, id } = row.dataset;
+    if ((event.key === " " || event.key === "Enter") && (selecting || event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      selectItem({ kind, id }, event);
+      return;
+    }
+    if (event.key === "Delete" && selecting && selected.size) {
+      event.preventDefault();
+      void deleteSelection(selectionItems());
+      return;
+    }
     if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
       event.preventDefault();
       if (!query) {
@@ -2767,9 +3033,11 @@ window.createLibrary = function createLibrary(host) {
         scheduleSearch(250);
       }
     },
-    /** Esc: menu, then an active drag, then an inline rename. True when consumed. */
+    /** Esc cancels a drag or rename; otherwise it closes the menu and leaves selection mode. */
     onEscape() {
-      return closeMenu() || cancelDrag() || cancelRename();
+      if (cancelDrag() || cancelRename()) return true;
+      const closed = closeMenu();
+      return clearSelection() || closed;
     },
     dragging: () => Boolean(drag && !drag.fromStrip),
     stripDragMove,

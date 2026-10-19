@@ -1092,6 +1092,34 @@ body.resizing-side .side-pane {
   box-shadow: inset 0 0 0 1px var(--accent-ring);
 }
 
+.lib-selecting .lib-row { user-select: none; }
+.lib-selecting .lib-row .tab-close { display: none; }
+.lib-row.lib-selected { background: var(--accent-soft); color: var(--heading); }
+.lib-row.lib-covered { opacity: 0.42; }
+.lib-check {
+  display: inline-flex;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--accent);
+  align-items: center;
+  justify-content: center;
+}
+.lib-check[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.lib-check[aria-checked="true"]::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg);
+}
+.lib-check[aria-disabled="true"] { cursor: default; }
+
 .lib-page {
   padding-left: calc(27px + var(--depth, 0) * 14px);
   color: var(--muted);

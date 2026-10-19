@@ -369,6 +369,11 @@
     copyTabKey,
     downloadExport,
     downloadFolderExport: (id) => downloadHref(`/api/export/folder/${encodeURIComponent(id)}`),
+    downloadSelectionExport: (items) => {
+      const query = new URLSearchParams();
+      for (const item of items) query.append(item.kind === "folder" ? "folder" : "page", item.id);
+      downloadHref(`/api/export?${query}`);
+    },
     downloadAll: () => downloadExport(),
     showNotice,
     choose,
