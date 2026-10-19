@@ -1101,7 +1101,10 @@ export class AgentHost {
 
   /** Start Codex's ChatGPT login (`codex login`); resolves with the login URL when the CLI prints one. */
   codexLogin(): Promise<{ url: string | null }> {
-    return (this.providers.codex as CodexProvider).startLogin();
+    return (this.providers.codex as CodexProvider).startLogin(() => {
+      this.codexUsageFetchAt = 0;
+      void this.refreshCodexUsage();
+    });
   }
 
   /** Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. */

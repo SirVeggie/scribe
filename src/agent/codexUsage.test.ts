@@ -15,7 +15,7 @@ after(() => { store.closeDb(); fs.rmSync(dir, { recursive: true, force: true });
 
 type Internals = {
   usageWindowStarts: UsageWindowStarts;
-  providers: { codex: { startUsageWindow(signal: AbortSignal): Promise<void> } };
+  providers: { codex: { startUsageWindow(signal: AbortSignal): Promise<void>; startLogin(onLogin?: () => void): Promise<{ url: string | null }> } };
   refreshCodexUsage(): Promise<void>;
   recordLimits(provider: "codex" | "claude", info: unknown): void;
   codexUsageFetchAt: number;
@@ -63,6 +63,30 @@ test("host defaults window starts off and dispatches an enabled overdue reset on
 const quota = (allowed: boolean | null) => ({ ordinaryUsageAllowed: allowed, rateLimits: {
   limitId: "codex", primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) - 1 },
 } });
+
+test("successful Codex login refreshes expired auth quota without waiting for the poll interval", async () => {
+  let expired = true;
+  const host = new AgentHost(() => {}, async () => {
+    if (expired) throw new Error("401 expired refresh token");
+    return quota(true);
+  });
+  const internal = host as unknown as Internals;
+  let completeLogin: (() => void) | undefined;
+  internal.providers.codex.startLogin = async (onLogin) => {
+    completeLogin = onLogin;
+    return { url: null };
+  };
+  try {
+    await internal.refreshCodexUsage();
+    await host.codexLogin();
+    assert.equal(host.limits().codex?.availability, "authentication_required");
+    expired = false;
+    assert.ok(completeLogin);
+    completeLogin();
+    await internal.refreshCodexUsage();
+    assert.equal(host.limits().codex?.availability, "available");
+  } finally { host.dispose(); }
+});
 
 test("host polls and persists Codex quota, throttles parallel reads and forwards sparse updates", async () => {
   const events: AgentEvent[] = [];

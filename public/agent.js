@@ -709,6 +709,7 @@
         pageLimitsChanged();
         for (const view of views()) view.renderComposerBar();
         agentSettings.renderUsage();
+        agentSettings.renderStatus();
         armUsageTick();
         return;
       }
@@ -10832,15 +10833,17 @@
       }
     },
     renderStatus() {
+      if (!this.status) return;
       this.status.replaceChildren();
       for (const p of S.config.providers) {
+        const loginExpired = p.id === "codex" && S.config.limits?.codex?.availability === "authentication_required";
         const row = el("div", "setting-row");
         const label = el("span");
-        label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${p.detail || ""}`));
+        label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${loginExpired ? "Login missing or expired" : p.detail || ""}`));
         row.append(label);
-        if (p.login && !p.available) {
+        if (loginExpired || (p.login && !p.available)) {
           row.append(
-            button("Log in", "ag-btn", async () => {
+            button(loginExpired ? "Log in again" : "Log in", "ag-btn", async () => {
               try {
                 const res = await api("POST", `/${p.id}/login`);
                 if (res?.url) window.open(res.url, "_blank", "noopener");
@@ -10849,7 +10852,7 @@
                 for (let i = 0; i < 100; i += 1) {
                   await new Promise((resolve) => setTimeout(resolve, 3000));
                   await loadConfig();
-                  if (providerAvailable(p.id)) break;
+                  if (providerAvailable(p.id) && !(p.id === "codex" && S.config.limits?.codex?.availability === "authentication_required")) break;
                 }
                 agentSettings.renderStatus();
                 requestRender();

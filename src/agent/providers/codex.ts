@@ -593,7 +593,7 @@ export class CodexProvider implements AgentProvider {
    * Scribe's CODEX_HOME. Resolves with the URL as soon as there is one; the wait goes on in the
    * background.
    */
-  async startLogin(): Promise<{ url: string | null }> {
+  async startLogin(onLogin?: () => void): Promise<{ url: string | null }> {
     if (!this.login) {
       let gotUrl: (url: string) => void = () => {};
       const urlReady = new Promise<string>((resolve) => (gotUrl = resolve));
@@ -630,6 +630,7 @@ export class CodexProvider implements AgentProvider {
             syncCodexAuth();
             this.modelCache = null;
             log("Codex login done");
+            onLogin?.();
           } else {
             const tail = output.trim().split(/\r?\n/).filter(Boolean).slice(-4).join(" ");
             log(`Codex login failed (exit ${code ?? "null"})${tail ? `: ${tail}` : ""}`);
