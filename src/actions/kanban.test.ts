@@ -929,6 +929,23 @@ test("sweep keeps a card claimed while Scribe waits out its chat's usage limit",
   assert.match(c.status!.text, /^Out of plan usage\. The worker goes on after the limit resets/);
 });
 
+test("sweep preserves the claim during a model capacity wait and clears its status on resumed output", () => {
+  const claimed = run(board(), "claim", { card: 1 }, agent({ thread: "th1" })).state;
+  const info: ThreadRunInfo = { exists: true, running: false, title: "T", lastTurn: { status: "error", endedAt: 900 }, run: { phase: "waiting", fixes: 0, after: 1, createdAt: 1, merge: true, wait: { until: 601000, count: 1, reason: "capacity" } } };
+  const ctx: SweepContext = { now: 1000, thread: () => info, sessionSeenAt: () => undefined };
+  const out = kanbanActions.sweep!(claimed, ctx)!;
+  const waiting = applyStateOps(claimed, out.ops);
+  assert.ok(card(waiting, 1).claim);
+  assert.match((card(waiting, 1).status as { text: string }).text, /^Model is at capacity\. The worker retries at/);
+  info.running = true;
+  info.outputAt = 602000;
+  info.lastTurn = { status: "running" };
+  info.run!.phase = "running";
+  const resumed = kanbanActions.sweep!(waiting, ctx)!;
+  const next = applyStateOps(waiting, resumed.ops);
+  assert.equal((card(next, 1).status as { text: string }).text, "Agent working");
+});
+
 const reply = (over: Record<string, unknown> = {}) => ({
   from: { id: "t_form", key: "scribe:card-2-form", title: "Form" },
   card: 2,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MAX_LIMIT_WAITS, MAX_MERGE_FIXES, MAX_RESUME_TRIES, NO_TURN_MS, PageRuns, RESUME_DELAY_MS, type PageRun, type RunDeps, type RunNote } from "./pageRuns.js";
+import { CAPACITY_RETRY_MS, MAX_LIMIT_WAITS, MAX_MERGE_FIXES, MAX_RESUME_TRIES, NO_TURN_MS, PageRuns, RESUME_DELAY_MS, runView, type PageRun, type RunDeps, type RunNote } from "./pageRuns.js";
 import type { Turn } from "./types.js";
 import { usageLimitResetsAt, UNKNOWN_RESET_RETRY_MS } from "./planLimits.js";
 
@@ -152,6 +152,48 @@ test("Claude's session limit keeps the run waiting and resumes the same chat (#7
   turn({});
   await runs.check("th");
   assert.equal(runs.get("th")?.outcome?.kind, "done");
+});
+
+test("model capacity waits ten minutes, survives restart, and resumes without quota confirmation", async () => {
+  const { state, deps, runs, turn } = harness();
+  runs.register("th", "page1", { resumePrompt: "Your plan's usage limit has reset. Get card #749 again before continuing." });
+  turn({ status: "error", error: "Selected model is at capacity. Please try a different model." });
+  await runs.check("th");
+  const until = state.now + CAPACITY_RETRY_MS;
+  assert.equal(runs.get("th")!.wait?.until, until);
+  assert.equal(runView(runs.get("th")!).wait?.reason, "capacity");
+  const restored = new PageRuns(deps, state.saved);
+  state.recovery = false;
+  state.now = until - 1;
+  await restored.check("th");
+  assert.deepEqual(state.sent, []);
+  assert.equal(state.merges, 0);
+  state.now = until;
+  await restored.check("th");
+  assert.equal(restored.get("th")!.phase, "running");
+  assert.deepEqual(state.sent, ["Retrying after waiting for model capacity. Get card #749 again before continuing."]);
+  state.now += 1;
+  turn({});
+  await restored.check("th");
+  assert.equal(restored.get("th")!.outcome?.kind, "done");
+});
+
+test("repeated model capacity errors have a bounded number of retries", async () => {
+  const { state, runs, turn } = harness();
+  runs.register("th", "page1", {});
+  for (let i = 0; i < MAX_LIMIT_WAITS; i++) {
+    turn({ status: "error", error: "Model is at capacity, try another model" });
+    await runs.check("th");
+    await runs.check("th");
+    assert.equal(runs.get("th")!.wait?.count, i + 1);
+    state.now = runs.get("th")!.wait!.until;
+    await runs.check("th");
+    state.now += 1;
+  }
+  turn({ status: "error", error: "Model is at capacity" });
+  await runs.check("th");
+  assert.equal(runs.get("th")!.outcome?.kind, "limit");
+  assert.match(runs.get("th")!.outcome!.error!, /model capacity/);
 });
 
 test("failed sends after a reset back off, then end the run", async () => {

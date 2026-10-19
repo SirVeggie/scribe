@@ -1105,7 +1105,9 @@ export const kanbanActions: ActionSet = {
         } else if (!info.running && info.run?.phase === "waiting") {
           // Scribe sends the chat on once the provider confirms the limit reset; it ends the run if it can't.
           const resetsAt = info.lastTurn?.limitResetsAt ?? info.run.wait?.until ?? ctx.now;
-          const text = `Out of plan usage. The worker goes on after the limit resets (${resetTime(resetsAt)}).`;
+          const text = info.run.wait?.reason === "capacity"
+            ? `Model is at capacity. The worker retries at ${resetTime(resetsAt)}.`
+            : `Out of plan usage. The worker goes on after the limit resets (${resetTime(resetsAt)}).`;
           if (card.status?.text !== text) ops.push({ op: "merge", path: cardPath(card), value: { status: { kind: "info", text } } });
         } else if (!info.running && info.lastTurn?.limitResetsAt && !info.run && workerWaits(state, claim.thread)) {
           // Boards whose saved HTML predates Scribe's runs wait out the limit themselves.
@@ -1179,7 +1181,7 @@ export const kanbanActions: ActionSet = {
     const what = data.ask === true ? `Ask${card ? ` #${card}` : ""}` : solo ? `One-card run${card ? ` #${card}` : ""}` : "";
     const kind: string = event.kind;
     let text: string;
-    if (event.kind === "limit") {
+    if (event.kind === "limit" && event.run.wait?.reason !== "capacity") {
       const wait = event.run.wait;
       text = `${what ? `${what} out` : "Out"} of plan usage until ${resetTime(event.resetsAt ?? wait?.until ?? now)}${wait ? ` (wait ${wait.count})` : ""}`;
     } else if (event.kind === "end") {
@@ -1206,5 +1208,6 @@ export const kanbanActions: ActionSet = {
 /** Only replace statuses the board set for launch or a plan-limit wait. */
 function launchStatus(status: Status | null | undefined): boolean {
   return status?.kind === "working" && status.text === "Agent starting"
-    || status?.kind === "info" && /^Out of plan usage\. The worker goes on after the limit resets \(.+\)\.$/.test(status.text);
+    || status?.kind === "info" && (/^Out of plan usage\. The worker goes on after the limit resets \(.+\)\.$/.test(status.text)
+      || /^Model is at capacity\. The worker retries at .+\.$/.test(status.text));
 }

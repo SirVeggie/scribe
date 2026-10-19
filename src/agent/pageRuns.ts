@@ -11,6 +11,7 @@ import type { Turn } from "./types.js";
 
 /** How long after a plan limit resets the chat is sent on, so the new usage is in. */
 export const RESUME_DELAY_MS = 60 * 1000;
+export const CAPACITY_RETRY_MS = 10 * 60 * 1000;
 /** While the provider has not confirmed the reset: how soon to look again (this does not use up a try). */
 export const RECOVERY_RECHECK_MS = 60 * 1000;
 /** Limit waits in one run before it ends with outcome "limit". */
@@ -63,7 +64,7 @@ export type PageRun = {
   /** Only turns started at or after this count. */
   after: number;
   phase: "running" | "waiting" | "ended";
-  wait?: { until: number; count: number; tries?: number; turn?: string };
+  wait?: { until: number; count: number; tries?: number; turn?: string; reason?: "capacity" };
   /** Times the agent was asked to fix the merge. */
   fixes: number;
   outcome?: RunOutcome;
@@ -77,7 +78,7 @@ export type PageRunView = Pick<PageRun, "phase" | "fixes" | "after" | "createdAt
   tag?: string;
   data?: Record<string, unknown>;
   merge: boolean;
-  wait?: { until: number; count: number };
+  wait?: { until: number; count: number; reason?: "capacity" };
   outcome?: RunOutcome;
   endedAt?: number;
 };
@@ -120,7 +121,7 @@ export function runView(run: PageRun): PageRunView {
     merge: run.merge,
     ...(run.tag ? { tag: run.tag } : {}),
     ...(run.data ? { data: run.data } : {}),
-    ...(run.phase === "waiting" && run.wait ? { wait: { until: run.wait.until, count: run.wait.count } } : {}),
+    ...(run.phase === "waiting" && run.wait ? { wait: { until: run.wait.until, count: run.wait.count, ...(run.wait.reason ? { reason: run.wait.reason } : {}) } } : {}),
     ...(run.outcome ? { outcome: run.outcome } : {}),
     ...(run.endedAt ? { endedAt: run.endedAt } : {}),
   };
@@ -238,25 +239,29 @@ export class PageRuns {
 
     if (run.phase === "waiting" && run.wait) {
       if (now < run.wait.until) return;
-      if (turn && !deps.recoveryAllowed(run.threadId, turn)) {
+      const capacity = run.wait.reason === "capacity";
+      if (!capacity && turn && !deps.recoveryAllowed(run.threadId, turn)) {
         // Not confirmed yet: look again soon, without using up a try.
         this.update(run, { wait: { ...run.wait, until: now + RECOVERY_RECHECK_MS } });
         return;
       }
       try {
-        deps.send(run.threadId, run.resumePrompt || DEFAULT_RESUME_PROMPT);
+        const prompt = run.resumePrompt || DEFAULT_RESUME_PROMPT;
+        deps.send(run.threadId, capacity
+          ? `Retrying after waiting for model capacity. ${prompt.replace("Your plan's usage limit has reset. ", "")}`
+          : prompt);
       } catch (err) {
         const why = (err as Error).message || String(err);
         const tries = (run.wait.tries ?? 0) + 1;
         if (tries > MAX_RESUME_TRIES) {
-          this.end(run, { kind: "failed", error: `Could not send the agent on after its usage limit reset: ${why}` });
+          this.end(run, { kind: "failed", error: `Could not send the agent on after ${capacity ? "waiting for model capacity" : "its usage limit reset"}: ${why}` });
           return;
         }
         const backoff = Math.min(RESUME_RETRY_MS * 2 ** (tries - 1), MAX_RESUME_BACKOFF_MS);
         this.update(run, { wait: { ...run.wait, until: now + backoff, tries } }, { kind: "resume", text: `Could not resume yet (${why}); try ${tries} of ${MAX_RESUME_TRIES}` });
         return;
       }
-      this.update(run, { phase: "running", after: now, wait: { until: 0, count: run.wait.count } }, { kind: "resume", text: "Sent the agent on after its usage limit reset" });
+      this.update(run, { phase: "running", after: now, wait: { until: 0, count: run.wait.count } }, { kind: "resume", text: capacity ? "Sent the agent on after waiting for model capacity" : "Sent the agent on after its usage limit reset" });
       return;
     }
 
@@ -265,15 +270,21 @@ export class PageRuns {
       return;
     }
 
-    if (turn.status === "error" && turn.limitResetsAt) {
+    const capacity = turn.status === "error" && /\bmodel\b[^\n.]*\bat capacity\b/i.test(turn.error ?? "");
+    if (turn.status === "error" && (turn.limitResetsAt || capacity)) {
       if (run.wait?.turn === turn.id) return;
       const count = (run.wait?.count ?? 0) + 1;
       if (count > MAX_LIMIT_WAITS) {
-        this.end(run, { kind: "limit", error: `The agent kept running out of plan usage (${MAX_LIMIT_WAITS} waits in a row).` });
+        this.end(run, { kind: "limit", error: `The agent kept ${capacity ? "hitting model capacity" : "running out of plan usage"} (${MAX_LIMIT_WAITS} waits in a row).` });
         return;
       }
-      const until = turn.limitResetsAt + RESUME_DELAY_MS;
-      this.update(run, { phase: "waiting", wait: { until, count, turn: turn.id } }, { kind: "limit", text: `Out of plan usage until ${new Date(turn.limitResetsAt).toISOString()} (wait ${count} of ${MAX_LIMIT_WAITS})`, resetsAt: turn.limitResetsAt });
+      if (capacity) {
+        const until = now + CAPACITY_RETRY_MS;
+        this.update(run, { phase: "waiting", wait: { until, count, turn: turn.id, reason: "capacity" } }, { kind: "limit", text: `Model is at capacity; retrying in 10 minutes (wait ${count} of ${MAX_LIMIT_WAITS})`, resetsAt: until });
+        return;
+      }
+      const until = turn.limitResetsAt! + RESUME_DELAY_MS;
+      this.update(run, { phase: "waiting", wait: { until, count, turn: turn.id } }, { kind: "limit", text: `Out of plan usage until ${new Date(turn.limitResetsAt!).toISOString()} (wait ${count} of ${MAX_LIMIT_WAITS})`, resetsAt: turn.limitResetsAt });
       return;
     }
     if (turn.status === "error" || turn.status === "cancelled") {
