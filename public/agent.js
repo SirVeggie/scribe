@@ -1380,6 +1380,8 @@
       return null;
     }
     closeMenu();
+    // Keep the opening position when a selection re-renders and detaches the anchor.
+    const anchorRect = anchor.getBoundingClientRect();
     const menu = el("div", `ag-menu${search ? " ag-menu-keyed" : ""}`);
     menu.style.width = `${width}px`;
     const list = el("div", "ag-menu-list");
@@ -1524,7 +1526,7 @@
     document.body.append(menu);
     function positionMenu() {
       menu.style.maxHeight = `${window.innerHeight - 24}px`;
-      const rect = anchor.getBoundingClientRect();
+      const rect = anchor.isConnected ? anchor.getBoundingClientRect() : anchorRect;
       const mh = Math.min(menu.offsetHeight, window.innerHeight - 24);
       let top = rect.bottom + 6;
       if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
