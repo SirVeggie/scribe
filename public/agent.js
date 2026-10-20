@@ -113,8 +113,8 @@
   ];
   /** The access ladder (#719), lowest first: APPROVALS in src/agent/types.ts. */
   const APPROVALS = [
-    { id: "readonly", label: "Read-only", detail: "Read files and pages; commands only in Codex's sandbox; no edits or page changes" },
-    { id: "board", label: "Board", detail: "Read files; create and change pages; commands only in Codex's sandbox; no edits" },
+    { id: "readonly", label: "Read-only", detail: "Read files and pages; no commands, file edits or page changes" },
+    { id: "board", label: "Board", detail: "Read files; create and change pages; no commands or file edits" },
     { id: "edits", label: "Edits", detail: "Accept edits in the workspace; ask before commands and edits outside it" },
     { id: "auto", label: "Auto review", detail: "A classifier approves safe calls and asks for the rest (Claude)" },
     { id: "full", label: "Full access", detail: "Approve everything automatically" },
@@ -148,6 +148,8 @@
   /** With the experimental host shell (Agent settings), Scribe runs Cursor's shell commands and asks first. */
   const CURSOR_HOST_EDITS = "Would auto-edit; Cursor asks before each shell command, Auto-reviews other tools";
   function approvalDetail(a, provider) {
+    if (provider === "codex" && a.id === "readonly") return "Read files and pages; run commands in a read-only sandbox; no file edits or page changes";
+    if (provider === "codex" && a.id === "board") return "Read files; create and change pages; run commands in a read-only sandbox; no file edits";
     if (provider === "cursor" && a.id === "edits" && prefs().cursorHostShell) return CURSOR_HOST_EDITS;
     if (provider === "cursor" && a.id === "edits") return CURSOR_EDITS;
     if (provider === "cursor" && a.id === "auto") return CURSOR_REVIEW;
