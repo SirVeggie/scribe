@@ -6,6 +6,11 @@ Work on this board with `page_action`. Actions read the latest state and apply t
 
 {{actions}}
 
+`scheduledAt` is the earliest worker pickup time in epoch milliseconds (the card dialog's
+**Start after**, entered in local time); `null` clears it. Workers, Continue requests and
+agent claims wait until then; a running holder keeps working. Pickup also needs the usual
+worker conditions and may follow on the daemon's next minute check, including when the board is closed.
+
 Form answers and Continue requests are saved and immediately move the card to its originating
 ready inbox (or the first ready inbox if none is recorded). They wait there for dependencies,
 the assigned worker to be running, an unpaused originating ready inbox, a free slot and

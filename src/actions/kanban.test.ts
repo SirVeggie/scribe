@@ -36,6 +36,25 @@ const card = (state: Record<string, unknown>, num: number) =>
   (state.cards as Array<Record<string, unknown>>).find((c) => c.num === num)!;
 const order = (state: Record<string, unknown>) => (state.cards as Array<{ num: number }>).map((c) => c.num);
 
+test("scheduled times can be created, listed, changed and cleared; agents cannot claim early", () => {
+  let state = run(board(), "create", { title: "Later", scheduledAt: 2000 }).state;
+  assert.equal(card(state, 4).scheduledAt, 2000);
+  assert.equal(run(state, "get", { card: 4 }).result.scheduledAt, 2000);
+  assert.equal((run(state, "list", {}).result.cards as Array<Record<string, unknown>>).find(c => c.num === 4)!.scheduledAt, 2000);
+  assert.throws(() => run(state, "claim", { card: 4 }), /scheduled for/);
+  const claimed = run(state, "claim", { card: 4 }, { ...agent(), now: 2000 }).state;
+  assert.equal(card(claimed, 4).col, "work");
+  const rescheduled = run(claimed, "update", { card: 4, scheduledAt: 3000 }).state;
+  assert.doesNotThrow(() => run(rescheduled, "claim", { card: 4 }));
+  state = run(state, "update", { card: 4, scheduledAt: null }).state;
+  assert.equal(card(state, 4).scheduledAt, undefined);
+  assert.doesNotThrow(() => run(state, "claim", { card: 4 }));
+  for (const value of ["tomorrow", "2026-10-20T12:00", 0, -1, NaN, Infinity, 8.64e15 + 1]) {
+    assert.throws(() => run(state, "update", { card: 4, scheduledAt: value }), /scheduledAt/);
+    assert.throws(() => run(state, "create", { title: "Invalid", scheduledAt: value }), /scheduledAt/);
+  }
+});
+
 test("create records the original worker and chat independently of later claims", () => {
   const initial = { ...board(), settings: { workers: {
     sol: { name: "Sol", threadId: "th_sol" },

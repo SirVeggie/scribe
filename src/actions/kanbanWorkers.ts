@@ -5,6 +5,7 @@ import {
   MAX_WORKER_LOG,
   STEP_LEASE_MS,
   cardPath,
+  cardScheduled,
   cards,
   claimFrom,
   columnById,
@@ -124,7 +125,8 @@ function workerCards(state: BoardState, w: Worker): Card[] {
 }
 
 /** Whether a worker would take the card now: not held, not blocked unanswered, not waiting on unfinished cards. */
-function cardTakeable(state: BoardState, c: Card): boolean {
+function cardTakeable(state: BoardState, c: Card, now = Date.now()): boolean {
+  if (cardScheduled(c, now)) return false;
   if (c.claim && !c.claim.stale) return false;
   if (!c.continuation && c.status?.kind === "blocked") {
     const last = arr<Comment>(c.comments).at(-1);
@@ -138,8 +140,8 @@ function cardTakeable(state: BoardState, c: Card): boolean {
 }
 
 /** The worker's next card: its first takeable one in the ready columns, except the ones in skip. */
-export function nextCard(state: BoardState, w: Worker, skip: ReadonlySet<string> = new Set()): Card | null {
-  return workerCards(state, w).find((c) => !skip.has(c.id) && cardTakeable(state, c)) ?? null;
+export function nextCard(state: BoardState, w: Worker, skip: ReadonlySet<string> = new Set(), now = Date.now()): Card | null {
+  return workerCards(state, w).find((c) => !skip.has(c.id) && cardTakeable(state, c, now)) ?? null;
 }
 
 /** Reserve slots for chats and launch leases, across worker names using the same provider. */
@@ -592,7 +594,7 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
     const wrapped = wrapUp(plan, state, id, w, threadId, info, ctx);
     if (!wrapped.go) return plan.outcome();
     skip = new Set(wrapped.blocked);
-  } else if (!w.stop && (!nextCard(state, w) || atLimit(state, id, ctx.now, ctx.defaultProvider))) {
+  } else if (!w.stop && (!nextCard(state, w, undefined, ctx.now) || atLimit(state, id, ctx.now, ctx.defaultProvider))) {
     return null;
   }
   const since = Number(w.run.since) || ctx.now;
@@ -600,7 +602,7 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
     plan.endRun(id, null, true);
     return plan.outcome();
   }
-  const c = nextCard(state, w, skip);
+  const c = nextCard(state, w, skip, ctx.now);
   const previous = c?.continuation?.thread || (c?.thread && sameName(c.threadAssignee, w.name) ? c.thread : undefined);
   const previousInfo = previous ? ctx.thread(previous) : undefined;
   // Never start a second chat while the card's previous chat is still being seen through.
@@ -665,13 +667,14 @@ export function driveWorkers(state: BoardState, ctx: DriveContext): DriveOutcome
 
 /** A pending dispatch must still own its lease and satisfy current board conditions. */
 export function workerLaunchAllowed(state: BoardState, launch: PageLaunch, now: number): boolean {
+  const c = cards(state).find((c) => c.num === launch.ref.card);
+  if (c && cardScheduled(c, now)) return false;
   if (!launch.ref.continuation) return true;
   const w = workerOf(state, str(launch.ref.worker));
-  const c = cards(state).find((c) => c.num === launch.ref.card);
   return Boolean(w?.run && !w.stop && w.step?.token === launch.ref.token && c &&
     c.continuation?.id === launch.ref.continuation && !c.archived &&
     workerCards(state, w).some((candidate) => candidate.id === c.id) &&
-    cardTakeable(state, c) && !atLimit(state, str(launch.ref.worker), now));
+    cardTakeable(state, c, now) && !atLimit(state, str(launch.ref.worker), now));
 }
 
 /** The claim worker_claim makes: the card held by the new chat under the worker's name, in the working column. */
@@ -706,7 +709,7 @@ export function workerLaunched(state: BoardState, launch: PageLaunch, result: { 
   const cardNum = Number(launch.ref.card) || undefined;
   const ours = w.step?.token === launch.ref.token;
   if ("error" in result) {
-    if (ours && launch.ref.continuation && result.error.startsWith("Worker conditions changed")) {
+    if (ours && result.error.startsWith("Worker conditions changed")) {
       plan.patchWorker(id, { step: null });
       return plan.outcome();
     }
@@ -742,7 +745,7 @@ export function workerStartOps(state: BoardState, id: string, w: Worker, now: nu
   plan.patchWorker(id, { run: { since: now }, stop: null, error: null, step: null });
   plan.log(id, "start", "Started");
   if (!w.merge || w.merge !== w.threadId) {
-    if (!nextCard(state, w)) plan.log(id, "wait", "Waiting for cards");
+    if (!nextCard(state, w, undefined, now)) plan.log(id, "wait", "Waiting for cards");
     else if (atLimit(state, id, now)) plan.log(id, "wait", "Waiting for a free slot");
   }
   return plan.outcome().ops;

@@ -47,6 +47,38 @@ const apply = (state: State, out: DriveOutcome | null) => (out ? applyStateOps(s
 const worker = (state: State) => ((state.settings as State).workers as Record<string, Record<string, unknown>>).w_op;
 const card = (state: State, num: number) => (state.cards as Card[]).find((c) => c.num === num)!;
 const log = (state: State) => ((state.settings as State).workerLog as Array<{ kind: string; text: string }> | undefined) ?? [];
+
+test("workers skip future cards, wait across reloads and take them at their earliest time", () => {
+  const state = board({ run: { since: 5 } });
+  card(state, 1).scheduledAt = 20_000;
+  assert.equal(drive(state, ctx().c)?.launch?.ref.card, 2, "later ready cards can proceed");
+  card(state, 2).assignee = "Someone";
+  const reloaded = JSON.parse(JSON.stringify(state));
+  assert.equal(drive(reloaded, ctx({}, { now: 19_999 }).c), null);
+  assert.equal(drive(reloaded, ctx({}, { now: 20_000 }).c)?.launch?.ref.card, 1);
+  delete card(reloaded, 1).scheduledAt;
+  assert.equal(drive(reloaded, ctx().c)?.launch?.ref.card, 1, "clearing makes it ready immediately");
+});
+
+test("pending continuations wait for their schedule and schedule edits invalidate leased dispatches", () => {
+  for (const continuation of [false, true]) {
+    let state = board({ run: { since: 5 } });
+    card(state, 2).assignee = "Someone";
+    card(state, 1).scheduledAt = 20_000;
+    if (continuation) state = answer(state);
+    assert.equal(drive(state, ctx().c), null);
+    const out = drive(state, ctx({}, { now: 20_000 }).c)!;
+    const leased = apply(state, out);
+    assert.equal(kanbanActions.launchAllowed!(leased, out.launch!, 20_000), true);
+    card(leased, 1).scheduledAt = 30_000;
+    assert.equal(kanbanActions.launchAllowed!(leased, out.launch!, 20_001), false);
+    const retry = applyStateOps(leased, kanbanActions.launched!(leased, out.launch!, { error: "Worker conditions changed before dispatch" }, 20_002)!.ops);
+    assert.ok(worker(retry).run, "worker keeps running after a schedule changes");
+    assert.equal(worker(retry).step, undefined);
+    assert.equal(drive(retry, ctx({}, { now: 29_999 }).c), null);
+    assert.equal(drive(retry, ctx({}, { now: 30_000 }).c)?.launch?.ref.card, 1);
+  }
+});
 const ended = (outcome: Record<string, unknown>, extra: Record<string, unknown> = {}): ThreadRunInfo => ({
   exists: true,
   running: false,

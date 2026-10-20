@@ -35,6 +35,8 @@ export type Card = {
   labels?: string[];
   priority?: number;
   due?: string;
+  /** Earliest worker pickup time, in epoch milliseconds. */
+  scheduledAt?: number;
   assignee?: string;
   threadAssignee?: string;
   checklist?: Array<{ id: string; text: string; done: boolean }>;
@@ -72,6 +74,17 @@ export const columns = (state: BoardState) => arr<Column>(state.columns);
 const labels = (state: BoardState) => arr<Label>(state.labels);
 export const cards = (state: BoardState) => arr<Card>(state.cards);
 export const cardPath = (card: Card) => `cards/id=${card.id}`;
+
+export const cardScheduled = (card: Card, now: number) => Number(card.scheduledAt) > now;
+
+function checkScheduledAt(value: unknown): number | null {
+  if (value === null) return null;
+  const time = typeof value === "number" ? value : NaN;
+  if (!Number.isFinite(time) || time <= 0 || time > 8.64e15) {
+    throw new ActionError("scheduledAt must be a positive epoch time in milliseconds, or null to clear it");
+  }
+  return time;
+}
 
 function continuationRequest(state: BoardState, card: Card, comment?: string): NonNullable<Card["continuation"]> {
   if (!str(card.assignee).trim() || !workerList(state).some(([, w]) => str(w.name).trim().toLowerCase() === str(card.assignee).trim().toLowerCase())) {
@@ -427,6 +440,7 @@ function summary(state: BoardState, card: Card) {
     labels: arr<string>(card.labels).map((id) => labels(state).find((l) => l.id === id)?.name ?? id),
     ...(card.priority ? { priority: card.priority } : {}),
     ...(card.due ? { due: card.due } : {}),
+    ...(card.scheduledAt ? { scheduledAt: card.scheduledAt } : {}),
     ...(card.assignee ? { assignee: card.assignee } : {}),
     ...(card.createdBy ? { createdBy: card.createdBy } : {}),
     ...(card.createdThread ? { createdThread: card.createdThread } : {}),
@@ -577,6 +591,7 @@ function updateOps(state: BoardState, args: Record<string, unknown>, ctx: Action
   if (args.labels !== undefined) fields.labels = labelIds(state, args.labels);
   if (args.priority !== undefined) fields.priority = Math.max(0, Math.min(4, Math.floor(Number(args.priority) || 0)));
   if (args.due !== undefined) fields.due = args.due === null ? null : str(args.due);
+  if (args.scheduledAt !== undefined) fields.scheduledAt = checkScheduledAt(args.scheduledAt);
   if (args.assignee !== undefined) fields.assignee = args.assignee === null ? null : str(args.assignee);
   if (args.status !== undefined) fields.status = checkStatus(args.status);
   if (args.blockedBy !== undefined) fields.blockedBy = arr(args.blockedBy).map((ref) => findCard(state, ref).id);
@@ -765,7 +780,7 @@ export const kanbanActions: ActionSet = {
     create: {
       description:
         "Add a card. column defaults to the first column. labels are names or ids. The card gets the next number; position top or bottom (default top).",
-      args: "{ title, description?, column?, labels?, priority?, due?, checklist?: string[], position? }",
+      args: "{ title, description?, column?, labels?, priority?, due?, scheduledAt?, checklist?: string[], position? }",
       run(state, args, ctx) {
         const title = str(args.title).trim();
         if (!title) throw new ActionError("title is required");
@@ -782,6 +797,7 @@ export const kanbanActions: ActionSet = {
           labels: labelIds(state, args.labels),
           priority: Math.max(0, Math.min(4, Math.floor(Number(args.priority) || 0))),
           ...(args.due ? { due: str(args.due) } : {}),
+          ...(args.scheduledAt != null ? { scheduledAt: checkScheduledAt(args.scheduledAt)! } : {}),
           checklist: arr(args.checklist).map((text) => ({ id: newId("ck"), text: str(text), done: false })),
           comments: [],
           images: [],
@@ -806,7 +822,7 @@ export const kanbanActions: ActionSet = {
     update: {
       description:
         "Change a card's fields. labels (names or ids) and checklist replace the whole list; a checklist item is a string or { text, done }. status: { kind: working | blocked | info, text }, or null to clear it. comment adds a comment and to (with position) moves the card, in the same step. Returns { num, column }.",
-      args: "{ card, title?, description?, labels?, priority?, due?, assignee?, checklist?, status?, blockedBy?, comment?, to?, position? }",
+      args: "{ card, title?, description?, labels?, priority?, due?, scheduledAt?, assignee?, checklist?, status?, blockedBy?, comment?, to?, position? }",
       run(state, args, ctx) {
         return { ops: updateOps(state, args, ctx), result: updateResult(state, args) };
       },
@@ -866,6 +882,9 @@ export const kanbanActions: ActionSet = {
       args: "{ card, text?, assignee? }",
       run(state, args, ctx) {
         const card = findCard(state, args.card);
+        if (ctx.caller.by === "agent" && cardScheduled(card, ctx.now) && !(card.claim && !card.claim.stale && sameHolder(card.claim, ctx))) {
+          throw new ActionError(`#${card.num} is scheduled for ${new Date(card.scheduledAt!).toISOString()}; take it after that time`);
+        }
         if (card.claim && !card.claim.stale && !sameHolder(card.claim, ctx)) {
           throw new ActionError(`#${card.num} is held by ${card.claim.holder} since ${new Date(card.claim.at).toISOString()}`);
         }

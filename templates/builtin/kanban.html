@@ -1147,6 +1147,7 @@
           <label>Column<select class="field" id="mColumn"></select></label>
           <label>Priority<select class="field" id="mPriority"></select></label>
           <label>Due<input class="field" id="mDue" type="date"></label>
+          <label><span data-tooltip="Workers wait until this local date and time before picking up the card." aria-description="Workers wait until this local date and time before picking up the card.">Start after</span><span class="combo"><input class="field" id="mScheduled" type="datetime-local"><button class="combo-clear hidden" id="mScheduledClear" type="button" aria-label="Clear scheduled time">×</button></span></label>
           <label>Assignee<span class="combo"><input class="field" id="mAssignee" type="text" placeholder="Nobody" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false"><button class="combo-clear hidden" id="mAssigneeClear" type="button" aria-label="Unassign">×</button></span></label>
           <div>
             <div class="section-label" style="margin-top:4px">Labels</div>
@@ -1348,6 +1349,7 @@
   var galleryEl = $("gallery"), coverToggle = $("coverToggle"), coverSwitch = $("coverSwitch");
   var commentsEl = $("comments"), commentBox = $("commentBox");
   var mColumn = $("mColumn"), mPriority = $("mPriority"), mDue = $("mDue"), mAssignee = $("mAssignee");
+  var mScheduled = $("mScheduled");
   var mLabels = $("mLabels"), mSuggest = $("mSuggest"), mLinks = $("mLinks"), mLinkAdd = $("mLinkAdd"), mReview = $("mReview"), mTimes = $("mTimes");
   var hintEl = $("hint"), archiveEl = $("archive"), archiveBody = $("archiveBody");
   var lightbox = $("lightbox"), lightboxImg = $("lightboxImg"), fileEl = $("file");
@@ -1536,6 +1538,7 @@
   }
   function continuationText(c) {
     if (!c.continuation) return "";
+    if (cardScheduled(c)) return "Continuation waiting until " + scheduledDate(c.scheduledAt);
     var blockers = arr(c.blockedBy).map(card).filter(function (b) {
       var col = b && colOf(b);
       return b && !b.archived && (!col || (col.role !== "done" && col.role !== "review"));
@@ -2166,6 +2169,25 @@
     } finally {
       renderCache = null;
     }
+    refreshScheduleTimer();
+  }
+
+  var scheduleTimer = null;
+  function cardScheduled(c) { return Number(c.scheduledAt) > Date.now(); }
+  function scheduledDate(time) {
+    return new Date(Number(time)).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  function localDateTime(time) {
+    if (!Number(time)) return "";
+    var d = new Date(Number(time));
+    function pad(n) { return String(n).padStart(2, "0"); }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  // Refresh eligibility when time passes, even without a state write or an open worker chat.
+  function refreshScheduleTimer() {
+    clearTimeout(scheduleTimer);
+    var times = liveCards().map(function (c) { return Number(c.scheduledAt); }).filter(function (t) { return t > Date.now(); });
+    if (times.length) scheduleTimer = setTimeout(render, Math.min(2147483647, Math.max(1, Math.min.apply(Math, times) - Date.now())));
   }
 
   function renderBoard() {
@@ -2349,7 +2371,7 @@
   function cardNode(c, col, labelMap, look) {
     var waiting = waitingInfo(c, col);
     var blockers = openBlockers(c).map(function (b) { return b.num; }).join(",");
-    var sig = [look, col ? col.id + ":" + str(col.role) : "", blockers, JSON.stringify(waiting)].join("|");
+    var sig = [look, col ? col.id + ":" + str(col.role) : "", blockers, JSON.stringify(waiting), cardScheduled(c)].join("|");
     var view = cardViews.get(c.id);
     if (view && view.card === c && view.sig === sig && view.el.className === view.cls) return view.el;
     var fresh = renderCard(c, col, labelMap, waiting);
@@ -2416,6 +2438,7 @@
     if (suggested) li.appendChild(suggested);
 
     var badges = el("div", "badges");
+    if (cardScheduled(c)) badges.appendChild(el("span", "badge", "◷ Starts " + scheduledDate(c.scheduledAt)));
     var t = dueTime(c.due);
     if (!isNaN(t)) {
       var today = dueTime(todayStr());
@@ -3346,6 +3369,8 @@
     fillSelect(mColumn, columns().map(function (x) { return [x.id, x.title]; }), col ? col.id : "");
     fillSelect(mPriority, PRIORITIES.map(function (p, i) { return [String(i), p]; }), c.priority);
     if (document.activeElement !== mDue) mDue.value = str(c.due);
+    if (document.activeElement !== mScheduled) mScheduled.value = localDateTime(c.scheduledAt);
+    $("mScheduledClear").classList.toggle("hidden", !c.scheduledAt);
     if (document.activeElement !== mAssignee) mAssignee.value = str(c.assignee);
     $("mAssigneeClear").classList.toggle("hidden", !str(c.assignee).trim());
 
@@ -3767,6 +3792,17 @@
     var v = mDue.value;
     updateCard(openId, function (x) { if (v) x.due = v; else delete x.due; return x; });
   });
+  mScheduled.addEventListener("change", function () {
+    if (mScheduled.validity.badInput || !mScheduled.validity.valid) return;
+    var time = mScheduled.value ? new Date(mScheduled.value).getTime() : null;
+    if (time !== null && (!isFinite(time) || time <= 0)) return;
+    updateCard(openId, function (x) { if (time) x.scheduledAt = time; else delete x.scheduledAt; return x; });
+  });
+  $("mScheduledClear").addEventListener("click", function (e) {
+    e.preventDefault();
+    mScheduled.value = "";
+    updateCard(openId, function (x) { delete x.scheduledAt; return x; });
+  });
   // ---------- assignee combobox ----------
   function commitAssignee(value) {
     var v = str(value).trim();
@@ -4012,12 +4048,13 @@
     var num = Math.max(1, Math.floor(Number(scribe.state.nextNum) || 1));
     var copy = {
       id: newId("c"), num: num, col: c.col, title: c.title + " (copy)", description: c.description,
-      labels: c.labels.slice(), priority: c.priority, due: c.due, assignee: c.assignee,
+      labels: c.labels.slice(), priority: c.priority, due: c.due, scheduledAt: c.scheduledAt, assignee: c.assignee,
       checklist: c.checklist.map(function (i) { return { id: newId("ck"), text: i.text, done: false }; }),
       comments: [], images: c.images.map(function (im) { return Object.assign({}, im); }), blockedBy: c.blockedBy.slice(),
       createdAt: now, createdBy: "user", movedAt: now
     };
     if (!copy.due) delete copy.due;
+    if (!copy.scheduledAt) delete copy.scheduledAt;
     if (!copy.assignee) delete copy.assignee;
     var cards = allCards().slice();
     cards.splice(cards.findIndex(function (x) { return x.id === c.id; }) + 1, 0, copy);
@@ -5589,6 +5626,7 @@
   }
   /** Whether a worker would take the card now: not held, not blocked unanswered, not waiting on unfinished cards. */
   function cardTakeable(c) {
+    if (cardScheduled(c)) return false;
     if ((c.claim && !c.claim.stale) || soloStarting[c.id]) return false;
     if (c.status && c.status.kind === "blocked") {
       var last = c.comments[c.comments.length - 1];
