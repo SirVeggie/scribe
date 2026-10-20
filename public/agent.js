@@ -289,15 +289,18 @@
 
   /** Point every thread and setting of the folder `from` at `to`. */
   async function relocateWorkspace(from, to) {
+    let relocated = false;
     try {
       const res = await api("POST", "/workspaces/relocate", { from, to });
       if (res.prefs) S.config.prefs = res.prefs;
       notice([`${R.basename(from)} is now ${R.basename(to)}: ${res.threads === 1 ? "1 thread" : `${res.threads} threads`} updated.`, ...(res.notes || [])].join(" "));
+      relocated = true;
     } catch (err) {
       notice(err.message);
     }
     await loadMissing();
     requestRender();
+    return relocated;
   }
 
   /** Ask where a missing folder went, starting at the folder Scribe found or where it used to be. */
@@ -309,7 +312,8 @@
       hint: `${from} is gone. Pick the folder it became: its threads, settings and Claude sessions follow.`,
       used: false,
     });
-    if (to) await relocateWorkspace(from, to);
+    if (to && await relocateWorkspace(from, to)) return { from, to };
+    return null;
   }
 
   /** Missing-folder rows for the top of a thread list, with automatic or manual relocation. */
@@ -6316,6 +6320,27 @@
         return;
       }
       this.sending = true;
+      // Check before consuming the draft: a missing workspace needs a repair popup, not a failed turn.
+      try {
+        const cwd = this.settings().cwd;
+        if (cwd) {
+          const folder = await api("GET", `/fs?check=1&path=${encodeURIComponent(cwd)}`);
+          if (folder.exists === false) {
+            await loadMissing();
+            const repaired = await locateWorkspace(cwd);
+            // New-thread drafts and pending forks are local, so relocation events cannot update them.
+            if (repaired && (!this.thread() || this.pendingFork)) {
+              await this.setWorkspace(repaired.to.replace(/[\\/]+$/, "") + cwd.slice(repaired.from.replace(/[\\/]+$/, "").length));
+            }
+            this.sending = false;
+            return;
+          }
+        }
+      } catch (err) {
+        this.sending = false;
+        notice(err.message);
+        return;
+      }
       const context = this.composerContext(text);
       const sending = this.attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data }));
       const images = sending.filter((f) => f.mimeType.startsWith("image/"));

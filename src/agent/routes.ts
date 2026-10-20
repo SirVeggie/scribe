@@ -702,6 +702,14 @@ export function agentRouter(host: AgentHost): express.Router {
     "/fs",
     wrap(async (req) => {
       const raw = typeof req.query.path === "string" ? req.query.path.trim() : "";
+      // Sending only needs to know whether the workspace exists, without listing it or probing git.
+      if (req.query.check === "1" && raw) {
+        try {
+          return { exists: fs.statSync(raw).isDirectory() };
+        } catch {
+          return { exists: false };
+        }
+      }
       if (!raw) {
         if (process.platform === "win32") {
           const drives = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((d) => `${d}:\\`).filter((d) => fs.existsSync(d));

@@ -70,6 +70,48 @@ test("missing workspaces offer manual repair when automatic recovery finds nothi
   }
 });
 
+test("sending to a missing workspace opens repair and keeps the unsent draft", async () => {
+  const { browser, page, errors } = await chatPage();
+  const writes: { url: string; body: any }[] = [];
+  try {
+    await page.route("**/api/agent/**", async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      if (req.method() !== "GET") writes.push({ url: url.pathname, body: req.postDataJSON() });
+      const data = url.pathname.endsWith("/workspaces/missing")
+        ? { missing: [{ path: "C:/lost/project", found: null, threads: 1, dismissed: false }] }
+        : url.pathname.endsWith("/workspaces/relocate") ? { threads: 1 }
+        : { exists: url.searchParams.get("check") !== "1", path: "C:/lost", parent: "C:/", dirs: [], repo: null };
+      await route.fulfill({ json: data });
+    });
+    await page.evaluate((thread) => {
+      const { T } = window as any;
+      T.open({ ...thread, status: "idle", cwd: "C:/lost/project" }, [], []);
+      T.view.input.value = "Keep this message";
+      T.view.attachments = [{ name: "note.txt", mimeType: "text/plain", data: "aGVsbG8=" }];
+      void T.view.send();
+    }, thread);
+    await page.getByRole("heading", { name: "Where is this folder now?" }).waitFor();
+    assert.equal(await page.evaluate(() => (window as any).T.view.input.value), "Keep this message");
+    await page.locator(".ag-ws").getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.waitForFunction(() => !(window as any).T.view.sending);
+    assert.deepEqual(writes, []);
+    await page.evaluate(() => { void (window as any).T.view.send(); });
+    await page.getByRole("heading", { name: "Where is this folder now?" }).waitFor();
+    await page.locator(".ag-ws input[type=text]").fill("C:/new/project");
+    await page.locator(".ag-ws").getByRole("button", { name: "Use folder", exact: true }).click();
+    await page.waitForFunction(() => !(window as any).T.view.sending);
+    assert.deepEqual(writes, [{ url: "/api/agent/workspaces/relocate", body: { from: "C:/lost/project", to: "C:/new/project" } }]);
+    assert.deepEqual(await page.evaluate(() => {
+      const view = (window as any).T.view;
+      return { text: view.input.value, files: view.attachments.length };
+    }), { text: "Keep this message", files: 1 });
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("notices keep their text and recovery controls through repeated turn updates", async () => {
   const { browser, page, errors } = await chatPage();
   try {
