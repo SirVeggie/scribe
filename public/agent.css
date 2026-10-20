@@ -3577,7 +3577,7 @@ html.fx-off .ag-slash { transition: none; }
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: var(--z-modal);
+  z-index: var(--z-agent-full);
   display: grid;
   grid-template-columns: var(--ag-full-side, 392px) minmax(0, 1fr);
   gap: 14px;
