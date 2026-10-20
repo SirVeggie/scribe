@@ -312,23 +312,30 @@
     if (to) await relocateWorkspace(from, to);
   }
 
-  /** "Folder renamed" rows for the top of a thread list: one click updates everything that used the old path. */
+  /** Missing-folder rows for the top of a thread list, with automatic or manual relocation. */
   function movedBanners() {
-    return S.missing.filter((m) => m.found && !m.dismissed).map((m) => {
+    return S.missing.filter((m) => !m.dismissed).map((m) => {
       const row = el("div", "ag-ws-moved");
       const text = el("span", "ag-ws-moved-text");
       const was = el("b", null, R.basename(m.path));
       was.dataset.tooltip = m.path;
-      const now = el("b", null, R.basename(m.found));
-      now.dataset.tooltip = m.found;
-      text.append(was, " is now ", now);
+      text.append(was);
+      if (m.found) {
+        const now = el("b", null, R.basename(m.found));
+        now.dataset.tooltip = m.found;
+        text.append(" is now ", now);
+      } else {
+        text.append(" is missing");
+      }
       const update = button(m.threads === 1 ? "Update 1 thread" : m.threads ? `Update ${m.threads} threads` : "Update", "ag-btn small primary", () => relocateWorkspace(m.path, m.found), "Threads, settings, worker folders and Claude sessions that used the old path move to the new one");
-      const other = button("Other…", "ag-btn small ghost", () => locateWorkspace(m.path), "Pick a different folder");
+      const other = button(m.found ? "Other…" : "Locate folder…", "ag-btn small ghost", () => locateWorkspace(m.path));
       const no = button("Ignore", "ag-btn small ghost", async () => {
         await api("POST", "/workspaces/dismiss", { path: m.path }).catch((err) => notice(err.message));
         loadMissing();
-      }, "Not the same folder. Its threads keep the old path");
-      row.append(text, update, other, no);
+      }, "Hide this notice. Its threads keep the old path");
+      row.append(text);
+      if (m.found) row.append(update);
+      row.append(other, no);
       return row;
     });
   }

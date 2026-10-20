@@ -17,7 +17,7 @@ async function chatPage() {
   await page.goto("http://chat.test/");
   const exposed = agent.replace(/  if \(document\.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
     window.T = {
-      S, onEvent, view: full.view, R, requestRender,
+      S, onEvent, view: full.view, R, requestRender, movedBanners,
       open(thread, items, turns) {
         S.threads.set(thread.id, thread);
         S.details.set(thread.id, { items, byId: new Map(items.map((it) => [it.id, it])), turns: new Map(turns.map((t) => [t.id, t])) });
@@ -45,6 +45,30 @@ const items = [
   { id: "x", threadId: "t", turnId: "u1", seq: 3, kind: "tool", tool: "execute", toolId: "c1", title: "ls", detail: "ls", status: "done", output: "a\nb", startedAt: 1, endedAt: 2 },
   { id: "p", threadId: "t", turnId: "u1", seq: 4, kind: "approval", requestId: "p", title: "Run rm", status: "pending", options: [{ id: "allow", kind: "allow_once", label: "Allow" }, { id: "deny", kind: "reject_once", label: "Deny" }] },
 ];
+
+test("missing workspaces offer manual repair when automatic recovery finds nothing", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    await page.evaluate(() => {
+      const { S, movedBanners } = (window as any).T;
+      S.missing = [
+        { path: "C:/lost/project", found: null, threads: 2, dismissed: false },
+        { path: "C:/old/app", found: "C:/new/app", threads: 1, dismissed: false },
+        { path: "C:/ignored", found: null, threads: 1, dismissed: true },
+      ];
+      document.body.append(...movedBanners());
+    });
+    const banners = page.locator(".ag-ws-moved");
+    assert.equal(await banners.count(), 2);
+    assert.equal(await banners.nth(0).locator(".ag-ws-moved-text").textContent(), "project is missing");
+    assert.deepEqual(await banners.nth(0).locator("button").allTextContents(), ["Locate folder…", "Ignore"]);
+    assert.equal(await banners.nth(1).locator(".ag-ws-moved-text").textContent(), "app is now app");
+    assert.deepEqual(await banners.nth(1).locator("button").allTextContents(), ["Update 1 thread", "Other…", "Ignore"]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
 
 test("notices keep their text and recovery controls through repeated turn updates", async () => {
   const { browser, page, errors } = await chatPage();
