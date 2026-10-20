@@ -816,6 +816,36 @@ test("export all with only templates round-trips to another board", () => {
   target.closeDb();
 });
 
+test("exporting one template excludes pages, folders and other templates and round-trips its definition", () => {
+  const source = loaded();
+  todoTemplate(source);
+  const { template } = source.upsertTemplate({
+    key: "portable", title: "Portable", html: "<h1>{{title}}</h1>",
+    fields: [{ key: "title", label: "Title", type: "text", default: "New" }],
+    titleTemplate: "{{title}} board", initialState: { items: [] }, stateVersion: 3,
+    guide: "Keep the items in state.", pin: false,
+    agentActions: [{ id: "summarise", label: "Summarise", prompt: "Summarise {{page.title}}." }],
+  });
+  source.openFromTemplate(template.id, { title: "Existing" });
+  source.createFolder({ name: "Unrelated" });
+  const file = source.exportFile({ templateId: template.id });
+  assert.deepEqual(file.templates, [template]);
+  assert.deepEqual(file.pages, []);
+  assert.equal(file.folders, undefined);
+  assert.throws(() => source.exportFile({ templateId: "missing" }), /template not found/);
+  const parsed = roundTrip(file);
+  source.closeDb();
+  const target = otherBoard();
+  const result = target.importBoard(parsed, "meta");
+  assert.equal(result.templatesCreated, 1);
+  assert.equal(result.tabs.length, 0);
+  const imported = target.getTemplate("portable")!;
+  assert.equal(templateFingerprint(imported), templateFingerprint(template));
+  assert.equal(imported.guide, template.guide);
+  assert.equal(imported.pin, false);
+  target.closeDb();
+});
+
 test("export all with only welcome throws", () => {
   const store = loaded();
   store.upsert({ key: "welcome", title: "Welcome", html: "<p>help</p>" });

@@ -1286,8 +1286,11 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
-  /** One page, folder subtrees, a mixed selection, or the whole Library. */
-  exportFile(scope: { id?: string; folderId?: string; pageIds?: string[]; folderIds?: string[] } = {}): BoardExportFile {
+  /** One template, one page, folder subtrees, a mixed selection, or the whole Library. */
+  exportFile(scope: { templateId?: string; id?: string; folderId?: string; pageIds?: string[]; folderIds?: string[] } = {}): BoardExportFile {
+    if (scope.templateId) {
+      return buildExport([], [this.requireTemplate(scope.templateId)]);
+    }
     let tabs: Tab[];
     const selection = scope.pageIds !== undefined || scope.folderIds !== undefined;
     const selectedFolders = new Set<string>();

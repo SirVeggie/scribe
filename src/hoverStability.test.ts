@@ -192,7 +192,11 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} };
       const findTemplateMeta = id => state.templates.find(t => t.id === id);
       const createFromTemplate = template => window.opened = template;
-      ${app.slice(app.indexOf('  function templateRow('), app.indexOf('  function builtinMenu('))}
+      const library = { openMenu: (at, items) => window.menuItems = items };
+      const downloadHref = href => window.downloaded = href;
+      const copyTemplateId = id => window.copied = id;
+      const deleteTemplate = template => window.deleted = template;
+      ${app.slice(app.indexOf('  function templateRow('), app.indexOf('  function toggleBuiltinGroup('))}
       window.check = () => {
         window.renderHoverThreads(); view.renderComposerBar();
         window.scribeSyncChildren(document.querySelector('#templates'), state.templates.map(t => templateRow(t, false)));
@@ -212,6 +216,13 @@ test("shell updates retain composer pills, thread controls and template rows wit
     await page.locator('#templates > div').click();
     assert.deepEqual(errors, []);
     assert.equal(await page.evaluate(() => (window as any).opened.fields[0].key), 'new');
+    await page.locator('#templates > div').click({ button: 'right' });
+    assert.deepEqual(await page.evaluate(() => (window as any).menuItems.map((item: any) => item.label)), ['Export', 'Copy template ID', 'Delete']);
+    assert.deepEqual(await page.evaluate(() => {
+      const w = window as any;
+      w.menuItems.forEach((item: any) => item.action());
+      return [w.downloaded, w.copied, w.deleted.fields[0].key, w.menuItems[2].danger];
+    }), ['/api/export/template/one', 'one', 'new', true]);
     await page.locator('#bar .ag-wt-icon').click();
     assert.equal(await page.evaluate(() => { (window as any).check(); return document.querySelector('#bar .ag-wt-icon')!.classList.contains('on'); }), true);
     await page.locator('#bar .ag-wt-icon').click();

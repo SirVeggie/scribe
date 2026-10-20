@@ -2632,9 +2632,8 @@
     }
     el.appendChild(text);
 
-    if (builtin) {
-      el.addEventListener("contextmenu", (event) => live() && builtinMenu(event, live(), el));
-    } else {
+    el.addEventListener("contextmenu", (event) => live() && templateMenu(event, live(), el, builtin));
+    if (!builtin) {
       const close = document.createElement("button");
       close.className = "tab-close";
       close.type = "button";
@@ -2650,17 +2649,21 @@
     return el;
   }
 
-  function builtinMenu(event, template, el) {
+  function templateMenu(event, template, el, builtin) {
     event.preventDefault();
     event.stopPropagation();
     el.classList.add("menu-on");
-    library.openMenu({ x: event.clientX, y: event.clientY }, [
+    library.openMenu({ x: event.clientX, y: event.clientY }, builtin ? [
       { label: template.fields?.length ? "Open…" : "Open", action: () => createFromTemplate(template) },
       template.localId
         ? { label: "Show my copy", action: () => flashTemplateRow(template.localId, true) }
         : { label: "Add to my templates", action: () => copyBuiltinTemplate(template) },
       "sep",
       { label: "Copy template ID", action: () => copyTemplateId(template.id) },
+    ] : [
+      { label: "Export", action: () => downloadHref(`/api/export/template/${encodeURIComponent(template.id)}`) },
+      { label: "Copy template ID", action: () => copyTemplateId(template.id) },
+      { label: "Delete", danger: true, action: () => deleteTemplate(template) },
     ]);
     // The shared menu has no close hook; drop the highlight on the next interaction.
     const clear = () => el.classList.remove("menu-on");

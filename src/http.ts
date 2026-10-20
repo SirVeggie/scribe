@@ -1875,6 +1875,17 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  app.get("/api/export/template/:id", (req, res) => {
+    try {
+      const file = store.exportFile({ templateId: req.params.id });
+      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(file.templates[0].title)}"`);
+      res.type("json").send(JSON.stringify(file));
+    } catch (err) {
+      const message = (err as Error).message;
+      res.status(message.startsWith("template not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
   app.get("/api/export/:id", (req, res) => {
     try {
       const file = store.exportFile({ id: req.params.id });

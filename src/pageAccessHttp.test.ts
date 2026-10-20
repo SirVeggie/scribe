@@ -112,6 +112,15 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal((await call("GET", "/api/agent/threads", undefined, thread.id)).status, 403, "a chat cannot read other chats or answer its own approvals");
     assert.equal((await call("GET", "/api/export", undefined, "")).status, 403);
     assert.equal((await call("GET", `/api/export?page=${home.id}`, undefined, thread.id)).status, 403);
+    const template = (await call("POST", "/api/templates", { key: "export-me", title: "Export me", html: "<p>Reusable</p>" })).data.template;
+    const templateRoute = `/api/export/template/${template.id}`;
+    const templateExport = await call("GET", templateRoute);
+    assert.equal(templateExport.status, 200);
+    assert.equal(templateExport.data.format, "scribe-export");
+    assert.deepEqual(templateExport.data.pages, []);
+    assert.deepEqual(templateExport.data.templates.map((item: any) => item.id), [template.id]);
+    assert.equal((await call("GET", "/api/export/template/missing")).status, 404);
+    assert.equal((await call("GET", templateRoute, undefined, thread.id)).status, 403);
     assert.equal((await call("POST", "/api/library/delete", { pages: [home.id] }, thread.id)).status, 403);
     const selectionFolder = (await call("POST", "/api/folders", { name: "Selection" })).data.folder;
     const selectionPage = await show("selection-page");
