@@ -6960,7 +6960,7 @@
     for (const [id, label] of [
       ["here", "Here"],
       // Threads started in the active space (#260), once the user has spaces.
-      ...(app()?.space?.() ? [["space", "This space"]] : []),
+      ...(app()?.space?.() ? [["space", "Space"]] : []),
       ["workspaces", "Workspaces"],
       ["all", "All"],
       ["archived", "Archived"],
