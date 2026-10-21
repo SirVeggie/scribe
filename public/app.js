@@ -705,6 +705,10 @@
       return;
     }
     if (msg.type === "plugin_event") {
+      if(msg.name==="changed"){
+        for(const [id,frame]of frames)frame.el.contentWindow?.postMessage({type:"scribe-plugin-availability"},pageOrigin(id));
+        window.scribePluginSettings.refresh();
+      }
       forwardPluginEvent(msg);
       return;
     }
@@ -1537,6 +1541,7 @@
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
     { label: "Classifier", sections: window.scribeMlSettings.sections },
     { label: "Audio", sections: window.scribeAudioSettings.sections },
+    { label: "Plugins", sections: window.scribePluginSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
@@ -1639,6 +1644,8 @@
   });
   window.scribeMlSettings.init({ confirm: confirmDelete, view: renderRerankSetting });
   window.scribeAudioSettings.init({ confirm: confirmDelete });
+  window.scribePluginSettings.init({confirm:confirmDelete});
+  window.scribePluginSettings.refresh();
   function openSettings(category) {
     if (isPaletteOpen()) {
       closePalette();
@@ -1646,6 +1653,7 @@
     settingsCategories.open();
     if (category === "Audio") settingsCategories.select(4);
     window.scribeAudioSettings.refresh();
+    window.scribePluginSettings.refresh();
     searchSwitch.disabled = true;
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     window.scribeMlSettings.refresh();
@@ -3730,7 +3738,14 @@
     }
   }
 
-  function downloadHref(href) {
+  async function downloadHref(href) {
+    if(href.startsWith("/api/export")){
+      try{
+        const url=new URL(href,location.href);url.searchParams.set("preview","1");
+        const response=await fetch(url),preview=await response.json();if(!response.ok)throw new Error(preview.error||"Cannot export pages");
+        if(preview.plugins?.length){const choices=await window.scribePluginSettings.exportChoices(preview.plugins);if(!choices)return;url.searchParams.delete("preview");url.searchParams.set("plugins",JSON.stringify(choices));href=url.pathname+url.search;}
+      }catch(error){showNotice(error.message);return;}
+    }
     const link = document.createElement("a");
     link.href = href;
     link.download = "";
@@ -3822,6 +3837,9 @@
     let error = null;
     for (const file of files) {
       try {
+        const previewResponse=await fetch(`/api/import?preview=1&destination=${encodeURIComponent(destination)}`,{method:"POST",headers:{"Content-Type":"application/octet-stream","X-Filename":file.name||"import"},body:file});
+        const preview=await previewResponse.json();if(!previewResponse.ok)throw new Error(preview.error||"Cannot inspect import");
+        for(const plugin of preview.plugins??[])await window.scribePluginSettings.reviewPackage(plugin,plugin.archive);
         const res = await fetch("/api/import?destination=" + encodeURIComponent(destination), {
           method: "POST",
           headers: {

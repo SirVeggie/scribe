@@ -1793,6 +1793,7 @@ ${POINTER_DRAG_JS}
 
   // ---------- page plugins ----------
   var pluginListeners = [];
+  function pluginShellOrigin(origin) { return origin === boardOrigin || origin === location.protocol + "//localhost" + (location.port ? ":" + location.port : ""); }
   function plugin(id) {
     id = String(id);
     function request(suffix, body, retried) {
@@ -1829,12 +1830,29 @@ ${POINTER_DRAG_JS}
     };
   }
   window.addEventListener("message", function (event) {
-    if (event.source !== window.parent || event.origin !== boardOrigin || event.data?.type !== "scribe-plugin-event") return;
+    if (event.source !== window.parent || !pluginShellOrigin(event.origin) || event.data?.type !== "scribe-plugin-event") return;
     var message = event.data;
     pluginListeners.filter(function (entry) { return entry.plugin === message.plugin && entry.name === message.name; }).forEach(function (entry) {
       try { entry.listener(message.data); } catch (error) { console.error("[scribe] plugin listener failed", error); }
     });
   });
+
+  function pluginAvailability() {
+    if (capturing || !tabId) return;
+    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/plugins").then(function (response) { return response.json(); }).then(function (result) {
+      var unavailable = (result.plugins || []).filter(function (item) { return !item.enabled; });
+      var notice = document.getElementById("scribe-plugin-notice");
+      if (!unavailable.length) { if (notice) notice.remove(); return; }
+      if (!notice) {
+        notice = document.createElement("div"); notice.id = "scribe-plugin-notice"; notice.setAttribute("role", "status");
+        notice.style.cssText = "padding:8px 14px;background:var(--code-bg,#202024);color:var(--text,#ddd);border-bottom:1px solid var(--border,#444);font:13px system-ui";
+        document.body.prepend(notice);
+      }
+      notice.textContent = unavailable.map(function (item) { return item.id + (item.installed ? " is off" : " is missing"); }).join(" · ");
+    }).catch(function () {});
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded",pluginAvailability); else pluginAvailability();
+  window.addEventListener("message", function(event) { if(event.source===window.parent && pluginShellOrigin(event.origin) && event.data?.type==="scribe-plugin-availability") pluginAvailability(); });
 
   // ---------- reply ----------
   /**

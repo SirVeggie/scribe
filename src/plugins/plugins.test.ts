@@ -31,7 +31,7 @@ test("installed snapshots remain stable after source edits; backend persists key
     service.patch("fixture","index.mjs","export default {methods:{echo:()=> 'changed'}}");
     assert.deepEqual(await service.call("fixture","echo",{still:"old"},{kind:"page",page:"t_test"}),{still:"old"});
     service.enable("fixture",false); await assert.rejects(()=>service.call("fixture","echo",{},{kind:"agent"}),/disabled/);
-  } finally { service.close(); await new Promise(r=>setTimeout(r,100)); fs.rmSync(root,{recursive:true,force:true}); }
+  } finally { await service.close(); fs.rmSync(root,{recursive:true,force:true}); }
 });
 
 test("plugin actions retry concurrent edits without applying stale ops or duplicate events",async()=> {
@@ -58,5 +58,5 @@ test("plugin actions retry concurrent edits without applying stale ops or duplic
     await assert.rejects(()=>actions.action(tab,"increment",{},{by:"agent"},undefined,true),/Read-only/);
     store.setPagePermission(tab.id,"plugin.fixture","deny");
     await assert.rejects(()=>actions.action(tab,"increment",{},{by:"user"}),/permission/);
-  }finally{store.closeDb();service.close();if(previousHome===undefined)delete process.env.SCRIBE_HOME;else process.env.SCRIBE_HOME=previousHome;fs.rmSync(root,{recursive:true,force:true});}
+  }finally{store.closeDb();await service.close();if(previousHome===undefined)delete process.env.SCRIBE_HOME;else process.env.SCRIBE_HOME=previousHome;fs.rmSync(root,{recursive:true,force:true});}
 });

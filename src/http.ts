@@ -74,6 +74,10 @@ import { PluginActions } from "./plugins/actions.js";
 import { pluginRouter } from "./plugins/routes.js";
 import { setPlugins, plugins, setPluginActions } from "./plugins/current.js";
 import { normalizeTemplateInput } from "./templates.js";
+import { declaredPlugins, declarePlugins } from "./plugins/manifest.js";
+import { exportTransfer, importTransfer, type PluginExportChoice } from "./plugins/transfer.js";
+import { readPackage } from "./plugins/package.js";
+import { findRepo } from "./agent/git.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
@@ -213,7 +217,16 @@ export async function startHttp(): Promise<http.Server> {
   sweepTimer.unref?.();
   scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
+  if(!pluginService.database.list().some(p=>p.manifest.id==="git-history")){
+    const folder=path.join(INSTALL_ROOT,"plugins","builtin","git-history");
+    if(fs.existsSync(folder)){
+      const files=readPackage(folder);pluginService.install(files,pluginService.preview(files).hash);
+      const repositories=[...new Set((await Promise.all([...agentHost.workspaceFolders().values()].map(folder=>findRepo(folder)))).filter((folder):folder is string=>!!folder))];
+      await pluginService.configure("git-history",{repositories});
+    }
+  }
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
+  app.use("/api/plugins",express.json({limit:"90mb"}));
   app.use(express.json({ limit: "6mb" }));
   app.use("/api/plugins",pluginRouter(pluginService,store,agentHost));
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
@@ -395,6 +408,7 @@ export async function startHttp(): Promise<http.Server> {
         }
         html = spliceHtmlSlot(baseTab.html, html);
       }
+      html=declarePlugins(html,req.body?.plugins);
       const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
@@ -543,7 +557,9 @@ export async function startHttp(): Promise<http.Server> {
       res.status(404).json({ error: `tab not found: ${req.params.id}` });
       return;
     }
-    const guide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
+    const templateGuide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
+    const pluginGuides=declaredPlugins(tab.html).filter(id=>pluginService.enabled(id)).map(id=>pluginService.guide(id));
+    const guide=pluginGuides.length?{id:`plugins:${tab.id}`,title:templateGuide?.title??tab.title,text:[templateGuide?.text,...pluginGuides.map(p=>`Plugin ${p.id}: ${p.summary}\n${p.guide}\n${JSON.stringify(p.methods)}`)].filter(Boolean).join("\n\n")}:templateGuide;
     const thread = threadOf(req);
     if (!guide || !thread || req.query.deliver !== "1") {
       res.json({ guide });
@@ -702,8 +718,9 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs/:id/action", async (req, res) => {
     try {
       const tab=store.get(req.params.id);
-      const { result, stateRevision } = tab && pluginActions?.binding(tab) ? await pluginActions.action(tab,String(req.body?.action??""),req.body?.args??{},callerOf(req),(id)=>agentHost?agentHost.runInfo(id):{exists:false},req.body?.readOnly===true) : store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
-        agentHost ? agentHost.runInfo(id) : { exists: false }, req.body?.readOnly === true
+      const readOnly=req.body?.readOnly===true || (threadOf(req)?agentHost?.getThread(threadOf(req)!)?.approval==="readonly":false);
+      const { result, stateRevision } = tab && pluginActions?.binding(tab) ? await pluginActions.action(tab,String(req.body?.action??""),req.body?.args??{},callerOf(req),(id)=>agentHost?agentHost.runInfo(id):{exists:false},readOnly) : store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
+        agentHost ? agentHost.runInfo(id) : { exists: false }, readOnly
       );
       res.json({ result: result ?? null, stateRevision });
     } catch (err) {
@@ -715,6 +732,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs/:id/plugins/:plugin/call", async (req,res)=> {
     try {
       if(viewerOf(req)==="agent")throw new Error("Agents use plugin_call");
+      if(isContentHost(req)&&framePageId(req)!==store.get(req.params.id)?.id)throw new Error("Plugin calls must name the calling page");
       const permission=checkPermission(store.pagePermissions(req.params.id),{perm:`plugin.${req.params.plugin}`});
       if(permission!=="allow") {res.json({ok:false,error:permission==="deny"?"denied":"permission",permission:`plugin.${req.params.plugin}`});return;}
       if(!pluginService.enabled(req.params.plugin)){res.json({ok:false,error:"disabled"});return;}
@@ -724,11 +742,16 @@ export async function startHttp(): Promise<http.Server> {
   app.get("/api/tabs/:id/plugins/:plugin/state/:stateKey",(req,res)=> {
     try {
       if(viewerOf(req)==="agent")throw new Error("Agents use plugin_state");
+      if(isContentHost(req)&&framePageId(req)!==store.get(req.params.id)?.id)throw new Error("Plugin state must name the calling page");
       const permission=checkPermission(store.pagePermissions(req.params.id),{perm:`plugin.${req.params.plugin}`});
       if(permission!=="allow"){res.json({ok:false,error:permission==="ask"?"permission":"denied"});return;}
       if(!pluginService.enabled(req.params.plugin))throw new Error("disabled");
       res.json({ok:true,...pluginService.database.get(req.params.plugin,req.params.stateKey)});
     }catch(error){res.json({ok:false,error:String((error as Error).message)});}
+  });
+  app.get("/api/tabs/:id/plugins",(req,res)=> {
+    const tab=store.get(req.params.id);if(!tab){res.status(404).json({ok:false,error:"missing"});return;}
+    res.json({ok:true,plugins:declaredPlugins(tab.html).map(id=>({id,enabled:pluginService.enabled(id),installed:pluginService.database.list().some(p=>p.manifest.id===id)}))});
   });
 
   /** Per-viewer page state (scribe.local). Never broadcast and never shown to agents. */
@@ -1916,41 +1939,44 @@ export async function startHttp(): Promise<http.Server> {
     res.type("html").send(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8")));
   });
 
-  app.get("/api/export/folder/:fid", (req, res) => {
+  const sendExport=async(req:express.Request,res:express.Response,file:ReturnType<typeof store.exportFile>,filename:string)=>{
+    const dependencies=[...new Set(file.pages.flatMap(page=>declaredPlugins(page.html)))];
+    if(req.query.preview==="1"){res.json({plugins:dependencies.map(id=>{try{return {id,name:pluginService.get(id).manifest.name,version:pluginService.get(id).manifest.version};}catch{return {id,name:id,version:"missing"};}})});return;}
+    const choices=typeof req.query.plugins==="string"?JSON.parse(req.query.plugins) as Record<string,PluginExportChoice>:{};
+    res.attachment(filename.replace(/\.(json|scribe\.json)$/,".scribe.zip")).type("application/zip").send(await exportTransfer(file,pluginService,choices));
+  };
+  app.get("/api/export/folder/:fid", async (req, res) => {
     try {
       const file = store.exportFile({ folderId: req.params.fid });
       const name = store.folderPath(req.params.fid) ?? "folder";
-      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(name.replaceAll("/", " - "))}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportFilename(name.replaceAll("/", " - ")));
     } catch (err) {
       sendStoreError(res, err);
     }
   });
 
-  app.get("/api/export/template/:id", (req, res) => {
+  app.get("/api/export/template/:id", async (req, res) => {
     try {
       const file = store.exportFile({ templateId: req.params.id });
-      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(file.templates[0].title)}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportFilename(file.templates[0].title));
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("template not found") ? 404 : 400).json({ error: message });
     }
   });
 
-  app.get("/api/export/:id", (req, res) => {
+  app.get("/api/export/:id", async (req, res) => {
     try {
       const file = store.exportFile({ id: req.params.id });
       const title = file.pages[0]?.title ?? "page";
-      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(title)}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportFilename(title));
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
     }
   });
 
-  app.get("/api/export", (req, res) => {
+  app.get("/api/export", async (req, res) => {
     try {
       const ids = (value: unknown): string[] => {
         const values = Array.isArray(value) ? value : [value];
@@ -1962,8 +1988,7 @@ export async function startHttp(): Promise<http.Server> {
         pageIds: req.query.page === undefined ? [] : ids(req.query.page),
         folderIds: req.query.folder === undefined ? [] : ids(req.query.folder),
       } : {});
-      res.setHeader("Content-Disposition", `attachment; filename="${exportAllFilename(file.exportedAt)}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportAllFilename(file.exportedAt));
     } catch (err) {
       const message = (err as Error).message;
       res.status(message === "nothing to export" ? 404 : 400).json({ error: message });
@@ -2242,14 +2267,19 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/import", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), (req, res) => {
+  app.post("/api/import", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), async (req, res) => {
     try {
       if (!Buffer.isBuffer(req.body)) {
         res.status(400).json({ error: "expected a file body" });
         return;
       }
       const destination = parseImportDestination(req.query.destination);
-      const parsed = parseImport(req.body, importFilename(req));
+      const transfer=await importTransfer(req.body,importFilename(req));
+      if(req.query.preview==="1"){
+        res.json({pages:transfer.parsed?.pages.length??0,plugins:transfer.packages.map(p=>({...pluginService.preview(p.files),archive:p.archive.toString("base64")}))});return;
+      }
+      if(!transfer.parsed){res.json({kind:"plugin",opened:0,closed:0,templatesCreated:0});return;}
+      const parsed = transfer.parsed;
       const result = store.importBoard(parsed, destination);
       res.status(201).json({
         kind: parsed.kind,

@@ -348,6 +348,7 @@ export async function startMcp(): Promise<void> {
       key: z.string().optional().describe("Stable page identity, e.g. sprint-notes (stored as scribe:sprint-notes). Reuse it to update the same page."),
       title: z.string().describe("Tab title."),
       html: z.string().optional().describe("HTML document or fragment. Omit when passing htmlPath."),
+      plugins: z.array(z.string()).optional().describe("Page plugin dependencies. Writes a scribe-plugins meta tag; grants no access."),
       htmlPath: z.string().min(1).optional().describe("Local HTML file to use as the page instead of html."),
       base: z
         .string()
@@ -380,7 +381,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Where the page's scribe.reply(data, { summary }) goes on submit. On a form for a Kanban card ({ page: board, card }), it posts on the card as the user's comment and reaches the card's chat; elsewhere it is a reply event for page_wait. null clears it."),
     },
-    async ({ key, title, html: htmlArg, htmlPath, base, assets, pin, state, background, folder, expectedRevision, replyTo }) => {
+    async ({ key, title, html: htmlArg, htmlPath, base, assets, pin, state, background, folder, expectedRevision, replyTo, plugins }) => {
       const resolved = resolveShowHtml(htmlArg, htmlPath);
       if ("error" in resolved) {
         return errorResult(resolved.error);
@@ -406,6 +407,7 @@ export async function startMcp(): Promise<void> {
         assets: resolvedAssets.length ? resolvedAssets : undefined,
         expectedRevision: guard,
         replyTo,
+        plugins,
       });
       if (status === 409 && expectedRevision === undefined) {
         return errorResult(
@@ -2193,6 +2195,7 @@ function registerPluginTools(tool: McpServer["tool"]): void {
   tool("plugin_list","List installed page plugins and their summaries, enablement and runtime status. Use plugin_guide for a plugin's methods and usage.",{},()=>request("GET","/"));
   tool("plugin_guide","Read a page plugin's author guide and method signatures. Plugins can be used by ordinary pages as well as their templates.",{id},({id})=>request("GET",`/${id}/guide`));
   tool("plugin_logs","Read the bounded recent backend log for a plugin. Secrets are never included by Scribe.",{id},({id})=>request("GET",`/${id}/logs`));
+  tool("plugin_state","Read one keyed value and its revision from a plugin's shared state. State is written only through the plugin's methods.",{id,key:z.string()},({id,key})=>request("GET",`/${id}/state/${encodeURIComponent(key)}`));
   tool("plugin_read","List source files or read one UTF-8 file. Source is kept by Scribe; this works without workspace file access.",{id,path:z.string().optional()},({id,path})=>request("GET",`/${id}/files${path?`?path=${encodeURIComponent(path)}`:""}`));
   tool("plugin_call","Call an agent method declared by a plugin. Method levels are read, board and ask. Ask methods request consent unless Full or allowed by this thread's page; a page's Deny refuses them. Discover methods with plugin_guide.",{id,method:z.string(),args:z.record(z.string(),z.unknown()).optional()},({id,method,args})=>request("POST",`/${id}/call`,{method,args}));
   tool("plugin_create","Create a disabled plugin source tree in Scribe with a manifest, guide and backend stub. Read scribe_docs Plugins before authoring. Installation is a separate approval step.",{manifest:z.record(z.string(),z.unknown())},({manifest})=>request("POST","/create",{manifest}));

@@ -4,6 +4,7 @@ import { embedUrlFromHtml } from "./embed.js";
 import type { SkippedOp, StateOp } from "./stateOps.js";
 import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
 import type { AgentEvent } from "./agent/types.js";
+import { declaredPlugins } from "./plugins/manifest.js";
 
 export type BoardState = Record<string, unknown>;
 
@@ -323,6 +324,7 @@ export type PageProvenance = {
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "events" | "eventSeq" | "stripSeq"> & {
+  plugins?: string[];
   htmlBytes: number;
   /** Set when the page asks to be shown as a direct iframe of this URL. */
   embedUrl?: string;
@@ -526,6 +528,7 @@ export type StateWriteResult =
 
 export function toMeta(tab: Tab): TabMeta {
   const embedUrl = embedUrlFromHtml(tab.html);
+  const plugins=declaredPlugins(tab.html);
   return {
     id: tab.id,
     key: tab.key,
@@ -541,6 +544,7 @@ export function toMeta(tab: Tab): TabMeta {
     stateRevision: tab.stateRevision,
     stateUpdatedAt: tab.stateUpdatedAt,
     htmlBytes: Buffer.byteLength(tab.html, "utf8"),
+    ...(plugins.length?{plugins}:{}),
     assets: tab.assets,
     ...(tab.agentHidden ? { agentHidden: true } : {}),
     ...(tab.access ? { access: tab.access } : {}),

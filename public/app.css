@@ -5241,6 +5241,16 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .ml-grow { flex: 1 1 auto; }
 .ml-source-form button.primary { background: var(--accent-soft); color: var(--heading); }
 
+.plugin-entry { border-bottom: 1px solid var(--border); padding: 4px 0; }
+.plugin-entry > summary { cursor: pointer; list-style: none; }
+.plugin-entry > summary::marker { content: ""; }
+.plugin-entry > summary .ml-source-text { flex: 1; min-width: 0; }
+.plugin-entry > .ml-source-form { padding: 4px 0; }
+.plugin-settings .settings-actions { flex-wrap: wrap; margin: 10px 2px; }
+.plugin-source { max-width: 100%; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--code-bg); border-radius: 8px; font-size: 12px; }
+.plugin-consent { max-width: min(680px, 90vw); }
+.plugin-settings textarea.audio-control { min-height: 76px; resize: vertical; }
+
 .lens-cond-note.lens-unit {
   flex: none;
 }

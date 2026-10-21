@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import yauzl from "yauzl";
+import { deflateRawSync } from "node:zlib";
 
 export const MAX_PACKAGE = 64 * 1024 ** 2;
 export type PackageFiles = Record<string, Buffer>;
@@ -16,7 +17,7 @@ export function readPackage(root: string): PackageFiles {
   let bytes = 0;
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if ([".git", "node_modules"].includes(entry.name)) continue;
+      if ([".git", "node_modules", ".scribe-merge"].includes(entry.name)) continue;
       const full = path.join(dir, entry.name), name = path.relative(root, full).split(path.sep).join("/");
       if (entry.isSymbolicLink()) throw new Error("Plugin packages cannot contain links");
       if (entry.isDirectory()) walk(full);
@@ -39,8 +40,8 @@ export function writePackage(root: string, files: PackageFiles): void {
   for (const [name, data] of Object.entries(files)) { const file = packagePath(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); }
 }
 
-export async function unzip(bytes: Buffer): Promise<PackageFiles> {
-  if (bytes.length > MAX_PACKAGE) throw new Error("Archive exceeds 64 MiB");
+export async function unzip(bytes: Buffer, maxBytes = MAX_PACKAGE): Promise<PackageFiles> {
+  if (bytes.length > maxBytes) throw new Error("Archive exceeds the import size limit");
   return new Promise((resolve, reject) => yauzl.fromBuffer(bytes, { lazyEntries: true }, (error, archive) => {
     if (error || !archive) { reject(error ?? new Error("Invalid zip")); return; }
     const files: PackageFiles = Object.create(null); let total = 0, count = 0;
@@ -55,11 +56,11 @@ export async function unzip(bytes: Buffer): Promise<PackageFiles> {
         if (((entry.externalFileAttributes >>> 16) & 0o170000) === 0o120000) throw new Error("Archive links are refused");
         if (Object.hasOwn(files, name)) throw new Error("Duplicate archive entry");
         total += entry.uncompressedSize;
-        if (total > MAX_PACKAGE) throw new Error("Expanded archive exceeds 64 MiB");
+        if (total > maxBytes) throw new Error("Expanded archive exceeds the import size limit");
         archive.openReadStream(entry, (error, stream) => {
           if (error || !stream) { fail(error ?? new Error("Cannot read zip entry")); return; }
           const chunks: Buffer[] = []; let size = 0;
-          stream.on("data", (data: Buffer) => { size += data.length; if (size > entry.uncompressedSize || size > MAX_PACKAGE) { stream.destroy(); fail(new Error("Zip entry exceeds declared size")); } else chunks.push(data); });
+          stream.on("data", (data: Buffer) => { size += data.length; if (size > entry.uncompressedSize || size > maxBytes) { stream.destroy(); fail(new Error("Zip entry exceeds declared size")); } else chunks.push(data); });
           stream.on("error", fail);
           stream.on("end", () => { files[name] = Buffer.concat(chunks); archive.readEntry(); });
         });
@@ -74,10 +75,11 @@ export function zip(files: PackageFiles): Buffer {
   const parts: Buffer[] = [], directory: Buffer[] = []; let offset = 0;
   for (const [name, data] of Object.entries(files)) {
     packagePath("/package", name);
-    const filename = Buffer.from(name), crc = crc32(data);
+    const filename = Buffer.from(name), crc = crc32(data), compressed=deflateRawSync(data), packed=compressed.length<data.length?compressed:data, method=packed===data?0:8;
     const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x800, 6); local.writeUInt32LE(crc, 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(filename.length, 26);
     const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(0x800, 8); central.writeUInt32LE(crc, 16); central.writeUInt32LE(data.length, 20); central.writeUInt32LE(data.length, 24); central.writeUInt16LE(filename.length, 28); central.writeUInt32LE(offset, 42);
-    parts.push(local, filename, data); directory.push(central, filename); offset += local.length + filename.length + data.length;
+    local.writeUInt16LE(method,8);local.writeUInt32LE(packed.length,18);central.writeUInt16LE(method,10);central.writeUInt32LE(packed.length,20);
+    parts.push(local, filename, packed); directory.push(central, filename); offset += local.length + filename.length + packed.length;
   }
   const index = Buffer.concat(directory), end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50); end.writeUInt16LE(Object.keys(files).length, 8); end.writeUInt16LE(Object.keys(files).length, 10); end.writeUInt32LE(index.length, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...parts, index, end]);

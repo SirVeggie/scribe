@@ -74,16 +74,23 @@
     const menu = document.createElement("div");
     menu.className = "tab-menu select-menu";
     menu.role = "listbox";
+    if(select.multiple)menu.setAttribute("aria-multiselectable","true");
     menu.hidden = true;
     wrap.appendChild(menu);
 
     let active = 0;
 
     function sync() {
-      label.textContent = select.selectedOptions[0]?.textContent ?? "";
+      label.textContent = select.multiple ? ([...select.selectedOptions].map(option=>option.textContent).join(", ") || "None") : select.selectedOptions[0]?.textContent ?? "";
     }
 
     function choose(index) {
+      if(select.multiple){
+        const option=select.options[index];if(!option||option.disabled)return;
+        option.selected=!option.selected;
+        menu.children[index]?.setAttribute("aria-selected",String(option.selected));
+        sync();select.dispatchEvent(new Event("input",{bubbles:true}));select.dispatchEvent(new Event("change",{bubbles:true}));return;
+      }
       const changed = select.selectedIndex !== index;
       select.selectedIndex = index;
       sync();
@@ -135,7 +142,8 @@
         item.tabIndex = -1;
         item.textContent = option.textContent;
         item.disabled = option.disabled;
-        item.setAttribute("aria-selected", index === select.selectedIndex ? "true" : "false");
+        item.setAttribute("aria-selected", String(option.selected));
+        if(option.dataset.tooltip){item.dataset.tooltip=option.dataset.tooltip;item.setAttribute("aria-description",option.dataset.tooltip);}
         item.addEventListener("mouseenter", () => {
           active = index;
           highlight();

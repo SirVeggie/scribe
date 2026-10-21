@@ -1,0 +1,61 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import net from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
+import { zip } from "./package.js";
+import { launchChromium } from "../chromium.js";
+
+test("plugin HTTP gates, transfer and shell settings work on an isolated daemon",{timeout:90_000},async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-plugin-http-"));
+  const probe=net.createServer();await new Promise<void>(resolve=>probe.listen(0,"127.0.0.1",resolve));const port=(probe.address() as net.AddressInfo).port;await new Promise<void>(resolve=>probe.close(()=>resolve()));
+  const child=spawn(process.execPath,["--import","tsx",path.resolve("src/index.ts"),"--daemon"],{env:{...process.env,SCRIBE_HOME:root,SCRIBE_PORT:String(port),SCRIBE_FAKE_AGENTS:"1"},windowsHide:true,stdio:["ignore","pipe","pipe"]});
+  let output="";child.stdout.on("data",data=>{output+=String(data);});child.stderr.on("data",data=>{output+=String(data);});
+  const exited=new Promise(resolve=>child.once("exit",resolve));
+  const url=`http://127.0.0.1:${port}`;let browser:Awaited<ReturnType<typeof launchChromium>>|undefined;
+  const userHeaders=()=>({"x-scribe-local-token":fs.readFileSync(path.join(root,"local-token"),"utf8").trim()});
+  async function call(route:string,method="GET",body?:unknown,headers:Record<string,string>=userHeaders()){
+    const response=await fetch(url+route,{method,headers:{...headers,...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json()};
+  }
+  try{
+    for(let i=0;;i++){try{if(fs.existsSync(path.join(root,"local-token"))&&(await fetch(`${url}/api/health`)).ok)break;}catch{}if(i>250)throw new Error(output);await delay(100);}
+    const manifest={id:"http-fixture",name:"HTTP fixture",version:"1.0.0",summary:"HTTP plugin test",backend:"backend.mjs",risky:false,methods:{read:{description:"Read",agent:"read"},change:{description:"Change",agent:"board"},danger:{description:"Ask",agent:"ask"}},settings:{token:{label:"Token",type:"secret"}}};
+    const archive=zip({"plugin.json":Buffer.from(JSON.stringify(manifest)),"backend.mjs":Buffer.from('export default {methods:{read:()=>42,change:()=>true,danger:()=>true}}')}).toString("base64");
+    const preview=await call("/api/plugins/preview","POST",{archive});assert.equal(preview.status,200,JSON.stringify(preview.data));
+    assert.equal((await call("/api/plugins/install","POST",{archive,hash:preview.data.hash})).status,200);
+    const made=await call("/api/tabs","POST",{title:"Plugin fixture",html:"<p>Fixture</p>",plugins:[manifest.id],activate:false});const id=made.data.tab.id;
+    assert.deepEqual(made.data.tab.plugins,[manifest.id]);
+    let pageCall=await call(`/api/tabs/${id}/plugins/${manifest.id}/call`,"POST",{method:"read"});assert.equal(pageCall.data.error,"permission");
+    await call(`/api/tabs/${id}/permissions`,"PUT",{perm:`plugin.${manifest.id}`,value:"allow"});
+    pageCall=await call(`/api/tabs/${id}/plugins/${manifest.id}/call`,"POST",{method:"read"});assert.equal(pageCall.data.result,42);
+    const thread=await call("/api/agent/threads","POST",{provider:"claude",model:"default",approval:"readonly",scope:{kind:"page",ref:id},remember:false});assert.equal(thread.status,200,JSON.stringify(thread.data));
+    const tid=thread.data.thread.id,secret=Buffer.from(fs.readFileSync(path.join(root,"agent-secret"),"utf8").trim(),"hex");
+    const agentHeaders={"x-scribe-client":"agent","x-scribe-thread":tid,"x-scribe-token":createHmac("sha256",secret).update(`thread:${tid}`).digest("hex")};
+    assert.equal((await call(`/api/plugins/${manifest.id}/call`,"POST",{method:"read"},agentHeaders)).data.result,42);
+    assert.equal((await call(`/api/plugins/${manifest.id}/call`,"POST",{method:"change"},agentHeaders)).status,400);
+    assert.equal((await call(`/api/plugins/${manifest.id}/files`,"PUT",{path:"oops",content:"bad"},agentHeaders)).status,400);
+    assert.equal((await call(`/api/tabs/${id}/permissions`,"PUT",{perm:`plugin.${manifest.id}`,value:"allow"},agentHeaders)).status,403);
+    const exported=await fetch(`${url}/api/export/${id}`,{headers:userHeaders()});assert.equal(exported.headers.get("content-type"),"application/zip");
+    const bytes=Buffer.from(await exported.arrayBuffer());const imported=await fetch(`${url}/api/import?preview=1`,{method:"POST",headers:{...userHeaders(),"Content-Type":"application/octet-stream"},body:bytes});const importPreview=await imported.json();assert.equal(importPreview.plugins[0].manifest.id,manifest.id);
+    browser=await launchChromium({headless:true,args:[],purpose:"Plugin settings integration"});
+    const page=await browser.newPage();const errors:string[]=[];page.on("pageerror",error=>errors.push(error.message));
+    await page.goto(url);await page.waitForFunction(()=>!!(window as any).scribeApp);
+    await page.click("#settings-toggle");await page.getByRole("button",{name:"Plugins",exact:true}).click();
+    await page.locator(`details[data-plugin="${manifest.id}"] > summary`).click();
+    assert.equal(await page.getByLabel("HTTP fixture · Token").count(),1);
+    assert.deepEqual(errors,[]);
+    const other=await call("/api/tabs","POST",{title:"Other",html:"<p>Other</p>",activate:false});
+    const content=await browser.newPage();await content.goto(`http://t-${id.slice(2)}.localhost:${port}/view/${id}`);
+    const blocked=await content.evaluate(async({other,plugin})=>(await fetch(`/api/tabs/${other}/plugins/${plugin}/call`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({method:"read"})})).status,{other:other.data.tab.id,plugin:manifest.id});
+    assert.equal(blocked,404);
+  }finally{
+    await browser?.close();
+    try{await call("/api/shutdown","POST",{});}catch{}
+    child.kill();await exited;
+    fs.rmSync(root,{recursive:true,force:true,maxRetries:15,retryDelay:100});
+  }
+});

@@ -64,6 +64,7 @@ export class PluginActions {
       const raw=await this.service.hook(binding.id,binding.t.key,hook,args(current),{kind:caller.by==="agent"?"agent":"page",page:tab.id,thread:caller.thread});
       const latest=this.store.get(tab.id);
       if(!latest || latest.templateId!==templateId || !this.service.enabled(binding.id)) throw new Error("Plugin or page changed during the call");
+      if(checkPermission(this.store.pagePermissions(latest.id),{perm:`plugin.${binding.id}`})!=="allow")throw new Error("Plugin permission was revoked during the call");
       if(latest.stateRevision!==revision) continue;
       if(raw===null) return null;
       const outcome=outcomeSchema.parse(raw);

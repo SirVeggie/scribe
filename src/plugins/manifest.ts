@@ -10,6 +10,7 @@ export const manifestSchema = z.object({
   author: z.string().max(200).optional(),
   risky: z.boolean().default(true),
   backend: file.optional(),
+  source: file.optional(),
   guide: file.optional(),
   readme: file.optional(),
   access: z.object({ files: z.array(z.string().max(1000)).max(50).default([]), network: z.array(z.string().max(250)).max(50).default([]) }).default({ files: [], network: [] }),
@@ -40,4 +41,11 @@ export function declaredPlugins(html: string): string[] {
     for (const id of (attrs.get("content") ?? "").split(/[\s,]+/)) if (pluginId.safeParse(id).success) ids.add(id);
   }
   return [...ids];
+}
+
+export function declarePlugins(html: string, ids: unknown): string {
+  if(ids===undefined)return html;
+  const plugins=z.array(pluginId).max(50).parse(ids);
+  const clean=html.replace(/<meta\b(?=[^>]*\bname\s*=\s*["']scribe-plugins["'])[^>]*>/gi,"");
+  return plugins.length?`<meta name="scribe-plugins" content="${[...new Set(plugins)].join(" ")}">\n${clean}`:clean;
 }

@@ -9,6 +9,7 @@ import { PluginDatabase, type PluginRecord } from "./database.js";
 import { packageHash, packagePath, readPackage, writePackage, zip, type PackageFiles } from "./package.js";
 import { PluginRuntime } from "./runtime.js";
 import { PluginSecrets } from "./secrets.js";
+import { build } from "esbuild";
 
 export type PluginCaller = { kind: "page" | "agent" | "system"; page?: string; thread?: string };
 export type ExportParts = { source?: boolean; settings?: boolean; state?: boolean; data?: boolean };
@@ -16,6 +17,7 @@ export class PluginService {
   readonly database: PluginDatabase;
   private secrets: PluginSecrets;
   private runtimes = new Map<string, PluginRuntime>();
+  private stopping = new Map<string,Promise<void>>();
   private contexts = new Map<string, Record<string, (...args: unknown[]) => unknown>>();
   constructor(readonly root = path.join(dataDir(), "plugins"), private event: (id: string, name: string, data: unknown) => void = () => {}, private asset?: (page: string, name: string, mimeType: string, bytes: Buffer) => unknown) {
     fs.mkdirSync(root, { recursive: true });
@@ -42,28 +44,42 @@ export class PluginService {
   guide(id: string) { const p = this.get(id); return { id, summary: p.manifest.summary, guide: this.text(id,p.manifest.guide), methods: p.manifest.methods }; }
   private snapshot(p: PluginRecord): string { return path.join(this.directory(p.manifest.id), "versions", p.hash); }
   validate(files: PackageFiles): PluginManifest {
+    for(const name of Object.keys(files))if(name.split("/").some(part=>[".git","node_modules",".scribe-merge"].includes(part)))throw new Error("Reserved package directory");
     if (!files["plugin.json"]) throw new Error("Package needs plugin.json");
     const manifest = parseManifest(JSON.parse(files["plugin.json"].toString("utf8")));
-    for (const file of [manifest.backend, manifest.guide, manifest.readme, ...manifest.templates.flatMap(t => [t.metadata,t.html,t.guide])]) if (file && !files[file]) throw new Error(`Missing package file: ${file}`);
-    if (!manifest.backend && (Object.keys(manifest.methods).length || manifest.templates.some(t => t.actions || t.hooks?.length))) throw new Error("Methods and hooks require a backend");
+    for (const file of [manifest.backend, manifest.source, manifest.guide, manifest.readme, ...manifest.templates.flatMap(t => [t.metadata,t.html,t.guide])]) if (file && !files[file]) throw new Error(`Missing package file: ${file}`);
+    if (!manifest.backend && (manifest.source || Object.keys(manifest.methods).length || manifest.templates.some(t => t.actions || t.hooks?.length))) throw new Error("Methods and hooks require a backend");
     return manifest;
   }
   preview(files: PackageFiles) {
-    const manifest = this.validate(files), hash = packageHash(files), previous = this.database.list().find(p => p.manifest.id === manifest.id);
-    return { manifest, hash, previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { addedMethods: Object.keys(manifest.methods).filter(m => !Object.hasOwn(previous.manifest.methods,m)), removedMethods: Object.keys(previous.manifest.methods).filter(m => !Object.hasOwn(manifest.methods,m)), access: manifest.access } : null };
+    const manifest = this.validate(files), hash = packageHash(files), codeHash=packageHash(this.codeFiles(files)), previous = this.database.list().find(p => p.manifest.id === manifest.id);
+    return { manifest, hash, codeHash, same:previous?.hash===codeHash, previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { addedMethods: Object.keys(manifest.methods).filter(m => !Object.hasOwn(previous.manifest.methods,m)), removedMethods: Object.keys(previous.manifest.methods).filter(m => !Object.hasOwn(manifest.methods,m)), access: manifest.access } : null };
   }
   /** Caller must collect consent for precisely this hash before invoking install. */
   install(files: PackageFiles, expectedHash: string, replace = false): PluginRecord {
     const manifest = this.validate(files), hash = packageHash(files);
     if (hash !== expectedHash) throw new Error("Package changed after consent; review it again");
     const previous = this.database.list().find(p => p.manifest.id === manifest.id);
-    if (previous && previous.hash !== hash && !replace) throw new Error("Plugin already exists; review changes and choose replace or keep mine");
+    if (previous && previous.hash !== packageHash(this.codeFiles(files)) && !replace) throw new Error("Plugin already exists; review changes and choose replace or keep mine");
     const settings = Object.fromEntries(Object.entries(manifest.settings).filter(([,v]) => v.type !== "secret").map(([k,v]) => [k, previous?.settings[k] ?? v.default ?? (v.type === "paths" ? [] : v.type === "boolean" ? false : "")]));
-    const record: PluginRecord = { manifest, hash, enabled: true, keepAlive: previous?.keepAlive ?? false, settings, installedAt: Date.now() };
-    writePackage(this.snapshot(record), files);
-    this.stop(manifest.id); this.database.save(record); this.permission(manifest); this.event(manifest.id,"changed",null);
+    const code=this.codeFiles(files),codeHash=packageHash(code);
+    const record: PluginRecord = { manifest, hash:codeHash, ...(previous&&previous.hash!==codeHash?{baseHash:previous.hash}:{}), enabled: true, keepAlive: previous?.keepAlive ?? false, settings, installedAt: Date.now() };
+    writePackage(this.snapshot(record), code);
+    this.stop(manifest.id);
+    if(files["scribe/settings.json"]){const imported=JSON.parse(files["scribe/settings.json"].toString());for(const [key,field]of Object.entries(manifest.settings)){if(field.type!=="secret"&&Object.hasOwn(imported,key))record.settings[key]=imported[key];}}
+    if(files["scribe/state.json"]){const imported=JSON.parse(files["scribe/state.json"].toString());if(!imported||typeof imported!=="object"||Array.isArray(imported))throw new Error("Invalid imported plugin state");for(const [key,value]of Object.entries(imported))this.database.set(manifest.id,key,value);}
+    const importedData=Object.fromEntries(Object.entries(files).filter(([name])=>name.startsWith("scribe/data/")).map(([name,data])=>[name.slice(12),data]));
+    if(Object.keys(importedData).length)writePackage(path.join(this.directory(manifest.id),"data"),importedData);
+    this.database.save(record); this.permission(manifest); this.event(manifest.id,"changed",null);
+    const source=this.draft(manifest.id);
+    if(fs.existsSync(source)){
+      this.history(manifest.id,"Before plugin update");
+      for(const name of Object.keys(readPackage(source)))fs.unlinkSync(packagePath(source,name));
+    }
+    writePackage(source,code);this.history(manifest.id,`Install ${manifest.version}`);
     return record;
   }
+  private codeFiles(files:PackageFiles):PackageFiles {return Object.fromEntries(Object.entries(files).filter(([name])=>!name.startsWith("scribe/")));}
   create(manifestInput: unknown): { id: string; files: string[] } {
     const manifest = parseManifest(manifestInput), folder = this.draft(manifest.id);
     if (fs.existsSync(folder)) throw new Error("Plugin source already exists");
@@ -82,7 +98,7 @@ export class PluginService {
     const folder = this.draft(id);
     if (!fs.existsSync(folder)) writePackage(folder,readPackage(this.snapshot(this.get(id))));
     const target = packagePath(folder,name);
-    if (name.split("/").some(p => p === ".git" || p === "node_modules")) throw new Error("Reserved source path");
+    if (name.split("/").some(p => [".git","node_modules",".scribe-merge","scribe"].includes(p))) throw new Error("Reserved source path");
     // Check all existing parents for junctions/symlinks before writing.
     let parent = path.dirname(target);
     while (parent !== folder) { if (fs.existsSync(parent) && fs.lstatSync(parent).isSymbolicLink()) throw new Error("Linked paths are refused"); parent = path.dirname(parent); }
@@ -91,8 +107,12 @@ export class PluginService {
     fs.mkdirSync(path.dirname(target),{recursive:true}); fs.writeFileSync(target,content);
     this.history(id,`Edit ${name}`);
   }
-  reload(id: string): { manifest: PluginManifest; hash: string; previous: unknown; changes: unknown } {
+  async reload(id: string) {
     const files = readPackage(this.draft(id)), manifest = this.validate(files);
+    if(manifest.source&&manifest.backend){
+      const result=await build({entryPoints:[packagePath(this.draft(id),manifest.source)],bundle:true,platform:"node",format:"esm",target:"node22",write:false,logLevel:"silent"});
+      files[manifest.backend]=Buffer.from(result.outputFiles[0].contents);fs.mkdirSync(path.dirname(packagePath(this.draft(id),manifest.backend)),{recursive:true});fs.writeFileSync(packagePath(this.draft(id),manifest.backend),files[manifest.backend]);
+    }
     const previous = this.database.list().find(p => p.manifest.id === id);
     if (manifest.id !== id) throw new Error("Changing a plugin id requires a new plugin");
     if (previous && packageHash(files) !== previous.hash && manifest.version === previous.manifest.version) {
@@ -107,6 +127,7 @@ export class PluginService {
   }
   enabled(id: string): boolean { try { return this.database.enabled() && this.get(id).enabled; } catch { return false; } }
   enableAll(enabled: boolean): void { this.database.enable(enabled); if (!enabled) for (const id of this.runtimes.keys()) this.stop(id); this.event("*","changed",null); }
+  startKeptAlive():void {if(!this.database.enabled())return;for(const p of this.database.list())if(p.enabled&&p.keepAlive)void this.runtime(p.manifest.id).start().catch(()=>{});}
   enable(id: string, enabled: boolean, keepAlive?: boolean): void { const p = this.get(id); p.enabled = enabled; if (keepAlive !== undefined) p.keepAlive = keepAlive; this.stop(id); this.database.save(p); if (enabled && p.keepAlive && this.database.enabled()) void this.runtime(id).start().catch(()=>{}); this.event(id,"changed",null); }
   async configure(id: string, settings: Record<string, unknown>): Promise<void> {
     const p = this.get(id);
@@ -116,7 +137,7 @@ export class PluginService {
       if ((field.type === "string" && typeof value !== "string") || (field.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) || (field.type === "boolean" && typeof value !== "boolean") || (field.type === "paths" && (!Array.isArray(value) || value.some(v=> typeof v !== "string")))) throw new Error(`Invalid value for ${key}`);
       p.settings[key] = value;
     }
-    this.stop(id); this.database.save(p);
+    await this.stop(id); this.database.save(p);
   }
   private runtime(id: string): PluginRuntime {
     if (!this.enabled(id)) throw new Error("Plugin is disabled");
@@ -124,7 +145,7 @@ export class PluginService {
     const p = this.get(id); if (!p.manifest.backend) throw new Error("Plugin has no backend");
     const folder = path.join(this.directory(id),"data"); fs.mkdirSync(folder,{recursive:true});
     runtime = new PluginRuntime({entry:packagePath(this.snapshot(p),p.manifest.backend),dataDir:folder,settings:p.settings},async(method,args)=> {
-      if (!this.enabled(id)) throw new Error("Plugin is disabled");
+      if (!this.enabled(id)||this.runtimes.get(id)!==runtime) throw new Error("Plugin is disabled or its runtime was replaced");
       if (method === "secret") { const key = String(args.name); if (p.manifest.settings[key]?.type !== "secret") throw new Error("Unknown secret"); return this.secrets.get(id,key); }
       if (method === "state.get") return this.database.get(id,String(args.key));
       if (method === "state.set") { const key = String(args.key), result = this.database.set(id,key,args.value); this.event(id,"state",{key,...result}); return result; }
@@ -154,7 +175,11 @@ export class PluginService {
     return this.database.list().filter(p=>this.enabled(p.manifest.id)).flatMap(p=>p.manifest.templates.map(t=>({plugin:p.manifest.id, definition:t, metadata:JSON.parse(this.text(p.manifest.id,t.metadata)), html:`<meta name="scribe-plugins" content="${p.manifest.id}">\n${this.text(p.manifest.id,t.html)}`,guide:this.text(p.manifest.id,t.guide)})));
   }
   logs(id: string): string[] { this.get(id); return this.runtimes.get(id)?.logs ?? []; }
-  stop(id: string): void { this.runtimes.get(id)?.stop(); this.runtimes.delete(id); }
+  stop(id: string): Promise<void> {
+    const runtime=this.runtimes.get(id);this.runtimes.delete(id);
+    if(!runtime)return this.stopping.get(id)??Promise.resolve();
+    const done=runtime.stop().finally(()=>{if(this.stopping.get(id)===done)this.stopping.delete(id);});this.stopping.set(id,done);return done;
+  }
   remove(id: string): void { this.stop(id); this.database.remove(id); this.event(id,"changed",null); }
   export(id: string, parts: ExportParts = {source:true}): Buffer {
     const p = this.get(id), files = readPackage(this.snapshot(p));
@@ -162,7 +187,16 @@ export class PluginService {
     if (parts.settings) files["scribe/settings.json"] = Buffer.from(JSON.stringify(p.settings));
     if (parts.state) files["scribe/state.json"] = Buffer.from(JSON.stringify(this.database.state(id)));
     if (parts.data) { const folder = path.join(this.directory(id),"data"); if (this.runtimes.get(id)?.status() === "running") throw new Error("Stop the plugin before exporting its data"); if(fs.existsSync(folder)) for(const [name,data] of Object.entries(readPackage(folder))) files[`scribe/data/${name}`]=data; }
+    if(parts.source&&p.baseHash){const base=path.join(this.directory(id),"versions",p.baseHash);if(fs.existsSync(base))for(const [name,data]of Object.entries(readPackage(base)))files[`scribe/base/${name}`]=data;}
     return zip(files);
   }
-  close(): void { for (const id of this.runtimes.keys()) this.stop(id); this.database.close(); }
+  prepareMerge(id:string,files:PackageFiles):{source:string;incoming:string;base:string} {
+    const p=this.get(id),folder=this.draft(id);if(!fs.existsSync(folder))writePackage(folder,readPackage(this.snapshot(p)));
+    const incoming=path.join(folder,".scribe-merge",packageHash(files),"incoming"),base=path.join(folder,".scribe-merge",packageHash(files),"base");
+    writePackage(incoming,this.codeFiles(files));
+    const exportedBase=Object.fromEntries(Object.entries(files).filter(([name])=>name.startsWith("scribe/base/")).map(([name,data])=>[name.slice(12),data]));
+    writePackage(base,Object.keys(exportedBase).length?exportedBase:readPackage(this.snapshot(p)));
+    return {source:folder,incoming,base};
+  }
+  async close(): Promise<void> { for (const id of this.runtimes.keys()) this.stop(id);await Promise.all(this.stopping.values());this.database.close(); }
 }

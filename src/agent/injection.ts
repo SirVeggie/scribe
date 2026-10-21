@@ -52,6 +52,9 @@ export const SCANNED_TOOLS: readonly string[] = [
   "browser_eval",
   "web_fetch",
   "web_search",
+  "plugin_read",
+  "plugin_logs",
+  "plugin_state",
 ];
 
 /** Scribe's own tools that only read, so a suspect turn may go on calling them without asking. */
@@ -69,6 +72,8 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "scribe_docs",
   "template_list",
   "template_get",
+  "plugin_list",
+  "plugin_guide",
   "thread_list",
   "thread_access",
   "memory_list",

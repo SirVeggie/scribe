@@ -5075,7 +5075,7 @@ export class AgentHost {
   }
 
   /** Every folder threads and prefs point at, by workspaceKey. */
-  private workspaceFolders(): Map<string, string> {
+  workspaceFolders(): Map<string, string> {
     const prefs = this.prefs();
     const out = new Map<string, string>();
     for (const dir of [...[...this.threads.values()].map((t) => this.threadFolder(t)), ...prefs.recentWorkspaces, ...Object.values(prefs.scopeWorkspaces)]) {

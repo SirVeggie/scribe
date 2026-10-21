@@ -76,6 +76,14 @@ export class PluginRuntime {
     });
   }
   async call(method: string, params: unknown): Promise<unknown> { await this.start(); return this.request(method, params); }
-  stop(): void { this.stopping = true; if (this.idle) clearTimeout(this.idle); this.child?.kill(); }
+  stop(): Promise<void> {
+    this.stopping = true;if(this.idle)clearTimeout(this.idle);
+    const child=this.child;if(!child)return Promise.resolve();
+    return new Promise(resolve=>{
+      child.once("close",()=>resolve());
+      if(process.platform==="win32"&&child.pid){const killer=spawn("taskkill",["/pid",String(child.pid),"/T","/F"],{windowsHide:true,stdio:"ignore"});killer.on("error",()=>child.kill());}
+      else child.kill();
+    });
+  }
   restart(): void { this.crashes = []; this.stop(); }
 }

@@ -825,6 +825,10 @@ In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the pa
 
 ## Templates
 
+## Page plugins
+
+Plugins give pages local backend methods, shared state and templates. Discover them with `plugin_list` and read a specific guide with `plugin_guide`. To build or edit a plugin, read `PLUGINS.md` (or `scribe_docs` with topic `plugins`) first. Ordinary pages use `scribe.plugin(id)` and declare dependencies through `page_show({plugins:[id]})`; Scribe controls access.
+
 Do **not** create, edit, or delete templates unless the user explicitly asked. Everyday pages still use `page_show` / `page_patch`.
 
 When they do ask, read `TEMPLATES.md` in this skill folder before using `template_*`. A page bound to a template cannot have its HTML changed — update the template instead. You may still change that page's state, title, and pin.
