@@ -3825,6 +3825,15 @@
     persistBannerDetail.textContent = message;
   }
 
+  async function importScribeFile(file,destination){
+    const headers={"Content-Type":"application/octet-stream","X-Filename":encodeURIComponent(file.name||"import")};
+    const previewResponse=await fetch(`/api/import?preview=1&destination=${encodeURIComponent(destination)}`,{method:"POST",headers,body:file});
+    const preview=await previewResponse.json();if(!previewResponse.ok)throw new Error(preview.error||"Cannot inspect import");
+    let pluginsInstalled=0;
+    for(const plugin of preview.plugins??[])if(await window.scribePluginSettings.reviewPackage(plugin,plugin.archive))pluginsInstalled++;
+    const response=await fetch(`/api/import?destination=${encodeURIComponent(destination)}`,{method:"POST",headers,body:file});
+    const data=await response.json();if(!response.ok)throw new Error(data.error||"Import failed");return {...data,pluginsInstalled};
+  }
   async function importFiles(fileList, destination) {
     const files = [...fileList].filter((file) => file && file.size);
     if (!files.length) {
@@ -3833,34 +3842,21 @@
     let opened = 0;
     let closed = 0;
     let templates = 0;
+    let pluginsInstalled=0;
     let focusedId = null;
     let error = null;
     for (const file of files) {
       try {
-        const previewResponse=await fetch(`/api/import?preview=1&destination=${encodeURIComponent(destination)}`,{method:"POST",headers:{"Content-Type":"application/octet-stream","X-Filename":file.name||"import"},body:file});
-        const preview=await previewResponse.json();if(!previewResponse.ok)throw new Error(preview.error||"Cannot inspect import");
-        for(const plugin of preview.plugins??[])await window.scribePluginSettings.reviewPackage(plugin,plugin.archive);
-        const res = await fetch("/api/import?destination=" + encodeURIComponent(destination), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Filename": file.name || "import",
-          },
-          body: file,
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          error = data.error || "Import failed";
-          continue;
-        }
+        const data=await importScribeFile(file,destination);
+        pluginsInstalled+=data.pluginsInstalled;
         opened += data.opened || 0;
         closed += data.closed || 0;
         templates += data.templatesCreated || 0;
         if (data.focusedId) {
           focusedId = data.focusedId;
         }
-      } catch {
-        error = "Import failed";
+      } catch (err) {
+        error = err.message||"Import failed";
       }
     }
     if (focusedId) {
@@ -3874,6 +3870,8 @@
       showNotice(importNotice(opened, closed, templates));
     } else if (error) {
       showNotice(error);
+    } else if(pluginsInstalled) {
+      showNotice(`Installed ${pluginsInstalled} plugin${pluginsInstalled===1?"":"s"}`);
     }
   }
 
@@ -3936,6 +3934,7 @@
   }
 
   async function uploadDropped(file, folderId, activate) {
+    if(/\.(scribeplugin|scribe\.zip)$/i.test(file.name)){const result=await importScribeFile(file,activate?"meta":"closed");return {...result,kind:"export"};}
     const params = new URLSearchParams({ activate: activate ? "1" : "0" });
     if (folderId) params.set("folderId", folderId);
     const res = await fetch(`/api/files/upload?${params}`, {
@@ -3971,7 +3970,7 @@
     const files = [...event.dataTransfer.files];
     const library = destination === "closed";
     const folderId = library ? dropFolderOf(event.target) : null;
-    const tally = { files: 0, folders: 0, imported: 0, focusedId: null, error: null, truncated: false };
+    const tally = { files: 0, folders: 0, imported: 0, plugins:0, focusedId: null, error: null, truncated: false };
     const openFile = async (file, parentId, activate) => {
       if (tally.files >= DROP_MAX_FILES) {
         tally.truncated = true;
@@ -3981,6 +3980,7 @@
         const data = await uploadDropped(file, parentId, activate);
         if (data.kind === "export") {
           tally.imported += (data.opened || 0) + (data.closed || 0);
+          tally.plugins+=data.pluginsInstalled||0;
           if (data.focusedId) tally.focusedId = data.focusedId;
           return;
         }
@@ -4030,8 +4030,9 @@
     if (tally.files) parts.push(tally.files === 1 ? "1 file" : `${tally.files} files`);
     if (tally.folders) parts.push(tally.folders === 1 ? "1 folder" : `${tally.folders} folders`);
     if (tally.imported) parts.push(tally.imported === 1 ? "imported 1 page" : `imported ${tally.imported} pages`);
+    if(tally.plugins)parts.push(`installed ${tally.plugins} plugin${tally.plugins===1?"":"s"}`);
     if (tally.error && !parts.length) showNotice(tally.error);
-    else if (parts.length > 1 || tally.folders || tally.truncated || tally.error) showNotice(`Opened ${parts.join(", ")}${tally.truncated ? " (stopped at the file limit)" : ""}${tally.error ? `. ${tally.error}` : ""}`);
+    else if (parts.length > 1 || tally.plugins || tally.folders || tally.truncated || tally.error) showNotice(`Opened ${parts.join(", ")}${tally.truncated ? " (stopped at the file limit)" : ""}${tally.error ? `. ${tally.error}` : ""}`);
   }
 
   async function undoClose() {
@@ -4675,6 +4676,7 @@
   const pluginSubscriptions = new Map();
   async function onPagePlugin(event) {
     const data = event.data, frameId = frameIdByWindow(event.source), tab = frameId ? findAnyTab(frameId) : null;
+    const activated=frameId?frameActivated(frameId):false;
     const reply = result => event.source?.postMessage({type:"scribe-open-result",id:data.id,reqId:data.reqId,result},event.origin);
     if (!tab || tab.embedUrl || !/^[a-z][a-z0-9-]{0,63}$/.test(data.plugin)) return reply({ok:false,error:"not_a_page"});
     try {
@@ -4687,7 +4689,7 @@
         return reply({ok:true});
       }
       if (data.op === "repository" && data.plugin === "git-history") {
-        if (!frameActivated(frameId)) return reply({ok:false,error:"no_gesture"});
+        if (!activated) return reply({ok:false,error:"no_gesture"});
         const accepted=await confirmDelete(`Allow “${tab.title}” to read Git history from ${String(data.repository)}?`,"Allow");
         if (!accepted) return reply({ok:false,error:"denied"});
         const res=await fetch("/api/plugins/git-history/repositories",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repository:data.repository})});

@@ -419,6 +419,7 @@ export class BoardStore extends EventEmitter {
 
   listTemplates(viewer: Viewer = "user"): TemplateMeta[] {
     return [...this.templates.values()]
+      .filter(template=>!template.source?.builtin.startsWith("plugin-")||this.pluginBuiltins.some(builtin=>builtin.key===template.source?.builtin))
       .sort((a, b) => a.title.localeCompare(b.title) || a.createdAt - b.createdAt)
       .map((template) => this.templateMeta(template, this.instanceCount(template.id, viewer)));
   }
@@ -1097,6 +1098,7 @@ export class BoardStore extends EventEmitter {
     if (!found) {
       throw new Error(`template not found: ${idOrKey}`);
     }
+    if(found.template.source?.builtin.startsWith("plugin-")&&!this.pluginBuiltins.some(template=>template.key===found.template.source?.builtin))throw new Error("This template's plugin is disabled or missing");
     if (opts?.into && !this.blankOf(opts.into)) {
       throw new Error("this page is not blank anymore");
     }

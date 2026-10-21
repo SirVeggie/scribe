@@ -833,6 +833,10 @@ window.createLibrary = function createLibrary(host) {
 
     const access = accessMarker(page.agentHidden ? "restricted" : page.access?.level, page.folderId);
     if (access) el.appendChild(access);
+    if(page.plugins?.length){
+      const plugin=document.createElement("span");plugin.className="lib-plugin";plugin.textContent="⌁";
+      plugin.dataset.tooltip=`Plugins: ${page.plugins.join(", ")}`;plugin.setAttribute("aria-label",plugin.dataset.tooltip);el.appendChild(plugin);
+    }
 
     if (page.pinned) {
       const pin = document.createElement("span");

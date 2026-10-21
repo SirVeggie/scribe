@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const execute=promisify(execFile);
 const key=folder=>process.platform==="win32"?folder.toLowerCase():folder;
-function repositories(ctx){return [...new Map((ctx.settings.repositories??[]).filter(folder=>typeof folder==="string"&&path.isAbsolute(folder)).map(folder=>{const resolved=fs.realpathSync(folder);return [key(resolved),resolved];})).values()];}
+function repositories(ctx){const found=new Map();for(const folder of ctx.settings.repositories??[]){if(typeof folder!=="string"||!path.isAbsolute(folder))continue;try{const resolved=fs.realpathSync(folder);found.set(key(resolved),resolved);}catch{}}return [...found.values()];}
 export default {
   methods:{
     repositories:(_args,ctx)=>({repositories:repositories(ctx)}),

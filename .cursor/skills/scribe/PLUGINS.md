@@ -68,7 +68,9 @@ A template declaration has `key`, `metadata` (a normal template JSON file), `htm
 
 Backend sets live at `templates[templateKey]`. `actions[name](state,args,ctx)` returns `{ops,result,events?}`. Hooks are `seed(state,values)`, `reply(state,reply,ctx)`, `replyDelivered(state,delivery,result,ctx)`, `sweep(state,ctx)`, `drive(state,ctx)`, `launched(state,launch,result,now)`, `launchAllowed(state,launch,now)`, `runHold(state,thread)`, and `runEvent(state,event,now)`. Seed returns an initial state object; launchAllowed returns a boolean; runHold returns a reason or null; other hooks return an action outcome or null. Drive may include `launch`; reply may include `deliver`.
 
-The normal action context includes caller, now, values and an async `thread(id)`. Sweep adds async `sessionSeenAt`; drive adds page and async `mayStart(settings)`, `watch(thread,run)`, and `release(thread)`. Await these proxies. Plugin hooks compute against a state snapshot. If the page changes while a hook runs, Scribe retries up to three times before failing. Computations must be repeatable: do not perform external writes in speculative actions. Use explicit methods for external side effects.
+The normal action context includes caller, now, values and an async `thread(id)`. Sweep adds async `sessionSeenAt`; drive adds page and async `mayStart(settings)`, `watch(thread,run)`, and `release(thread)`. Await these proxies. Every hook also receives the backend context as one extra final argument: for example `actions[name](state,args,actionCtx,backendCtx)` or `seed(state,values,backendCtx)`. This final argument has settings, secrets, shared state, database and asset APIs.
+
+Plugin hooks compute against a state snapshot. If the page changes while a hook runs, Scribe retries up to three times before failing. Computations must be repeatable: do not perform external writes in speculative actions. Use explicit methods for external side effects.
 
 ## Transfer
 

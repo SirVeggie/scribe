@@ -23,7 +23,12 @@ export class PluginDatabase {
     return this.get(plugin, key);
   }
   state(plugin: string): Record<string, unknown> { return Object.fromEntries(this.db.prepare("SELECT key,value FROM plugin_state WHERE plugin=?").all(plugin).map(r => [String(r.key), JSON.parse(String(r.value))])); }
+  replaceState(plugin:string,state:Record<string,unknown>):void {
+    this.db.exec("BEGIN IMMEDIATE");try{this.db.prepare("DELETE FROM plugin_state WHERE plugin=?").run(plugin);for(const [key,value]of Object.entries(state))this.set(plugin,key,value);this.db.exec("COMMIT");}catch(error){this.db.exec("ROLLBACK");throw error;}
+  }
   enabled(): boolean { return this.db.prepare("SELECT value FROM plugin_options WHERE key='enabled'").get()?.value !== "false"; }
   enable(value: boolean): void { this.db.prepare("INSERT OR REPLACE INTO plugin_options VALUES ('enabled',?)").run(String(value)); }
+  removed(id:string):boolean {return this.db.prepare("SELECT value FROM plugin_options WHERE key=?").get(`removed:${id}`)?.value==="true";}
+  markRemoved(id:string,value:boolean):void {this.db.prepare("INSERT OR REPLACE INTO plugin_options VALUES (?,?)").run(`removed:${id}`,String(value));}
   close(): void { this.db.close(); }
 }

@@ -11,6 +11,7 @@ export class PluginRuntime {
   private crashes: number[] = [];
   private idle?: NodeJS.Timeout;
   private stopping = false;
+  private generation = 0;
   readonly logs: string[] = [];
   constructor(private config: { entry: string; dataDir: string; settings: Record<string, unknown> }, private host: (method: string, params: Record<string, unknown>) => Promise<unknown>, private keepAlive = false) {}
   status(): string { return this.crashes.length >= 3 ? "failing" : this.child ? "running" : "idle"; }
@@ -20,21 +21,25 @@ export class PluginRuntime {
     if (this.child) return;
     this.crashes = this.crashes.filter(t => t > Date.now() - 120_000);
     if (this.crashes.length >= 3) throw new Error("Plugin failed three times in two minutes; restart it in Settings");
+    const generation=this.generation;
     this.opening = (async () => {
       if (this.crashes.length) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** this.crashes.length));
+      if(generation!==this.generation)throw new Error("Plugin startup was cancelled");
       this.stopping = false;
       // No inherited Scribe tokens, API keys, NODE_OPTIONS or provider credentials.
       const env = Object.fromEntries(["PATH", "SystemRoot", "TEMP", "TMP", "HOME", "USERPROFILE", "LOCALAPPDATA"].flatMap(k => process.env[k] ? [[k, process.env[k]!]] : []));
       const child = spawn(process.execPath, ["--input-type=module", "-e", runnerSource], { cwd: this.config.dataDir, windowsHide: true, env, stdio: ["pipe", "pipe", "pipe"] });
       this.child = child;
+      child.stdin.on("error",error=>{this.log(`RPC input closed: ${error.message}`);void this.stop();});
       const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
       let bytes = 0;
       child.stdout.on("data", (data: Buffer) => { bytes += data.length; if (bytes > 16 * 1024 ** 2) { this.log("RPC output limit exceeded"); this.stop(); } });
       lines.on("line", line => { bytes = 0; void this.receive(child, line); });
       const errors = createInterface({ input: child.stderr });
-      errors.on("line", line => this.log(line));
+      let errorBytes=0;child.stderr.on("data",(data:Buffer)=>{errorBytes+=data.length;if(errorBytes>256*1024){this.log("Backend log line exceeded its limit");void this.stop();}});
+      errors.on("line", line => {errorBytes=0;this.log(line);});
       child.on("error", error => this.log(error.message));
-      child.on("exit", (code, signal) => {
+      child.on("close", (code, signal) => {
         if (this.child !== child) return;
         this.child = undefined;
         if (!this.stopping) this.crashes.push(Date.now());
@@ -42,7 +47,7 @@ export class PluginRuntime {
         for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error("Plugin backend stopped")); }
         this.pending.clear();
       });
-      await this.request("init", this.config);
+      try{await this.request("init", this.config);}catch(error){if(this.child===child)this.crashes.push(Date.now());await this.stop();throw error;}
       this.log("Started");
     })().finally(() => { this.opening = undefined; });
     return this.opening;
@@ -63,7 +68,7 @@ export class PluginRuntime {
   }
   private request(method: string, params: unknown): Promise<unknown> {
     const child = this.child;
-    if (!child) return Promise.reject(new Error("Plugin is not running"));
+    if (!child||this.stopping) return Promise.reject(new Error("Plugin is not running"));
     if (this.pending.size >= 32) return Promise.reject(new Error("Plugin has too many pending calls"));
     const id = ++this.next;
     if (this.idle) clearTimeout(this.idle);
@@ -77,7 +82,7 @@ export class PluginRuntime {
   }
   async call(method: string, params: unknown): Promise<unknown> { await this.start(); return this.request(method, params); }
   stop(): Promise<void> {
-    this.stopping = true;if(this.idle)clearTimeout(this.idle);
+    this.stopping = true;this.generation++;if(this.idle)clearTimeout(this.idle);
     const child=this.child;if(!child)return Promise.resolve();
     return new Promise(resolve=>{
       child.once("close",()=>resolve());

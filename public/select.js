@@ -82,6 +82,7 @@
 
     function sync() {
       label.textContent = select.multiple ? ([...select.selectedOptions].map(option=>option.textContent).join(", ") || "None") : select.selectedOptions[0]?.textContent ?? "";
+      if(select.multiple)for(let i=0;i<menu.children.length;i++)menu.children[i].setAttribute("aria-selected",String(select.options[i]?.selected??false));
     }
 
     function choose(index) {
@@ -89,7 +90,7 @@
         const option=select.options[index];if(!option||option.disabled)return;
         option.selected=!option.selected;
         menu.children[index]?.setAttribute("aria-selected",String(option.selected));
-        sync();select.dispatchEvent(new Event("input",{bubbles:true}));select.dispatchEvent(new Event("change",{bubbles:true}));return;
+        sync();select.dispatchEvent(new Event("input",{bubbles:true}));select.dispatchEvent(new Event("change",{bubbles:true}));button.focus();return;
       }
       const changed = select.selectedIndex !== index;
       select.selectedIndex = index;

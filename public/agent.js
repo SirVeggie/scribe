@@ -3420,6 +3420,7 @@
       const threads = t.grants.filter((g) => g.kind === "threads");
       const helpers = t.grants.filter((g) => g.kind === "helpers");
       const pages = t.grants.filter((g) => g.kind === "pages");
+      const plugins=t.grants.filter(g=>g.kind==="plugins");
       openMenu(
         anchor,
         [
@@ -3427,6 +3428,7 @@
           ...(threads.length ? [{ header: "Can read other threads" }, ...threads.map(row)] : []),
           ...(pages.length ? [{ header: "Pages outside its Scribe access" }, ...pages.map(row)] : []),
           ...(helpers.length ? [{ header: "Helper agents" }, ...helpers.map(row)] : []),
+          ...(plugins.length?[{header:"Plugin methods"},...plugins.map(row)]:[]),
         ],
         { width: 320 }
       );
@@ -4544,6 +4546,7 @@
       head.append(icon("shield"), el("span", "ag-card-title", it.title));
       node.append(head);
       if (it.detail) node.append(el("pre", "ag-pre small", it.detail));
+      if(/^\/api\/plugins\/reviews\/[0-9a-f-]+$/.test(it.sourceUrl||""))node.append(button("View source","ag-btn small",()=>window.scribePreview.open({url:it.sourceUrl,name:"plugin-source.txt",mimeType:"text/plain"})));
       const note = keepNote(el("input", "ag-input small"), `approval:${it.id}`);
       note.placeholder = "Note for the agent (optional, sent with Deny)";
       const actions = el("div", "ag-card-actions");

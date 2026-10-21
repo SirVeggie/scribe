@@ -36,7 +36,7 @@ lines.on('line', async line => {
       const fn = hook.startsWith('action:') ? set?.actions?.[hook.slice(7)] : set?.[hook];
       if (typeof fn !== 'function') throw new Error('Template hook not found: ' + hook);
       for (const arg of args) if (arg && typeof arg === 'object' && !Array.isArray(arg)) {
-        for (const [key,value] of Object.entries(arg)) if (value?.__scribeCallback) arg[key] = (...values) => rpc('context',{token:caller.token,method:value.__scribeCallback,args:values});
+        for (const [key,value] of Object.entries(arg)) if (value?.__scribeCallback && value.__scribeToken===caller.token) arg[key] = (...values) => rpc('context',{token:caller.token,method:value.__scribeCallback,args:values});
       }
       result = await fn(...args, context(caller));
     } else throw new Error('Unknown RPC method');
@@ -49,7 +49,7 @@ function context(caller) {
     secret: name => rpc('secret',{name}),
     state: {get:key => rpc('state.get',{key}), set:(key,value) => rpc('state.set',{key,value})},
     emit: (name,data) => rpc('emit',{name,data}),
-    saveAsset: (name,mimeType,data) => rpc('asset',{page:caller.page,name,mimeType,data:Buffer.from(data).toString('base64')}),
+    saveAsset: (name,mimeType,data) => rpc('asset',{token:caller.token,name,mimeType,data:Buffer.from(data).toString('base64')}),
     db: () => database ??= new DatabaseSync(path.join(config.dataDir,'plugin.sqlite')),
   };
 }

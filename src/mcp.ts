@@ -2187,21 +2187,25 @@ function jsonResult(value: unknown) {
 }
 
 function registerPluginTools(tool: McpServer["tool"]): void {
-  const request = async (method: string, route: string, body?: unknown) => {
-    const {status,data}=await api(method,`/api/plugins${route}`,body);
-    return status>=400 ? errorResult((data as ApiError).error??`HTTP ${status}`) : jsonResult(data);
+  const request = async (method: string, route: string, body?: unknown, extra?:RequestHandlerExtra<ServerRequest,ServerNotification>) => {
+    const token=extra?._meta?.progressToken,started=Date.now();
+    const timer=token===undefined?undefined:setInterval(()=>void extra!.sendNotification({method:"notifications/progress",params:{progressToken:token,progress:Math.round((Date.now()-started)/1000),message:"Waiting for plugin approval or completion"}}).catch(()=>{}),WAIT_HEARTBEAT_MS);
+    try{
+      const {status,data}=await api(method,`/api/plugins${route}`,body,{signal:extra?.signal});
+      return status>=400 ? errorResult((data as ApiError).error??`HTTP ${status}`) : jsonResult(data);
+    }finally{clearInterval(timer);}
   };
   const id=z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).describe("Plugin id from plugin_list, or the id being authored.");
   tool("plugin_list","List installed page plugins and their summaries, enablement and runtime status. Use plugin_guide for a plugin's methods and usage.",{},()=>request("GET","/"));
   tool("plugin_guide","Read a page plugin's author guide and method signatures. Plugins can be used by ordinary pages as well as their templates.",{id},({id})=>request("GET",`/${id}/guide`));
   tool("plugin_logs","Read the bounded recent backend log for a plugin. Secrets are never included by Scribe.",{id},({id})=>request("GET",`/${id}/logs`));
-  tool("plugin_state","Read one keyed value and its revision from a plugin's shared state. State is written only through the plugin's methods.",{id,key:z.string()},({id,key})=>request("GET",`/${id}/state/${encodeURIComponent(key)}`));
+  tool("plugin_state","Read one keyed value and its revision from a plugin's shared state. Respects the page's Deny; otherwise asks unless Full or already allowed. State is written only through plugin methods.",{id,key:z.string()},({id,key},extra)=>request("GET",`/${id}/state/${encodeURIComponent(key)}`,undefined,extra));
   tool("plugin_read","List source files or read one UTF-8 file. Source is kept by Scribe; this works without workspace file access.",{id,path:z.string().optional()},({id,path})=>request("GET",`/${id}/files${path?`?path=${encodeURIComponent(path)}`:""}`));
-  tool("plugin_call","Call an agent method declared by a plugin. Method levels are read, board and ask. Ask methods request consent unless Full or allowed by this thread's page; a page's Deny refuses them. Discover methods with plugin_guide.",{id,method:z.string(),args:z.record(z.string(),z.unknown()).optional()},({id,method,args})=>request("POST",`/${id}/call`,{method,args}));
+  tool("plugin_call","Call an agent method declared by a plugin. Method levels are read, board and ask. Ask methods request consent unless Full or allowed by this thread's page; a page's Deny refuses them. Discover methods with plugin_guide.",{id,method:z.string(),args:z.record(z.string(),z.unknown()).optional(),importance:z.enum(["necessary","important","useful","trivial"]).optional()},({id,method,args,importance},extra)=>request("POST",`/${id}/call`,{method,args,importance},extra));
   tool("plugin_create","Create a disabled plugin source tree in Scribe with a manifest, guide and backend stub. Read scribe_docs Plugins before authoring. Installation is a separate approval step.",{manifest:z.record(z.string(),z.unknown())},({manifest})=>request("POST","/create",{manifest}));
   tool("plugin_patch","Write a source file inside a plugin's editable tree. This does not change installed/running code. Then plugin_reload validates and plugin_install activates after consent.",{id,path:z.string(),content:z.string()},({id,path,content})=>request("PUT",`/${id}/files`,{path,content}));
   tool("plugin_reload","Validate changed plugin source, bump its patch version and return the install preview. Does not run changed code. Follow with plugin_install to request activation.",{id},({id})=>request("POST",`/${id}/reload`,{}));
-  tool("plugin_install","Install or replace a plugin from its source tree. Rungs below Full ask the user before running code, including Auto. Changed source is installed as an immutable snapshot.",{id,replace:z.boolean().optional()},({id,replace})=>request("POST","/install",{id,replace}));
+  tool("plugin_install","Build, validate and install or replace a plugin from its source tree. Rungs below Full ask the user before running code, including Auto. Changed source is installed as an immutable snapshot.",{id,replace:z.boolean().optional(),importance:z.enum(["necessary","important","useful","trivial"]).optional()},({id,replace,importance},extra)=>request("POST","/install",{id,replace,importance},extra));
 }
 
 /** Ids this call closed or deleted — never the Library-wide closed-page count. */

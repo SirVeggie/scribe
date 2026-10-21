@@ -823,11 +823,11 @@ In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the pa
 - Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
 
-## Templates
-
 ## Page plugins
 
 Plugins give pages local backend methods, shared state and templates. Discover them with `plugin_list` and read a specific guide with `plugin_guide`. To build or edit a plugin, read `PLUGINS.md` (or `scribe_docs` with topic `plugins`) first. Ordinary pages use `scribe.plugin(id)` and declare dependencies through `page_show({plugins:[id]})`; Scribe controls access.
+
+## Templates
 
 Do **not** create, edit, or delete templates unless the user explicitly asked. Everyday pages still use `page_show` / `page_patch`.
 

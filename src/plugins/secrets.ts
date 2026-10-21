@@ -13,13 +13,14 @@ export class PluginSecrets {
     fs.mkdirSync(this.root, { recursive: true }); fs.writeFileSync(this.file(id, key), encrypted, { mode: 0o600 });
   }
   has(id: string, key: string): boolean { return fs.existsSync(this.file(id, key)); }
+  remove(id:string):void {if(fs.existsSync(this.root))for(const name of fs.readdirSync(this.root))if(name.startsWith(`${id}.`)&&name.endsWith(".secret"))fs.rmSync(path.join(this.root,name),{force:true});}
   async get(id: string, key: string): Promise<string | null> {
     if (!this.has(id, key)) return null;
     return dpapi(fs.readFileSync(this.file(id, key), "utf8"), true);
   }
 }
 function dpapi(value: string, decrypt: boolean): Promise<string> {
-  const script = `Add-Type -AssemblyName System.Security; $v=[Console]::In.ReadToEnd(); $b=${decrypt ? "[Convert]::FromBase64String($v)" : "[Text.Encoding]::UTF8.GetBytes($v)"}; $r=[Security.Cryptography.ProtectedData]::${decrypt ? "Unprotect" : "Protect"}($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Out.Write(${decrypt ? "[Text.Encoding]::UTF8.GetString($r)" : "[Convert]::ToBase64String($r)"})`;
+  const script = `[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.Security; $v=[Console]::In.ReadToEnd(); $b=${decrypt ? "[Convert]::FromBase64String($v)" : "[Text.Encoding]::UTF8.GetBytes($v)"}; $r=[Security.Cryptography.ProtectedData]::${decrypt ? "Unprotect" : "Protect"}($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Out.Write(${decrypt ? "[Text.Encoding]::UTF8.GetString($r)" : "[Convert]::ToBase64String($r)"})`;
   return new Promise((resolve, reject) => {
     const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
     const chunks: Buffer[] = []; child.stdout.on("data", (data: Buffer) => chunks.push(data));

@@ -5249,6 +5249,7 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .plugin-settings .settings-actions { flex-wrap: wrap; margin: 10px 2px; }
 .plugin-source { max-width: 100%; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--code-bg); border-radius: 8px; font-size: 12px; }
 .plugin-consent { max-width: min(680px, 90vw); }
+.lib-plugin { flex: none; color: var(--muted); font-size: 15px; }
 .plugin-settings textarea.audio-control { min-height: 76px; resize: vertical; }
 
 .lens-cond-note.lens-unit {

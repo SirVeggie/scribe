@@ -19,24 +19,36 @@
 
   async function reviewPackage(preview,archive) {
     const m=preview.manifest,dialog=el("dialog","confirm plugin-consent"),form=el("form");form.method="dialog";
+    let approvePaths=!(preview.parts?.paths?.length);
     form.append(el("h2","",`${preview.previous?"Update":"Install"} ${m.name} ${m.version}?`),el("p","",m.summary));
     if(m.backend)form.append(el("p","permission-ask-what","Runs code on this PC as you."));
     if(preview.previous?.author!==m.author && preview.previous)form.append(el("p","settings-hint","The author differs from the installed package."));
     if(preview.previous?.edited)form.append(el("p","settings-hint","This plugin has local source edits. Keep mine preserves them; Take theirs replaces the installed version."));
     const access=el("ul");for(const folder of m.access.files)access.append(el("li","",`Files: ${folder}`));for(const host of m.access.network)access.append(el("li","",`Network: ${host}`));
     form.append(access,el("p","",`${m.templates.length} templates · ${Object.keys(m.methods).length} methods · ${m.risky?"resets page grants after agent edits":"keeps page grants after agent edits"}`));
+    if(preview.changes){const changes=el("ul");for(const key of ["methods","settings","templates"])if(preview.changes[key]?.length)changes.append(el("li","",`${key}: ${preview.changes[key].join(", ")}`));if(preview.changes.access)changes.append(el("li","","Declared file or network access changed."));if(preview.changes.risky)changes.append(el("li","","Page grant reset behavior changed."));form.append(changes);}
     const source=el("details"),summary=el("summary","","View source"),code=el("pre","plugin-source");
     code.textContent=Object.entries(preview.source??{"plugin.json":JSON.stringify(m,null,2)}).map(([path,text])=>`${path}\n${text}`).join("\n\n");source.append(summary,code);form.append(source);
+    if(preview.sourceTruncated)source.append(el("p","settings-hint","Source preview is limited; inspect the original archive for the complete source."));
+    if(preview.diff){const diff=el("details"),label=el("summary","","View diff");diff.append(label,el("pre","plugin-source",preview.diff));form.append(diff);}
+    if(preview.parts?.settings)form.append(el("h4","","Imported settings"),el("pre","plugin-source",JSON.stringify(preview.parts.settings,null,2)));
+    if(preview.parts?.state)form.append(el("p","",`Replace shared state with ${preview.parts.stateKeys.length} imported keys.`));
+    if(preview.parts?.data)form.append(el("p","",`Replace the data folder with ${preview.parts.dataFiles.length} imported files.`));
     const controls=el("div","confirm-actions");
     const cancel=el("button","",preview.previous?"Keep mine":"Cancel");cancel.value="cancel";
     const install=el("button","primary",preview.previous?"Take theirs":"Install");install.value="install";
+    install.disabled=!approvePaths;
+    if(!approvePaths){const paths=el("ul");for(const item of preview.parts.paths)for(const folder of item.paths)paths.append(el("li","",`${item.label}: ${folder}`));form.append(paths);const allow=button("",()=>{approvePaths=!approvePaths;allow.setAttribute("aria-checked",String(approvePaths));install.disabled=!approvePaths;});allow.className="pill-toggle";allow.setAttribute("role","switch");allow.setAttribute("aria-checked","false");row(form,"Allow imported folders",allow);}
     controls.append(cancel);
     if(preview.previous?.edited){const merge=el("button","","Merge with an agent");merge.value="merge";controls.append(merge);}
+    let copyId;
+    if(preview.previous&&preview.previous.author!==m.author){copyId=el("input","ag-input");copyId.value=`${m.id.slice(0,58)}-copy`;row(form,"Copy id",copyId);const copy=el("button","","Install as a renamed copy");copy.value="copy";controls.append(copy);}
     controls.append(install);form.append(controls);dialog.append(form);document.body.append(dialog);dialog.showModal();
     const choice=await new Promise(resolve=>dialog.addEventListener("close",()=>resolve(dialog.returnValue),{once:true}));dialog.remove();
     if(choice==="merge"){const result=await request("/merge","POST",{archive,id:m.id});if(result.thread)window.scribeChat?.openThread(result.thread);return false;}
+    if(choice==="copy"){const result=await request("/copy","POST",{archive,id:copyId.value});return reviewPackage(result.preview,result.archive);}
     if(choice!=="install")return false;
-    await request("/install","POST",{archive,hash:preview.hash,replace:!!preview.previous});return true;
+    await request("/install","POST",{archive,hash:preview.hash,replace:!!preview.previous,approvePaths});return true;
   }
   async function importFile(file){if(file.size>64*1024**2)throw new Error("Plugin packages must be under 64 MiB");const archive=await base64(file),preview=await request("/preview","POST",{archive});const installed=await reviewPackage(preview,archive);await refresh();return installed;}
   picker.addEventListener("change",()=>{const file=picker.files[0];picker.value="";if(file)importFile(file).catch(error=>{status.textContent=error.message;});});
@@ -49,7 +61,7 @@
       fields.push({key,field,input});row(form,`${view.name} · ${field.label}`,input,field.description);
       if(field.type==="secret"&&view.secrets[key])form.append(button(`Clear ${field.label}`,async()=>{await request(`/${view.id}`,"PUT",{settings:{[key]:""}});await refresh();}));
     }
-    row(form,`${view.name} · Keep running`,toggle(view.keepAlive,value=>request(`/${view.id}`,"PUT",{enabled:view.enabled,keepAlive:value})),"Start with Scribe and keep the backend running between calls.");
+    if(view.manifest.backend)row(form,`${view.name} · Keep running`,toggle(view.keepAlive,value=>request(`/${view.id}`,"PUT",{enabled:view.enabled,keepAlive:value})),"Start with Scribe and keep the backend running between calls.");
     if(fields.some(f=>f.field.type!=="boolean")){
       const save=button("Save settings",async()=>{const settings={};for(const {key,field,input} of fields){if(field.type==="boolean")continue;if(field.type==="secret"&&!input.value)continue;settings[key]=field.type==="number"?Number(input.value):field.type==="paths"?input.value.split("\n").map(v=>v.trim()).filter(Boolean):input.value;}await request(`/${view.id}`,"PUT",{settings});await refresh();});form.append(save);
     }
@@ -73,7 +85,19 @@
   async function exportChoices(plugins){
     const dialog=el("dialog","confirm"),form=el("form");form.method="dialog";form.append(el("h2","","Export pages with plugins"));
     const selects=new Map();
-    for(const plugin of plugins){const select=el("select");select.multiple=true;for(const [value,label,hint]of [["code","Code","Runnable backend, templates, manifest and guide."],["source","Source","Editable source for an agent on another PC."],["settings","Settings","Configuration values, excluding secrets."],["state","State","Shared keyed plugin state."],["data","Data folder","Private database and caches; stop the backend first."]]){const option=el("option","",label);option.value=value;option.selected=value==="code"||value==="source";option.dataset.tooltip=hint;select.append(option);}row(form,`${plugin.name} ${plugin.version}`,select);window.createSelect(select);selects.set(plugin.id,select);}
+    for(const plugin of plugins){
+      const select=el("select");select.multiple=true;
+      for(const [value,label,hint]of [["code","Code","Runnable backend, templates, manifest and guide. Required with any other part."],["source","Source","Editable source for an agent on another PC."],["settings","Settings","Configuration values, excluding secrets."],["state","State","Shared keyed plugin state."],["data","Data folder","Private database and caches; stop the backend first."]]){
+        const option=el("option","",label);option.value=value;option.selected=value==="code"||value==="source";option.dataset.tooltip=hint;select.append(option);
+      }
+      let hadCode=true;
+      select.addEventListener("change",()=>{
+        if(hadCode&&!select.options[0].selected)for(const option of select.options)option.selected=false;
+        else if([...select.options].some(option=>option.selected))select.options[0].selected=true;
+        hadCode=select.options[0].selected;select.parentElement.syncSelect?.();
+      });
+      row(form,`${plugin.name} ${plugin.version}`,select);window.createSelect(select);selects.set(plugin.id,select);
+    }
     const actions=el("div","confirm-actions"),cancel=el("button","","Cancel"),save=el("button","primary","Export");cancel.value="cancel";save.value="export";actions.append(cancel,save);form.append(actions);dialog.append(form);document.body.append(dialog);dialog.showModal();
     const choice=await new Promise(resolve=>dialog.addEventListener("close",()=>resolve(dialog.returnValue),{once:true}));dialog.remove();
     return choice==="export"?Object.fromEntries([...selects].map(([id,select])=>[id,Object.fromEntries([...select.options].map(option=>[option.value,option.selected]))])):null;

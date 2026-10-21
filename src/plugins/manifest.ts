@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const pluginId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+export const pluginId = z.string().max(64).regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
 const file = z.string().min(1).max(240).refine(v => !v.includes("\\") && !v.startsWith("/") && !v.split("/").some(p => !p || p === "." || p === "..") && !v.includes(":"), "Use a relative package path");
 export const manifestSchema = z.object({
   id: pluginId,
@@ -47,5 +47,9 @@ export function declarePlugins(html: string, ids: unknown): string {
   if(ids===undefined)return html;
   const plugins=z.array(pluginId).max(50).parse(ids);
   const clean=html.replace(/<meta\b(?=[^>]*\bname\s*=\s*["']scribe-plugins["'])[^>]*>/gi,"");
-  return plugins.length?`<meta name="scribe-plugins" content="${[...new Set(plugins)].join(" ")}">\n${clean}`:clean;
+  if(!plugins.length)return clean;
+  const meta=`<meta name="scribe-plugins" content="${[...new Set(plugins)].join(" ")}">`;
+  if(/<head\b[^>]*>/i.test(clean))return clean.replace(/<head\b[^>]*>/i,head=>`${head}\n${meta}`);
+  if(/<!doctype[^>]*>/i.test(clean))return clean.replace(/<!doctype[^>]*>/i,doctype=>`${doctype}\n${meta}`);
+  return `${meta}\n${clean}`;
 }

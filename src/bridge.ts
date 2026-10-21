@@ -1821,7 +1821,11 @@ ${POINTER_DRAG_JS}
       on: on,
       state: {
         get: function (key) { return request("/state/" + encodeURIComponent(String(key))); },
-        on: function (key, listener) { return on("state", function (event) { if (event.key === String(key)) request("/state/" + encodeURIComponent(String(key))).then(function (result) { if (result.ok) listener(result.value, result.revision); }); }); }
+        on: function (key, listener) {
+          function refresh() { request("/state/" + encodeURIComponent(String(key))).then(function (result) { if (result.ok) listener(result.value, result.revision); }); }
+          var stopState=on("state",function(event){if(event.key===String(key))refresh();}),stopChanged=on("changed",refresh);
+          return function(){stopState();stopChanged();};
+        }
       },
       requestRepository: function (repo) {
         if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });

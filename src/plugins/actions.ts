@@ -6,8 +6,12 @@ import { parseTemplateValues } from "../templates.js";
 import { checkPermission } from "../pagePermissions.js";
 import type { ActionCaller, ActionContext, ActionOutcome, DriveContext, PageLaunch, ReplyDelivery, RunEvent, SweepContext } from "../actions/types.js";
 import { PluginService } from "./service.js";
+import { MAX_EVENT_DATA_BYTES } from "../config.js";
 
-const outcomeSchema = z.object({ops:z.array(z.unknown()).max(10000),result:z.unknown().optional(),events:z.array(z.object({name:z.string().min(1).max(100),data:z.unknown().optional()})).max(100).optional(),deliver:z.unknown().optional(),launch:z.unknown().optional()});
+const record=z.record(z.string(),z.unknown());
+const launchSchema=z.object({resumeThread:z.string().max(100).optional(),prompt:z.string().min(1).max(100_000),settings:z.object({title:z.string().min(1).max(300),mode:z.string().default("board"),provider:z.string().optional(),model:z.string().optional(),effort:z.string().optional(),customMode:z.string().optional(),show:z.string().optional(),web:z.string().default("off"),approval:z.string().default("board"),modelParams:z.record(z.string(),z.string()).default({}),cwd:z.string().optional(),worktree:z.boolean().optional(),helpers:z.boolean().default(false)}),run:z.object({tag:z.string().max(100),data:record.refine(value=>JSON.stringify(value).length<=4000),merge:z.boolean().default(true),resumePrompt:z.string().default(""),after:z.number().optional()}),ref:record.default({})});
+const deliverSchema=z.object({thread:z.string().min(1).max(100),num:z.number().int().positive(),title:z.string().max(300),text:z.string().max(100_000),resume:z.boolean(),ref:z.record(z.string(),z.string()).optional()});
+const outcomeSchema = z.object({ops:z.array(z.unknown()).max(10000),result:z.unknown().optional(),events:z.array(z.object({name:z.string().trim().min(1).max(100),data:z.unknown().optional().refine(value=>value===undefined||Buffer.byteLength(JSON.stringify(value))<=MAX_EVENT_DATA_BYTES)})).max(100).optional(),deliver:deliverSchema.optional(),launch:launchSchema.optional()});
 export class PluginActions {
   private busy = new Set<string>();
   constructor(readonly service: PluginService, private store: BoardStore) {}
@@ -52,16 +56,16 @@ export class PluginActions {
   }
   async runEvent(tab:Tab,event:RunEvent):Promise<void> {
     if(!this.binding(tab)?.t.hooks?.includes("runEvent"))return;
-    await this.invoke(tab,"runEvent",t=>[t.state,event,Date.now()]);
+    await this.invoke(tab,"runEvent",t=>[t.state,event,Date.now()],undefined,false,true);
   }
-  async invoke(tab: Tab, hook: string, args: (tab: Tab)=>unknown[], caller: ActionCaller = {by:"user"}, readOnly=false): Promise<unknown> {
+  async invoke(tab: Tab, hook: string, args: (tab: Tab)=>unknown[], caller: ActionCaller = {by:"user"}, readOnly=false,system=false): Promise<unknown> {
     for(let attempt=0;attempt<3;attempt++) {
       const current=this.store.get(tab.id); if(!current) throw new Error("Page was removed");
       const binding=this.binding(current); if(!binding) throw new Error("Page has no plugin actions");
       if (!this.service.enabled(binding.id)) throw new Error("Plugin is disabled");
       if(checkPermission(this.store.pagePermissions(current.id),{perm:`plugin.${binding.id}`})!=="allow")throw new Error("This page needs permission to run its plugin actions");
       const revision=current.stateRevision, templateId=current.templateId;
-      const raw=await this.service.hook(binding.id,binding.t.key,hook,args(current),{kind:caller.by==="agent"?"agent":"page",page:tab.id,thread:caller.thread});
+      const raw=await this.service.hook(binding.id,binding.t.key,hook,args(current),{kind:system?"system":caller.by==="agent"?"agent":"page",page:tab.id,thread:caller.thread});
       const latest=this.store.get(tab.id);
       if(!latest || latest.templateId!==templateId || !this.service.enabled(binding.id)) throw new Error("Plugin or page changed during the call");
       if(checkPermission(this.store.pagePermissions(latest.id),{perm:`plugin.${binding.id}`})!=="allow")throw new Error("Plugin permission was revoked during the call");
@@ -69,9 +73,9 @@ export class PluginActions {
       if(raw===null) return null;
       const outcome=outcomeSchema.parse(raw);
       if(readOnly && (outcome.ops.length || outcome.events?.length || outcome.launch || outcome.deliver)) throw new Error("This action changes the page; Read-only chats cannot run it");
-      const write=this.store.writeState(tab.id,{ops:outcome.ops,expectedRevision:revision,byUser:caller.by==="user"});
+      const write=this.store.writeState(tab.id,{ops:outcome.ops,expectedRevision:revision,byUser:!system&&caller.by==="user"});
       if(!write.ok) continue;
-      for(const event of outcome.events ?? []) this.store.logEvent(tab.id,{...event,by:caller.by});
+      for(const event of outcome.events ?? []) this.store.logEvent(tab.id,{...event,by:system?"scribe":caller.by});
       return outcome;
     }
     throw new Error("Page changed during the plugin call three times; try again");
@@ -85,11 +89,12 @@ export class PluginActions {
     for(const id of this.store.pageIds()) {
       const tab=this.store.get(id); if(!tab || this.busy.has(id)) continue;
       const binding=this.binding(tab); if(!binding || !this.service.enabled(binding.id)) continue;
+      if(checkPermission(this.store.pagePermissions(id),{perm:`plugin.${binding.id}`})!=="allow")continue;
       this.busy.add(id);
       void (async()=> {
-        if(binding.t.hooks?.includes("sweep")) await this.invoke(tab,"sweep",t=>[t.state,ctx]);
+        if(binding.t.hooks?.includes("sweep")) await this.invoke(tab,"sweep",t=>[t.state,ctx],undefined,false,true);
         if(binding.t.hooks?.includes("drive")) for(let i=0;i<20;i++) {
-          const outcome=await this.invoke(tab,"drive",t=>[t.state,{...drive,page:{id:t.id,title:t.title},mayStart:(settings:unknown)=>this.store.mayStartAgent(t.id,settings as PageLaunch["settings"])}]) as (ActionOutcome&{launch?:PageLaunch})|null;
+          const outcome=await this.invoke(tab,"drive",t=>[t.state,{...drive,page:{id:t.id,title:t.title},mayStart:(settings:unknown)=>this.store.mayStartAgent(t.id,settings as PageLaunch["settings"])}],undefined,false,true) as (ActionOutcome&{launch?:PageLaunch})|null;
           if(!outcome) break;
           if(outcome.launch) {
             const item=outcome.launch;
@@ -98,7 +103,7 @@ export class PluginActions {
               if(!current||!this.service.enabled(binding.id)||this.store.mayStartAgent(id,item.settings))throw new Error("Plugin worker conditions changed");
               if(binding.t.hooks?.includes("launchAllowed") && await this.service.hook(binding.id,binding.t.key,"launchAllowed",[current.state,item,Date.now()],{kind:"system",page:id})===false)throw new Error("Plugin worker conditions changed");
             }).then(threadId=>({threadId}),error=>({error:String(error)}));
-            if(binding.t.hooks?.includes("launched")) await this.invoke(tab,"launched",t=>[t.state,item,result,Date.now()]);
+            if(binding.t.hooks?.includes("launched")) await this.invoke(tab,"launched",t=>[t.state,item,result,Date.now()],undefined,false,true);
           }
           if(!outcome.ops.length) break;
         }

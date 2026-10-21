@@ -17,8 +17,10 @@ export async function exportTransfer(file: BoardExportFile, service: PluginServi
     return {...page,...(requires.length?{requires}:{})};
   });
   const plugins=[];
+  for(const template of file.templates)for(const id of declaredPlugins(template.html))if(!dependencies.has(id)){let version="*";try{version=service.get(id).manifest.version;}catch{}dependencies.set(id,version);}
   for(const [id,version]of dependencies){
     const choice=choices[id]??{code:true,source:true};
+    if(choice.code===false&&(choice.source||choice.settings||choice.state||choice.data))throw new Error("Code must be included when exporting other plugin parts");
     let archivePath: string | undefined;
     if(choice.code!==false && version!=="*"){
       archivePath=`plugins/${id}.scribeplugin`;files[archivePath]=service.export(id,choice);

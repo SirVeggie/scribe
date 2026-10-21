@@ -1719,6 +1719,7 @@ export class AgentHost {
     thread.webGrants = next.webGrants;
     thread.threadGrants = next.threadGrants;
     if (next.pageGrants) thread.pageGrants = next.pageGrants;
+    if(next.pluginGrants)thread.pluginGrants=next.pluginGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
     this.sessions.get(id)?.update(this.sessionThread(thread));
@@ -2676,19 +2677,11 @@ export class AgentHost {
     return `“${store.get(target.id)?.title || target.id}”`;
   }
 
-  /**
-   * page_access from the thread's MCP: ask the user to let the thread reach a page outside its Scribe
-   * access, or the page's folder. Allow for this thread grants it for the rest of the thread; Always
-   * allow grants it to the thread's page or folder, for every chat there (not on Ask always pages, and
-   * not for a global thread, which has no page or folder to keep it on). A Trusted only page an
-   * untrusted model asks for by key can only be allowed for this thread, like Ask always. Restricted
-   * pages are not found: only the user's @mention gets those. Full access answers none of this.
-   */
-  async requestPluginApproval(threadId: string, title: string, detail: string, allowThread: boolean, plugin?: string): Promise<{allowed:boolean}> {
+  /** Plugin consent is cancellable, bounded for unattended work, and never grants a page access. */
+  async requestPluginApproval(threadId: string, title: string, detail: string, allowThread: boolean, plugin?: string, opts:{signal?:AbortSignal;importance?:WebImportance;sourceUrl?:string}={}): Promise<{allowed:boolean}> {
     const thread = this.threads.get(threadId), run = this.runs.get(threadId);
     if (!thread || !run) return {allowed:false};
-    const key = `pluginGrants:${threadId}`;
-    const grants = this.db.getSetting<string[]>(key, []);
+    const grants = thread.pluginGrants??[];
     if (allowThread && plugin && grants.includes(plugin)) return {allowed:true};
     this.closeBlocks(run);
     const options: ApprovalOption[] = [
@@ -2696,14 +2689,23 @@ export class AgentHost {
       ...(allowThread ? [{id:"thread",label:"Allow for this thread",kind:"allow_always" as const}] : []),
       {id:"deny",label:"Deny",kind:"reject_once"},
     ];
-    const item = this.addItem(threadId,run.turn.id,{kind:"approval",requestId:"",tool:"other",title,detail,options,status:"pending"});
+    const waitMs=this.unattended(threadId)?WEB_IMPORTANCE_WAIT_MS[opts.importance??"useful"]:null;
+    const deadline=waitMs===null?"":`\nRefused if not answered by ${new Date(Date.now()+waitMs).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}.`;
+    const item = this.addItem(threadId,run.turn.id,{kind:"approval",requestId:"",tool:"other",title,detail:detail+deadline,options,status:"pending",...(opts.sourceUrl?{sourceUrl:opts.sourceUrl}:{})});
+    const abort=new AbortController(),onAbort=()=>abort.abort();opts.signal?.addEventListener("abort",onAbort);if(opts.signal?.aborted)abort.abort();
+    const timer=waitMs===null?null:setTimeout(()=>abort.abort(),waitMs);
     try {
-      const decision=await this.waitPending<ApprovalDecision>(threadId,run,"approval",item.id);
-      if(decision.optionId==="thread" && allowThread && plugin) this.db.setSetting(key,[...new Set([...grants,plugin])]);
+      const decision=await this.waitPending<ApprovalDecision>(threadId,run,"approval",item.id,abort.signal);
+      if(decision.optionId==="thread" && allowThread && plugin){thread.pluginGrants=[...new Set([...grants,plugin])];this.db.saveThread(thread);this.emitThread(threadId);}
       return {allowed:decision.optionId==="allow" || (allowThread && decision.optionId==="thread")};
-    } catch {return {allowed:false};}
+    } catch {return {allowed:false};}finally{if(timer)clearTimeout(timer);opts.signal?.removeEventListener("abort",onAbort);}
   }
 
+  /**
+   * Ask to reach an out-of-scope page or folder. Thread-only grants last for this chat; Always
+   * grants its home page/folder access. Ask-always or untrusted requests offer thread-only access.
+   * Restricted pages require the user's mention. Full access does not bypass these choices.
+   */
   async requestPageAccess(
     threadId: string,
     opts: { page: string; folder?: boolean; importance?: WebImportance; reason?: string; signal?: AbortSignal }

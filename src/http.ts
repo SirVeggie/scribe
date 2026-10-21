@@ -77,7 +77,7 @@ import { normalizeTemplateInput } from "./templates.js";
 import { declaredPlugins, declarePlugins } from "./plugins/manifest.js";
 import { exportTransfer, importTransfer, type PluginExportChoice } from "./plugins/transfer.js";
 import { readPackage } from "./plugins/package.js";
-import { findRepo } from "./agent/git.js";
+import { mainRepository } from "./plugins/git.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
@@ -147,8 +147,8 @@ export async function startHttp(): Promise<http.Server> {
       }
     });
   }
-  const flush = () => {
-    pluginService.close();
+  const flush = async () => {
+    await pluginService.close();
     store.stopDiskWatch();
     searchEmbedder.stop();
     void searchIndex.close();
@@ -164,12 +164,10 @@ export async function startHttp(): Promise<http.Server> {
     }
   };
   process.once("SIGINT", () => {
-    flush();
-    process.exit(0);
+    void flush().finally(()=>process.exit(0));
   });
   process.once("SIGTERM", () => {
-    flush();
-    process.exit(0);
+    void flush().finally(()=>process.exit(0));
   });
 
   const app = express();
@@ -217,14 +215,17 @@ export async function startHttp(): Promise<http.Server> {
   sweepTimer.unref?.();
   scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
-  if(!pluginService.database.list().some(p=>p.manifest.id==="git-history")){
+  if(!pluginService.database.removed("git-history")&&!pluginService.database.list().some(p=>p.manifest.id==="git-history")){
+    try{
     const folder=path.join(INSTALL_ROOT,"plugins","builtin","git-history");
     if(fs.existsSync(folder)){
-      const files=readPackage(folder);pluginService.install(files,pluginService.preview(files).hash);
-      const repositories=[...new Set((await Promise.all([...agentHost.workspaceFolders().values()].map(folder=>findRepo(folder)))).filter((folder):folder is string=>!!folder))];
+      const files=readPackage(folder);await pluginService.install(files,pluginService.preview(files).hash);
+      const repositories=[...new Set((await Promise.all([...agentHost.workspaceFolders().values()].map(folder=>mainRepository(folder)))).filter((folder):folder is string=>!!folder))];
       await pluginService.configure("git-history",{repositories});
     }
+    }catch(error){log("Bundled Git history plugin could not be installed",String(error));}
   }
+  pluginService.startKeptAlive();
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use("/api/plugins",express.json({limit:"90mb"}));
   app.use(express.json({ limit: "6mb" }));
@@ -1940,7 +1941,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   const sendExport=async(req:express.Request,res:express.Response,file:ReturnType<typeof store.exportFile>,filename:string)=>{
-    const dependencies=[...new Set(file.pages.flatMap(page=>declaredPlugins(page.html)))];
+    const dependencies=[...new Set([...file.pages,...file.templates].flatMap(page=>declaredPlugins(page.html)))];
     if(req.query.preview==="1"){res.json({plugins:dependencies.map(id=>{try{return {id,name:pluginService.get(id).manifest.name,version:pluginService.get(id).manifest.version};}catch{return {id,name:id,version:"missing"};}})});return;}
     const choices=typeof req.query.plugins==="string"?JSON.parse(req.query.plugins) as Record<string,PluginExportChoice>:{};
     res.attachment(filename.replace(/\.(json|scribe\.json)$/,".scribe.zip")).type("application/zip").send(await exportTransfer(file,pluginService,choices));
@@ -2276,7 +2277,7 @@ export async function startHttp(): Promise<http.Server> {
       const destination = parseImportDestination(req.query.destination);
       const transfer=await importTransfer(req.body,importFilename(req));
       if(req.query.preview==="1"){
-        res.json({pages:transfer.parsed?.pages.length??0,plugins:transfer.packages.map(p=>({...pluginService.preview(p.files),archive:p.archive.toString("base64")}))});return;
+        res.json({pages:transfer.parsed?.pages.length??0,plugins:transfer.packages.map(p=>({...pluginService.preview(p.files,true),archive:p.archive.toString("base64")}))});return;
       }
       if(!transfer.parsed){res.json({kind:"plugin",opened:0,closed:0,templatesCreated:0});return;}
       const parsed = transfer.parsed;
@@ -2295,7 +2296,8 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/shutdown", (_req, res) => {
+  app.post("/api/shutdown", async (_req, res) => {
+    await pluginService.close();
     searchEmbedder.stop();
     res.json({ ok: true });
     try {
