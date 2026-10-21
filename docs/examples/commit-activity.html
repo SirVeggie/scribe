@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="scribe-plugins" content="git-history">
+<title>Commit Activity</title>
+<style>:root {
+  color-scheme: dark;
+  --bg: #1a1a1d;
+  --text: #e8e8ea;
+  --muted: #8e8e96;
+  --border: rgba(255, 255, 255, 0.08);
+  --accent: #c9c9d0;
+  --code-bg: #131315;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+  font-size: 15px;
+  padding: 34px 44px 72px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+h1, h2, h3, h4 { line-height: 1.25; font-weight: 650; }
+h1 { font-size: 1.7rem; margin: 0 0 0.8rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.25rem; margin: 1.6rem 0 0.6rem; }
+h3 { font-size: 1.05rem; margin: 1.3rem 0 0.45rem; }
+p, ul, ol { margin: 0.65rem 0; }
+ul, ol { padding-left: 1.3rem; }
+a { color: var(--accent); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+code, kbd {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: 12px;
+}
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 0.8rem 0 1.2rem; font-size: 0.95rem; }
+th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: rgba(255, 255, 255, 0.04); font-weight: 600; }
+blockquote {
+  margin: 0.8rem 0;
+  padding: 0.2rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+.muted { color: var(--muted); }
+@supports not selector(::-webkit-scrollbar) {
+  html, * { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.45) transparent; }
+}
+::-webkit-scrollbar { width: 5px; height: 5px; background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(127, 127, 127, 0.45); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 127, 0.65); }</style>
+</head>
+<body>
+<h1>Commit activity</h1>
+<p class="muted" id="subtitle">Repository <code>agent-board</code> · branch <code>master</code> · all authors (Veikka).</p>
+
+<section class="card toolbar-card">
+  <div class="toolbar">
+    <span class="tb-label">Show last</span>
+    <div class="presets" id="presets">
+      <button type="button" data-days="7">7d</button>
+      <button type="button" data-days="14">14d</button>
+      <button type="button" data-days="30">30d</button>
+      <button type="button" data-days="all">All</button>
+    </div>
+    <label class="custom"><input id="days" type="number" min="1" step="1" inputmode="numeric"> days</label>
+    <span class="range-note muted" id="rangeNote"></span>
+    <button type="button" class="action" id="refresh">Refresh</button>
+    <button type="button" class="action" id="connect" hidden>Connect repository</button>
+  </div>
+  <div class="muted foot" id="status" role="status"></div>
+</section>
+
+<div class="stats" id="stats"></div>
+
+<section class="card">
+  <h2 id="chartTitle">Commits per day</h2>
+  <div id="chart" class="chart"></div>
+  <div class="legend" id="legend"></div>
+</section>
+
+<section class="card" id="weeksCard">
+  <h2>Weekly totals</h2>
+  <div class="weeks" id="weeks"></div>
+</section>
+
+<section class="card">
+  <h2>Day by day</h2>
+  <table id="tbl">
+    <thead><tr><th>Day</th><th>Date</th><th class="n">Commits</th><th class="n">Share</th><th style="width:34%"></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<p class="muted foot" id="source">Saved snapshot: 917 commits on master, captured 20 Oct 2026, 17:14. Counts use each commit's author calendar day, including merges and reverts.</p>
+
+<style>
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600; }
+  .muted { color: var(--muted); }
+  .card { border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 16px 0; }
+  .foot { font-size: 12px; margin-top: 18px; }
+
+  .toolbar-card { padding: 12px 16px; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .tb-label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .presets { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .presets button { appearance: none; border: 0; background: transparent; color: var(--text);
+                    font: inherit; font-size: 12.5px; padding: 5px 12px; cursor: pointer; border-right: 1px solid var(--border); }
+  .presets button:last-child { border-right: 0; }
+  .presets button:hover { background: rgba(255, 255, 255, 0.05); }
+  .presets button.active { background: #3f6ee0; color: #fff; }
+  .custom { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .custom input { width: 62px; background: var(--code-bg); color: var(--text); border: 1px solid var(--border);
+                  border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .range-note { margin-left: auto; font-size: 12.5px; }
+  .action { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .action:hover { background: rgba(255, 255, 255, 0.05); }
+  .action:disabled { opacity: .5; cursor: wait; }
+  #status:empty { display: none; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 12px; margin: 16px 0 4px; }
+  .stat { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 26px; font-weight: 650; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+  .stat .s { font-size: 12px; color: var(--muted); }
+
+  .chart { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-items: end; gap: 4px;
+           height: 260px; padding: 26px 0 0; position: relative; }
+  .chart.dense { gap: 2px; }
+  .chart .grid { position: absolute; inset: 26px 0 40px 0; pointer-events: none; }
+  .chart .grid div { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border); font-size: 11px; color: var(--muted); }
+  .chart .grid div span { position: absolute; left: 0; top: -16px; }
+  .col { position: relative; display: flex; flex-direction: column; justify-content: flex-end; height: 100%;
+         padding-bottom: 40px; box-sizing: border-box; cursor: default; min-width: 0; }
+  .barwrap { position: relative; flex: 1; display: flex; align-items: flex-end; }
+  .bar { width: 100%; border-radius: 5px 5px 0 0; background: linear-gradient(180deg, #7aa2ff, #3f6ee0);
+         min-height: 2px; transition: filter .12s ease, transform .12s ease; }
+  .col.weekend .bar { background: linear-gradient(180deg, #ffb86b, #e08a2a); }
+  .col.partial .bar { background: repeating-linear-gradient(45deg, #3f6ee0 0 6px, #2c4f9e 6px 12px); }
+  .col.zero .bar { background: rgba(142, 142, 150, 0.28); }
+  .col:hover .bar { filter: brightness(1.25); transform: translateY(-2px); }
+  .col .val { position: absolute; bottom: 40px; left: 0; right: 0; text-align: center; font-size: 11px; color: var(--text);
+              opacity: 0; transition: opacity .12s; font-variant-numeric: tabular-nums; }
+  .col:hover .val { opacity: 1; }
+  .col .lbl { position: absolute; bottom: 5px; left: -2px; right: -2px; text-align: center; font-size: 10.5px; color: var(--muted); overflow: hidden; white-space: nowrap; }
+  .col .lbl b { display: block; font-weight: 600; color: var(--text); font-size: 11.5px; }
+  .chart.dense .col .lbl .dt { display: none; }
+  .chart.dense .col .lbl b { font-size: 9.5px; }
+  .col:hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+                      background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+                      font-size: 11.5px; white-space: nowrap; z-index: 5; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .sw-week { background: #3f6ee0; } .sw-weekend { background: #e08a2a; } .sw-partial { background: #2c4f9e; }
+  .sw-zero { background: rgba(142, 142, 150, 0.28); }
+
+  .weeks { display: grid; gap: 12px; }
+  .wk-top { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+  .wk-top .wk-sub { color: var(--muted); font-size: 12px; }
+  .weeks .bar { height: 12px; border-radius: 6px; background: var(--code-bg); overflow: hidden; }
+  .weeks .bar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, #7aa2ff, #3f6ee0); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--code-bg); }
+  td .minibar { height: 9px; border-radius: 5px; background: linear-gradient(90deg, #7aa2ff, #3f6ee0); }
+  td.wkend .minibar { background: linear-gradient(90deg, #ffb86b, #e08a2a); }
+  tr.partial-row td { color: var(--muted); }
+  tr.zero-row td { color: var(--muted); }
+</style>
+
+<script>
+(function () {
+  // Keep the previous snapshot visible while the plugin is unavailable or loading.
+  var DATA = {
+    "2026-09-07": 1,  "2026-09-09": 1,  "2026-09-11": 2,  "2026-09-15": 5,
+    "2026-09-16": 2,  "2026-09-17": 2,  "2026-09-20": 1,  "2026-09-21": 2,
+    "2026-09-22": 5,  "2026-09-23": 10, "2026-09-24": 4,  "2026-09-25": 2,
+    "2026-09-26": 4,  "2026-09-27": 14, "2026-09-28": 7,  "2026-09-29": 8,
+    "2026-09-30": 20, "2026-10-01": 16, "2026-10-02": 35, "2026-10-03": 48,
+    "2026-10-04": 79, "2026-10-05": 19, "2026-10-06": 60, "2026-10-07": 6,
+    "2026-10-08": 2,  "2026-10-09": 77, "2026-10-10": 103,"2026-10-11": 67,
+    "2026-10-12": 93, "2026-10-13": 22, "2026-10-14": 1,  "2026-10-15": 5,
+    "2026-10-16": 110,"2026-10-17": 31, "2026-10-18": 38, "2026-10-19": 15
+  };
+
+  var MS = 86400000;
+  var DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function parseISO(s) { var p = s.split("-"); return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])); }
+  function iso(dt) { return dt.toISOString().slice(0, 10); }
+  function localISO() {
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function fmtDate(dt) { return dt.getUTCDate() + " " + MON[dt.getUTCMonth()]; }
+  function fmtFull(dt) { return DOW[dt.getUTCDay()] + " " + dt.getUTCDate() + " " + MON[dt.getUTCMonth()] + " " + dt.getUTCFullYear(); }
+
+  var lastDate = parseISO("2026-10-19");
+  var firstDate = parseISO("2026-09-07");
+  var spanDays = Math.round((lastDate - firstDate) / MS) + 1;
+  var TODAY = localISO();
+  var activity = null;
+  var targetRepository = "S:\\Library\\Projects\\agent-board";
+  function repositoryKey(folder) { return folder.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase(); }
+  var refreshing = false;
+  var plugin = typeof scribe.plugin === "function" ? scribe.plugin("git-history") : null;
+
+  function dayList(daysBack) {
+    var start = new Date(lastDate.getTime() - (daysBack - 1) * MS);
+    if (start < firstDate) start = firstDate;
+    var out = [];
+    for (var t = start.getTime(); t <= lastDate.getTime(); t += MS) {
+      var dt = new Date(t);
+      var key = iso(dt);
+      out.push({ date: key, dow: DOW[dt.getUTCDay()], count: DATA[key] || 0, dt: dt,
+                 weekend: dt.getUTCDay() === 0 || dt.getUTCDay() === 6 });
+    }
+    return out;
+  }
+
+  var saved = scribe.local && typeof scribe.local.daysBack === "number" ? scribe.local.daysBack : null;
+  var daysBack = saved !== null && saved >= 1 && saved <= spanDays ? Math.round(saved) : spanDays;
+  var showAll = saved === null || (scribe.local && scribe.local.allDays === true) || daysBack === spanDays;
+
+  var els = {
+    subtitle: document.getElementById("subtitle"),
+    presets: document.getElementById("presets"),
+    days: document.getElementById("days"),
+    rangeNote: document.getElementById("rangeNote"),
+    stats: document.getElementById("stats"),
+    chart: document.getElementById("chart"),
+    chartTitle: document.getElementById("chartTitle"),
+    legend: document.getElementById("legend"),
+    weeks: document.getElementById("weeks"),
+    weeksCard: document.getElementById("weeksCard"),
+    tbody: document.querySelector("#tbl tbody"),
+    refresh: document.getElementById("refresh"),
+    connect: document.getElementById("connect"),
+    status: document.getElementById("status"),
+    source: document.getElementById("source")
+  };
+
+  function niceStep(max) {
+    if (max <= 10) return 2;
+    if (max <= 25) return 5;
+    if (max <= 60) return 10;
+    if (max <= 150) return 25;
+    if (max <= 300) return 50;
+    return 100;
+  }
+
+  function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+
+  function render() {
+    if (activity) useActivity(activity);
+    else TODAY = localISO();
+    var list = dayList(daysBack);
+    var counts = list.map(function (d) { return d.count; });
+    var total = counts.reduce(function (a, b) { return a + b; }, 0);
+    var n = list.length;
+    var avg = total / n;
+    var sorted = counts.slice().sort(function (a, b) { return a - b; });
+    var median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+    var maxv = Math.max.apply(null, counts);
+    var busiest = list.filter(function (d) { return d.count === maxv; });
+    var active = list.filter(function (d) { return d.count > 0; });
+    var minActive = active.length ? Math.min.apply(null, active.map(function (d) { return d.count; })) : 0;
+    var quiet = active.filter(function (d) { return d.count === minActive; });
+    var zeroDays = n - active.length;
+    var isAll = daysBack >= spanDays;
+    var partialLast = list[n - 1].date === TODAY;
+
+    // ---- header / controls ----
+    els.days.max = spanDays;
+    if (document.activeElement !== els.days) els.days.value = daysBack;
+    els.subtitle.textContent = "Repository agent-board · branch " + (activity ? activity.branch : "master") + " · all authors";
+    els.rangeNote.textContent = fmtFull(list[0].dt) + " – " + fmtFull(list[n - 1].dt) + " · " +
+      plural(n, "day", "days") + (isAll ? " · full history" : "");
+    Array.prototype.forEach.call(els.presets.querySelectorAll("button"), function (b) {
+      var v = b.getAttribute("data-days");
+      var on = (v === "all" && isAll) || (+v === daysBack && !isAll);
+      b.classList.toggle("active", on);
+    });
+
+    // ---- stat cards ----
+    function stat(k, v, s) {
+      return '<div class="stat"><div class="k">' + k + '</div><div class="v">' + v +
+             '</div><div class="s">' + s + '</div></div>';
+    }
+    function dateSummary(arr) {
+      if (!arr.length) return "No commits";
+      if (arr.length === 1) return fmtDate(arr[0].dt);
+      return fmtDate(arr[0].dt) + " +" + (arr.length - 1) + " more";
+    }
+    var busiestSub = dateSummary(busiest);
+    var quietSub = dateSummary(quiet);
+    var medianStr = (Math.round(median * 10) / 10).toString();
+    els.stats.innerHTML =
+      stat("Total commits", total, plural(n, "day", "days") + " in range") +
+      stat("Average / day", avg.toFixed(1), "median " + medianStr) +
+      stat("Busiest day", maxv, busiestSub) +
+      stat("Quietest day", minActive, quietSub) +
+      stat("Active days", active.length, active.length + " of " + n);
+
+    // ---- chart ----
+    var step = niceStep(maxv);
+    var scaleMax = Math.max(step, Math.ceil(maxv / step) * step);
+    var chartCls = "chart" + (n > 18 ? " dense" : "");
+    els.chart.className = chartCls;
+    els.chart.innerHTML = "";
+    var grid = document.createElement("div");
+    grid.className = "grid";
+    for (var g = 0; g <= scaleMax; g += step) {
+      var line = document.createElement("div");
+      line.style.bottom = (g / scaleMax * 100) + "%";
+      if (g > 0) line.innerHTML = "<span>" + g + "</span>";
+      grid.appendChild(line);
+    }
+    els.chart.appendChild(grid);
+    list.forEach(function (d) {
+      var partial = d.date === TODAY && d === list[n - 1];
+      var col = document.createElement("div");
+      col.className = "col" + (d.weekend ? " weekend" : "") + (partial ? " partial" : "") + (d.count === 0 ? " zero" : "");
+      var pct = (d.count / scaleMax * 100).toFixed(2);
+      col.setAttribute("data-tip", fmtFull(d.dt) + " · " + plural(d.count, "commit", "commits") + (partial ? " (partial)" : ""));
+      col.innerHTML =
+        '<div class="val">' + d.count + "</div>" +
+        '<div class="barwrap"><div class="bar" style="height:' + pct + '%"></div></div>' +
+        '<div class="lbl"><b>' + d.dow + "</b><span class='dt'>" + d.date.slice(5) + "</span></div>";
+      els.chart.appendChild(col);
+    });
+    els.chartTitle.textContent = "Commits per day";
+
+    // ---- legend ----
+    var leg = '<span><i class="sw sw-week"></i>weekday</span>' +
+              '<span><i class="sw sw-weekend"></i>weekend</span>';
+    if (partialLast) leg += '<span><i class="sw sw-partial"></i>day in progress</span>';
+    if (zeroDays > 0) leg += '<span><i class="sw sw-zero"></i>no commits (' + zeroDays + ')</span>';
+    els.legend.innerHTML = leg + '<span class="muted">' + plural(n, "day", "days") + ' · hover a bar for the exact day</span>';
+
+    // ---- weekly totals ----
+    function weekStart(dt) {
+      var diff = (dt.getUTCDay() + 6) % 7; // Monday start
+      return new Date(dt.getTime() - diff * MS);
+    }
+    var weeks = [], wmap = {};
+    list.forEach(function (d) {
+      var ws = iso(weekStart(d.dt));
+      if (!wmap[ws]) { wmap[ws] = { start: weekStart(d.dt), count: 0, days: 0 }; weeks.push(wmap[ws]); }
+      wmap[ws].count += d.count;
+      wmap[ws].days++;
+    });
+    if (weeks.length < 2) {
+      els.weeksCard.style.display = "none";
+    } else {
+      els.weeksCard.style.display = "";
+      var wmax = Math.max.apply(null, weeks.map(function (w) { return w.count; }));
+      els.weeks.innerHTML = weeks.map(function (w) {
+        var end = new Date(Math.min(w.start.getTime() + 6 * MS, lastDate.getTime()));
+        var label = fmtDate(w.start) + " – " + fmtDate(end);
+        var sub = w.days < 7 ? plural(w.days, "day", "days") : "";
+        return '<div class="week"><div class="wk-top"><span>' + label +
+          (sub ? ' <span class="wk-sub">· ' + sub + '</span>' : "") +
+          '</span><b>' + w.count + '</b></div>' +
+          '<div class="bar"><i style="width:' + (wmax ? w.count / wmax * 100 : 0).toFixed(1) + '%"></i></div></div>';
+      }).join("");
+    }
+
+    // ---- table ----
+    els.tbody.innerHTML = "";
+    list.slice().sort(function (a, b) { return b.count - a.count || (a.date < b.date ? -1 : 1); }).forEach(function (d) {
+      var partial = d.date === TODAY && d === list[n - 1];
+      var tr = document.createElement("tr");
+      if (partial) tr.className = "partial-row";
+      else if (d.count === 0) tr.className = "zero-row";
+      var share = total ? (d.count / total * 100).toFixed(1) : "0.0";
+      tr.innerHTML =
+        "<td>" + d.dow + (partial ? " <span class='muted'>(partial)</span>" : "") + "</td>" +
+        "<td>" + d.date + "</td>" +
+        '<td class="n">' + d.count + "</td>" +
+        '<td class="n">' + share + "%</td>" +
+        '<td class="' + (d.weekend ? "wkend" : "") + '"><div class="minibar" style="width:' +
+          (maxv ? d.count / maxv * 100 : 0).toFixed(1) + '%"></div></td>';
+      els.tbody.appendChild(tr);
+    });
+  }
+
+  function setDays(v) {
+    daysBack = Math.max(1, Math.min(spanDays, Math.round(v) || spanDays));
+    showAll = daysBack === spanDays;
+    scribe.setLocal({ daysBack: daysBack, allDays: showAll });
+    render();
+  }
+
+  els.presets.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (b) setDays(b.getAttribute("data-days") === "all" ? spanDays : +b.getAttribute("data-days"));
+  });
+  els.days.addEventListener("change", function () { setDays(+els.days.value); });
+  els.days.addEventListener("keydown", function (e) { if (e.key === "Enter") { setDays(+els.days.value); els.days.blur(); } });
+  function useActivity(value) {
+    if (!value || typeof value.repository !== "string" || repositoryKey(value.repository) !== repositoryKey(targetRepository) || !value.days || typeof value.branch !== "string" || !Number.isFinite(value.queriedAt)) return false;
+    var dates = Object.keys(value.days).sort();
+    if (dates.some(function (day) { return !/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isSafeInteger(value.days[day]) || value.days[day] < 0 || !Number.isFinite(parseISO(day).getTime()); })) return false;
+    activity = value;
+    DATA = value.days;
+    TODAY = localISO();
+    firstDate = parseISO(dates[0] || TODAY);
+    lastDate = parseISO(dates.length && dates[dates.length - 1] > TODAY ? dates[dates.length - 1] : TODAY);
+    spanDays = Math.round((lastDate - firstDate) / MS) + 1;
+    daysBack = showAll ? spanDays : Math.min(daysBack, spanDays);
+    els.source.textContent = "Git history · " + value.repository + " · updated " + new Date(value.queriedAt).toLocaleString() + ". Counts use each commit's author calendar day, including merges and reverts.";
+    return true;
+  }
+
+  async function refresh() {
+    if (refreshing) return;
+    if (!plugin) { els.status.textContent = "Install the Scribe plugin update and restart Scribe to refresh this snapshot."; return; }
+    refreshing = true;
+    els.refresh.disabled = true;
+    els.refresh.textContent = "Refresh";
+    els.connect.hidden = true;
+    els.status.textContent = "Refreshing…";
+    try {
+      var approved = await plugin.call("repositories");
+      if (!approved.ok) throw new Error(approved.error);
+      var repositories = approved.result.repositories;
+      // This page belongs to agent-board: never silently switch to another repository.
+      var repository = repositories.find(function (folder) { return repositoryKey(folder) === repositoryKey(targetRepository); });
+      if (!repository) {
+        els.connect.hidden = false;
+        throw new Error("Approve agent-board to refresh its history.");
+      }
+      targetRepository = repository;
+      var result = await plugin.call("activity", { repository: repository });
+      if (!result.ok) throw new Error(result.error);
+      if (!useActivity(result.result)) throw new Error("Invalid Git activity response");
+      scribe.set({ gitActivity: result.result });
+      els.status.textContent = "";
+      render();
+    } catch (error) {
+      els.status.textContent = friendlyError(error.message);
+    } finally {
+      refreshing = false;
+      els.refresh.disabled = false;
+    }
+  }
+
+  function friendlyError(message) {
+    if (/denied|permission/.test(message)) return "Allow Git history in this page's permissions to refresh.";
+    if (/disabled| off/.test(message)) return "Turn on Git history in Settings → Plugins to refresh.";
+    if (/not installed|missing|unknown plugin/i.test(message)) return "Install Git history in Settings → Plugins to refresh.";
+    return "Refresh failed: " + message;
+  }
+
+  async function automaticRefresh() {
+    if (activity && Date.now() - activity.queriedAt <= 5 * 60 * 1000) return;
+    if (!plugin) { refresh(); return; }
+    var result = await scribe.permissions.query();
+    var permission = result.ok && result.permissions.find(function (item) { return item.id === "plugin.git-history"; });
+    if (permission && permission.value === "allow") refresh();
+    else {
+      els.refresh.textContent = permission && permission.value === "deny" ? "Refresh" : "Allow and refresh";
+      els.status.textContent = "Allow Git history in this page's permissions to refresh.";
+    }
+  }
+
+  els.refresh.addEventListener("click", refresh);
+  els.connect.addEventListener("click", async function () {
+    var result = await plugin.requestRepository(targetRepository);
+    if (result.ok) refresh();
+    else els.status.textContent = result.error === "denied" || result.error === "cancelled" ? "Repository was not added." : friendlyError(result.error);
+  });
+  scribe.onChange(function () { useActivity(scribe.state.gitActivity); render(); });
+  var cached = useActivity(scribe.state.gitActivity);
+  render();
+  automaticRefresh();
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) automaticRefresh();
+  });
+})();
+</script>
+</body>
+</html>

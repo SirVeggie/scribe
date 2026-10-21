@@ -57,11 +57,37 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     await page.evaluate(()=>{(window as any).exportChoice=(window as any).scribePluginSettings.exportChoices([{id:"http-fixture",name:"HTTP fixture",version:"1.0.0"}]);});
     await page.locator("dialog[open] .select-button").click();await page.getByRole("option",{name:"Settings",exact:true}).click();await page.keyboard.press("Escape");await page.getByRole("button",{name:"Export",exact:true}).click();
     assert.equal((await page.evaluate(()=>(window as any).exportChoice))["http-fixture"].settings,true);
-    assert.deepEqual(errors,[]);
     const other=await call("/api/tabs","POST",{title:"Other",html:"<p>Other</p>",activate:false});
     const content=await browser.newPage();await content.goto(`http://t-${id.slice(2)}.localhost:${port}/view/${id}`);
     const blocked=await content.evaluate(async({other,plugin})=>(await fetch(`/api/tabs/${other}/plugins/${plugin}/call`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({method:"read"})})).status,{other:other.data.tab.id,plugin:manifest.id});
     assert.equal(blocked,404);
+    // Exercise the migrated page against the real bridge and bundled backend.
+    assert.equal((await git(["-c","user.name=Fixture","-c","user.email=fixture@local","-c","commit.gpgsign=false","commit","--allow-empty","-m","Activity"],repo)).code,0);
+    const example=fs.readFileSync(path.resolve("docs/examples/commit-activity.html"),"utf8");
+    const activityHtml=example.replace('"S:\\\\Library\\\\Projects\\\\agent-board"',JSON.stringify(fs.realpathSync(repo)));
+    assert.notEqual(activityHtml,example);
+    const activityTab=await call("/api/tabs","POST",{title:"Activity test",html:activityHtml,activate:false});const activityId=activityTab.data.tab.id;
+    await page.evaluate(async(id)=>{(window as any).scribeApp.closeSettings();await (window as any).scribeApp.openLink(id,null,{mode:"tab"});},activityId);
+    const activityFrame=await page.waitForSelector(`iframe[src*="/view/${activityId}"]`);
+    const activityPage=(await activityFrame!.contentFrame())!;assert.ok(activityPage);
+    await activityPage.waitForFunction(()=>document.querySelector("#refresh")?.textContent==="Allow and refresh");
+    assert.equal(await activityPage.locator(".stat .v").first().textContent(),"917");
+    assert.equal(await page.getByRole("button",{name:"Allow",exact:true}).count(),0);
+    assert.equal((await call(`/api/tabs/${activityId}/permissions`,"PUT",{perm:"plugin.git-history",value:"allow"})).status,200);
+    await activityPage.getByRole("button",{name:"Allow and refresh",exact:true}).click();
+    await activityPage.waitForFunction(()=>!!(window as any).scribe.state.gitActivity);
+    assert.equal(await activityPage.locator(".stat .v").first().textContent(),"1");
+    await activityPage.locator('[data-days="7"]').click();
+    await activityPage.getByRole("button",{name:"Refresh",exact:true}).click();
+    await activityPage.waitForFunction(()=>!(document.querySelector("#refresh") as HTMLButtonElement).disabled);
+    assert.equal(await activityPage.locator("#status").textContent(),"");
+    assert.equal(await activityPage.locator(".stat .v").first().textContent(),"1");
+    await activityPage.goto(activityPage.url());await activityPage.waitForFunction(()=>!!(window as any).scribe.state.gitActivity);
+    assert.equal(await activityPage.locator(".stat .v").first().textContent(),"1");
+    // A repository with no commits in the chosen period still renders zero totals.
+    await activityPage.evaluate(async()=>{const s=(window as any).scribe;s.set({gitActivity:{...s.state.gitActivity,days:{}}});await s.flush();});
+    await activityPage.goto(activityPage.url());await activityPage.waitForFunction(()=>document.querySelector(".stat .v")?.textContent==="0");
+    assert.deepEqual(errors,[]);
   }finally{
     await browser?.close();
     try{await call("/api/shutdown","POST",{});}catch{}

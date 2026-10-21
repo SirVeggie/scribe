@@ -126,6 +126,22 @@ test("Git history folds worktrees into their main repository and ignores deleted
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 
+test("Git activity counts complete history beyond the log limit and refuses unapproved roots",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-plugin-activity-"));
+  try{
+    assert.equal((await git(["init","--template="],root)).code,0);
+    let input="";
+    for(let i=0;i<2001;i++)input+=`commit refs/heads/activity\ncommitter Fixture <fixture@local> ${946684800+i} +0200\ndata 7\nCommit!\n\n`;
+    assert.equal((await git(["fast-import","--quiet"],root,{input})).code,0);
+    assert.equal((await git(["symbolic-ref","HEAD","refs/heads/activity"],root)).code,0);
+    const backend=await import(pathToFileURL(path.resolve("plugins/builtin/git-history/backend.mjs")).href);
+    const ctx={settings:{repositories:[root]}};
+    const result=await backend.default.methods.activity({repository:root},ctx);
+    assert.equal(result.total,2001);assert.deepEqual(result.days,{"2000-01-01":2001});assert.equal(result.branch,"activity");assert.ok(result.queriedAt>Date.now()-30_000);
+    await assert.rejects(()=>backend.default.methods.activity({repository:root},{settings:{repositories:[]}}),/not approved/);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test("backend asset saves are bound to the actual calling page",async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-plugin-assets-"));let target="";
   const service=new PluginService(root,()=>{},(page)=>{target=page;return {id:"asset"};});

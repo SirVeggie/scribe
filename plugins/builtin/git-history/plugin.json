@@ -1,7 +1,7 @@
 {
   "id": "git-history",
   "name": "Git history",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "summary": "Read commit history from approved local repositories for live activity pages.",
   "author": "Scribe",
   "risky": false,
@@ -14,6 +14,7 @@
   },
   "methods": {
     "repositories": { "description": "List approved repositories: {}.", "agent": "read" },
+    "activity": { "description": "Count all reachable commits per author calendar day: { repository }. Returns days, total, branch and query time.", "agent": "read", "input": { "type": "object", "required": ["repository"], "properties": { "repository": { "type": "string" } } } },
     "log": { "description": "Read recent commits: { repository, since?, limit? }. Returns commits and the query time.", "agent": "read", "input": { "type": "object", "required": ["repository"], "properties": { "repository": { "type": "string" }, "since": { "type": "string" }, "limit": { "type": "number" } } } }
   }
 }
