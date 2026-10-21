@@ -6,9 +6,10 @@
   const status=el("p","settings-hint");status.setAttribute("role","status");
   const list=el("div","ml-sources");
   let confirmRemove=async()=>false;
+  let controlId=0;
   const button=(text,run)=>{const node=el("button","",text);node.type="button";node.addEventListener("click",()=>Promise.resolve(run()).catch(error=>{status.textContent=error.message;}));return node;};
-  const row=(parent,label,control,hint)=>{const line=el("div","setting-row"),text=el("label","",label);if(hint){text.dataset.tooltip=hint;text.setAttribute("aria-description",hint);}control.setAttribute("aria-label",label);line.append(text,control);parent.append(line);return line;};
-  const toggle=(value,run)=>{const node=button("",async()=>{node.disabled=true;try{await run(node.getAttribute("aria-checked")!=="true");await refresh();}finally{node.disabled=false;}});node.className="pill-toggle";node.setAttribute("role","switch");node.setAttribute("aria-checked",String(value));return node;};
+  const row=(parent,label,control,hint)=>{const line=el("div","setting-row"),text=el("label","",label);if(hint){text.dataset.tooltip=hint;text.setAttribute("aria-description",hint);}control.id||=`plugin-setting-${++controlId}`;text.htmlFor=control.id;control.setAttribute("aria-label",label);line.append(text,control);parent.append(line);return line;};
+  const toggle=(value,run)=>{const node=button("",async()=>{node.disabled=true;const next=node.getAttribute("aria-checked")!=="true";try{await run(next);node.setAttribute("aria-checked",String(next));await refresh();}finally{node.disabled=false;}});node.className="pill-toggle";node.setAttribute("role","switch");node.setAttribute("aria-checked",String(value));return node;};
   async function request(path="",method="GET",body){const res=await fetch(`/api/plugins${path}`,{method,headers:body===undefined?{}:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});const data=await res.json();if(!res.ok)throw new Error(data.error||"Plugin request failed");return data;}
   const enabled=toggle(true,value=>request("/","PUT",{enabled:value}));
   row(section,"Enable plugins",enabled);
@@ -17,10 +18,12 @@
   const actions=el("div","settings-actions");actions.append(button("Import plugin…",()=>picker.click()),picker);section.append(actions,status);
   const base64=async file=>{const bytes=new Uint8Array(await file.arrayBuffer());let text="";for(let i=0;i<bytes.length;i+=32768)text+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(text);};
 
-  async function reviewPackage(preview,archive) {
+  async function reviewPackage(preview,archive,{allowOlder=false}={}) {
+    if(preview.same&&!preview.parts?.settings&&!preview.parts?.state&&!preview.parts?.data)return false;
+    if(preview.versionStatus==="older"&&!allowOlder)return false;
     const m=preview.manifest,dialog=el("dialog","confirm plugin-consent"),form=el("form");form.method="dialog";
     let approvePaths=!(preview.parts?.paths?.length);
-    form.append(el("h2","",`${preview.previous?"Update":"Install"} ${m.name} ${m.version}?`),el("p","",m.summary));
+    form.append(el("h2","",`${preview.versionStatus==="older"?"Downgrade":preview.previous?"Update":"Install"} ${m.name} ${m.version}?`),el("p","",m.summary));
     if(m.backend)form.append(el("p","permission-ask-what","Runs code on this PC as you."));
     if(preview.previous?.author!==m.author && preview.previous)form.append(el("p","settings-hint","The author differs from the installed package."));
     if(preview.previous?.edited)form.append(el("p","settings-hint","This plugin has local source edits. Keep mine preserves them; Take theirs replaces the installed version."));
@@ -50,7 +53,7 @@
     if(choice!=="install")return false;
     await request("/install","POST",{archive,hash:preview.hash,replace:!!preview.previous,approvePaths});return true;
   }
-  async function importFile(file){if(file.size>64*1024**2)throw new Error("Plugin packages must be under 64 MiB");const archive=await base64(file),preview=await request("/preview","POST",{archive});const installed=await reviewPackage(preview,archive);await refresh();return installed;}
+  async function importFile(file){if(file.size>64*1024**2)throw new Error("Plugin packages must be under 64 MiB");const archive=await base64(file),preview=await request("/preview","POST",{archive});const installed=await reviewPackage(preview,archive,{allowOlder:true});await refresh();return installed;}
   picker.addEventListener("change",()=>{const file=picker.files[0];picker.value="";if(file)importFile(file).catch(error=>{status.textContent=error.message;});});
   async function details(view,parent){
     const form=el("form","ml-source-form"),fields=[];
@@ -63,8 +66,9 @@
     }
     if(view.manifest.backend)row(form,`${view.name} · Keep running`,toggle(view.keepAlive,value=>request(`/${view.id}`,"PUT",{enabled:view.enabled,keepAlive:value})),"Start with Scribe and keep the backend running between calls.");
     if(fields.some(f=>f.field.type!=="boolean")){
-      const save=button("Save settings",async()=>{const settings={};for(const {key,field,input} of fields){if(field.type==="boolean")continue;if(field.type==="secret"&&!input.value)continue;settings[key]=field.type==="number"?Number(input.value):field.type==="paths"?input.value.split("\n").map(v=>v.trim()).filter(Boolean):input.value;}await request(`/${view.id}`,"PUT",{settings});await refresh();});form.append(save);
+      const save=button("Save settings",async()=>{const settings={};for(const {key,field,input} of fields){if(field.type==="boolean")continue;if(field.type==="secret"&&!input.value)continue;settings[key]=field.type==="number"?Number(input.value):field.type==="paths"?input.value.split("\n").map(v=>v.trim()).filter(Boolean):input.value;}await request(`/${view.id}`,"PUT",{settings});form.dataset.dirty="false";await refresh();});form.append(save,button("Cancel changes",async()=>{form.dataset.dirty="false";await refresh();}));
     }
+    form.addEventListener("input",()=>{form.dataset.dirty="true";});
     form.addEventListener("submit",event=>event.preventDefault());parent.append(form);
     const controls=el("div","settings-actions"),logs=el("pre","plugin-source");logs.hidden=true;
     controls.append(button("Restart",async()=>{await request(`/${view.id}/restart`,"POST",{});await refresh();}),button("Logs",async()=>{logs.textContent=(await request(`/${view.id}/logs`)).logs.join("\n")||"No backend log yet.";logs.hidden=!logs.hidden;}),button("Export…",()=>exportPlugin(view.id)),button("Update from file…",()=>picker.click()),button("Remove",async()=>{if(await confirmRemove(`Remove “${view.name}”? Its source and data stay on disk.`,"Remove")){await request(`/${view.id}`,"DELETE");await refresh();}}));parent.append(controls,logs);
@@ -102,11 +106,14 @@
     const choice=await new Promise(resolve=>dialog.addEventListener("close",()=>resolve(dialog.returnValue),{once:true}));dialog.remove();
     return choice==="export"?Object.fromEntries([...selects].map(([id,select])=>[id,Object.fromEntries([...select.options].map(option=>[option.value,option.selected]))])):null;
   }
+  let refreshing=false,refreshAgain=false;
   async function refresh(){
+    if(list.querySelector('form[data-dirty="true"]'))return;
+    if(refreshing){refreshAgain=true;return;}refreshing=true;
     try{const data=await request("/");enabled.setAttribute("aria-checked",String(data.enabled));const open=new Set([...list.querySelectorAll("details[open]")].map(n=>n.dataset.plugin));list.replaceChildren();
       for(const item of data.plugins){const entry=el("details","plugin-entry");entry.dataset.plugin=item.id;entry.open=open.has(item.id);const summary=el("summary","setting-row"),name=el("span","ml-source-text",`${item.name} ${item.version} · ${item.enabled?item.status:"off"}${item.edited?" · edited":""}`),on=toggle(item.enabled,value=>request(`/${item.id}`,"PUT",{enabled:value}));on.addEventListener("click",event=>event.preventDefault());on.setAttribute("aria-label",`Enable ${item.name}`);summary.append(name,on);entry.append(summary);list.append(entry);await details(await request(`/${item.id}`),entry);}
       if(!data.plugins.length)list.append(el("p","settings-hint","No plugins installed."));status.textContent="";
-    }catch(error){status.textContent=error.message;}
+    }catch(error){status.textContent=error.message;}finally{refreshing=false;if(refreshAgain){refreshAgain=false;void refresh();}}
   }
   window.scribePluginSettings={sections:[section],refresh,importFile,reviewPackage,chooseParts,exportChoices,init({confirm}){if(confirm)confirmRemove=confirm;}};
 })();

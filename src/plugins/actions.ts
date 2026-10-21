@@ -101,7 +101,9 @@ export class PluginActions {
             const result=await launch(id,item,async()=>{
               const current=this.store.get(id);
               if(!current||!this.service.enabled(binding.id)||this.store.mayStartAgent(id,item.settings))throw new Error("Plugin worker conditions changed");
+              const revision=current.stateRevision;
               if(binding.t.hooks?.includes("launchAllowed") && await this.service.hook(binding.id,binding.t.key,"launchAllowed",[current.state,item,Date.now()],{kind:"system",page:id})===false)throw new Error("Plugin worker conditions changed");
+              if(this.store.get(id)?.stateRevision!==revision||!this.service.enabled(binding.id)||this.store.mayStartAgent(id,item.settings)||checkPermission(this.store.pagePermissions(id),{perm:`plugin.${binding.id}`})!=="allow")throw new Error("Plugin worker conditions changed during validation");
             }).then(threadId=>({threadId}),error=>({error:String(error)}));
             if(binding.t.hooks?.includes("launched")) await this.invoke(tab,"launched",t=>[t.state,item,result,Date.now()],undefined,false,true);
           }

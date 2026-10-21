@@ -11,6 +11,7 @@
     "test:search": "tsx --test src/search/*.test.ts",
     "test:clear-command": "node --experimental-strip-types --test --test-isolation=none src/agent/clearCommand.test.ts",
     "test:mcp": "tsx --test src/agent/mcpPermissions.test.ts src/agent/mcpBridge.test.ts src/agent/mcpConfig.test.ts src/agent/codexProvider.test.ts",
+    "test:plugins": "tsx --test --test-timeout=120000 src/plugins/*.test.ts",
     "test:scrollbars": "tsx --test src/scrollbars.test.ts",
     "eval:search": "node tools/eval-semantic-search.mjs",
     "eval:images": "node tools/eval-image-search.mjs",

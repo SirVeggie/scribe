@@ -120,7 +120,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.1.0";
+  const BOARD_VERSION = "3.2.0";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -705,7 +705,7 @@
       return;
     }
     if (msg.type === "plugin_event") {
-      if(msg.name==="changed"){
+      if(msg.registry){
         for(const [id,frame]of frames)frame.el.contentWindow?.postMessage({type:"scribe-plugin-availability"},pageOrigin(id));
         window.scribePluginSettings.refresh();
       }
@@ -3830,7 +3830,7 @@
     const previewResponse=await fetch(`/api/import?preview=1&destination=${encodeURIComponent(destination)}`,{method:"POST",headers,body:file});
     const preview=await previewResponse.json();if(!previewResponse.ok)throw new Error(preview.error||"Cannot inspect import");
     let pluginsInstalled=0;
-    for(const plugin of preview.plugins??[])if(await window.scribePluginSettings.reviewPackage(plugin,plugin.archive))pluginsInstalled++;
+    for(const plugin of preview.plugins??[])if(await window.scribePluginSettings.reviewPackage(plugin,plugin.archive,{allowOlder:/\.scribeplugin$/i.test(file.name)}))pluginsInstalled++;
     const response=await fetch(`/api/import?destination=${encodeURIComponent(destination)}`,{method:"POST",headers,body:file});
     const data=await response.json();if(!response.ok)throw new Error(data.error||"Import failed");return {...data,pluginsInstalled};
   }
@@ -4690,9 +4690,11 @@
       }
       if (data.op === "repository" && data.plugin === "git-history") {
         if (!activated) return reply({ok:false,error:"no_gesture"});
-        const accepted=await confirmDelete(`Allow “${tab.title}” to read Git history from ${String(data.repository)}?`,"Allow");
+        const resolvedResponse=await fetch(`/api/plugins/git-history/repositories/resolve?path=${encodeURIComponent(String(data.repository))}`),resolved=await resolvedResponse.json();
+        if(!resolvedResponse.ok)return reply({ok:false,error:resolved.error});
+        const accepted=await confirmDelete(`Allow “${tab.title}” to read Git history from ${resolved.repository}?`,"Allow");
         if (!accepted) return reply({ok:false,error:"denied"});
-        const res=await fetch("/api/plugins/git-history/repositories",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repository:data.repository})});
+        const res=await fetch("/api/plugins/git-history/repositories",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repository:resolved.repository})});
         return reply(await res.json());
       }
       reply({ok:false,error:"unknown_op"});

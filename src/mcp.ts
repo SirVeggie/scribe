@@ -94,28 +94,26 @@ const guideParts = new WeakSet<object>();
 
 /** quiet leaves out the one-line pointer once the guide was sent (a page_action that went through needs no reminder). */
 async function withGuide(result: ToolResult, which: string, force = false, quiet = false): Promise<ToolResult> {
-  let guide: TemplateGuide | null = null;
-  let sent: boolean | undefined;
+  let guides:Array<{guide:TemplateGuide;sent?:boolean}>=[];
   try {
     const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}/guide?deliver=1${force ? "&force=1" : ""}`);
     if (status < 400) {
-      ({ guide = null, sent } = data as { guide?: TemplateGuide | null; sent?: boolean });
+      const payload=data as {guide?:TemplateGuide|null;sent?:boolean;pluginGuides?:Array<{guide:TemplateGuide;sent?:boolean}>};
+      guides=[...(payload.guide?[{guide:payload.guide,sent:payload.sent}]:[]),...(payload.pluginGuides??[])];
     }
   } catch {
     return result;
   }
-  if (!guide) {
-    return result;
-  }
+  for(const {guide,sent}of guides){
   if (!force && (sent ?? deliveredGuides.get(guide.id) === guide.text)) {
-    if (quiet) return result;
+    if (quiet) continue;
     const pointer = {
       type: "text" as const,
       text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; page_state with guide: true shows it again.`,
     };
     guideParts.add(pointer);
     result.content.push(pointer);
-    return result;
+    continue;
   }
   deliveredGuides.set(guide.id, guide.text);
   const part = {
@@ -124,6 +122,7 @@ async function withGuide(result: ToolResult, which: string, force = false, quiet
   };
   guideParts.add(part);
   result.content.push(part);
+  }
   return result;
 }
 

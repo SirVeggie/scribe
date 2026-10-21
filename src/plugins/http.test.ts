@@ -9,6 +9,7 @@ import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { zip } from "./package.js";
 import { launchChromium } from "../chromium.js";
+import { git } from "../agent/git.js";
 
 test("plugin HTTP gates, transfer and shell settings work on an isolated daemon",{timeout:90_000},async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-plugin-http-"));
@@ -27,6 +28,10 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     const archive=zip({"plugin.json":Buffer.from(JSON.stringify(manifest)),"backend.mjs":Buffer.from('export default {methods:{read:()=>42,change:()=>true,danger:()=>true}}')}).toString("base64");
     const preview=await call("/api/plugins/preview","POST",{archive});assert.equal(preview.status,200,JSON.stringify(preview.data));
     assert.equal((await call("/api/plugins/install","POST",{archive,hash:preview.data.hash})).status,200);
+    const repo=path.join(root,"repo"),sub=path.join(repo,"sub");fs.mkdirSync(sub,{recursive:true});await git(["init","--template="],repo);
+    const resolved=await call(`/api/plugins/git-history/repositories/resolve?path=${encodeURIComponent(sub)}`);assert.equal(resolved.data.repository,path.normalize(repo));
+    assert.equal((await call("/api/plugins/git-history/repositories","POST",{repository:sub})).status,400);
+    assert.equal((await call("/api/plugins/git-history/repositories","POST",{repository:resolved.data.repository})).status,200);
     const made=await call("/api/tabs","POST",{title:"Plugin fixture",html:"<p>Fixture</p>",plugins:[manifest.id],activate:false});const id=made.data.tab.id;
     assert.deepEqual(made.data.tab.plugins,[manifest.id]);
     let pageCall=await call(`/api/tabs/${id}/plugins/${manifest.id}/call`,"POST",{method:"read"});assert.equal(pageCall.data.error,"permission");
@@ -47,6 +52,11 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     await page.click("#settings-toggle");await page.getByRole("button",{name:"Plugins",exact:true}).click();
     await page.locator(`details[data-plugin="${manifest.id}"] > summary`).click();
     assert.equal(await page.getByLabel("HTTP fixture · Token").count(),1);
+    await page.getByLabel("HTTP fixture · Token").fill("unsaved-secret");await page.evaluate(()=>void (window as any).scribePluginSettings.refresh());assert.equal(await page.getByLabel("HTTP fixture · Token").inputValue(),"unsaved-secret");
+    await page.getByRole("button",{name:"Cancel changes",exact:true}).click();
+    await page.evaluate(()=>{(window as any).exportChoice=(window as any).scribePluginSettings.exportChoices([{id:"http-fixture",name:"HTTP fixture",version:"1.0.0"}]);});
+    await page.locator("dialog[open] .select-button").click();await page.getByRole("option",{name:"Settings",exact:true}).click();await page.keyboard.press("Escape");await page.getByRole("button",{name:"Export",exact:true}).click();
+    assert.equal((await page.evaluate(()=>(window as any).exportChoice))["http-fixture"].settings,true);
     assert.deepEqual(errors,[]);
     const other=await call("/api/tabs","POST",{title:"Other",html:"<p>Other</p>",activate:false});
     const content=await browser.newPage();await content.goto(`http://t-${id.slice(2)}.localhost:${port}/view/${id}`);

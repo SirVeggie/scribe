@@ -27,7 +27,7 @@ export class PluginService {
   private callers=new Map<string,PluginCaller>();
   private closing?: Promise<void>;
   private pastLogs=new Map<string,string[]>();
-  constructor(readonly root = path.join(dataDir(), "plugins"), private event: (id: string, name: string, data: unknown) => void = () => {}, private asset?: (page: string, name: string, mimeType: string, bytes: Buffer) => unknown) {
+  constructor(readonly root = path.join(dataDir(), "plugins"), private event: (id: string, name: string, data: unknown, registry?:boolean) => void = () => {}, private asset?: (page: string, name: string, mimeType: string, bytes: Buffer) => unknown) {
     fs.mkdirSync(root, { recursive: true });
     this.database = new PluginDatabase(path.join(root, "plugins.sqlite")); this.secrets = new PluginSecrets(path.join(root, "secrets"));
     for (const record of this.database.list()) this.permission(record.manifest);
@@ -81,7 +81,8 @@ export class PluginService {
     let diff="";
     if(detailed&&previous){const old=readPackage(this.snapshot(previous));for(const name of [...new Set([...Object.keys(old),...Object.keys(this.codeFiles(files))])].sort()){if(diff.length>250_000){diff+="\n…Diff preview limited. Inspect the archive for all remaining files.\n";break;}if(old[name]?.equals(files[name]))continue;diff+=unifiedDiff(old[name]?.toString("utf8")??null,files[name]?.toString("utf8")??null,name).patch+"\n";}}
     let sourceBytes=0;const source=detailed?Object.fromEntries(Object.entries(this.codeFiles(files)).filter(([,data])=>{sourceBytes+=data.length;return sourceBytes<250_000;}).map(([name,data])=>[name,data.toString("utf8")])):undefined;
-    return { manifest, hash, codeHash, same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:JSON.stringify(previous.manifest.access)!==JSON.stringify(manifest.access) } : null };
+    let versionStatus="new";if(previous){versionStatus="same";const current=manifest.version.split(".").map(Number),old=previous.manifest.version.split(".").map(Number);for(let i=0;i<3;i++)if(current[i]!==old[i]){versionStatus=current[i]>old[i]?"newer":"older";break;}}
+    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:JSON.stringify(previous.manifest.access)!==JSON.stringify(manifest.access) } : null };
   }
   /** Caller must collect consent for precisely this hash before invoking install. */
   async install(files: PackageFiles, expectedHash: string, replace = false,approvePaths=false): Promise<PluginRecord> {
@@ -111,7 +112,7 @@ export class PluginService {
       for(const name of Object.keys(readPackage(source)))fs.unlinkSync(packagePath(source,name));
     }
     writePackage(source,code);await this.history(manifest.id,`Install ${manifest.version}`);
-    this.event(manifest.id,"changed",null);
+    this.event(manifest.id,"changed",null,true);
     return record;
   }
   private codeFiles(files:PackageFiles):PackageFiles {return Object.fromEntries(Object.entries(files).filter(([name])=>!name.startsWith("scribe/")));}
@@ -144,6 +145,7 @@ export class PluginService {
   }
   async reload(id: string) {
     const files = readPackage(this.draft(id)), manifest = this.validate(files);
+    if(Object.keys(files).some(name=>name.startsWith("scribe/")))throw new Error("Draft source cannot carry imported settings, state or data parts");
     if(manifest.source&&manifest.backend){
       const root=fs.realpathSync(this.draft(id));
       const result=await build({absWorkingDir:root,entryPoints:[packagePath(root,manifest.source)],bundle:true,platform:"node",format:"esm",target:"node22",write:false,logLevel:"silent",plugins:[{name:"scribe-plugin-files",setup(builder){
@@ -178,12 +180,12 @@ export class PluginService {
     }catch{/* Source remains editable when Git is unavailable. */}
   }
   enabled(id: string): boolean { try { return this.database.enabled() && this.get(id).enabled; } catch { return false; } }
-  enableAll(enabled: boolean): void { this.database.enable(enabled); if (!enabled) for (const id of this.runtimes.keys()) this.stop(id); this.event("*","changed",null); }
-  startKeptAlive():void {if(!this.database.enabled())return;for(const p of this.database.list())if(p.enabled&&p.keepAlive&&p.manifest.backend)void this.runtime(p.manifest.id).start().catch(()=>{});}
+  enableAll(enabled: boolean): void { this.database.enable(enabled); if (!enabled) for (const id of this.runtimes.keys()) this.stop(id);else this.startKeptAlive(); this.event("*","changed",null,true); }
+  startKeptAlive():void {if(!this.database.enabled())return;for(const p of this.database.list())if(p.enabled&&p.keepAlive&&p.manifest.backend)void (async()=>{await this.stopping.get(p.manifest.id);if(this.enabled(p.manifest.id))await this.runtime(p.manifest.id).start();})().catch(()=>{});}
   async enable(id: string, enabled: boolean, keepAlive?: boolean): Promise<void> {
     const p=this.get(id);if(keepAlive&&!p.manifest.backend)throw new Error("This plugin has no backend to keep running");
     p.enabled=enabled;if(keepAlive!==undefined)p.keepAlive=keepAlive;this.database.save(p);await this.stop(id);const latest=this.get(id);
-    if(latest.enabled&&latest.keepAlive&&this.database.enabled())void this.runtime(id).start().catch(()=>{});this.event(id,"changed",null);
+    if(latest.enabled&&latest.keepAlive&&this.database.enabled())void this.runtime(id).start().catch(()=>{});this.event(id,"changed",null,true);
   }
   async configure(id: string, settings: Record<string, unknown>): Promise<void> {
     const p = this.get(id);
@@ -203,7 +205,7 @@ export class PluginService {
     const folder = path.join(this.directory(id),"data"); fs.mkdirSync(folder,{recursive:true});
     runtime = new PluginRuntime({entry:packagePath(this.snapshot(p),p.manifest.backend),dataDir:folder,settings:p.settings},async(method,args)=> {
       if (!this.enabled(id)||this.runtimes.get(id)!==runtime) throw new Error("Plugin is disabled or its runtime was replaced");
-      if (method === "secret") { const key = String(args.name); if (p.manifest.settings[key]?.type !== "secret") throw new Error("Unknown secret");if(!secretCache.has(key))secretCache.set(key,this.secrets.get(id,key));return secretCache.get(key); }
+      if (method === "secret") { const key = String(args.name); if (p.manifest.settings[key]?.type !== "secret") throw new Error("Unknown secret");if(!secretCache.has(key))secretCache.set(key,this.secrets.get(id,key).catch(error=>{secretCache.delete(key);throw error;}));return secretCache.get(key); }
       if (method === "state.get") return this.database.get(id,String(args.key));
       if (method === "state.set") { const key = String(args.key), result = this.database.set(id,key,args.value); this.event(id,"state",{key,...result}); return result; }
       if (method === "emit") { this.event(id,String(args.name).slice(0,100),args.data); return true; }
@@ -247,7 +249,8 @@ export class PluginService {
     if(!runtime)return this.stopping.get(id)??Promise.resolve();
     const done=runtime.stop().finally(()=>{this.pastLogs.set(id,[...(this.pastLogs.get(id)??[]),...runtime.logs].slice(-200));if(this.stopping.get(id)===done)this.stopping.delete(id);});this.stopping.set(id,done);return done;
   }
-  remove(id: string): void { this.stop(id);this.secrets.remove(id);this.database.markRemoved(id,true);this.database.remove(id); this.event(id,"changed",null); }
+  async remove(id: string): Promise<void> {const p=this.get(id);p.enabled=false;this.database.save(p);await this.stop(id);this.secrets.remove(id);this.database.markRemoved(id,true);this.database.remove(id); this.event(id,"changed",null,true); }
+  async restart(id:string):Promise<void>{await this.stop(id);if(this.enabled(id)&&this.get(id).manifest.backend)await this.runtime(id).start();}
   export(id: string, parts: ExportParts = {source:true}): Buffer {
     const p = this.get(id), files = readPackage(this.snapshot(p));
     files["scribe/parts.json"]=Buffer.from(JSON.stringify(parts));

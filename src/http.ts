@@ -127,9 +127,9 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
-  const pluginService = new PluginService(undefined,(id,name,data)=> {
-    if(name==="changed") refreshPluginTemplates();
-    for(const socket of sockets) if(socket.readyState===1) socket.send(JSON.stringify({type:"plugin_event",plugin:id,name,data}));
+  const pluginService = new PluginService(undefined,(id,name,data,registry=false)=> {
+    if(registry) refreshPluginTemplates();
+    for(const socket of sockets) if(socket.readyState===1) socket.send(JSON.stringify({type:"plugin_event",plugin:id,name,data,registry}));
   },(page,name,mimeType,data)=>store.savePageAsset(page,{name,mimeType,data}).asset);
   setPlugins(pluginService);
   pluginActions=new PluginActions(pluginService,store);
@@ -559,16 +559,20 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     const templateGuide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
-    const pluginGuides=declaredPlugins(tab.html).filter(id=>pluginService.enabled(id)).map(id=>pluginService.guide(id));
-    const guide=pluginGuides.length?{id:`plugins:${tab.id}`,title:templateGuide?.title??tab.title,text:[templateGuide?.text,...pluginGuides.map(p=>`Plugin ${p.id}: ${p.summary}\n${p.guide}\n${JSON.stringify(p.methods)}`)].filter(Boolean).join("\n\n")}:templateGuide;
+    const guide=templateGuide;
     const thread = threadOf(req);
+    const pluginGuides=declaredPlugins(tab.html).filter(id=>pluginService.enabled(id)).map(id=>{
+      const p=pluginService.guide(id),guide={id:`plugin:${p.id}`,title:`Plugin ${p.id}`,text:`${p.summary}\n${p.guide}\n${JSON.stringify(p.methods)}`};
+      const sent=thread&&req.query.deliver==="1"?req.query.force!=="1"&&guideSent(thread,guide):undefined;
+      if(thread&&req.query.deliver==="1")markGuideSent(thread,guide);return {guide,...(sent===undefined?{}:{sent})};
+    });
     if (!guide || !thread || req.query.deliver !== "1") {
-      res.json({ guide });
+      res.json({ guide,pluginGuides });
       return;
     }
     const sent = req.query.force !== "1" && guideSent(thread, guide);
     markGuideSent(thread, guide);
-    res.json({ guide, sent });
+    res.json({ guide, sent,pluginGuides });
   });
 
   app.get("/api/tabs/:id/state", (req, res) => {

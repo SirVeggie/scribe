@@ -35,9 +35,11 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
   router.post("/git-history/repositories",wrap(async req=>{
     user(req);const repository=String(req.body?.repository??"");
     const repo=await mainRepository(repository);if(!repo)throw new Error("No Git repository at this path");
+    if(repo!==repository)throw new Error("Repository resolution changed; review the resolved root before adding it");
     const previous=service.get("git-history").settings.repositories;
     await service.configure("git-history",{repositories:[...new Set([...(Array.isArray(previous)?previous:[]),repo])]});return {ok:true,repository:repo};
   }));
+  router.get("/git-history/repositories/resolve",wrap(async req=>{user(req);const repository=await mainRepository(String(req.query.path??""));if(!repository)throw new Error("No Git repository at this path");return {repository};}));
   router.post("/preview",wrap(async req=>{author(req);return service.preview(await unzip(Buffer.from(String(req.body?.archive),"base64")),true);}));
   router.post("/copy",wrap(async req=>{
     user(req);const id=pluginId.parse(req.body?.id),files=await unzip(Buffer.from(String(req.body?.archive),"base64")),manifest=service.validate(files),old=manifest.id;
@@ -99,8 +101,8 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
   }));
   router.get("/:plugin",wrap(req=>{user(req);return service.inspect(req.params.plugin);}));
   router.put("/:plugin",wrap(async req=>{user(req);if(req.body?.settings)await service.configure(req.params.plugin,req.body.settings); if(typeof req.body?.enabled==="boolean")await service.enable(req.params.plugin,req.body.enabled,req.body.keepAlive);}));
-  router.post("/:plugin/restart",wrap(req=>{user(req);service.stop(req.params.plugin);}));
-  router.delete("/:plugin",wrap(req=>{user(req);service.remove(req.params.plugin);}));
+  router.post("/:plugin/restart",wrap(req=>{user(req);return service.restart(req.params.plugin);}));
+  router.delete("/:plugin",wrap(req=>{user(req);return service.remove(req.params.plugin);}));
   router.get("/:plugin/export",wrap((req,res)=>{user(req);const bytes=service.export(req.params.plugin,{source:req.query.source!=="false",settings:req.query.settings==="true",state:req.query.state==="true",data:req.query.data==="true"});res.type("application/zip").attachment(`${req.params.plugin}.scribeplugin`).send(bytes);}));
   return router;
 }
