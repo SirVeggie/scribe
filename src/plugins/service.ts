@@ -42,7 +42,7 @@ export class PluginService {
   draft(id: string): string { return path.join(this.directory(id), "source"); }
   get(id: string): PluginRecord { pluginId.parse(id); const record = this.database.list().find(p => p.manifest.id === id); if (!record) throw new Error(`Plugin not found: ${id}`); return record; }
   list() {
-    return this.database.list().map(p => ({ id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, summary: p.manifest.summary, enabled: p.enabled && this.database.enabled(), keepAlive: p.keepAlive, status: this.runtimes.get(p.manifest.id)?.status() ?? "idle", edited: fs.existsSync(this.draft(p.manifest.id)) && packageHash(readPackage(this.draft(p.manifest.id))) !== p.hash }));
+    return this.database.list().map(p => ({ id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, summary: p.manifest.summary, enabled: p.enabled && this.database.enabled(), configuredEnabled: p.enabled, keepAlive: p.keepAlive, status: this.runtimes.get(p.manifest.id)?.status() ?? "idle", edited: fs.existsSync(this.draft(p.manifest.id)) && packageHash(readPackage(this.draft(p.manifest.id))) !== p.hash }));
   }
   inspect(id: string) {
     const p = this.get(id);
