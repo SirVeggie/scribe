@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { PAGE_PERMISSIONS } from "../pagePermissions.js";
 import { parseManifest, pluginId, type PluginManifest } from "./manifest.js";
@@ -15,6 +16,7 @@ export class PluginService {
   readonly database: PluginDatabase;
   private secrets: PluginSecrets;
   private runtimes = new Map<string, PluginRuntime>();
+  private contexts = new Map<string, Record<string, (...args: unknown[]) => unknown>>();
   constructor(readonly root = path.join(dataDir(), "plugins"), private event: (id: string, name: string, data: unknown) => void = () => {}, private asset?: (page: string, name: string, mimeType: string, bytes: Buffer) => unknown) {
     fs.mkdirSync(root, { recursive: true });
     this.database = new PluginDatabase(path.join(root, "plugins.sqlite")); this.secrets = new PluginSecrets(path.join(root, "secrets"));
@@ -127,6 +129,7 @@ export class PluginService {
       if (method === "state.get") return this.database.get(id,String(args.key));
       if (method === "state.set") { const key = String(args.key), result = this.database.set(id,key,args.value); this.event(id,"state",{key,...result}); return result; }
       if (method === "emit") { this.event(id,String(args.name).slice(0,100),args.data); return true; }
+      if (method === "context") { const ctx = this.contexts.get(String(args.token)); const fn = ctx?.[String(args.method)]; if (!fn) throw new Error("Action context expired"); return fn(...(Array.isArray(args.args) ? args.args : [])); }
       if (method === "asset" && this.asset && typeof args.page === "string") return this.asset(args.page,String(args.name),String(args.mimeType),Buffer.from(String(args.data),"base64"));
       throw new Error("Unknown host RPC");
     },p.keepAlive);
@@ -137,7 +140,19 @@ export class PluginService {
     if (!Object.hasOwn(p.manifest.methods,method)) throw new Error(`Unknown plugin method: ${method}`);
     return this.runtime(id).call("call",{method,args,caller});
   }
-  hook(id: string, template: string, hook: string, args: unknown[], caller: PluginCaller): Promise<unknown> { return this.runtime(id).call("hook",{template,hook,args,caller}); }
+  async hook(id: string, template: string, hook: string, args: unknown[], caller: PluginCaller): Promise<unknown> {
+    const token = randomUUID(), callbacks: Record<string, (...args: unknown[]) => unknown> = {};
+    const safeArgs = args.map(arg => {
+      if (!arg || typeof arg !== "object" || Array.isArray(arg)) return arg;
+      return Object.fromEntries(Object.entries(arg).map(([key,value]) => { if (typeof value !== "function") return [key,value]; callbacks[key]=value; return [key,{__scribeCallback:key}]; }));
+    });
+    this.contexts.set(token,callbacks);
+    try { return await this.runtime(id).call("hook",{template,hook,args:safeArgs,caller:{...caller,token}}); }
+    finally { this.contexts.delete(token); }
+  }
+  templates() {
+    return this.database.list().filter(p=>this.enabled(p.manifest.id)).flatMap(p=>p.manifest.templates.map(t=>({plugin:p.manifest.id, definition:t, metadata:JSON.parse(this.text(p.manifest.id,t.metadata)), html:`<meta name="scribe-plugins" content="${p.manifest.id}">\n${this.text(p.manifest.id,t.html)}`,guide:this.text(p.manifest.id,t.guide)})));
+  }
   logs(id: string): string[] { this.get(id); return this.runtimes.get(id)?.logs ?? []; }
   stop(id: string): void { this.runtimes.get(id)?.stop(); this.runtimes.delete(id); }
   remove(id: string): void { this.stop(id); this.database.remove(id); this.event(id,"changed",null); }

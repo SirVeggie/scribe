@@ -35,6 +35,9 @@ lines.on('line', async line => {
       const set = backend.templates?.[template];
       const fn = hook.startsWith('action:') ? set?.actions?.[hook.slice(7)] : set?.[hook];
       if (typeof fn !== 'function') throw new Error('Template hook not found: ' + hook);
+      for (const arg of args) if (arg && typeof arg === 'object' && !Array.isArray(arg)) {
+        for (const [key,value] of Object.entries(arg)) if (value?.__scribeCallback) arg[key] = (...values) => rpc('context',{token:caller.token,method:value.__scribeCallback,args:values});
+      }
       result = await fn(...args, context(caller));
     } else throw new Error('Unknown RPC method');
     send({id:msg.id,result:result ?? null});

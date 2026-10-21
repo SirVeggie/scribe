@@ -103,7 +103,7 @@ export type RunDeps = {
   recoveryAllowed(threadId: string, turn: Turn): boolean;
   hasWorktree(threadId: string): boolean;
   /** The page's reason to keep the branch unmerged, from its template's actions; null to merge. */
-  hold(run: PageRun): string | null;
+  hold(run: PageRun): string | null | Promise<string | null>;
   /** Throws when the message could not be sent. */
   send(threadId: string, text: string): void;
   /** Merges and closes the worktree; resolves with Scribe's message, throws with why it didn't. */
@@ -297,7 +297,7 @@ export class PageRuns {
       this.end(run, { kind: "done" });
       return;
     }
-    const held = deps.hold(run);
+    const held = await deps.hold(run);
     if (held) {
       this.end(run, { kind: "done", merged: false, held }, `Kept the branch unmerged: ${held}`);
       return;

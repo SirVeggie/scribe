@@ -184,6 +184,16 @@ export class BoardStore extends EventEmitter {
   private foldersDirty = false;
   private templates = new Map<string, Template>();
   private builtins: Template[] = [];
+  private pluginBuiltins: Template[] = [];
+
+  pageIds(): string[] { return [...this.tabs.keys(), ...this.closed.keys()]; }
+
+  setPluginTemplates(templates: Template[]): void {
+    this.pluginBuiltins = templates;
+    this.builtins = [...this.builtins.filter(t => !t.key.startsWith("plugin-")), ...templates];
+    this.syncBuiltinCopies();
+    this.emit("builtin_templates", this.listBuiltinTemplates());
+  }
   private removedTemplates = new Set<string>();
   private templatesDirty = false;
 
@@ -1081,7 +1091,7 @@ export class BoardStore extends EventEmitter {
   openFromTemplate(
     idOrKey: string,
     values: unknown,
-    opts?: { activate?: boolean; agentHidden?: boolean; actor?: PageActor; into?: string }
+    opts?: { activate?: boolean; agentHidden?: boolean; actor?: PageActor; into?: string; pluginSeed?: BoardState }
   ): { tab: Tab; created: boolean; template: Template; copiedBuiltin: boolean } {
     const found = this.findTemplate(idOrKey);
     if (!found) {
@@ -1099,7 +1109,7 @@ export class BoardStore extends EventEmitter {
     const html = this.renderBoundHtml(template, title, parsed);
     const initialState = structuredClone(template.initialState ?? {});
     const actionSet = template.source?.builtin ? BUILTIN_ACTIONS[template.source.builtin] : undefined;
-    const state = actionSet?.seed ? actionSet.seed(initialState, parsed) : initialState;
+    const state = opts?.pluginSeed ?? (actionSet?.seed ? actionSet.seed(initialState, parsed) : initialState);
     const pin = template.pin !== false;
     const tab = opts?.into
       ? this.fillBlank(this.openBlank(opts.into), { title, html, pin, state, actor: opts.actor })
@@ -2002,6 +2012,11 @@ export class BoardStore extends EventEmitter {
       }
       grants.set(row.perm, { value: row.value, ...(folders ? { folders } : {}), updatedAt: row.updatedAt });
     }
+    const pluginKey = tab.templateId ? this.templates.get(tab.templateId)?.source?.builtin : undefined;
+    if (pluginKey?.startsWith("plugin-")) {
+      const plugin = pluginKey.slice(7).split("--")[0];
+      if (!grants.has(`plugin.${plugin}`)) grants.set(`plugin.${plugin}`, {value:"allow",updatedAt:0});
+    }
     return grants;
   }
 
@@ -2025,7 +2040,7 @@ export class BoardStore extends EventEmitter {
       this.persist();
     }
     const db = this.requireDb();
-    if (stored === def.default && !list.length) {
+    if (stored === def.default && !list.length && !perm.startsWith("plugin.")) {
       db.writePermission(tab.id, perm, null, null, Date.now());
     } else {
       db.writePermission(tab.id, perm, stored, list.length ? JSON.stringify({ folders: list }) : null, Date.now());
@@ -2086,9 +2101,14 @@ export class BoardStore extends EventEmitter {
       return false;
     }
     let reset = false;
+    const templateKey=tab.templateId?this.templates.get(tab.templateId)?.source?.builtin:undefined;
+    if(templateKey?.startsWith("plugin-")) {
+      const perm=`plugin.${templateKey.slice(7).split("--")[0]}`;
+      if(permissionDef(perm)?.risky) { this.db.writePermission(tab.id,perm,"ask",null,Date.now()); reset=true; }
+    }
     for (const row of this.db.readPermissions(tab.id)) {
       if (permissionDef(row.perm)?.risky !== false) {
-        this.db.writePermission(tab.id, row.perm, null, null, Date.now());
+        this.db.writePermission(tab.id, row.perm, row.perm.startsWith("plugin.") ? "ask" : null, null, Date.now());
         reset = true;
       }
     }
@@ -4108,7 +4128,7 @@ export class BoardStore extends EventEmitter {
   reloadBuiltins(dir?: string): string[] {
     let next: Template[];
     try {
-      next = loadBuiltinTemplates(dir);
+      next = [...loadBuiltinTemplates(dir), ...this.pluginBuiltins];
     } catch (err) {
       log("Built-in templates not reloaded", (err as Error).message);
       return [];

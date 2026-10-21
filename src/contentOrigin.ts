@@ -15,6 +15,7 @@ const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
 const EVENTS_PATH = /^\/api\/tabs\/[^/]+\/events$/;
 const LOCAL_PATH = /^\/api\/tabs\/[^/]+\/local$/;
 const ACTION_PATH = /^\/api\/tabs\/[^/]+\/action$/;
+const PLUGIN_PATH = /^\/api\/tabs\/[^/]+\/plugins\/[^/]+\/(call|state\/[^/]+)$/;
 const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/;
 const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
@@ -52,6 +53,7 @@ export function previewShared(req: express.Request): boolean {
 /** The page routes a page's own script calls (src/bridge.ts), each for its own tab id. */
 function pageApi(req: express.Request): boolean {
   const { method, path } = req;
+  if (PLUGIN_PATH.test(path) && ((method === "POST" && path.endsWith("/call")) || (method === "GET" && path.includes("/state/")))) return true;
   if ((method === "GET" || method === "PUT") && (STATE_PATH.test(path) || LOCAL_PATH.test(path))) return true;
   if (method === "POST" && (EVENTS_PATH.test(path) || ACTION_PATH.test(path) || TEMPLATE_INCOMPATIBLE_PATH.test(path))) return true;
   if ((method === "GET" || method === "POST") && ASSETS_PATH.test(path)) return true;

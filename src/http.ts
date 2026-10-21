@@ -69,6 +69,11 @@ import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFil
 import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
+import { PluginService } from "./plugins/service.js";
+import { PluginActions } from "./plugins/actions.js";
+import { pluginRouter } from "./plugins/routes.js";
+import { setPlugins, plugins, setPluginActions } from "./plugins/current.js";
+import { normalizeTemplateInput } from "./templates.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
@@ -98,6 +103,19 @@ const startedAt = Date.now();
 const sockets = new Set<WebSocket>();
 const viewers = new ViewerHub();
 let agentHost: AgentHost | null = null;
+let pluginActions: PluginActions | null = null;
+
+function refreshPluginTemplates(): void {
+  if (!plugins) return;
+  store.setPluginTemplates(plugins.templates().map(({plugin,definition,metadata,html,guide}) => {
+    const key=`plugin-${plugin}--${definition.key}`;
+    const parsed=normalizeTemplateInput({...metadata,html});
+    const {pin,...rest}=parsed;
+    const actionGuide=Object.entries(definition.actions??{}).map(([name,def])=>`- \`${name}\` ${def.args}: ${def.description}`).join("\n");
+    const fullGuide=guide.includes("{{actions}}")?guide.replace("{{actions}}",actionGuide):[guide,actionGuide].filter(Boolean).join("\n\n");
+    return {...rest,...(pin===false?{pin:false as const}:{}),id:`builtin:${key}`,key,guide:fullGuide,createdAt:Date.now(),updatedAt:Date.now(),stateVersion:parsed.stateVersion??1};
+  }));
+}
 
 export function viewerCount(): number {
   return viewers.count();
@@ -105,6 +123,14 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
+  const pluginService = new PluginService(undefined,(id,name,data)=> {
+    if(name==="changed") refreshPluginTemplates();
+    for(const socket of sockets) if(socket.readyState===1) socket.send(JSON.stringify({type:"plugin_event",plugin:id,name,data}));
+  },(page,name,mimeType,data)=>store.savePageAsset(page,{name,mimeType,data}).asset);
+  setPlugins(pluginService);
+  pluginActions=new PluginActions(pluginService,store);
+  setPluginActions(pluginActions);
+  refreshPluginTemplates();
   prepareSecrets();
   refreshSearchIndex();
   // Watch linked disk folders (#707) once start-up is done: the first scan of each can take a moment.
@@ -118,6 +144,7 @@ export async function startHttp(): Promise<http.Server> {
     });
   }
   const flush = () => {
+    pluginService.close();
     store.stopDiskWatch();
     searchEmbedder.stop();
     void searchIndex.close();
@@ -188,6 +215,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/agent", agentRouter(agentHost));
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use(express.json({ limit: "6mb" }));
+  app.use("/api/plugins",pluginRouter(pluginService,store,agentHost));
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
@@ -635,14 +663,16 @@ export async function startHttp(): Promise<http.Server> {
    * reply target, set by the agent that made it, decides where it goes; a Kanban card's chat gets it
    * like a comment from the board's own box.
    */
-  app.post("/api/tabs/:id/reply", (req, res) => {
+  app.post("/api/tabs/:id/reply", async (req, res) => {
     if (viewerOf(req) === "agent") {
       res.status(403).json({ error: "Only the user's click on the page sends a reply" });
       return;
     }
     try {
       const threadInfo = (id: string) => (agentHost ? agentHost.runInfo(id) : ({ exists: false } as const));
-      const { target, result, deliver } = store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data }, threadInfo);
+      const source=store.get(req.params.id);
+      const pluginReply=source?await pluginActions?.reply(source,req.body?.data,req.body?.summary,threadInfo):null;
+      const { target, result, deliver } = pluginReply ?? store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data }, threadInfo);
       let delivered: "steered" | "queued" | "started" | null = null;
       if (deliver && agentHost) {
         const source = store.get(req.params.id);
@@ -658,7 +688,8 @@ export async function startHttp(): Promise<http.Server> {
         } catch (err) {
           log("Reply delivery failed", String(err));
         }
-        store.replyDelivered(target.id, deliver, delivered, threadInfo);
+        if(pluginReply)await pluginActions?.replyDelivered(target,deliver,delivered,threadInfo);
+        else store.replyDelivered(target.id, deliver, delivered, threadInfo);
       }
       res.json({ ok: true, target: { id: target.id, key: target.key, title: target.title }, delivered, result: result ?? null });
     } catch (err) {
@@ -668,9 +699,10 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   /** Run a template action (see src/actions). Agents through page_action; pages through scribe.action. */
-  app.post("/api/tabs/:id/action", (req, res) => {
+  app.post("/api/tabs/:id/action", async (req, res) => {
     try {
-      const { result, stateRevision } = store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
+      const tab=store.get(req.params.id);
+      const { result, stateRevision } = tab && pluginActions?.binding(tab) ? await pluginActions.action(tab,String(req.body?.action??""),req.body?.args??{},callerOf(req),(id)=>agentHost?agentHost.runInfo(id):{exists:false},req.body?.readOnly===true) : store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
         agentHost ? agentHost.runInfo(id) : { exists: false }, req.body?.readOnly === true
       );
       res.json({ result: result ?? null, stateRevision });
@@ -678,6 +710,25 @@ export async function startHttp(): Promise<http.Server> {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
     }
+  });
+
+  app.post("/api/tabs/:id/plugins/:plugin/call", async (req,res)=> {
+    try {
+      if(viewerOf(req)==="agent")throw new Error("Agents use plugin_call");
+      const permission=checkPermission(store.pagePermissions(req.params.id),{perm:`plugin.${req.params.plugin}`});
+      if(permission!=="allow") {res.json({ok:false,error:permission==="deny"?"denied":"permission",permission:`plugin.${req.params.plugin}`});return;}
+      if(!pluginService.enabled(req.params.plugin)){res.json({ok:false,error:"disabled"});return;}
+      res.json({ok:true,result:await pluginService.call(req.params.plugin,String(req.body?.method),req.body?.args??{},{kind:"page",page:req.params.id})});
+    }catch(error){res.json({ok:false,error:String((error as Error).message)});}
+  });
+  app.get("/api/tabs/:id/plugins/:plugin/state/:stateKey",(req,res)=> {
+    try {
+      if(viewerOf(req)==="agent")throw new Error("Agents use plugin_state");
+      const permission=checkPermission(store.pagePermissions(req.params.id),{perm:`plugin.${req.params.plugin}`});
+      if(permission!=="allow"){res.json({ok:false,error:permission==="ask"?"permission":"denied"});return;}
+      if(!pluginService.enabled(req.params.plugin))throw new Error("disabled");
+      res.json({ok:true,...pluginService.database.get(req.params.plugin,req.params.stateKey)});
+    }catch(error){res.json({ok:false,error:String((error as Error).message)});}
   });
 
   /** Per-viewer page state (scribe.local). Never broadcast and never shown to agents. */
@@ -1788,7 +1839,7 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/templates/:id/open", (req, res) => {
+  app.post("/api/templates/:id/open", async (req, res) => {
     try {
       const activate = req.body?.activate !== false;
       const into = viewerOf(req) === "user" ? optionalString(req.body?.into) : activate ? threadBlankPage(req) : undefined;
@@ -1797,6 +1848,7 @@ export async function startHttp(): Promise<http.Server> {
         agentHidden: viewerOf(req) === "user" && req.body?.agentHidden === true,
         actor: actorOf(req),
         into,
+        pluginSeed: await pluginActions?.seed(req.params.id,req.body?.values??{}),
       });
       res.status(201).json({ tab: toMeta(tab), template: { id: template.id, key: template.key }, copiedBuiltin });
     } catch (err) {
@@ -2521,12 +2573,11 @@ function scheduleSweep(delayMs: number): void {
     const available = (await host.providerStatus().catch(() => [])).filter((p) => p.available).map((p) => p.id);
     const defaultProvider = ["cursor", "codex", "claude", "pi"].find((id) => available.some((p) => p === id)) ?? available[0];
     // Then the pages' own agents (Kanban workers) go on, whether or not a window shows them (#312).
-    store.driveActions(
-      {
+    const driveContext = {
         ...ctx,
         now: Date.now(),
         defaultProvider,
-        watch: (thread, run) => {
+        watch: (thread: string, run: import("./actions/types.js").PageRunInput) => {
           try {
             host.watchPageThread(thread, run);
             return true;
@@ -2535,16 +2586,17 @@ function scheduleSweep(delayMs: number): void {
             return false;
           }
         },
-        release: (thread) => {
+        release: (thread: string) => {
           try {
             host.releasePageThread(thread);
           } catch {
             /* the chat is gone */
           }
         },
-      },
-      (pageId, launch, validate) => host.launchPageThread(pageId, launch.prompt, launch.settings, launch.run, launch.resumeThread, validate)
-    );
+      };
+    const launch=(pageId:string,item:import("./actions/types.js").PageLaunch,validate:()=>void|Promise<void>)=>host.launchPageThread(pageId,item.prompt,item.settings,item.run,item.resumeThread,validate);
+    store.driveActions(driveContext,launch);
+    await pluginActions?.sweep(ctx,driveContext,launch);
   }, delayMs);
   sweepQueued.unref?.();
 }

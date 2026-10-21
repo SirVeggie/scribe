@@ -704,6 +704,10 @@
         (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
       return;
     }
+    if (msg.type === "plugin_event") {
+      forwardPluginEvent(msg);
+      return;
+    }
     if (msg.type === "folders") {
       state.folders = Array.isArray(msg.folders) ? msg.folders : [];
       invalidate("chrome", "library");
@@ -4650,6 +4654,44 @@
       .catch((err) => failed(String(err?.message || err)));
   }
 
+  const pluginSubscriptions = new Map();
+  async function onPagePlugin(event) {
+    const data = event.data, frameId = frameIdByWindow(event.source), tab = frameId ? findAnyTab(frameId) : null;
+    const reply = result => event.source?.postMessage({type:"scribe-open-result",id:data.id,reqId:data.reqId,result},event.origin);
+    if (!tab || tab.embedUrl || !/^[a-z][a-z0-9-]{0,63}$/.test(data.plugin)) return reply({ok:false,error:"not_a_page"});
+    try {
+      const result = await window.scribePermissions.ensure(tab,{perm:`plugin.${data.plugin}`});
+      if (!result.ok) return reply(result);
+      if (data.op === "allow") return reply(result);
+      if (data.op === "subscribe") {
+        if (!pluginSubscriptions.has(frameId)) pluginSubscriptions.set(frameId,new Set());
+        pluginSubscriptions.get(frameId).add(data.plugin);
+        return reply({ok:true});
+      }
+      if (data.op === "repository" && data.plugin === "git-history") {
+        if (!frameActivated(frameId)) return reply({ok:false,error:"no_gesture"});
+        const accepted=await confirmDelete(`Allow “${tab.title}” to read Git history from ${String(data.repository)}?`,"Allow");
+        if (!accepted) return reply({ok:false,error:"denied"});
+        const res=await fetch("/api/plugins/git-history/repositories",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repository:data.repository})});
+        return reply(await res.json());
+      }
+      reply({ok:false,error:"unknown_op"});
+    } catch(error) {reply({ok:false,error:String(error.message||error)});}
+  }
+  async function forwardPluginEvent(message) {
+    for (const [id,subscriptions] of pluginSubscriptions) {
+      const frame=frames.get(id);
+      if (!frame) {pluginSubscriptions.delete(id);continue;}
+      if (!subscriptions.has(message.plugin)) continue;
+      try {
+        const response=await fetch(`/api/tabs/${encodeURIComponent(id)}/permissions/check`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({perm:`plugin.${message.plugin}`})});
+        if ((await response.json()).result !== "allow") continue;
+        const data=message.name === "state" ? {key:message.data?.key,revision:message.data?.revision} : message.data;
+        frame.el.contentWindow?.postMessage({type:"scribe-plugin-event",plugin:message.plugin,name:message.name,data},pageOrigin(id));
+      }catch{}
+    }
+  }
+
   const pageAudioSessions = new Map();
   let pageAudioActive = null;
   const audioStop = document.createElement("button");
@@ -5819,6 +5861,8 @@
       onPagePermissions(event);
     } else if (event.data?.type === "scribe-ml") {
       onPageMl(event);
+    } else if (event.data?.type === "scribe-plugin") {
+      onPagePlugin(event);
     } else if (event.data?.type === "scribe-audio") {
       onPageAudio(event);
     } else if (event.data?.type === "scribe-reply") {

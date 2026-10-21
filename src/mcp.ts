@@ -266,7 +266,7 @@ function outsideOf(outside: TabMeta[] | undefined): { outside?: Array<{ id: stri
 }
 
 /** Tools that create or change pages and templates: left out on the Read-only rung. page_action stays, and the daemon refuses an action that would change the page. */
-const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open"]);
+const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open", "plugin_create", "plugin_patch", "plugin_reload", "plugin_install"]);
 
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
@@ -283,6 +283,7 @@ export async function startMcp(): Promise<void> {
   scanTools(server);
   gateTools(server);
   registerCodexFileTools(server);
+  registerPluginTools(pageTool);
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {
     const client = server.server.getClientVersion();
@@ -2181,6 +2182,23 @@ function jsonResult(value: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
   };
+}
+
+function registerPluginTools(tool: McpServer["tool"]): void {
+  const request = async (method: string, route: string, body?: unknown) => {
+    const {status,data}=await api(method,`/api/plugins${route}`,body);
+    return status>=400 ? errorResult((data as ApiError).error??`HTTP ${status}`) : jsonResult(data);
+  };
+  const id=z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).describe("Plugin id from plugin_list, or the id being authored.");
+  tool("plugin_list","List installed page plugins and their summaries, enablement and runtime status. Use plugin_guide for a plugin's methods and usage.",{},()=>request("GET","/"));
+  tool("plugin_guide","Read a page plugin's author guide and method signatures. Plugins can be used by ordinary pages as well as their templates.",{id},({id})=>request("GET",`/${id}/guide`));
+  tool("plugin_logs","Read the bounded recent backend log for a plugin. Secrets are never included by Scribe.",{id},({id})=>request("GET",`/${id}/logs`));
+  tool("plugin_read","List source files or read one UTF-8 file. Source is kept by Scribe; this works without workspace file access.",{id,path:z.string().optional()},({id,path})=>request("GET",`/${id}/files${path?`?path=${encodeURIComponent(path)}`:""}`));
+  tool("plugin_call","Call an agent method declared by a plugin. Method levels are read, board and ask. Ask methods request consent unless Full or allowed by this thread's page; a page's Deny refuses them. Discover methods with plugin_guide.",{id,method:z.string(),args:z.record(z.string(),z.unknown()).optional()},({id,method,args})=>request("POST",`/${id}/call`,{method,args}));
+  tool("plugin_create","Create a disabled plugin source tree in Scribe with a manifest, guide and backend stub. Read scribe_docs Plugins before authoring. Installation is a separate approval step.",{manifest:z.record(z.string(),z.unknown())},({manifest})=>request("POST","/create",{manifest}));
+  tool("plugin_patch","Write a source file inside a plugin's editable tree. This does not change installed/running code. Then plugin_reload validates and plugin_install activates after consent.",{id,path:z.string(),content:z.string()},({id,path,content})=>request("PUT",`/${id}/files`,{path,content}));
+  tool("plugin_reload","Validate changed plugin source, bump its patch version and return the install preview. Does not run changed code. Follow with plugin_install to request activation.",{id},({id})=>request("POST",`/${id}/reload`,{}));
+  tool("plugin_install","Install or replace a plugin from its source tree. Rungs below Full ask the user before running code, including Auto. Changed source is installed as an immutable snapshot.",{id,replace:z.boolean().optional()},({id,replace})=>request("POST","/install",{id,replace}));
 }
 
 /** Ids this call closed or deleted — never the Library-wide closed-page count. */
