@@ -176,6 +176,12 @@
   .md-doc a { color: #82aaff; }
   .md-doc code { font: 0.88em var(--mono); background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 5px; }
   .md-doc pre { background: var(--code-bg); border: 1px solid var(--border); padding: 12px 14px; border-radius: 10px; overflow: auto; }
+  .md-doc li:has(> .task-box), .md-doc li:has(> p > .task-box) { list-style: none; }
+  .md-doc .task-box { margin: 0 0.45em 0 -1.4em; vertical-align: -2px; accent-color: var(--accent); cursor: pointer; }
+  .md-doc .code-block { position: relative; }
+  .md-doc .code-copy { position: absolute; top: 7px; right: 7px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+  .md-doc .code-block:hover .code-copy, .md-doc .code-copy:focus-visible { opacity: 1; }
+  .md-doc .code-copy:hover { color: var(--text); }
   .md-doc pre code { background: none; padding: 0; font-size: 13px; }
   .md-doc blockquote { margin: 0.6em 0; padding: 0.1em 0.9em; border-left: 3px solid var(--accent); color: var(--muted); }
   .md-doc table { border-collapse: collapse; margin: 0.6em 0; }
@@ -586,7 +592,18 @@
   }
 
   function sanitize(html) {
-    return window.DOMPurify ? DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed"], FORBID_ATTR: ["style"] }) : "";
+    if (!window.DOMPurify) return "";
+    var clean = DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "button", "textarea", "select", "iframe", "object", "embed"], FORBID_ATTR: ["style"], RETURN_DOM_FRAGMENT: true });
+    // A task list item's checkbox is the only input kept: a click ticks it in the text.
+    clean.querySelectorAll("input").forEach(function (input) {
+      if (input.type !== "checkbox") return input.remove();
+      input.removeAttribute("disabled");
+      input.className = "task-box";
+    });
+    var box = document.createElement("div");
+    box.append(clean);
+    return box.innerHTML;
+
   }
   function renderMarkdown() {
     editing = null;
@@ -611,6 +628,17 @@
       el.className = "blk";
       el.innerHTML = sanitize(marked.parser(one, { gfm: true }));
       el.querySelectorAll("pre code").forEach(highlightBlock);
+      el.querySelectorAll("pre").forEach(function (pre) {
+        var copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "code-copy";
+        copy.textContent = "Copy";
+        var wrap = document.createElement("div");
+        wrap.className = "code-block";
+        pre.replaceWith(wrap);
+        wrap.append(pre, copy);
+      });
+
       loadLocalImages(el);
       // A block's own trailing newlines stay outside its editor.
       var raw = tok.raw.replace(/\n+$/, "");
@@ -728,6 +756,58 @@
     area.style.height = "auto";
     area.style.height = area.scrollHeight + 2 + "px";
   }
+  // The nth checkbox of a block is the nth "- [ ]" line in its text. Ticking one ticks its sub-items too, and a
+  // parent is ticked once all of its sub-items are.
+  var LIST_ITEM = /^([ \t]*)([-*+]|\d+[.)])\s+(.*)$/;
+  var TASK_ITEM = /^([ \t]*(?:[-*+]|\d+[.)])\s+)\[([ xX])\](?=\s|$)/;
+  function indentOf(line) {
+    var w = 0;
+    for (var k = 0; k < line.length && (line[k] === " " || line[k] === "\t"); k++) w += line[k] === "\t" ? 4 : 1;
+    return w;
+  }
+  function toggleTask(lines, line) {
+    function set(k, on) { lines[k] = lines[k].replace(TASK_ITEM, function (_, lead) { return lead + (on ? "[x]" : "[ ]"); }); }
+    function subTasks(k) {
+      var out = [], base = indentOf(lines[k]);
+      for (var j = k + 1; j < lines.length && (indentOf(lines[j]) > base || !lines[j].trim()); j++) if (TASK_ITEM.test(lines[j])) out.push(j);
+      return out;
+    }
+    var on = TASK_ITEM.exec(lines[line])[2] === " ";
+    set(line, on);
+    subTasks(line).forEach(function (k) { set(k, on); });
+    for (var k = line, indent = indentOf(lines[line]); k > 0 && indent > 0;) {
+      k--;
+      if (!LIST_ITEM.test(lines[k]) || indentOf(lines[k]) >= indent) continue;
+      indent = indentOf(lines[k]);
+      var subs = subTasks(k);
+      if (TASK_ITEM.test(lines[k]) && subs.length) set(k, subs.every(function (j) { return TASK_ITEM.exec(lines[j])[2] !== " "; }));
+    }
+    return lines;
+  }
+  function toggleTaskIn(el, box) {
+    var start = Number(el.dataset.start), end = Number(el.dataset.end);
+    var nth = Array.prototype.indexOf.call(el.querySelectorAll("input.task-box"), box);
+    var lines = current().slice(start, end).split("\n");
+    for (var k = 0, seen = -1; k < lines.length; k++) {
+      if (TASK_ITEM.test(lines[k]) && ++seen === nth) {
+        editor.replaceRange(start, end, toggleTask(lines, k).join("\n"));
+        break;
+      }
+    }
+    renderMarkdown();
+  }
+  function copyCode(button) {
+    var code = button.parentNode.querySelector("code");
+    if (!code || !navigator.clipboard || !navigator.clipboard.writeText) return;
+    navigator.clipboard.writeText(code.textContent).then(function () {
+      button.textContent = "Copied";
+      setTimeout(function () { button.textContent = "Copy"; }, 1200);
+    }, function () { button.textContent = "Not copied"; });
+  }
+  function selectingText(root) {
+    var sel = window.getSelection && window.getSelection();
+    return !!(sel && !sel.isCollapsed && root.contains(sel.anchorNode));
+  }
   mdDoc.addEventListener("click", function (event) {
     var link = event.target.closest("a[href]");
     if (link) {
@@ -738,6 +818,16 @@
     }
     if (event.target.closest(".blk-edit")) return;
     var el = event.target.closest(".blk");
+    if (el && event.target.classList.contains("code-copy")) {
+      copyCode(event.target);
+      return;
+    }
+    if (el && event.target.classList.contains("task-box")) {
+      toggleTaskIn(el, event.target);
+      return;
+    }
+    // A drag that selected text keeps it selected.
+    if (selectingText(mdDoc)) return;
     if (el) {
       editBlock(el, Number(el.dataset.start), Number(el.dataset.end), false);
       return;

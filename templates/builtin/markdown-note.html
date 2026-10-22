@@ -108,6 +108,27 @@
     display: block;
     margin: 8px 0;
   }
+  .md-preview li > ul, .md-preview li > ol { margin: 0.1em 0; }
+  .md-preview li.task { list-style: none; }
+  .md-preview .task-box { margin: 0 0.45em 0 -1.35em; vertical-align: -2px; accent-color: var(--accent); cursor: pointer; }
+  .md-preview .code-block { position: relative; }
+  .md-preview .code-copy {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--muted);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .md-preview .code-block:hover .code-copy, .md-preview .code-copy:focus-visible { opacity: 1; }
+  .md-preview .code-copy:hover { color: var(--text); }
   .md-editor {
     display: block;
     width: 100%;
@@ -260,6 +281,82 @@
     return str;
   }
 
+  // Lists nest by indentation, spaces or tabs. "- [ ] " and "- [x] " items are checkboxes: ticking one ticks its
+  // sub-items too, and a parent is ticked once all of its sub-items are.
+  var LIST_ITEM = /^([ \t]*)([-*+]|\d+\.)\s+(.*)$/;
+  var TASK_ITEM = /^([ \t]*(?:[-*+]|\d+\.)\s+)\[([ xX])\](?=\s|$)/;
+  function indentOf(line) {
+    var w = 0;
+    for (var k = 0; k < line.length && (line[k] === " " || line[k] === "\t"); k++) w += line[k] === "\t" ? 4 : 1;
+    return w;
+  }
+  function renderList(lines, i, inlineHtml, tasks) {
+    var root = { indent: -1, children: [] }, path = [root];
+    for (; i < lines.length; i++) {
+      var m = LIST_ITEM.exec(lines[i]);
+      if (!m) break;
+      var node = { indent: indentOf(m[1]), ordered: /\d/.test(m[2]), num: parseInt(m[2], 10), text: m[3], line: i, children: [] };
+      while (path.length > 1 && node.indent <= path[path.length - 1].indent) path.pop();
+      path[path.length - 1].children.push(node);
+      path.push(node);
+    }
+    function items(list) {
+      var out = "";
+      for (var k = 0; k < list.length;) {
+        var ordered = list[k].ordered;
+        out += ordered ? (list[k].num !== 1 ? '<ol start="' + list[k].num + '">' : "<ol>") : "<ul>";
+        for (; k < list.length && list[k].ordered === ordered; k++) out += item(list[k]);
+        out += ordered ? "</ol>" : "</ul>";
+      }
+      return out;
+    }
+    function item(node) {
+      var task = /^\[([ xX])\](?:\s+|$)(.*)$/.exec(node.text);
+      if (!task) return "<li>" + inlineHtml(node.text) + items(node.children) + "</li>";
+      return '<li class="task"><input type="checkbox" class="task-box" data-line="' + node.line + '"' +
+        (task[1] !== " " ? " checked" : "") + (tasks ? "" : " disabled") + ">" + inlineHtml(task[2]) + items(node.children) + "</li>";
+    }
+    return { html: items(root.children), next: i };
+  }
+  /** The text with the checkbox on `line` flipped, its sub-items with it and its parents updated; null if no checkbox is there. */
+  function toggleTask(src, line) {
+    var lines = String(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
+    var m = TASK_ITEM.exec(lines[line] || "");
+    if (!m) return null;
+    function set(k, on) { lines[k] = lines[k].replace(TASK_ITEM, function (_, lead) { return lead + (on ? "[x]" : "[ ]"); }); }
+    function subTasks(k) {
+      var out = [], base = indentOf(lines[k]);
+      for (var j = k + 1; j < lines.length && LIST_ITEM.test(lines[j]) && indentOf(lines[j]) > base; j++) if (TASK_ITEM.test(lines[j])) out.push(j);
+      return out;
+    }
+    var on = m[2] === " ";
+    set(line, on);
+    subTasks(line).forEach(function (k) { set(k, on); });
+    for (var k = line, indent = indentOf(lines[line]); k > 0 && LIST_ITEM.test(lines[k - 1]);) {
+      k--;
+      if (indentOf(lines[k]) >= indent) continue;
+      indent = indentOf(lines[k]);
+      var subs = subTasks(k);
+      if (TASK_ITEM.test(lines[k]) && subs.length) set(k, subs.every(function (j) { return TASK_ITEM.exec(lines[j])[2] !== " "; }));
+    }
+    return lines.join("\n");
+  }
+  function codeBlockHtml(codeHtml) {
+    return '<div class="code-block"><button type="button" class="code-copy">Copy</button><pre><code>' + codeHtml + "</code></pre></div>";
+  }
+  function copyCode(button) {
+    var code = button.parentNode.querySelector("code");
+    if (!code || !navigator.clipboard || !navigator.clipboard.writeText) return;
+    navigator.clipboard.writeText(code.textContent).then(function () {
+      button.textContent = "Copied";
+      setTimeout(function () { button.textContent = "Copy"; }, 1200);
+    }, function () { button.textContent = "Not copied"; });
+  }
+  /** A click that ends a drag-selection of text in root: it should leave the text selected, not start editing. */
+  function selectingText(root) {
+    var sel = window.getSelection && window.getSelection();
+    return !!(sel && !sel.isCollapsed && root.contains(sel.anchorNode));
+  }
   function renderMarkdown(src) {
     var lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
     var html = [];
@@ -267,11 +364,9 @@
     function isFence(line) { return /^```/.test(line); }
     function isHeading(line) { return /^#{1,6} /.test(line); }
     function isQuote(line) { return /^>\s?/.test(line); }
-    function isUl(line) { return /^\s*[-*+] /.test(line); }
-    function isOl(line) { return /^\s*\d+\. /.test(line); }
     function isHr(line) { return /^(---+|\*\*\*+|___+)\s*$/.test(line); }
     function isBlock(line) {
-      return isFence(line) || isHeading(line) || isQuote(line) || isUl(line) || isOl(line) || isHr(line);
+      return isFence(line) || isHeading(line) || isQuote(line) || LIST_ITEM.test(line) || isHr(line);
     }
     while (i < lines.length) {
       var line = lines[i];
@@ -280,7 +375,7 @@
         i++;
         while (i < lines.length && !isFence(lines[i])) code.push(lines[i++]);
         if (i < lines.length) i++;
-        html.push("<pre><code>" + escapeHtml(code.join("\n")) + "</code></pre>");
+        html.push(codeBlockHtml(escapeHtml(code.join("\n"))));
         continue;
       }
       if (isHeading(line)) {
@@ -300,15 +395,10 @@
         i++;
         continue;
       }
-      if (isUl(line) || isOl(line)) {
-        var ordered = isOl(line);
-        var test = ordered ? isOl : isUl;
-        html.push(ordered ? "<ol>" : "<ul>");
-        while (i < lines.length && test(lines[i])) {
-          html.push("<li>" + mdInline(lines[i].replace(ordered ? /^\s*\d+\.\s+/ : /^\s*[-*+]\s+/, "")) + "</li>");
-          i++;
-        }
-        html.push(ordered ? "</ol>" : "</ul>");
+      if (LIST_ITEM.test(line)) {
+        var list = renderList(lines, i, mdInline, true);
+        html.push(list.html);
+        i = list.next;
         continue;
       }
       if (!line.trim()) {
@@ -333,6 +423,14 @@
 
   preview.onclick = function (event) {
     if (event.target.closest && event.target.closest("a")) return;
+    if (event.target.classList.contains("code-copy")) return copyCode(event.target);
+    if (event.target.classList.contains("task-box")) {
+      var next = toggleTask(text(), Number(event.target.getAttribute("data-line")));
+      if (next != null) scribe.set({ text: next });
+      showPreview();
+      return;
+    }
+    if (selectingText(preview)) return;
     startEdit();
   };
   preview.onkeydown = function (event) {
