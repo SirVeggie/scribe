@@ -3057,7 +3057,7 @@ export class BoardStore extends EventEmitter {
    * A new empty file as a page in Library folder folderId (#707). It goes in that folder's disk
    * location, else in `location` (the user's pick when there was none), else in the default
    * location; with none of them it throws NeedsLocationError and creates nothing. `file` is an
-   * exact path the user chose (Other…).
+   * exact path the user chose. With remember, its parent becomes the default location.
    */
   createFile(input: { folderId?: string | null; name?: string; file?: string; location?: string; remember?: boolean; activate?: boolean }): Tab {
     const folderId = input.folderId ?? null;
@@ -3077,9 +3077,10 @@ export class BoardStore extends EventEmitter {
       }
       file = uniqueFileName(dir, input.name || "Untitled.md");
     }
-    if (input.location && input.remember) {
-      fs.mkdirSync(path.resolve(input.location), { recursive: true });
-      this.setFileSettings({ defaultLocation: input.location });
+    const rememberLocation = input.file ? path.dirname(file) : input.location;
+    if (rememberLocation && input.remember) {
+      fs.mkdirSync(path.resolve(rememberLocation), { recursive: true });
+      this.setFileSettings({ defaultLocation: rememberLocation });
     }
     createEmptyFile(file);
     return this.openFilePage({ path: file, folderId, activate: input.activate !== false }).tab;

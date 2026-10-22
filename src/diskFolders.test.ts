@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError, uniqueFileName, watchRoots, within } from "./diskFolders.js";
 import { BoardStore } from "./store.js";
 
@@ -126,7 +127,49 @@ test("createFile puts the file in the folder's disk location, else the default, 
   assert.equal(next.file?.path, path.join(inbox, "a 2.txt"));
 
   assert.throws(() => store.createFile({ file: next.file!.path }), (err) => err instanceof FileExistsError);
+  const named = store.createFile({ file: path.join(work, "Chosen", "notes.md"), remember: true, activate: false });
+  assert.equal(named.title, "notes.md");
+  assert.equal(store.fileSettings().defaultLocation, path.join(work, "Chosen"));
+  assert.equal(fs.readFileSync(named.file!.path, "utf8"), "");
   store.closeDb();
+});
+
+test("new file picker names every file type before creation and cancellation creates nothing", async () => {
+  const app = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const source = app.slice(app.indexOf("  async function createFile(kind, folderId) {"), app.indexOf("  /** The HTTP reply and the WebSocket upsert race"));
+  for (const kind of ["md", "txt", "other"]) {
+    const picks: any[] = [];
+    const posts: any[] = [];
+    const focused: string[] = [];
+    let chosen: string | null = null;
+    let exists = false;
+    const create = runInNewContext(`${source}\ncreateFile`, {
+      NEW_FILE_NAMES: { md: "Untitled.md", txt: "Untitled.txt" },
+      window: { scribeChat: { pickWorkspace: async (start: string, options: any) => { picks.push({ start, options }); return chosen; } } },
+      newFileTarget: () => ({ folderId: "notes", location: "C:\\Notes" }),
+      postNewFile: async (body: any) => {
+        posts.push(body);
+        if (exists) { exists = false; chosen = null; return { res: { status: 409 }, data: { exists: body.file } }; }
+        return { res: { ok: true }, data: { tab: { id: "created" } } };
+      },
+      showNotice() {}, loadFileSettings() {}, focusWhenOpened: (id: string) => focused.push(id),
+    });
+    await create(kind, "notes");
+    assert.equal(posts.length, 0);
+    assert.equal(focused.length, 0);
+    assert.equal(picks[0].start, `C:\\Notes\\Untitled.${kind === "md" ? "md" : "txt"}`);
+    assert.equal(picks[0].options.files, "save");
+    chosen = "C:\\Notes\\Chosen.md";
+    await create(kind, "notes");
+    assert.equal(posts[0].file, chosen);
+    assert.equal(posts[0].folderId, "notes");
+    assert.deepEqual(focused, ["created"]);
+    exists = true;
+    await create(kind, "notes");
+    assert.equal(picks.at(-1).start, chosen ?? "C:\\Notes\\Chosen.md");
+    assert.equal(posts.length, 2, "an existing name returns to the picker without another creation after cancel");
+    assert.deepEqual(focused, ["created"]);
+  }
 });
 
 test("moving a file page into a disk folder moves its file; out to a plain folder it stays", () => {

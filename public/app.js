@@ -4147,33 +4147,28 @@
     return { res, data: res ? await res.json().catch(() => ({})) : {} };
   }
 
-  /** A new empty file as a page in Library folder folderId (kind md, txt, or other: the user names it). */
+  /** Ask for a name and location before creating an empty file page. */
   async function createFile(kind, folderId) {
     const pick = window.scribeChat?.pickWorkspace;
     const target = newFileTarget(folderId);
-    const body = { folderId: target.folderId };
-    if (kind === "other") {
-      const sep = /\\/.test(target.location || "") ? "\\" : "/";
-      const start = target.location ? `${target.location.replace(/[\\/]+$/, "")}${sep}untitled.txt` : "";
-      const picked = await pick?.(start, { files: "save", title: "New file", hint: "", action: "Create", name: "untitled.txt" });
+    const name = NEW_FILE_NAMES[kind] || "Untitled.txt";
+    const sep = /\\/.test(target.location || "") ? "\\" : "/";
+    let start = target.location ? `${target.location.replace(/[\\/]+$/, "")}${sep}${name}` : name;
+    const remember = !target.location ? { label: "Use this folder for new files from now on", checked: true } : undefined;
+    let res, data;
+    while (true) {
+      const picked = await pick?.(start, { files: "save", title: "New file", hint: "", action: "Create", name, remember });
       if (!picked) return;
-      body.file = picked;
-    } else {
-      body.name = NEW_FILE_NAMES[kind] || NEW_FILE_NAMES.md;
-    }
-    let { res, data } = await postNewFile(body);
-    if (res?.status === 409 && data.needsLocation) {
-      // Nothing is created until there is a folder on disk for it.
-      const remember = { label: "Use this folder for new files from now on", checked: true };
-      const dir = await pick?.("", { title: "Where should new files go?", hint: `${body.name} needs a folder on disk. Pick one to create it there.`, action: "Create", used: false, remember });
-      if (!dir) return;
-      ({ res, data } = await postNewFile({ ...body, location: dir, remember: remember.checked }));
-      if (res?.ok && remember.checked) void loadFileSettings();
+      ({ res, data } = await postNewFile({ folderId: target.folderId, file: picked, remember: remember?.checked === true }));
+      if (res?.status !== 409 || !data.exists) break;
+      showNotice(`${picked} already exists. Choose another filename.`);
+      start = picked;
     }
     if (!res?.ok || !data.tab) {
       showNotice(data.error || "Could not create the file");
       return;
     }
+    if (remember?.checked) void loadFileSettings();
     focusWhenOpened(data.tab.id);
   }
 
