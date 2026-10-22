@@ -98,7 +98,7 @@ html[data-theme="cream"] {
 
 .agent-pane {
   position: relative;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   width: var(--agent-width, 420px);
   min-width: 0;
   margin-left: 14px;
@@ -134,8 +134,8 @@ body.resizing-side .agent-pane {
 }
 
 .agent-inner {
-  width: var(--agent-width, 420px);
-  min-width: 320px;
+  width: 100%;
+  min-width: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
