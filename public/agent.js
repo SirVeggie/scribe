@@ -10174,6 +10174,7 @@
       const command = input(server.command, "e.g. npx");
       const args = area((server.args || []).join("\n"), "One argument per line");
       const env = area(pairs(server.env, "="), "KEY=value, one per line");
+      const cwd = input(server.cwd, "The thread's workspace");
       const url = input(server.url, "https://example.com/mcp");
       const sse = el("input");
       sse.type = "checkbox";
@@ -10182,7 +10183,7 @@
       sseLabel.append(sse, el("span", null, "Server-sent events (older servers)"));
       const headers = area(pairs(server.headers, ": "), "Header: value, one per line");
       const commandFields = el("div", "ag-mcp-fields");
-      commandFields.append(field("Command", command), field("Arguments", args), field("Environment", env, "${VAR} takes a variable from Scribe's environment."));
+      commandFields.append(field("Command", command), field("Arguments", args), field("Working folder", cwd), field("Environment", env, "${VAR} takes a variable from Scribe's environment."));
       const urlFields = el("div", "ag-mcp-fields");
       urlFields.append(field("URL", url), sseLabel, field("Headers", headers, "${VAR} takes a variable from Scribe's environment."));
       const syncKind = () => {
@@ -10228,7 +10229,7 @@
         if (!/^[A-Za-z0-9_.-]{1,48}$/.test(id)) return fail("Use letters, digits, dot, dash or underscore for the name.");
         if (id !== name && layer[id]) return fail(`There is already a server named ${id} here.`);
         const next = { ...server };
-        for (const key of ["command", "args", "env", "url", "headers", "type"]) delete next[key];
+        for (const key of ["command", "args", "cwd", "env", "url", "headers", "type"]) delete next[key];
         if (kind === "command") {
           if (!command.value.trim()) return fail("Enter the command that starts the server.");
           next.command = command.value.trim();
@@ -10237,6 +10238,7 @@
             .map((a) => a.trim())
             .filter(Boolean);
           if (list.length) next.args = list;
+          if (cwd.value.trim()) next.cwd = cwd.value.trim();
           const vars = parsePairs(env.value, "=");
           if (Object.keys(vars).length) next.env = vars;
         } else {

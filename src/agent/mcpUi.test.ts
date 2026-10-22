@@ -28,6 +28,7 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
       { key: "b".repeat(64), thread: "thread-a", threadTitle: "My project", server: null },
     ];
     const revoked: any[] = [];
+    const layerSaves: any[] = [];
     let fail = false;
     await page.route("http://mcp.test/**", async (route) => {
       const url = new URL(route.request().url());
@@ -46,6 +47,11 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
           grants = grants.filter((g) => g.key !== grant.key);
         }
         return route.fulfill({ contentType: "application/json", body: JSON.stringify({ grants }) });
+      }
+      if (route.request().method() === "PUT" && url.pathname.endsWith("/mcp/layer")) {
+        const body = route.request().postDataJSON();
+        layerSaves.push(body);
+        view.file.mcpServers = body.servers;
       }
       if (route.request().method() === "POST") {
         if (fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "write failed" }) });
@@ -77,6 +83,21 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await page.getByRole("button", { name: "Edit", exact: true }).waitFor();
     assert.deepEqual(imported[0], { name: "keeper", scope: "global", server: { command: "keeper", approve: "ask" } });
     assert.equal(await page.getByRole("button", { name: "Import keeper from home/.claude.json" }).count(), 0);
+    // The working folder is editable and cleared when emptied. Wait for the editor to focus Command first.
+    const editor = page.locator(".ag-mcp-edit");
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.waitForFunction(() => (document.activeElement as HTMLInputElement | null)?.placeholder === "e.g. npx");
+    await editor.getByLabel("Working folder").fill("C:\\keeper");
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await editor.waitFor({ state: "detached" });
+    assert.equal(layerSaves[0].servers.keeper.cwd, "C:\\keeper");
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.waitForFunction(() => (document.activeElement as HTMLInputElement | null)?.placeholder === "e.g. npx");
+    assert.equal(await editor.getByLabel("Working folder").inputValue(), "C:\\keeper");
+    await editor.getByLabel("Working folder").fill("");
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await editor.waitFor({ state: "detached" });
+    assert.equal("cwd" in layerSaves[1].servers.keeper, false);
     // The discovered workspace is selectable even when Scribe has no entries there yet.
     await page.getByRole("combobox", { name: "Where the servers apply" }).selectOption("/project");
     const shared = page.getByRole("button", { name: "Import shared from /project/.mcp.json" });
