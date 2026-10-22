@@ -22,6 +22,7 @@ import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
 import { checkSdkUpdates } from "./sdkUpdates.js";
 import { cardContext } from "./cardContext.js";
+import { DEFAULT_INTELLIJ, intellijSettings, intellijLauncher, intellijDiffArgs, intellijFileArgs, launchIntelliJ } from "./intellij.js";
 
 type AiPassage = { id: string; digest: string; kind: string; anchor: string | null; headingId: string | null; label: string };
 
@@ -89,6 +90,37 @@ export function agentRouter(host: AgentHost): express.Router {
           res.status(status).json({ error: err.message });
         });
     };
+
+  router.get("/integrations", wrap(() => ({ intellij: intellijSettings(host.db.getSetting("integration.intellij", DEFAULT_INTELLIJ)) })));
+  router.put("/integrations", wrap((req) => {
+    const settings = intellijSettings(req.body?.intellij);
+    host.db.setSetting("integration.intellij", settings);
+    return { intellij: settings };
+  }));
+  router.post("/integrations/intellij/open", wrap(async (req) => {
+    const settings = intellijSettings(host.db.getSetting("integration.intellij", DEFAULT_INTELLIJ));
+    if (!settings.enabled) throw new Error("Enable IntelliJ in Settings → Integrations first.");
+    const body = isPlainRecord(req.body) ? req.body : {};
+    if (body.mode !== "diff" && body.mode !== "file") throw new Error("Choose diff or file.");
+    if (typeof body.path !== "string" || !body.path) throw new Error("Choose a file to open.");
+    let repo = typeof body.repo === "string" ? await findRepo(body.repo) : null;
+    let from = typeof body.from === "string" ? body.from : "";
+    let to = typeof body.to === "string" ? body.to : "";
+    if (typeof body.threadId === "string" && !repo) {
+      const thread = host.getThread(body.threadId);
+      if (!thread) throw new Error("Thread not found.");
+      const changes = await host.changes(thread.id, typeof body.turnId === "string" ? body.turnId : undefined);
+      repo = changes.repo || thread.cwd;
+      from = changes.from || "";
+      to = changes.to || "";
+    }
+    if (!repo) throw new Error("This diff has no local workspace to open in IntelliJ.");
+    const launcher = await intellijLauncher(settings.launcher);
+    const args = body.mode === "diff" ? await intellijDiffArgs(repo, from, to, body.path)
+      : await intellijFileArgs(repo, body.path, body.line, body.column);
+    await launchIntelliJ(launcher, args);
+    return { ok: true };
+  }));
 
   router.get(
     "/config",

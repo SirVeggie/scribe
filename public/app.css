@@ -1,3 +1,7 @@
+.integration-settings #intellij-launcher { flex: 1; min-width: 80px; width: 180px; }
+.integration-settings #intellij-launcher-row { flex-wrap: wrap; gap: 8px; }
+.integration-settings #intellij-launcher-row[hidden] { display: none; }
+
 :root {
   --dur-turn: 140s;
   --dur-turn-reverse: 60s;

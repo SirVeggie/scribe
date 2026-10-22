@@ -391,7 +391,7 @@
         file.lines.push({ kind: "add", text: line.slice(1), newNo: newNo++ });
         file.added += 1;
       } else if (line.startsWith("-")) {
-        file.lines.push({ kind: "del", text: line.slice(1), oldNo: oldNo++ });
+        file.lines.push({ kind: "del", text: line.slice(1), oldNo: oldNo++, newPosition: Math.max(1, newNo) });
         file.removed += 1;
       } else if (line.startsWith(" ")) {
         file.lines.push({ kind: "ctx", text: line.slice(1), oldNo: oldNo++, newNo: newNo++ });
@@ -417,6 +417,7 @@
         if (ln.kind === "hunk" || ln.kind === "note") {
           row.append(el("span", "ag-dl-no"), el("span", "ag-dl-no"), el("span", "ag-dl-text", ln.text));
         } else {
+          if (ln.newNo || ln.newPosition) row.dataset.newLine = ln.newNo || ln.newPosition;
           row.append(
             el("span", "ag-dl-no", ln.oldNo ?? ""),
             el("span", "ag-dl-no", ln.newNo ?? ""),

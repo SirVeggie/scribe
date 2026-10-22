@@ -5411,6 +5411,10 @@ html.tight-small .agent-full {
   text-align: center;
 }
 
+.ag-intellij-actions { display: inline-flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.ag-intellij-actions[hidden] { display: none; }
+.ag-dl-selected { outline: 1px solid var(--accent); outline-offset: -1px; }
+
 .ag-diff-file {
   overflow-x: auto;
 }

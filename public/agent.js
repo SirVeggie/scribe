@@ -2590,6 +2590,7 @@
       let files = [];
       let patch = "";
       let truncated = false;
+      let intellijSource = { threadId: source.threadId, turnId: current === "turn" ? source.turnId : undefined };
       try {
         if (current === "git") {
           // A worktree thread shows everything on its branch: commits and uncommitted changes since it started.
@@ -2602,6 +2603,7 @@
           }
           title.textContent = `Changes · ${info.branch || R.basename(info.repo)}${base ? ` since ${wt.base || "it started"}` : ""}`;
           files = info.files || [];
+          intellijSource = { repo: info.repo, from: info.head, to: info.tree };
           if (files.length) {
             const p = await api("GET", `/git/patch?repo=${encodeURIComponent(info.repo)}&from=${info.head}&to=${info.tree}`);
             patch = p.patch;
@@ -2611,6 +2613,7 @@
         } else {
           const turnQ = current === "turn" ? `?turn=${encodeURIComponent(source.turnId)}` : "";
           const info = await api("GET", `/threads/${encodeURIComponent(source.threadId)}/changes${turnQ}`);
+          if (info.repo) intellijSource = { repo: info.repo, from: info.from, to: info.to };
           files = info.files || [];
           const p = await api("GET", `/threads/${encodeURIComponent(source.threadId)}/patch${turnQ}`);
           patch = p.patch;
@@ -2667,8 +2670,13 @@
         const sh = el("div", "ag-diff-section-head");
         sh.append(el("span", `ag-fstat s-${f.status || "M"}`, f.status || "M"), el("span", "ag-fpath", f.oldPath ? `${f.oldPath} → ${f.path}` : f.path), R.counts(f.added, f.removed));
         section.append(sh);
-        if (pf) section.append(R.renderDiffFile(pf));
+        if (pf) {
+          const diff = R.renderDiffFile(pf);
+          window.scribeIntegrations?.decorateDiff(sh, diff, intellijSource, { ...pf, path: f.path }, notice);
+          section.append(diff);
+        }
         else section.append(el("div", "ag-muted ag-pad", f.binary ? "Binary file" : "No text diff"));
+        if (!pf) window.scribeIntegrations?.decorateDiff(sh, null, intellijSource, f, notice);
         sections.set(f.path, section);
         main.append(section);
       }
@@ -4171,8 +4179,10 @@
           const files = R.parsePatch(it.diff);
           for (const f of files) {
             const fh = el("div", "ag-inline-diff-head");
-            fh.append(el("span", "ag-fpath", f.path), R.counts(f.added, f.removed), button("Open", "ag-btn tiny", () => openDiff({ kind: "turn", threadId: it.threadId, turnId: it.turnId, path: f.path })));
-            body.append(fh, R.renderDiffFile(f, { collapsedAfter: 160 }));
+            fh.append(el("span", "ag-fpath", f.path), R.counts(f.added, f.removed), button("View changes", "ag-btn tiny", () => openDiff({ kind: "turn", threadId: it.threadId, turnId: it.turnId, path: f.path })));
+            const diff = R.renderDiffFile(f, { collapsedAfter: 160 });
+            window.scribeIntegrations?.decorateDiff(fh, diff, { threadId: it.threadId, turnId: it.turnId }, f, notice);
+            body.append(fh, diff);
           }
         } else if (it.tool === "task" && typeof it.input?.prompt === "string") {
           // The brief the agent gave its subagent, readable rather than as JSON.

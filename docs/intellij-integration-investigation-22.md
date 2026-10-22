@@ -1,6 +1,8 @@
 # IntelliJ integration investigation (#22)
 
-Investigated 2026-10-13. This is a design recommendation; no integration or plugin has been implemented, and no installed IntelliJ instance was exercised.
+Investigated 2026-10-13. The launcher integration was implemented on 2026-10-22: Settings → Integrations has an IntelliJ toggle and optional launcher path; file diffs offer Open diff and Open in IntelliJ. Clicking a diff line selects the file-opening caret position. Comparisons export full Git snapshot blobs, including renamed, added, deleted and binary files, and retain temporary exports for a week. Non-Git historical comparisons report that snapshots are unavailable; files that exist can still be opened. No custom plugin was needed.
+
+Validation uses `npm run test:intellij` (snapshot exports, a fake launcher, HTTP routes and browser UI) and `npm run build`. No installed IntelliJ instance was exercised. The sections below preserve the investigation and design rationale.
 
 ## Conclusion
 

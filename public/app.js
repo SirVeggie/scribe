@@ -120,7 +120,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.2.0";
+  const BOARD_VERSION = "3.2.1";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -1542,6 +1542,7 @@
     { label: "Classifier", sections: window.scribeMlSettings.sections },
     { label: "Audio", sections: window.scribeAudioSettings.sections },
     { label: "Plugins", sections: window.scribePluginSettings.sections },
+    { label: "Integrations", sections: window.scribeIntegrations.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
@@ -1655,6 +1656,7 @@
     window.scribeAudioSettings.refresh();
     window.scribePluginSettings.refresh();
     searchSwitch.disabled = true;
+    window.scribeIntegrations.refresh();
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     window.scribeMlSettings.refresh();
   }
