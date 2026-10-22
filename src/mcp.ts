@@ -94,28 +94,26 @@ const guideParts = new WeakSet<object>();
 
 /** quiet leaves out the one-line pointer once the guide was sent (a page_action that went through needs no reminder). */
 async function withGuide(result: ToolResult, which: string, force = false, quiet = false): Promise<ToolResult> {
-  let guide: TemplateGuide | null = null;
-  let sent: boolean | undefined;
+  let guides:Array<{guide:TemplateGuide;sent?:boolean}>=[];
   try {
     const { status, data } = await api("GET", `/api/tabs/${encodeURIComponent(which)}/guide?deliver=1${force ? "&force=1" : ""}`);
     if (status < 400) {
-      ({ guide = null, sent } = data as { guide?: TemplateGuide | null; sent?: boolean });
+      const payload=data as {guide?:TemplateGuide|null;sent?:boolean;pluginGuides?:Array<{guide:TemplateGuide;sent?:boolean}>};
+      guides=[...(payload.guide?[{guide:payload.guide,sent:payload.sent}]:[]),...(payload.pluginGuides??[])];
     }
   } catch {
     return result;
   }
-  if (!guide) {
-    return result;
-  }
+  for(const {guide,sent}of guides){
   if (!force && (sent ?? deliveredGuides.get(guide.id) === guide.text)) {
-    if (quiet) return result;
+    if (quiet) continue;
     const pointer = {
       type: "text" as const,
       text: `This page is a "${guide.title}" page. Its agent guide was sent earlier in this session; page_state with guide: true shows it again.`,
     };
     guideParts.add(pointer);
     result.content.push(pointer);
-    return result;
+    continue;
   }
   deliveredGuides.set(guide.id, guide.text);
   const part = {
@@ -124,6 +122,7 @@ async function withGuide(result: ToolResult, which: string, force = false, quiet
   };
   guideParts.add(part);
   result.content.push(part);
+  }
   return result;
 }
 
@@ -266,7 +265,7 @@ function outsideOf(outside: TabMeta[] | undefined): { outside?: Array<{ id: stri
 }
 
 /** Tools that create or change pages and templates: left out on the Read-only rung. page_action stays, and the daemon refuses an action that would change the page. */
-const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open"]);
+const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open", "plugin_create", "plugin_patch", "plugin_reload", "plugin_install"]);
 
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
@@ -283,6 +282,7 @@ export async function startMcp(): Promise<void> {
   scanTools(server);
   gateTools(server);
   registerCodexFileTools(server);
+  registerPluginTools(pageTool);
   // Claims on cards show who holds them; the client's own name is the best label we get.
   server.server.oninitialized = () => {
     const client = server.server.getClientVersion();
@@ -347,6 +347,7 @@ export async function startMcp(): Promise<void> {
       key: z.string().optional().describe("Stable page identity, e.g. sprint-notes (stored as scribe:sprint-notes). Reuse it to update the same page."),
       title: z.string().describe("Tab title."),
       html: z.string().optional().describe("HTML document or fragment. Omit when passing htmlPath."),
+      plugins: z.array(z.string()).optional().describe("Page plugin dependencies. Writes a scribe-plugins meta tag; grants no access."),
       htmlPath: z.string().min(1).optional().describe("Local HTML file to use as the page instead of html."),
       base: z
         .string()
@@ -379,7 +380,7 @@ export async function startMcp(): Promise<void> {
         .optional()
         .describe("Where the page's scribe.reply(data, { summary }) goes on submit. On a form for a Kanban card ({ page: board, card }), it posts on the card as the user's comment and reaches the card's chat; elsewhere it is a reply event for page_wait. null clears it."),
     },
-    async ({ key, title, html: htmlArg, htmlPath, base, assets, pin, state, background, folder, expectedRevision, replyTo }) => {
+    async ({ key, title, html: htmlArg, htmlPath, base, assets, pin, state, background, folder, expectedRevision, replyTo, plugins }) => {
       const resolved = resolveShowHtml(htmlArg, htmlPath);
       if ("error" in resolved) {
         return errorResult(resolved.error);
@@ -405,6 +406,7 @@ export async function startMcp(): Promise<void> {
         assets: resolvedAssets.length ? resolvedAssets : undefined,
         expectedRevision: guard,
         replyTo,
+        plugins,
       });
       if (status === 409 && expectedRevision === undefined) {
         return errorResult(
@@ -2181,6 +2183,28 @@ function jsonResult(value: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
   };
+}
+
+function registerPluginTools(tool: McpServer["tool"]): void {
+  const request = async (method: string, route: string, body?: unknown, extra?:RequestHandlerExtra<ServerRequest,ServerNotification>) => {
+    const token=extra?._meta?.progressToken,started=Date.now();
+    const timer=token===undefined?undefined:setInterval(()=>void extra!.sendNotification({method:"notifications/progress",params:{progressToken:token,progress:Math.round((Date.now()-started)/1000),message:"Waiting for plugin approval or completion"}}).catch(()=>{}),WAIT_HEARTBEAT_MS);
+    try{
+      const {status,data}=await api(method,`/api/plugins${route}`,body,{signal:extra?.signal});
+      return status>=400 ? errorResult((data as ApiError).error??`HTTP ${status}`) : jsonResult(data);
+    }finally{clearInterval(timer);}
+  };
+  const id=z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).describe("Plugin id from plugin_list, or the id being authored.");
+  tool("plugin_list","List installed page plugins and their summaries, enablement and runtime status. Use plugin_guide for a plugin's methods and usage.",{},()=>request("GET","/"));
+  tool("plugin_guide","Read a page plugin's author guide and method signatures. Plugins can be used by ordinary pages as well as their templates.",{id},({id})=>request("GET",`/${id}/guide`));
+  tool("plugin_logs","Read the bounded recent backend log for a plugin. Secrets are never included by Scribe.",{id},({id})=>request("GET",`/${id}/logs`));
+  tool("plugin_state","Read one keyed value and its revision from a plugin's shared state. Respects the page's Deny; otherwise asks unless Full or already allowed. State is written only through plugin methods.",{id,key:z.string()},({id,key},extra)=>request("GET",`/${id}/state/${encodeURIComponent(key)}`,undefined,extra));
+  tool("plugin_read","List source files or read one UTF-8 file. Source is kept by Scribe; this works without workspace file access.",{id,path:z.string().optional()},({id,path})=>request("GET",`/${id}/files${path?`?path=${encodeURIComponent(path)}`:""}`));
+  tool("plugin_call","Call an agent method declared by a plugin. Method levels are read, board and ask. Ask methods request consent unless Full or allowed by this thread's page; a page's Deny refuses them. Discover methods with plugin_guide.",{id,method:z.string(),args:z.record(z.string(),z.unknown()).optional(),importance:z.enum(["necessary","important","useful","trivial"]).optional()},({id,method,args,importance},extra)=>request("POST",`/${id}/call`,{method,args,importance},extra));
+  tool("plugin_create","Create a disabled plugin source tree in Scribe with a manifest, guide and backend stub. Read scribe_docs Plugins before authoring. Installation is a separate approval step.",{manifest:z.record(z.string(),z.unknown())},({manifest})=>request("POST","/create",{manifest}));
+  tool("plugin_patch","Write a source file inside a plugin's editable tree. This does not change installed/running code. Then plugin_reload validates and plugin_install activates after consent.",{id,path:z.string(),content:z.string()},({id,path,content})=>request("PUT",`/${id}/files`,{path,content}));
+  tool("plugin_reload","Validate changed plugin source, bump its patch version and return the install preview. Does not run changed code. Follow with plugin_install to request activation.",{id},({id})=>request("POST",`/${id}/reload`,{}));
+  tool("plugin_install","Build, validate and install or replace a plugin from its source tree. Rungs below Full ask the user before running code, including Auto. Changed source is installed as an immutable snapshot.",{id,replace:z.boolean().optional(),importance:z.enum(["necessary","important","useful","trivial"]).optional()},({id,replace,importance},extra)=>request("POST","/install",{id,replace,importance},extra));
 }
 
 /** Ids this call closed or deleted — never the Library-wide closed-page count. */

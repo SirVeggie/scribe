@@ -1,0 +1,20 @@
+{
+  "id": "git-history",
+  "name": "Git history",
+  "version": "1.1.0",
+  "summary": "Read commit history from approved local repositories for live activity pages.",
+  "author": "Scribe",
+  "risky": false,
+  "backend": "backend.mjs",
+  "guide": "guide.md",
+  "readme": "README.md",
+  "access": { "files": ["Repositories listed in this plugin's settings (read only)"], "network": [] },
+  "settings": {
+    "repositories": { "label": "Repositories", "type": "paths", "description": "Local repositories this plugin may read. Pages ask before adding another.", "default": [] }
+  },
+  "methods": {
+    "repositories": { "description": "List approved repositories: {}.", "agent": "read" },
+    "activity": { "description": "Count all reachable commits per author calendar day: { repository }. Returns days, total, branch and query time.", "agent": "read", "input": { "type": "object", "required": ["repository"], "properties": { "repository": { "type": "string" } } } },
+    "log": { "description": "Read recent commits: { repository, since?, limit? }. Returns commits and the query time.", "agent": "read", "input": { "type": "object", "required": ["repository"], "properties": { "repository": { "type": "string" }, "since": { "type": "string" }, "limit": { "type": "number" } } } }
+  }
+}

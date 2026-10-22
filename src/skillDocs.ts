@@ -70,6 +70,9 @@ export function skillDocs(topic?: string, read: (name: string) => string | null 
     const templates = read("TEMPLATES.md");
     return templates == null ? { text: "TEMPLATES.md is missing from the scribe skill.", error: true } : { text: body(templates) };
   }
+  if(query==="plugins"){
+    const plugins=read("PLUGINS.md");return plugins===null?{text:"PLUGINS.md is missing from the scribe skill.",error:true}:{text:body(plugins)};
+  }
   const { intro, sections } = splitSections(skill);
   const contents = sections.map((section) => `${section.level === 3 ? "  " : ""}- ${section.heading}`).join("\n");
   if (!query) {

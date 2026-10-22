@@ -178,6 +178,8 @@ export type Thread = {
   threadGrants?: ThreadGrants;
   /** Pages and folders this thread may reach outside its scope (#269): a page_access answer, a previous home, or the user's @mention. */
   pageGrants?: ThreadPageGrant[];
+  /** Plugin Ask methods the user allowed for this thread; revocable from its permissions menu. */
+  pluginGrants?: string[];
   /** Scopes the thread had before it followed a page it showed: they keep counting for page access (#269). */
   formerScopes?: ThreadScope[];
   /**
@@ -585,6 +587,7 @@ export type ItemBody =
       tool: ToolKind;
       title: string;
       detail?: string;
+      sourceUrl?: string;
       options: ApprovalOption[];
       status: "pending" | "resolved" | "expired";
       decision?: string;

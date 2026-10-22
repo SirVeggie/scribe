@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import type { ItemBody } from "./types.js";
+import { WEB_IMPORTANCE_WAIT_MS } from "./webAccess.js";
 
 // The host and the store keep their data under SCRIBE_HOME; point it at a scratch folder first.
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-page-access-"));
@@ -53,6 +54,18 @@ function page(key: string, folderId?: string) {
   const { tab } = store.upsert({ key, title: key.replace(/-/g, " "), html: "<p>x</p>", activate: false });
   return folderId ? store.movePage(tab.id, folderId, 0) : tab;
 }
+
+test("plugin approvals can be cancelled, expire unattended, and grant revocable thread access",async()=>{
+  const chat=host.createThread({provider:"claude",mode:"board",scope:{kind:"global",ref:null}});running(chat.id);
+  const first=host.requestPluginApproval(chat.id,"Plugin call","Read Jira",true,"jira");
+  await answer(chat.id,"thread");assert.equal((await first).allowed,true);
+  assert.equal(host.threadDetail(chat.id)?.thread.grants?.some(row=>row.key==="plugins:jira"),true);
+  host.revokeGrant(chat.id,"plugins:jira");assert.deepEqual(host.getThread(chat.id)?.pluginGrants,[]);
+  const abort=new AbortController(),cancelled=host.requestPluginApproval(chat.id,"Plugin call","Cancelled",true,"jira",{signal:abort.signal});abort.abort();assert.equal((await cancelled).allowed,false);
+  const internals=host as unknown as {unattended(id:string):boolean},original=internals.unattended,wait=WEB_IMPORTANCE_WAIT_MS.trivial;
+  try{internals.unattended=()=>true;WEB_IMPORTANCE_WAIT_MS.trivial=5;assert.equal((await host.requestPluginApproval(chat.id,"Plugin install","Timed out",false,undefined,{importance:"trivial"})).allowed,false);}
+  finally{internals.unattended=original;WEB_IMPORTANCE_WAIT_MS.trivial=wait;}
+});
 
 const reach = (threadId: string, tabId: string) => (host as unknown as { reachOf(t: string, tab: unknown): string }).reachOf(threadId, store.get(tabId));
 

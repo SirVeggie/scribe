@@ -120,7 +120,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.1.0";
+  const BOARD_VERSION = "3.2.0";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -702,6 +702,14 @@
       if (msg.value !== "allow" && ((msg.perm === "audio.microphone" && pageAudioSessions.get(msg.id)?.mode !== "stream") ||
         (msg.perm === "audio.microphoneStream" && pageAudioSessions.get(msg.id)?.mode === "stream") ||
         (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
+      return;
+    }
+    if (msg.type === "plugin_event") {
+      if(msg.registry){
+        for(const [id,frame]of frames)frame.el.contentWindow?.postMessage({type:"scribe-plugin-availability"},pageOrigin(id));
+        window.scribePluginSettings.refresh();
+      }
+      forwardPluginEvent(msg);
       return;
     }
     if (msg.type === "folders") {
@@ -1533,6 +1541,7 @@
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
     { label: "Classifier", sections: window.scribeMlSettings.sections },
     { label: "Audio", sections: window.scribeAudioSettings.sections },
+    { label: "Plugins", sections: window.scribePluginSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
@@ -1635,6 +1644,8 @@
   });
   window.scribeMlSettings.init({ confirm: confirmDelete, view: renderRerankSetting });
   window.scribeAudioSettings.init({ confirm: confirmDelete });
+  window.scribePluginSettings.init({confirm:confirmDelete});
+  window.scribePluginSettings.refresh();
   function openSettings(category) {
     if (isPaletteOpen()) {
       closePalette();
@@ -1642,6 +1653,7 @@
     settingsCategories.open();
     if (category === "Audio") settingsCategories.select(4);
     window.scribeAudioSettings.refresh();
+    window.scribePluginSettings.refresh();
     searchSwitch.disabled = true;
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     window.scribeMlSettings.refresh();
@@ -3726,7 +3738,14 @@
     }
   }
 
-  function downloadHref(href) {
+  async function downloadHref(href) {
+    if(href.startsWith("/api/export")){
+      try{
+        const url=new URL(href,location.href);url.searchParams.set("preview","1");
+        const response=await fetch(url),preview=await response.json();if(!response.ok)throw new Error(preview.error||"Cannot export pages");
+        if(preview.plugins?.length){const choices=await window.scribePluginSettings.exportChoices(preview.plugins);if(!choices)return;url.searchParams.delete("preview");url.searchParams.set("plugins",JSON.stringify(choices));href=url.pathname+url.search;}
+      }catch(error){showNotice(error.message);return;}
+    }
     const link = document.createElement("a");
     link.href = href;
     link.download = "";
@@ -3806,6 +3825,15 @@
     persistBannerDetail.textContent = message;
   }
 
+  async function importScribeFile(file,destination){
+    const headers={"Content-Type":"application/octet-stream","X-Filename":encodeURIComponent(file.name||"import")};
+    const previewResponse=await fetch(`/api/import?preview=1&destination=${encodeURIComponent(destination)}`,{method:"POST",headers,body:file});
+    const preview=await previewResponse.json();if(!previewResponse.ok)throw new Error(preview.error||"Cannot inspect import");
+    let pluginsInstalled=0;
+    for(const plugin of preview.plugins??[])if(await window.scribePluginSettings.reviewPackage(plugin,plugin.archive,{allowOlder:/\.scribeplugin$/i.test(file.name)}))pluginsInstalled++;
+    const response=await fetch(`/api/import?destination=${encodeURIComponent(destination)}`,{method:"POST",headers,body:file});
+    const data=await response.json();if(!response.ok)throw new Error(data.error||"Import failed");return {...data,pluginsInstalled};
+  }
   async function importFiles(fileList, destination) {
     const files = [...fileList].filter((file) => file && file.size);
     if (!files.length) {
@@ -3814,31 +3842,21 @@
     let opened = 0;
     let closed = 0;
     let templates = 0;
+    let pluginsInstalled=0;
     let focusedId = null;
     let error = null;
     for (const file of files) {
       try {
-        const res = await fetch("/api/import?destination=" + encodeURIComponent(destination), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Filename": file.name || "import",
-          },
-          body: file,
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          error = data.error || "Import failed";
-          continue;
-        }
+        const data=await importScribeFile(file,destination);
+        pluginsInstalled+=data.pluginsInstalled;
         opened += data.opened || 0;
         closed += data.closed || 0;
         templates += data.templatesCreated || 0;
         if (data.focusedId) {
           focusedId = data.focusedId;
         }
-      } catch {
-        error = "Import failed";
+      } catch (err) {
+        error = err.message||"Import failed";
       }
     }
     if (focusedId) {
@@ -3852,6 +3870,8 @@
       showNotice(importNotice(opened, closed, templates));
     } else if (error) {
       showNotice(error);
+    } else if(pluginsInstalled) {
+      showNotice(`Installed ${pluginsInstalled} plugin${pluginsInstalled===1?"":"s"}`);
     }
   }
 
@@ -3914,6 +3934,7 @@
   }
 
   async function uploadDropped(file, folderId, activate) {
+    if(/\.(scribeplugin|scribe\.zip)$/i.test(file.name)){const result=await importScribeFile(file,activate?"meta":"closed");return {...result,kind:"export"};}
     const params = new URLSearchParams({ activate: activate ? "1" : "0" });
     if (folderId) params.set("folderId", folderId);
     const res = await fetch(`/api/files/upload?${params}`, {
@@ -3949,7 +3970,7 @@
     const files = [...event.dataTransfer.files];
     const library = destination === "closed";
     const folderId = library ? dropFolderOf(event.target) : null;
-    const tally = { files: 0, folders: 0, imported: 0, focusedId: null, error: null, truncated: false };
+    const tally = { files: 0, folders: 0, imported: 0, plugins:0, focusedId: null, error: null, truncated: false };
     const openFile = async (file, parentId, activate) => {
       if (tally.files >= DROP_MAX_FILES) {
         tally.truncated = true;
@@ -3959,6 +3980,7 @@
         const data = await uploadDropped(file, parentId, activate);
         if (data.kind === "export") {
           tally.imported += (data.opened || 0) + (data.closed || 0);
+          tally.plugins+=data.pluginsInstalled||0;
           if (data.focusedId) tally.focusedId = data.focusedId;
           return;
         }
@@ -4008,8 +4030,9 @@
     if (tally.files) parts.push(tally.files === 1 ? "1 file" : `${tally.files} files`);
     if (tally.folders) parts.push(tally.folders === 1 ? "1 folder" : `${tally.folders} folders`);
     if (tally.imported) parts.push(tally.imported === 1 ? "imported 1 page" : `imported ${tally.imported} pages`);
+    if(tally.plugins)parts.push(`installed ${tally.plugins} plugin${tally.plugins===1?"":"s"}`);
     if (tally.error && !parts.length) showNotice(tally.error);
-    else if (parts.length > 1 || tally.folders || tally.truncated || tally.error) showNotice(`Opened ${parts.join(", ")}${tally.truncated ? " (stopped at the file limit)" : ""}${tally.error ? `. ${tally.error}` : ""}`);
+    else if (parts.length > 1 || tally.plugins || tally.folders || tally.truncated || tally.error) showNotice(`Opened ${parts.join(", ")}${tally.truncated ? " (stopped at the file limit)" : ""}${tally.error ? `. ${tally.error}` : ""}`);
   }
 
   async function undoClose() {
@@ -4648,6 +4671,47 @@
         else failed(String(body?.error || `HTTP ${res.status}`));
       })
       .catch((err) => failed(String(err?.message || err)));
+  }
+
+  const pluginSubscriptions = new Map();
+  async function onPagePlugin(event) {
+    const data = event.data, frameId = frameIdByWindow(event.source), tab = frameId ? findAnyTab(frameId) : null;
+    const activated=frameId?frameActivated(frameId):false;
+    const reply = result => event.source?.postMessage({type:"scribe-open-result",id:data.id,reqId:data.reqId,result},event.origin);
+    if (!tab || tab.embedUrl || !/^[a-z][a-z0-9-]{0,63}$/.test(data.plugin)) return reply({ok:false,error:"not_a_page"});
+    try {
+      const result = await window.scribePermissions.ensure(tab,{perm:`plugin.${data.plugin}`});
+      if (!result.ok) return reply(result);
+      if (data.op === "allow") return reply(result);
+      if (data.op === "subscribe") {
+        if (!pluginSubscriptions.has(frameId)) pluginSubscriptions.set(frameId,new Set());
+        pluginSubscriptions.get(frameId).add(data.plugin);
+        return reply({ok:true});
+      }
+      if (data.op === "repository" && data.plugin === "git-history") {
+        if (!activated) return reply({ok:false,error:"no_gesture"});
+        const resolvedResponse=await fetch(`/api/plugins/git-history/repositories/resolve?path=${encodeURIComponent(String(data.repository))}`),resolved=await resolvedResponse.json();
+        if(!resolvedResponse.ok)return reply({ok:false,error:resolved.error});
+        const accepted=await confirmDelete(`Allow “${tab.title}” to read Git history from ${resolved.repository}?`,"Allow");
+        if (!accepted) return reply({ok:false,error:"denied"});
+        const res=await fetch("/api/plugins/git-history/repositories",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repository:resolved.repository})});
+        return reply(await res.json());
+      }
+      reply({ok:false,error:"unknown_op"});
+    } catch(error) {reply({ok:false,error:String(error.message||error)});}
+  }
+  async function forwardPluginEvent(message) {
+    for (const [id,subscriptions] of pluginSubscriptions) {
+      const frame=frames.get(id);
+      if (!frame) {pluginSubscriptions.delete(id);continue;}
+      if (!subscriptions.has(message.plugin)) continue;
+      try {
+        const response=await fetch(`/api/tabs/${encodeURIComponent(id)}/permissions/check`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({perm:`plugin.${message.plugin}`})});
+        if ((await response.json()).result !== "allow") continue;
+        const data=message.name === "state" ? {key:message.data?.key,revision:message.data?.revision} : message.data;
+        frame.el.contentWindow?.postMessage({type:"scribe-plugin-event",plugin:message.plugin,name:message.name,data},pageOrigin(id));
+      }catch{}
+    }
   }
 
   const pageAudioSessions = new Map();
@@ -5819,6 +5883,8 @@
       onPagePermissions(event);
     } else if (event.data?.type === "scribe-ml") {
       onPageMl(event);
+    } else if (event.data?.type === "scribe-plugin") {
+      onPagePlugin(event);
     } else if (event.data?.type === "scribe-audio") {
       onPageAudio(event);
     } else if (event.data?.type === "scribe-reply") {

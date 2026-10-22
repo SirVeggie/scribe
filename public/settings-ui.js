@@ -214,7 +214,7 @@
       out.value = clean(select.selectedOptions[0]?.textContent);
     } else if (input) {
       out.control = input.type === "checkbox" ? "checkbox" : input.type === "range" ? "slider" : "field";
-      out.value = input.type === "checkbox" ? (input.checked ? "on" : "off") : input.value;
+      out.value = input.type === "password" ? (input.value ? "Entered" : "") : input.type === "checkbox" ? (input.checked ? "on" : "off") : input.value;
     } else if (row.querySelector("button")) {
       out.control = "button";
     }
@@ -273,6 +273,7 @@
   /** A still copy for a card that doesn't hold the node: same look, nothing to click or focus. */
   function standIn(node) {
     const copy = node.cloneNode(true);
+    for(const input of copy.querySelectorAll('input[type="password"]')){input.value="";input.removeAttribute("value");}
     copy.inert = true;
     for (const el of [copy, ...copy.querySelectorAll("[id]")]) el.removeAttribute("id");
     return copy;

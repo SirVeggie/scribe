@@ -1791,6 +1791,73 @@ ${POINTER_DRAG_JS}
     available: function () { return askBoard({ type: "scribe-audio", op: "available" }, 30000); }
   };
 
+  // ---------- page plugins ----------
+  var pluginListeners = [];
+  function pluginShellOrigin(origin) { return origin === boardOrigin || origin === location.protocol + "//localhost" + (location.port ? ":" + location.port : ""); }
+  function plugin(id) {
+    id = String(id);
+    function request(suffix, body, retried) {
+      if (capturing) return Promise.resolve({ ok: false, error: "capture" });
+      return fetch("/api/tabs/" + encodeURIComponent(tabId) + "/plugins/" + encodeURIComponent(id) + suffix, body === undefined ? {} : {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+      }).then(function (res) { return res.json(); }).then(function (result) {
+        if (!retried && result.error === "permission" && window.parent !== window) {
+          return askBoard({ type: "scribe-plugin", op: "allow", plugin: id }, AGENT_ASK_MS).then(function (permission) {
+            return permission.ok ? request(suffix, body, true) : permission;
+          });
+        }
+        return result;
+      }).catch(function (error) { return { ok: false, error: String(error.message || error) }; });
+    }
+    function on(name, listener) {
+      if (typeof listener !== "function") return function () {};
+      var entry = { plugin: id, name: String(name), listener: listener };
+      pluginListeners.push(entry);
+      askBoard({ type: "scribe-plugin", op: "subscribe", plugin: id }, AGENT_ASK_MS);
+      return function () { pluginListeners = pluginListeners.filter(function (item) { return item !== entry; }); };
+    }
+    return {
+      call: function (method, args) { return request("/call", { method: String(method), args: args || {} }); },
+      on: on,
+      state: {
+        get: function (key) { return request("/state/" + encodeURIComponent(String(key))); },
+        on: function (key, listener) {
+          function refresh() { request("/state/" + encodeURIComponent(String(key))).then(function (result) { if (result.ok) listener(result.value, result.revision); }); }
+          var stopState=on("state",function(event){if(event.key===String(key))refresh();}),stopChanged=on("changed",refresh);
+          return function(){stopState();stopChanged();};
+        }
+      },
+      requestRepository: function (repo) {
+        if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
+        return askBoard({ type: "scribe-plugin", op: "repository", plugin: id, repository: String(repo) }, AGENT_ASK_MS);
+      }
+    };
+  }
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent || !pluginShellOrigin(event.origin) || event.data?.type !== "scribe-plugin-event") return;
+    var message = event.data;
+    pluginListeners.filter(function (entry) { return entry.plugin === message.plugin && entry.name === message.name; }).forEach(function (entry) {
+      try { entry.listener(message.data); } catch (error) { console.error("[scribe] plugin listener failed", error); }
+    });
+  });
+
+  function pluginAvailability() {
+    if (capturing || !tabId) return;
+    fetch("/api/tabs/" + encodeURIComponent(tabId) + "/plugins").then(function (response) { return response.json(); }).then(function (result) {
+      var unavailable = (result.plugins || []).filter(function (item) { return !item.enabled; });
+      var notice = document.getElementById("scribe-plugin-notice");
+      if (!unavailable.length) { if (notice) notice.remove(); return; }
+      if (!notice) {
+        notice = document.createElement("div"); notice.id = "scribe-plugin-notice"; notice.setAttribute("role", "status");
+        notice.style.cssText = "padding:8px 14px;background:var(--code-bg,#202024);color:var(--text,#ddd);border-bottom:1px solid var(--border,#444);font:13px system-ui";
+        document.body.prepend(notice);
+      }
+      notice.textContent = unavailable.map(function (item) { return item.id + (item.installed ? " is off" : " is missing"); }).join(" · ");
+    }).catch(function () {});
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded",pluginAvailability); else pluginAvailability();
+  window.addEventListener("message", function(event) { if(event.source===window.parent && pluginShellOrigin(event.origin) && event.data?.type==="scribe-plugin-availability") pluginAvailability(); });
+
   // ---------- reply ----------
   /**
    * Send this form's answers where the agent that made the page pointed it (page_show replyTo), e.g.
@@ -1883,6 +1950,7 @@ ${POINTER_DRAG_JS}
     agent: agent,
     ml: ml,
     audio: audio,
+    plugin: plugin,
     permissions: permissions,
     /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
     ops: {

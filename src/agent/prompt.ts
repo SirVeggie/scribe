@@ -22,6 +22,7 @@ export type ScopeInfo = {
   memories?: Memory[];
   /** Optional app instructions the user turned off in Agent settings (APP_INSTRUCTIONS ids). */
   instructionsOff?: string[];
+  plugins?: Array<{id:string;summary:string}>;
 };
 
 /**
@@ -98,6 +99,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     return lines.join("\n");
   }
   lines.push("");
+  if(scope.plugins?.length && !noPages(thread.scope)) lines.push(`Page plugins available through plugin_guide and plugin_call: ${scope.plugins.map(p=>`${p.id}: ${p.summary.slice(0,120)}`).join("; ")}.`);
   if (noPages(thread.scope)) {
     lines.push(
       `Pages: this thread has no access to Scribe pages (the user set its Scribe scope to None). The MCP server named \`${server}\` has its web, thread and browser tools here, plus file tools where the mode permits them. Do not try to read or show pages.`

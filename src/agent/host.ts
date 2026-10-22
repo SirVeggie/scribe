@@ -18,6 +18,7 @@ import { syncDependencies } from "./deps.js";
 import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeRemaining, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, implementText, pageKeysIn, planTurnNote, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
+import { plugins, pluginActions } from "../plugins/current.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
@@ -673,13 +674,20 @@ export class AgentHost {
           return allowed;
         },
         hasWorktree: (id) => Boolean(this.threads.get(id) && openWorktree(this.threads.get(id)!)),
-        hold: (run) => store.runHold(run.pageId, run.threadId),
+        hold: (run) => {
+          const tab=store.get(run.pageId);
+          return tab && pluginActions?.binding(tab)?pluginActions.runHold(tab,run.threadId):store.runHold(run.pageId,run.threadId);
+        },
         send: (id, text) => void this.send(id, { text, from: "page" }),
         merge: async (id) => (await this.finishWorktree(id, "merge")).message,
         save: (runs) => this.db.setSetting("pageRuns", runs),
         changed: (run, note) => {
           this.emitThread(run.threadId);
-          if (note) store.runEvent(run.pageId, run.threadId, runView(run), note);
+          if (note) {
+            const tab=store.get(run.pageId);
+            if(tab && pluginActions?.binding(tab))void pluginActions.runEvent(tab,{...note,thread:run.threadId,run:runView(run)}).catch(error=>log("Plugin run event failed",String(error)));
+            else store.runEvent(run.pageId,run.threadId,runView(run),note);
+          }
         },
       },
       this.db.getSetting<PageRun[]>("pageRuns", [])
@@ -1213,7 +1221,7 @@ export class AgentHost {
    * leaves out. The caller checked the page's permissions. Resolves with the thread id; throws with
    * a message for the board's worker log.
    */
-  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput, resumeThread?: string, validate?: () => void): Promise<string> {
+  async launchPageThread(pageId: string, prompt: string, s: LaunchSettings, run: PageRunInput, resumeThread?: string, validate?: () => void | Promise<void>): Promise<string> {
     if (run.data?.continuation) {
       // Persisted runs make retries idempotent, including after a daemon restart.
       for (const t of this.threads.values()) {
@@ -1227,7 +1235,7 @@ export class AgentHost {
       const info = this.runInfo(previous.id);
       if (info.exists && (info.running || (info.run && info.run.phase !== "ended"))) throw new Error("The card's previous chat is still busy.");
       if (this.closed) throw new Error("Scribe is shutting down.");
-      validate?.();
+      await validate?.();
       this.watchPageThread(previous.id, { ...run, after: Date.now() });
       try {
         this.send(previous.id, { text: prompt, from: "page" });
@@ -1275,7 +1283,7 @@ export class AgentHost {
     const folder = mode === "code";
     if (folder && !s.cwd) throw setup("it needs a folder");
     if (this.closed) throw new Error("Scribe is shutting down.");
-    validate?.();
+    await validate?.();
     const thread = this.createThread(
       {
         provider,
@@ -1711,6 +1719,7 @@ export class AgentHost {
     thread.webGrants = next.webGrants;
     thread.threadGrants = next.threadGrants;
     if (next.pageGrants) thread.pageGrants = next.pageGrants;
+    if(next.pluginGrants)thread.pluginGrants=next.pluginGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
     this.sessions.get(id)?.update(this.sessionThread(thread));
@@ -1952,6 +1961,12 @@ export class AgentHost {
 
   private scopeInfo(thread: Thread): ScopeInfo {
     const info = this.scopePages(thread);
+    if(plugins && !noPages(thread.scope)) {
+      const key=`pluginCatalog:${thread.id}`;
+      let catalog=this.db.getSetting<Array<{id:string;summary:string}>|null>(key,null);
+      if(catalog===null){catalog=plugins.list().filter(p=>p.enabled).map(({id,summary})=>({id,summary}));this.db.setSetting(key,catalog);}
+      info.plugins=catalog;
+    }
     if (this.prefs().searxngUrl) info.webSearch = true;
     if (this.prefs().instructionsOff.length) info.instructionsOff = this.prefs().instructionsOff;
     if (this.prefs().helpers && !thread.helperOf && !modeOff(thread, "helpers")) info.helpers = true;
@@ -2662,13 +2677,34 @@ export class AgentHost {
     return `“${store.get(target.id)?.title || target.id}”`;
   }
 
+  /** Plugin consent is cancellable, bounded for unattended work, and never grants a page access. */
+  async requestPluginApproval(threadId: string, title: string, detail: string, allowThread: boolean, plugin?: string, opts:{signal?:AbortSignal;importance?:WebImportance;sourceUrl?:string}={}): Promise<{allowed:boolean}> {
+    const thread = this.threads.get(threadId), run = this.runs.get(threadId);
+    if (!thread || !run) return {allowed:false};
+    const grants = thread.pluginGrants??[];
+    if (allowThread && plugin && grants.includes(plugin)) return {allowed:true};
+    this.closeBlocks(run);
+    const options: ApprovalOption[] = [
+      {id:"allow",label:"Allow",kind:"allow_once"},
+      ...(allowThread ? [{id:"thread",label:"Allow for this thread",kind:"allow_always" as const}] : []),
+      {id:"deny",label:"Deny",kind:"reject_once"},
+    ];
+    const waitMs=this.unattended(threadId)?WEB_IMPORTANCE_WAIT_MS[opts.importance??"useful"]:null;
+    const deadline=waitMs===null?"":`\nRefused if not answered by ${new Date(Date.now()+waitMs).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}.`;
+    const item = this.addItem(threadId,run.turn.id,{kind:"approval",requestId:"",tool:"other",title,detail:detail+deadline,options,status:"pending",...(opts.sourceUrl?{sourceUrl:opts.sourceUrl}:{})});
+    const abort=new AbortController(),onAbort=()=>abort.abort();opts.signal?.addEventListener("abort",onAbort);if(opts.signal?.aborted)abort.abort();
+    const timer=waitMs===null?null:setTimeout(()=>abort.abort(),waitMs);
+    try {
+      const decision=await this.waitPending<ApprovalDecision>(threadId,run,"approval",item.id,abort.signal);
+      if(decision.optionId==="thread" && allowThread && plugin){thread.pluginGrants=[...new Set([...grants,plugin])];this.db.saveThread(thread);this.emitThread(threadId);}
+      return {allowed:decision.optionId==="allow" || (allowThread && decision.optionId==="thread")};
+    } catch {return {allowed:false};}finally{if(timer)clearTimeout(timer);opts.signal?.removeEventListener("abort",onAbort);}
+  }
+
   /**
-   * page_access from the thread's MCP: ask the user to let the thread reach a page outside its Scribe
-   * access, or the page's folder. Allow for this thread grants it for the rest of the thread; Always
-   * allow grants it to the thread's page or folder, for every chat there (not on Ask always pages, and
-   * not for a global thread, which has no page or folder to keep it on). A Trusted only page an
-   * untrusted model asks for by key can only be allowed for this thread, like Ask always. Restricted
-   * pages are not found: only the user's @mention gets those. Full access answers none of this.
+   * Ask to reach an out-of-scope page or folder. Thread-only grants last for this chat; Always
+   * grants its home page/folder access. Ask-always or untrusted requests offer thread-only access.
+   * Restricted pages require the user's mention. Full access does not bypass these choices.
    */
   async requestPageAccess(
     threadId: string,
@@ -5041,7 +5077,7 @@ export class AgentHost {
   }
 
   /** Every folder threads and prefs point at, by workspaceKey. */
-  private workspaceFolders(): Map<string, string> {
+  workspaceFolders(): Map<string, string> {
     const prefs = this.prefs();
     const out = new Map<string, string>();
     for (const dir of [...[...this.threads.values()].map((t) => this.threadFolder(t)), ...prefs.recentWorkspaces, ...Object.values(prefs.scopeWorkspaces)]) {

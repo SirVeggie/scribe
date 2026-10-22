@@ -69,6 +69,15 @@ import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFil
 import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
+import { PluginService } from "./plugins/service.js";
+import { PluginActions } from "./plugins/actions.js";
+import { pluginRouter } from "./plugins/routes.js";
+import { setPlugins, plugins, setPluginActions } from "./plugins/current.js";
+import { normalizeTemplateInput } from "./templates.js";
+import { declaredPlugins, declarePlugins } from "./plugins/manifest.js";
+import { exportTransfer, importTransfer, type PluginExportChoice } from "./plugins/transfer.js";
+import { readPackage } from "./plugins/package.js";
+import { mainRepository } from "./plugins/git.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 
@@ -98,6 +107,19 @@ const startedAt = Date.now();
 const sockets = new Set<WebSocket>();
 const viewers = new ViewerHub();
 let agentHost: AgentHost | null = null;
+let pluginActions: PluginActions | null = null;
+
+function refreshPluginTemplates(): void {
+  if (!plugins) return;
+  store.setPluginTemplates(plugins.templates().map(({plugin,definition,metadata,html,guide}) => {
+    const key=`plugin-${plugin}--${definition.key}`;
+    const parsed=normalizeTemplateInput({...metadata,html});
+    const {pin,...rest}=parsed;
+    const actionGuide=Object.entries(definition.actions??{}).map(([name,def])=>`- \`${name}\` ${def.args}: ${def.description}`).join("\n");
+    const fullGuide=guide.includes("{{actions}}")?guide.replace("{{actions}}",actionGuide):[guide,actionGuide].filter(Boolean).join("\n\n");
+    return {...rest,...(pin===false?{pin:false as const}:{}),id:`builtin:${key}`,key,guide:fullGuide,createdAt:Date.now(),updatedAt:Date.now(),stateVersion:parsed.stateVersion??1};
+  }));
+}
 
 export function viewerCount(): number {
   return viewers.count();
@@ -105,6 +127,14 @@ export function viewerCount(): number {
 
 export async function startHttp(): Promise<http.Server> {
   store.load();
+  const pluginService = new PluginService(undefined,(id,name,data,registry=false)=> {
+    if(registry) refreshPluginTemplates();
+    for(const socket of sockets) if(socket.readyState===1) socket.send(JSON.stringify({type:"plugin_event",plugin:id,name,data,registry}));
+  },(page,name,mimeType,data)=>store.savePageAsset(page,{name,mimeType,data}).asset);
+  setPlugins(pluginService);
+  pluginActions=new PluginActions(pluginService,store);
+  setPluginActions(pluginActions);
+  refreshPluginTemplates();
   prepareSecrets();
   refreshSearchIndex();
   // Watch linked disk folders (#707) once start-up is done: the first scan of each can take a moment.
@@ -117,7 +147,8 @@ export async function startHttp(): Promise<http.Server> {
       }
     });
   }
-  const flush = () => {
+  const flush = async () => {
+    await pluginService.close();
     store.stopDiskWatch();
     searchEmbedder.stop();
     void searchIndex.close();
@@ -133,12 +164,10 @@ export async function startHttp(): Promise<http.Server> {
     }
   };
   process.once("SIGINT", () => {
-    flush();
-    process.exit(0);
+    void flush().finally(()=>process.exit(0));
   });
   process.once("SIGTERM", () => {
-    flush();
-    process.exit(0);
+    void flush().finally(()=>process.exit(0));
   });
 
   const app = express();
@@ -186,8 +215,21 @@ export async function startHttp(): Promise<http.Server> {
   sweepTimer.unref?.();
   scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
+  if(!pluginService.database.removed("git-history")&&!pluginService.database.list().some(p=>p.manifest.id==="git-history")){
+    try{
+    const folder=path.join(INSTALL_ROOT,"plugins","builtin","git-history");
+    if(fs.existsSync(folder)){
+      const files=readPackage(folder);await pluginService.install(files,pluginService.preview(files).hash);
+      const repositories=[...new Set((await Promise.all([...agentHost.workspaceFolders().values()].map(folder=>mainRepository(folder)))).filter((folder):folder is string=>!!folder))];
+      await pluginService.configure("git-history",{repositories});
+    }
+    }catch(error){log("Bundled Git history plugin could not be installed",String(error));}
+  }
+  pluginService.startKeptAlive();
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
+  app.use("/api/plugins",express.json({limit:"90mb"}));
   app.use(express.json({ limit: "6mb" }));
+  app.use("/api/plugins",pluginRouter(pluginService,store,agentHost));
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
@@ -367,6 +409,7 @@ export async function startHttp(): Promise<http.Server> {
         }
         html = spliceHtmlSlot(baseTab.html, html);
       }
+      html=declarePlugins(html,req.body?.plugins);
       const { tab, created, closed, titleKept } = store.upsert({
         key: optionalString(req.body?.key),
         title: String(req.body?.title ?? ""),
@@ -515,15 +558,21 @@ export async function startHttp(): Promise<http.Server> {
       res.status(404).json({ error: `tab not found: ${req.params.id}` });
       return;
     }
-    const guide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
+    const templateGuide = (tab.templateId && store.templateGuide(tab.templateId)) || null;
+    const guide=templateGuide;
     const thread = threadOf(req);
+    const pluginGuides=declaredPlugins(tab.html).filter(id=>pluginService.enabled(id)).map(id=>{
+      const p=pluginService.guide(id),guide={id:`plugin:${p.id}`,title:`Plugin ${p.id}`,text:`${p.summary}\n${p.guide}\n${JSON.stringify(p.methods)}`};
+      const sent=thread&&req.query.deliver==="1"?req.query.force!=="1"&&guideSent(thread,guide):undefined;
+      if(thread&&req.query.deliver==="1")markGuideSent(thread,guide);return {guide,...(sent===undefined?{}:{sent})};
+    });
     if (!guide || !thread || req.query.deliver !== "1") {
-      res.json({ guide });
+      res.json({ guide,pluginGuides });
       return;
     }
     const sent = req.query.force !== "1" && guideSent(thread, guide);
     markGuideSent(thread, guide);
-    res.json({ guide, sent });
+    res.json({ guide, sent,pluginGuides });
   });
 
   app.get("/api/tabs/:id/state", (req, res) => {
@@ -635,14 +684,16 @@ export async function startHttp(): Promise<http.Server> {
    * reply target, set by the agent that made it, decides where it goes; a Kanban card's chat gets it
    * like a comment from the board's own box.
    */
-  app.post("/api/tabs/:id/reply", (req, res) => {
+  app.post("/api/tabs/:id/reply", async (req, res) => {
     if (viewerOf(req) === "agent") {
       res.status(403).json({ error: "Only the user's click on the page sends a reply" });
       return;
     }
     try {
       const threadInfo = (id: string) => (agentHost ? agentHost.runInfo(id) : ({ exists: false } as const));
-      const { target, result, deliver } = store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data }, threadInfo);
+      const source=store.get(req.params.id);
+      const pluginReply=source?await pluginActions?.reply(source,req.body?.data,req.body?.summary,threadInfo):null;
+      const { target, result, deliver } = pluginReply ?? store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data }, threadInfo);
       let delivered: "steered" | "queued" | "started" | null = null;
       if (deliver && agentHost) {
         const source = store.get(req.params.id);
@@ -658,7 +709,8 @@ export async function startHttp(): Promise<http.Server> {
         } catch (err) {
           log("Reply delivery failed", String(err));
         }
-        store.replyDelivered(target.id, deliver, delivered, threadInfo);
+        if(pluginReply)await pluginActions?.replyDelivered(target,deliver,delivered,threadInfo);
+        else store.replyDelivered(target.id, deliver, delivered, threadInfo);
       }
       res.json({ ok: true, target: { id: target.id, key: target.key, title: target.title }, delivered, result: result ?? null });
     } catch (err) {
@@ -668,16 +720,43 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   /** Run a template action (see src/actions). Agents through page_action; pages through scribe.action. */
-  app.post("/api/tabs/:id/action", (req, res) => {
+  app.post("/api/tabs/:id/action", async (req, res) => {
     try {
-      const { result, stateRevision } = store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
-        agentHost ? agentHost.runInfo(id) : { exists: false }, req.body?.readOnly === true
+      const tab=store.get(req.params.id);
+      const readOnly=req.body?.readOnly===true || (threadOf(req)?agentHost?.getThread(threadOf(req)!)?.approval==="readonly":false);
+      const { result, stateRevision } = tab && pluginActions?.binding(tab) ? await pluginActions.action(tab,String(req.body?.action??""),req.body?.args??{},callerOf(req),(id)=>agentHost?agentHost.runInfo(id):{exists:false},readOnly) : store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
+        agentHost ? agentHost.runInfo(id) : { exists: false }, readOnly
       );
       res.json({ result: result ?? null, stateRevision });
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
     }
+  });
+
+  app.post("/api/tabs/:id/plugins/:plugin/call", async (req,res)=> {
+    try {
+      if(viewerOf(req)==="agent")throw new Error("Agents use plugin_call");
+      if(isContentHost(req)&&framePageId(req)!==store.get(req.params.id)?.id)throw new Error("Plugin calls must name the calling page");
+      const permission=checkPermission(store.pagePermissions(req.params.id),{perm:`plugin.${req.params.plugin}`});
+      if(permission!=="allow") {res.json({ok:false,error:permission==="deny"?"denied":"permission",permission:`plugin.${req.params.plugin}`});return;}
+      if(!pluginService.enabled(req.params.plugin)){res.json({ok:false,error:"disabled"});return;}
+      res.json({ok:true,result:await pluginService.call(req.params.plugin,String(req.body?.method),req.body?.args??{},{kind:"page",page:req.params.id})});
+    }catch(error){res.json({ok:false,error:String((error as Error).message)});}
+  });
+  app.get("/api/tabs/:id/plugins/:plugin/state/:stateKey",(req,res)=> {
+    try {
+      if(viewerOf(req)==="agent")throw new Error("Agents use plugin_state");
+      if(isContentHost(req)&&framePageId(req)!==store.get(req.params.id)?.id)throw new Error("Plugin state must name the calling page");
+      const permission=checkPermission(store.pagePermissions(req.params.id),{perm:`plugin.${req.params.plugin}`});
+      if(permission!=="allow"){res.json({ok:false,error:permission==="ask"?"permission":"denied"});return;}
+      if(!pluginService.enabled(req.params.plugin))throw new Error("disabled");
+      res.json({ok:true,...pluginService.database.get(req.params.plugin,req.params.stateKey)});
+    }catch(error){res.json({ok:false,error:String((error as Error).message)});}
+  });
+  app.get("/api/tabs/:id/plugins",(req,res)=> {
+    const tab=store.get(req.params.id);if(!tab){res.status(404).json({ok:false,error:"missing"});return;}
+    res.json({ok:true,plugins:declaredPlugins(tab.html).map(id=>({id,enabled:pluginService.enabled(id),installed:pluginService.database.list().some(p=>p.manifest.id===id)}))});
   });
 
   /** Per-viewer page state (scribe.local). Never broadcast and never shown to agents. */
@@ -1788,7 +1867,7 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/templates/:id/open", (req, res) => {
+  app.post("/api/templates/:id/open", async (req, res) => {
     try {
       const activate = req.body?.activate !== false;
       const into = viewerOf(req) === "user" ? optionalString(req.body?.into) : activate ? threadBlankPage(req) : undefined;
@@ -1797,6 +1876,7 @@ export async function startHttp(): Promise<http.Server> {
         agentHidden: viewerOf(req) === "user" && req.body?.agentHidden === true,
         actor: actorOf(req),
         into,
+        pluginSeed: await pluginActions?.seed(req.params.id,req.body?.values??{}),
       });
       res.status(201).json({ tab: toMeta(tab), template: { id: template.id, key: template.key }, copiedBuiltin });
     } catch (err) {
@@ -1864,41 +1944,44 @@ export async function startHttp(): Promise<http.Server> {
     res.type("html").send(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8")));
   });
 
-  app.get("/api/export/folder/:fid", (req, res) => {
+  const sendExport=async(req:express.Request,res:express.Response,file:ReturnType<typeof store.exportFile>,filename:string)=>{
+    const dependencies=[...new Set([...file.pages,...file.templates].flatMap(page=>declaredPlugins(page.html)))];
+    if(req.query.preview==="1"){res.json({plugins:dependencies.map(id=>{try{return {id,name:pluginService.get(id).manifest.name,version:pluginService.get(id).manifest.version};}catch{return {id,name:id,version:"missing"};}})});return;}
+    const choices=typeof req.query.plugins==="string"?JSON.parse(req.query.plugins) as Record<string,PluginExportChoice>:{};
+    res.attachment(filename.replace(/\.(json|scribe\.json)$/,".scribe.zip")).type("application/zip").send(await exportTransfer(file,pluginService,choices));
+  };
+  app.get("/api/export/folder/:fid", async (req, res) => {
     try {
       const file = store.exportFile({ folderId: req.params.fid });
       const name = store.folderPath(req.params.fid) ?? "folder";
-      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(name.replaceAll("/", " - "))}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportFilename(name.replaceAll("/", " - ")));
     } catch (err) {
       sendStoreError(res, err);
     }
   });
 
-  app.get("/api/export/template/:id", (req, res) => {
+  app.get("/api/export/template/:id", async (req, res) => {
     try {
       const file = store.exportFile({ templateId: req.params.id });
-      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(file.templates[0].title)}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportFilename(file.templates[0].title));
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("template not found") ? 404 : 400).json({ error: message });
     }
   });
 
-  app.get("/api/export/:id", (req, res) => {
+  app.get("/api/export/:id", async (req, res) => {
     try {
       const file = store.exportFile({ id: req.params.id });
       const title = file.pages[0]?.title ?? "page";
-      res.setHeader("Content-Disposition", `attachment; filename="${exportFilename(title)}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportFilename(title));
     } catch (err) {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
     }
   });
 
-  app.get("/api/export", (req, res) => {
+  app.get("/api/export", async (req, res) => {
     try {
       const ids = (value: unknown): string[] => {
         const values = Array.isArray(value) ? value : [value];
@@ -1910,8 +1993,7 @@ export async function startHttp(): Promise<http.Server> {
         pageIds: req.query.page === undefined ? [] : ids(req.query.page),
         folderIds: req.query.folder === undefined ? [] : ids(req.query.folder),
       } : {});
-      res.setHeader("Content-Disposition", `attachment; filename="${exportAllFilename(file.exportedAt)}"`);
-      res.type("json").send(JSON.stringify(file));
+      await sendExport(req,res,file,exportAllFilename(file.exportedAt));
     } catch (err) {
       const message = (err as Error).message;
       res.status(message === "nothing to export" ? 404 : 400).json({ error: message });
@@ -2190,14 +2272,19 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/import", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), (req, res) => {
+  app.post("/api/import", express.raw({ type: "application/octet-stream", limit: MAX_IMPORT_BYTES }), async (req, res) => {
     try {
       if (!Buffer.isBuffer(req.body)) {
         res.status(400).json({ error: "expected a file body" });
         return;
       }
       const destination = parseImportDestination(req.query.destination);
-      const parsed = parseImport(req.body, importFilename(req));
+      const transfer=await importTransfer(req.body,importFilename(req));
+      if(req.query.preview==="1"){
+        res.json({pages:transfer.parsed?.pages.length??0,plugins:transfer.packages.map(p=>({...pluginService.preview(p.files,true),archive:p.archive.toString("base64")}))});return;
+      }
+      if(!transfer.parsed){res.json({kind:"plugin",opened:0,closed:0,templatesCreated:0});return;}
+      const parsed = transfer.parsed;
       const result = store.importBoard(parsed, destination);
       res.status(201).json({
         kind: parsed.kind,
@@ -2213,7 +2300,8 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/shutdown", (_req, res) => {
+  app.post("/api/shutdown", async (_req, res) => {
+    await pluginService.close();
     searchEmbedder.stop();
     res.json({ ok: true });
     try {
@@ -2521,12 +2609,11 @@ function scheduleSweep(delayMs: number): void {
     const available = (await host.providerStatus().catch(() => [])).filter((p) => p.available).map((p) => p.id);
     const defaultProvider = ["cursor", "codex", "claude", "pi"].find((id) => available.some((p) => p === id)) ?? available[0];
     // Then the pages' own agents (Kanban workers) go on, whether or not a window shows them (#312).
-    store.driveActions(
-      {
+    const driveContext = {
         ...ctx,
         now: Date.now(),
         defaultProvider,
-        watch: (thread, run) => {
+        watch: (thread: string, run: import("./actions/types.js").PageRunInput) => {
           try {
             host.watchPageThread(thread, run);
             return true;
@@ -2535,16 +2622,17 @@ function scheduleSweep(delayMs: number): void {
             return false;
           }
         },
-        release: (thread) => {
+        release: (thread: string) => {
           try {
             host.releasePageThread(thread);
           } catch {
             /* the chat is gone */
           }
         },
-      },
-      (pageId, launch, validate) => host.launchPageThread(pageId, launch.prompt, launch.settings, launch.run, launch.resumeThread, validate)
-    );
+      };
+    const launch=(pageId:string,item:import("./actions/types.js").PageLaunch,validate:()=>void|Promise<void>)=>host.launchPageThread(pageId,item.prompt,item.settings,item.run,item.resumeThread,validate);
+    store.driveActions(driveContext,launch);
+    await pluginActions?.sweep(ctx,driveContext,launch);
   }, delayMs);
   sweepQueued.unref?.();
 }
