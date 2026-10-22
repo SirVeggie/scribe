@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -2129,6 +2130,26 @@ export async function startHttp(): Promise<http.Server> {
       res.status(201).json({ kind: "file", tab: toMeta(tab) });
     } catch (err) {
       sendStoreError(res, err);
+    }
+  });
+
+  app.post("/api/tabs/:id/file/open-location", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    const tab = store.get(req.params.id);
+    if (!tab?.file) {
+      res.status(404).json({ error: "not a file page" });
+      return;
+    }
+    try {
+      const folder = path.dirname(path.resolve(tab.file.path));
+      if (!fs.statSync(folder).isDirectory()) throw new Error("folder not found");
+      const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+      // The user clicked to see this folder window; keep Explorer visible.
+      const child = spawn(command, [folder], { stdio: "ignore", detached: true, windowsHide: false });
+      child.once("error", err => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
+      child.once("spawn", () => { child.unref(); res.json({ ok: true }); });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
     }
   });
 

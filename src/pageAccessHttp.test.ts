@@ -112,6 +112,16 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal((await call("GET", "/api/agent/threads", undefined, thread.id)).status, 403, "a chat cannot read other chats or answer its own approvals");
     assert.equal((await call("GET", "/api/export", undefined, "")).status, 403);
     assert.equal((await call("GET", `/api/export?page=${home.id}`, undefined, thread.id)).status, 403);
+    const filePath = path.join(root, "outside-workspace.md");
+    fs.writeFileSync(filePath, "file page content\nsecond line");
+    const filePage = (await call("POST", "/api/files/open", { path: filePath, activate: false })).data.tab;
+    assert.ok(filePage?.id);
+    const fileThread = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: filePage.id } })).data.thread;
+    const fileRoute = `/api/tabs/${filePage.id}/file`;
+    assert.equal((await call("POST", `${fileRoute}/open-location`, {}, fileThread.id)).status, 403, "agents cannot open file manager windows");
+    assert.equal(await fromPage(filePage.id, "POST", `${fileRoute}/open-location`, {}), 403, "a file page opens its folder through the shell bridge");
+    assert.equal((await call("POST", `/api/tabs/${home.id}/file/open-location`, {})).status, 404, "HTML pages have no file location");
+
     const template = (await call("POST", "/api/templates", { key: "export-me", title: "Export me", html: "<p>Reusable</p>" })).data.template;
     const templateRoute = `/api/export/template/${template.id}`;
     const templateExport = await call("GET", templateRoute);
@@ -153,12 +163,6 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal(await fromPage(home.id, "POST", "/api/library/delete", { pages: [home.id] }), 403);
 
     // A Pages-mode chat can read its file page through Scribe, even outside its file roots.
-    const filePath = path.join(root, "outside-workspace.md");
-    fs.writeFileSync(filePath, "file page content\nsecond line");
-    const filePage = (await call("POST", "/api/files/open", { path: filePath, activate: false })).data.tab;
-    assert.ok(filePage?.id);
-    const fileThread = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: filePage.id } })).data.thread;
-    const fileRoute = `/api/tabs/${filePage.id}/file`;
     assert.equal((await call("GET", fileRoute, undefined, fileThread.id)).data.text, "file page content\nsecond line");
     assert.equal((await call("GET", fileRoute, undefined, thread.id)).status, 403);
     assert.equal((await call("POST", "/api/files/open", { path: filePath }, fileThread.id)).status, 403, "reading a file page does not allow opening arbitrary files");

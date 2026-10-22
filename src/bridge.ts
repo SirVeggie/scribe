@@ -1896,6 +1896,10 @@ ${POINTER_DRAG_JS}
    * outlives the tab (#685).
    */
   var fileApi = {
+    openLocation: function () {
+      if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
+      return askBoard({ type: "scribe-file", op: "openLocation" }, 10000);
+    },
     read: function () { return askBoard({ type: "scribe-file", op: "read" }, 60000); },
     image: function () { return askBoard({ type: "scribe-file", op: "image" }, 120000); },
     asset: function (src) { return askBoard({ type: "scribe-file", op: "asset", src: String(src) }, 60000); },

@@ -4582,6 +4582,12 @@
     try {
       if (data.op === "view") {
         reply({ ok: true, view: fileView(tab.file.path, data.view) });
+      } else if (data.op === "openLocation") {
+        if (!frameActivated(frameId)) {
+          reply({ ok: false, error: "no_gesture" });
+          return;
+        }
+        reply(await call("POST", `${url}/open-location`, {}));
       } else if (data.op === "read") {
         reply(await call("GET", url));
       } else if (data.op === "image" || data.op === "asset") {
