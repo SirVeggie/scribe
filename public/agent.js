@@ -4980,7 +4980,7 @@
       dock.classList.toggle("away", !this.queueShown);
     }
 
-    /** Snap when opening a thread; otherwise a critically damped spring follows the bottom and keeps its speed as more rows arrive. */
+    /** Snap when opening a thread or resizing the sidebar; otherwise a critically damped spring follows the bottom. */
     scrollToEnd(instant) {
       const el = this.scroll;
       if (!el) return;
@@ -4988,7 +4988,7 @@
       // New content or a resize: the running spring reads the bottom again on its next frame.
       this.stickTarget = -1;
       const max = () => Math.max(0, el.scrollHeight - el.clientHeight);
-      const reduce = instant || !window.scribeMotion.enabled();
+      const reduce = instant || document.body.classList.contains("resizing-side") || !window.scribeMotion.enabled();
       if (reduce) {
         this.stopStickAnim();
         this.jumpScroll(max());
@@ -5001,6 +5001,10 @@
       const tick = (now) => {
         if (!this.stick) {
           this.stopStickAnim();
+          return;
+        }
+        if (document.body.classList.contains("resizing-side")) {
+          this.scrollToEnd(true);
           return;
         }
         const dt = Math.min(0.05, Math.max(0, now - last) / 1000);
