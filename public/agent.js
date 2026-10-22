@@ -556,6 +556,7 @@
   async function loadConfig() {
     try {
       S.config = await api("GET", "/config");
+      window.dispatchEvent(new Event("scribe:workspaces-changed"));
     } catch {
       return;
     }
@@ -968,7 +969,7 @@
   }
 
   /** Last used folders, with `prefer` first when it is not already among them. */
-  function recentWorkspaceDirs(prefer) {
+  function recentWorkspaceDirs(prefer, limit = 3) {
     const out = [];
     const seen = new Set();
     const add = (dir) => {
@@ -981,7 +982,7 @@
     add(prefer);
     const hidden = hiddenWorkspaceKeys();
     for (const dir of prefs().recentWorkspaces || []) if (!hidden.has(dirKey(dir))) add(dir);
-    return out.slice(0, 3);
+    return out.slice(0, limit);
   }
 
   /**
@@ -1020,6 +1021,7 @@
     try {
       const data = await api("POST", "/workspaces/hide", { path: dir, hidden });
       S.config.prefs = data.prefs;
+      window.dispatchEvent(new Event("scribe:workspaces-changed"));
       renderLists();
       if (hidden) notice(`Hid ${R.basename(dir) || dir}. It is listed under Archived, and a search still finds its threads.`);
     } catch (err) {
@@ -2928,6 +2930,7 @@
           scope: cur.scope,
         });
         if (data.prefs) S.config.prefs = data.prefs;
+        window.dispatchEvent(new Event("scribe:workspaces-changed"));
       } catch {
         /* the composer still shows the draft's settings */
       }
@@ -12298,6 +12301,16 @@
     setTimeout(() => view.focus(), 70);
   }
 
+  /** A workspace shortcut starts with saved defaults, without inheriting the current thread's settings. */
+  function openWorkspace(dir) {
+    if (S.fullOpen) leaveFull();
+    const tab = activeTab();
+    if (tab) setDockPick(tab.id, null);
+    dock.view.startDraft({ kind: "global", ref: null }, { cwd: dir });
+    dock.setShown(true);
+    dock.view.focus();
+  }
+
   /** A new thread with this text in its composer, not sent yet (the palette's "Ask in chat", #245). */
   function askInChat(text) {
     let view;
@@ -12314,7 +12327,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

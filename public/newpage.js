@@ -403,7 +403,8 @@ return glow(c,e);}`;
    * host: templates() and builtins() (template metas), pick(template), threads(id) (the page's chat
    * threads), working(id) (an agent is at work on it), openChat(), provider() (the floating chat's provider),
    * intent(id) (the new page the floating chat is writing from this page: { title }, else null) and
-   * dismissIntent() (the user clicked the creating screen away).
+   * dismissIntent() (the user clicked the creating screen away), workspaces() (recent paths),
+   * and openWorkspace(path) (a new floating chat using saved agent defaults).
    */
   window.createNewPage = (host) => {
     const root = document.getElementById("newpage");
@@ -411,9 +412,11 @@ return glow(c,e);}`;
     const lede = root.querySelector(".newpage-lede");
     const askBtn = root.querySelector(".newpage-ask");
     const grid = root.querySelector(".newpage-templates:not(.newpage-files)");
-    const gridHead = root.querySelector(".newpage-templates-head:not(.newpage-files-head)");
+    const gridHead = root.querySelector(".newpage-templates-head:not(.newpage-files-head):not(.newpage-workspaces-head)");
     const files = root.querySelector(".newpage-files");
     const filesHead = root.querySelector(".newpage-files-head");
+    const workspaces = root.querySelector(".newpage-workspaces");
+    const workspacesHead = root.querySelector(".newpage-workspaces-head");
     const where = root.querySelector(".newpage-where");
     const intentWord = root.querySelector(".newpage-intent-word");
     const intentTitle = root.querySelector(".newpage-intent-title");
@@ -532,6 +535,23 @@ return glow(c,e);}`;
       );
     }
 
+    function renderWorkspaces(dirs) {
+      workspaces.hidden = workspacesHead.hidden = !dirs.length;
+      workspaces.replaceChildren(...dirs.map((dir) => {
+        const btn = el("button", "newpage-card");
+        btn.type = "button";
+        const text = el("span", "newpage-card-text");
+        const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
+        text.append(el("span", "newpage-card-title", name), el("span", "newpage-card-desc", dir));
+        btn.append(text);
+        const tip = `Open a new chat with the default agent settings for ${dir}`;
+        btn.dataset.tooltip = tip;
+        btn.setAttribute("aria-description", tip);
+        btn.addEventListener("click", () => host.openWorkspace(dir));
+        return btn;
+      }));
+    }
+
     /** Built-ins that already have a local copy show once, as the copy. */
     function templateList() {
       const own = host.templates();
@@ -618,7 +638,8 @@ return glow(c,e);}`;
       const working = covering || host.working(tab.id);
       const list = threads ? [] : templateList();
       const target = host.fileTarget?.() || {};
-      const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description]), target]);
+      const dirs = threads ? [] : host.workspaces?.() || [];
+      const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description]), target, dirs]);
       if (shown === tab.id && drawn === key) return;
       // The same call with more known about it (its title) keeps the word it is on.
       const sameIntent = Boolean(intent) && shown === tab.id && lastIntent === intent.itemId;
@@ -636,6 +657,7 @@ return glow(c,e);}`;
       if (threads > 0) return;
       lede.textContent = "Start from a template, or ask the agent to make something here.";
       renderFiles(target);
+      renderWorkspaces(dirs);
       gridHead.hidden = !list.length;
       grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
     }
@@ -643,7 +665,8 @@ return glow(c,e);}`;
     window.addEventListener("scribe:newpage-bg", () => updateBackdrop());
     window.addEventListener("scribe:dock-provider", (event) => updateBackdrop(event.detail.provider));
     window.addEventListener("scribe:orb-appearance", () => updateBackdrop());
-    window.addEventListener("scribe:threads-ready", () => updateBackdrop());
+    window.addEventListener("scribe:threads-ready", () => render(current, covering));
+    window.addEventListener("scribe:workspaces-changed", () => { if (current) render(current, covering); });
 
     return {
       render,

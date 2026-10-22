@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 
 const source = readFileSync(new URL("../public/newpage.js", import.meta.url), "utf8");
 
-function screen(webgl = true, restoring = false) {
+function screen(webgl = true, restoring = false, hostOverrides: Record<string, any> = {}) {
   let selected = "nebula";
   let working = false;
   let step: (dt: number) => void = () => {};
@@ -38,9 +38,14 @@ function screen(webgl = true, restoring = false) {
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChanges.push(fn); } };
   const node = () => ({
     hidden: false, textContent: "", innerHTML: "",
+    children: [] as any[], listeners: {} as Record<string, () => void>,
     dataset: {} as Record<string, string>, style: { cssText: "" },
+    append(...children: any[]) { this.children.push(...children); },
+    setAttribute() {},
     removeAttribute() {}, remove() {},
-    classList: { toggle(_name: string, _on: boolean) {}, add(_name: string) {}, remove(_name: string) {} }, addEventListener() {}, replaceChildren() {},
+    classList: { toggle(_name: string, _on: boolean) {}, add(_name: string) {}, remove(_name: string) {} },
+    addEventListener(name: string, fn: () => void) { this.listeners[name] = fn; },
+    replaceChildren(...children: any[]) { this.children = children; },
     cloneNode: () => node(), replaceWith() {}, querySelector: (_: string): any => node(),
   });
   const root = node();
@@ -92,6 +97,7 @@ function screen(webgl = true, restoring = false) {
   class Observer { observe() {} }
   runInNewContext(source, {
     window: win, document: {
+      createElement: () => node(),
       getElementById: () => root, documentElement: { hasAttribute: () => restoring, classList: { contains: (name: string) => name === "fx-off" && !uiEffects } },
       body: { appendChild() {} }, get hidden() { return hidden; },
       addEventListener: (name: string, fn: () => void) => { events[name] = fn; },
@@ -111,9 +117,10 @@ function screen(webgl = true, restoring = false) {
     openChat() {},
     provider: () => provider,
     intent: () => intent,
+    ...hostOverrides,
   });
   return {
-    page, draws, shaders, motion, uniforms, classes, css, root, animations, timers, parts,
+    page, draws, shaders, motion, uniforms, classes, css, root, animations, timers, parts, events,
     intent: (value: typeof intent) => { intent = value; },
     activeShader: () => activeShader,
     frame: () => {
@@ -146,6 +153,48 @@ function screen(webgl = true, restoring = false) {
     visibility: (value: boolean) => { hidden = value; events.visibilitychange(); },
   };
 }
+
+test("recent workspaces open the selected path and refresh when preferences arrive", () => {
+  let dirs: string[] = [];
+  const opened: string[] = [];
+  const s = screen(false, false, { threads: () => 0, workspaces: () => dirs, openWorkspace: (dir: string) => opened.push(dir) });
+  s.page.render({ id: "draft" });
+  const grid = s.parts.get(".newpage-workspaces")!;
+  const heading = s.parts.get(".newpage-workspaces-head")!;
+  assert.equal(grid.hidden, true);
+  assert.equal(heading.hidden, true);
+  dirs = ["C:\\projects\\scribe", "/home/me/other/scribe"];
+  s.events["scribe:threads-ready"]();
+  assert.equal(grid.hidden, false);
+  assert.equal(heading.hidden, false);
+  assert.equal(grid.children.length, 2);
+  assert.equal(grid.children[0].children[0].children[0].textContent, "scribe");
+  assert.equal(grid.children[1].children[0].children[1].textContent, dirs[1]);
+  grid.children[1].listeners.click();
+  assert.deepEqual(opened, [dirs[1]]);
+  const first = grid.children[0];
+  s.page.render({ id: "draft" });
+  assert.equal(grid.children[0], first, "unchanged lists keep their buttons and focus");
+  dirs = [];
+  s.events["scribe:workspaces-changed"]();
+  assert.equal(grid.hidden, true);
+  assert.equal(heading.hidden, true);
+});
+
+test("workspace shortcuts start a floating draft with saved defaults", () => {
+  const agent = readFileSync(new URL("../public/agent.js", import.meta.url), "utf8");
+  const source = agent.slice(agent.indexOf("  function openWorkspace(dir) {"), agent.indexOf("  /** A new thread with this text", agent.indexOf("  function openWorkspace(dir) {")));
+  const calls: any[] = [];
+  const context = {
+    S: { fullOpen: true }, leaveFull: () => calls.push("leaveFull"), activeTab: () => ({ id: "draft" }),
+    setDockPick: (...args: any[]) => calls.push(["pick", ...args]),
+    dock: { view: { startDraft: (...args: any[]) => calls.push(["draft", ...args]), focus: () => calls.push("focus") }, setShown: (shown: boolean) => calls.push(["show", shown]) },
+  };
+  runInNewContext(`${source}\nopenWorkspace('C:/projects/scribe');`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    "leaveFull", ["pick", "draft", null], ["draft", { kind: "global", ref: null }, { cwd: "C:/projects/scribe" }], ["show", true], "focus",
+  ]);
+});
 
 test("warmup waits for restoration, reuses one prepared effect and replenishes without animating it", () => {
   const s = screen(true, true);

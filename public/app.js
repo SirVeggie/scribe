@@ -464,6 +464,8 @@
     threads: (id) => window.scribeChat?.pageThreads?.(id) || 0,
     working: (id) => window.scribeChat?.pageStatus?.(id) || null,
     openChat: () => window.scribeChat?.shortcut("dock"),
+    workspaces: () => window.scribeChat?.recentWorkspaces?.() || [],
+    openWorkspace: (dir) => window.scribeChat?.openWorkspace?.(dir),
     provider: () => window.scribeChat?.dockProvider?.(),
     intent: (id) => (pageIntent?.origin === id ? pageIntent : null),
     dismissIntent: () => {
