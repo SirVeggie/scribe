@@ -7,6 +7,52 @@ import { launchChromium } from "./chromium.js";
 
 const source = (path: string) => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 
+test("plugin templates stay grouped outside collapsed built-ins, including local copies", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Plugin template grouping test" });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<span id="count"></span><span id="builtin-count"></span><div id="templates"></div><div id="none"></div><div id="builtin"><button id="head"></button><div id="builtins"></div></div>');
+    await page.addScriptTag({ content: source("../public/dom-sync.js") });
+    const app = source("../public/app.js");
+    await page.addScriptTag({ content: `
+      const plugin = { id: 'jira', name: 'Jira' };
+      const catalog = { id: 'builtin:plugin-jira--board', title: 'Jira board', plugin, builtIn: true, stateVersion: 1 };
+      const state = { sideOpen: true, sidebarTab: 'templates', builtinOpen: false,
+        templates: [{ id: 'own', title: 'My template' }],
+        builtinTemplates: [{ id: 'builtin:todo', title: 'Todo', builtIn: true }, catalog] };
+      const templateCountEl = document.querySelector('#count'), builtinCountEl = document.querySelector('#builtin-count');
+      const templateList = document.querySelector('#templates'), templateNone = document.querySelector('#none');
+      const builtinGroup = document.querySelector('#builtin'), builtinHead = document.querySelector('#head'), builtinList = document.querySelector('#builtins');
+      let templatesDrawn = '', freshTemplateId = null;
+      const activeTab = () => null, isBlank = () => false;
+      const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} };
+      const findTemplateMeta = id => [...state.templates, ...state.builtinTemplates].find(t => t.id === id);
+      const createFromTemplate = template => window.opened = template.id;
+      ${app.slice(app.indexOf('  function renderTemplates('), app.indexOf('  function toggleBuiltinGroup('))}
+      window.copyTemplate = () => {
+        catalog.localId = 'copy';
+        state.templates.push({ id: 'copy', title: 'Jira copy', plugin, builtinSource: 'plugin-jira--board', stateVersion: 1 });
+        renderTemplates();
+      };
+      renderTemplates();
+    ` });
+    assert.deepEqual(await page.locator('.plugin-template-head').allTextContents(), ['Jira']);
+    assert.equal(await page.locator('#builtins .template-name').textContent(), 'Todo');
+    assert.equal(await page.locator('.plugin-template-group .template-row').getAttribute('tabindex'), '0');
+    assert.equal(await page.locator('#builtins .template-row').getAttribute('tabindex'), '-1');
+    await page.locator('.plugin-template-group .template-row').press('Enter');
+    assert.equal(await page.evaluate(() => (window as any).opened), 'builtin:plugin-jira--board');
+    await page.evaluate(() => (window as any).copyTemplate());
+    assert.deepEqual(await page.locator('.plugin-template-group .template-name').allTextContents(), ['Jira copy']);
+    assert.equal(await page.locator('#count').textContent(), '2');
+    assert.equal(await page.locator('#builtin-count').textContent(), '1');
+    await page.locator('.plugin-template-group .template-row').press('Enter');
+    assert.equal(await page.evaluate(() => (window as any).opened), 'copy');
+  } finally {
+    await browser.close();
+  }
+});
+
 test("updates keep hovered rows and focused editors connected", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Hover stability test" });
   try {

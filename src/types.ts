@@ -129,6 +129,8 @@ export type TemplateSource = {
 };
 
 export type TemplateMeta = Omit<Template, "html" | "initialState" | "source" | "guide" | "agentActions"> & {
+  /** Plugin supplying this template, including its local copies. */
+  plugin?: { id: string; name: string };
   /** Its agent actions, or for a local copy of a built-in without its own, the built-in's. */
   agentActions?: AgentAction[];
   htmlBytes: number;

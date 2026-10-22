@@ -111,13 +111,13 @@ let pluginActions: PluginActions | null = null;
 
 function refreshPluginTemplates(): void {
   if (!plugins) return;
-  store.setPluginTemplates(plugins.templates().map(({plugin,definition,metadata,html,guide}) => {
+  store.setPluginTemplates(plugins.templates().map(({plugin,pluginName,definition,metadata,html,guide}) => {
     const key=`plugin-${plugin}--${definition.key}`;
     const parsed=normalizeTemplateInput({...metadata,html});
     const {pin,...rest}=parsed;
     const actionGuide=Object.entries(definition.actions??{}).map(([name,def])=>`- \`${name}\` ${def.args}: ${def.description}`).join("\n");
     const fullGuide=guide.includes("{{actions}}")?guide.replace("{{actions}}",actionGuide):[guide,actionGuide].filter(Boolean).join("\n\n");
-    return {...rest,...(pin===false?{pin:false as const}:{}),id:`builtin:${key}`,key,guide:fullGuide,createdAt:Date.now(),updatedAt:Date.now(),stateVersion:parsed.stateVersion??1};
+    return {...rest,...(pin===false?{pin:false as const}:{}),plugin:{id:plugin,name:pluginName},id:`builtin:${key}`,key,guide:fullGuide,createdAt:Date.now(),updatedAt:Date.now(),stateVersion:parsed.stateVersion??1};
   }));
 }
 

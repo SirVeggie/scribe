@@ -184,11 +184,11 @@ export class BoardStore extends EventEmitter {
   private foldersDirty = false;
   private templates = new Map<string, Template>();
   private builtins: Template[] = [];
-  private pluginBuiltins: Template[] = [];
+  private pluginBuiltins: (Template & { plugin?: TemplateMeta["plugin"] })[] = [];
 
   pageIds(): string[] { return [...this.tabs.keys(), ...this.closed.keys()]; }
 
-  setPluginTemplates(templates: Template[]): void {
+  setPluginTemplates(templates: (Template & { plugin?: TemplateMeta["plugin"] })[]): void {
     this.pluginBuiltins = templates;
     this.builtins = [...this.builtins.filter(t => !t.key.startsWith("plugin-")), ...templates];
     this.syncBuiltinCopies();
@@ -596,17 +596,19 @@ export class BoardStore extends EventEmitter {
   /** Template metadata, flagging a built-in's copy that fell behind its built-in. */
   templateMeta(template: Template, instanceCount = 0): TemplateMeta {
     const builtin = template.source ? this.locateBuiltin(template.source.builtin) : undefined;
-    return toTemplateMeta(
+    const meta = toTemplateMeta(
       template,
       instanceCount,
       Boolean(builtin && template.source!.fingerprint !== templateFingerprint(builtin)),
       template.agentActions ?? builtin?.agentActions
     );
+    const plugin = this.pluginBuiltins.find(t => t.key === (template.source?.builtin ?? template.key))?.plugin;
+    return { ...meta, ...(plugin ? { plugin } : {}) };
   }
 
   listBuiltinTemplates(): BuiltinTemplateMeta[] {
     return this.builtins.map((builtin) => {
-      const { instanceCount: _count, builtinSource: _source, ...meta } = toTemplateMeta(builtin);
+      const { instanceCount: _count, builtinSource: _source, ...meta } = this.templateMeta(builtin);
       const local = this.localCopyOf(builtin.key);
       return { ...meta, builtIn: true, ...(local ? { localId: local.id } : {}) };
     });

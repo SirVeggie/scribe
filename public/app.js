@@ -2563,21 +2563,43 @@
   }
 
   function renderTemplates() {
-    const rows = state.templates;
-    const builtins = state.builtinTemplates;
-    templateCountEl.textContent = String(rows.length);
+    const rows = state.templates.filter(t => !t.plugin);
+    const builtins = state.builtinTemplates.filter(t => !t.plugin);
+    const plugins = new Map();
+    for (const template of [...state.templates, ...state.builtinTemplates]) {
+      if (!template.plugin) continue;
+      if (template.builtIn && template.localId) continue;
+      const { id, name } = template.plugin;
+      if (!plugins.has(id)) plugins.set(id, { id, name, templates: [] });
+      plugins.get(id).templates.push(template);
+    }
+    const groups = [...plugins.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const pluginCount = groups.reduce((count, group) => count + group.templates.length, 0);
+    templateCountEl.textContent = String(rows.length + pluginCount);
     builtinCountEl.textContent = String(builtins.length);
     // The rows are drawn while the Templates tab shows, and only when they changed.
     const shown = state.sideOpen && state.sidebarTab === "templates" && !state.trashOpen;
-    const sig = shown ? JSON.stringify([rows, builtins, state.builtinOpen]) : templatesDrawn;
+    const sig = shown ? JSON.stringify([rows, builtins, groups, state.builtinOpen]) : templatesDrawn;
     if (sig !== templatesDrawn) {
       templatesDrawn = sig;
-      window.scribeSyncChildren(templateList, rows.map((template) => templateRow(template, false)));
-      templateNone.hidden = rows.length > 0;
+      window.scribeSyncChildren(templateList, [
+        ...rows.map((template) => templateRow(template, false)),
+        ...groups.map(group => {
+          const section = document.createElement("section");
+          section.className = "plugin-template-group";
+          section.dataset.id = `plugin:${group.id}`;
+          const heading = document.createElement("h3");
+          heading.className = "plugin-template-head";
+          heading.textContent = group.name;
+          section.append(heading, ...group.templates.map(template => templateRow(template, Boolean(template.builtIn))));
+          return section;
+        }),
+      ]);
+      templateNone.hidden = rows.length + pluginCount > 0;
       builtinGroup.hidden = builtins.length === 0;
       builtinGroup.classList.toggle("open", state.builtinOpen);
       builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
-      window.scribeSyncChildren(builtinList, builtins.map((template) => templateRow(template, true)));
+      window.scribeSyncChildren(builtinList, builtins.map((template) => templateRow(template, true, !state.builtinOpen)));
     }
     if (freshTemplateId) {
       flashTemplateRow(freshTemplateId);
@@ -2588,12 +2610,12 @@
     }
   }
 
-  function templateRow(template, builtin) {
+  function templateRow(template, builtin, collapsed = false) {
     const live = () => findTemplateMeta(template.id);
     const el = document.createElement("div");
     el.className = builtin ? "side-row template-row builtin" : "side-row template-row";
     el.role = "button";
-    el.tabIndex = builtin && !state.builtinOpen ? -1 : 0;
+    el.tabIndex = collapsed ? -1 : 0;
     el.dataset.id = template.id;
     el.dataset.kind = "template";
     el.ariaLabel = template.title;
@@ -2632,7 +2654,9 @@
       const version = document.createElement("span");
       version.className = "template-version";
       version.textContent = `v${template.stateVersion}`;
-      version.dataset.tooltip = builtin ? "Built-in template version" : "Copied from a built-in template";
+      version.dataset.tooltip = template.plugin
+        ? (builtin ? "Plugin template version" : "Copied from a plugin template")
+        : (builtin ? "Built-in template version" : "Copied from a built-in template");
       line.appendChild(version);
     }
     text.appendChild(line);

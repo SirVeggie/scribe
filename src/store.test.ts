@@ -1605,6 +1605,27 @@ test("opening a built-in opens a local copy, created once", () => {
   store.closeDb();
 });
 
+test("plugin template metadata identifies the plugin on catalog entries and local copies", () => {
+  const store = loaded();
+  try {
+    const plugin = { id: "jira", name: "Jira" };
+    const template = {
+      ...store.findTemplate("todo-list")!.template,
+      id: "builtin:plugin-jira--tasks", key: "plugin-jira--tasks", plugin,
+    };
+    store.setPluginTemplates([template]);
+    assert.deepEqual(store.listBuiltinTemplates().find(t => t.id === template.id)?.plugin, plugin);
+    store.openFromTemplate(template.id, { title: "Tasks" });
+    assert.deepEqual(store.listTemplates()[0].plugin, plugin);
+    store.setPluginTemplates([{ ...template, plugin: { ...plugin, name: "Jira renamed" } }]);
+    assert.equal(store.listTemplates()[0].plugin?.name, "Jira renamed");
+    store.setPluginTemplates([]);
+    assert.equal(store.listTemplates().length, 0);
+  } finally {
+    store.closeDb();
+  }
+});
+
 test("Kanban opens with usable preset state before any browser script runs", () => {
   const store = loaded();
   try {

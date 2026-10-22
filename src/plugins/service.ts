@@ -239,7 +239,7 @@ export class PluginService {
       try{
         const original=this.text(p.manifest.id,t.html),html=declarePlugins(original,[p.manifest.id,...declaredPlugins(original)]);
         const metadata=normalizeTemplateInput({...JSON.parse(this.text(p.manifest.id,t.metadata)),html});
-        return [{plugin:p.manifest.id,definition:t,metadata,html,guide:this.text(p.manifest.id,t.guide)}];
+        return [{plugin:p.manifest.id,pluginName:p.manifest.name,definition:t,metadata,html,guide:this.text(p.manifest.id,t.guide)}];
       }catch(error){const message=`Template ${t.key} unavailable: ${String(error)}`;this.pastLogs.set(p.manifest.id,[...(this.pastLogs.get(p.manifest.id)??[]),message].slice(-200));console.error(`Plugin ${p.manifest.id}: ${message}`);return [];}
     }));
   }
