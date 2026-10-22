@@ -1432,7 +1432,7 @@ export class BoardStore extends EventEmitter {
       this.emitFolders();
     }
     for (const tab of closed) {
-      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true });
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true, markUnread: false });
     }
     for (let i = 0; i < opened.length; i += 1) {
       const tab = opened[i];
@@ -1440,6 +1440,7 @@ export class BoardStore extends EventEmitter {
       this.emit("tab_upserted", toMeta(tab), this.order.indexOf(tab.id), {
         activate: last,
         structural: true,
+        markUnread: false,
       });
     }
     if (focused) {
@@ -1617,7 +1618,10 @@ export class BoardStore extends EventEmitter {
     if (this.folders.size !== foldersBefore) {
       this.emitFolders();
     }
-    this.emit("tab_upserted", toMeta(tab), activate ? this.order.indexOf(id) : undefined, actorNotice(activate, true, input.actor));
+    this.emit("tab_upserted", toMeta(tab), activate ? this.order.indexOf(id) : undefined, {
+      ...actorNotice(activate, true, input.actor),
+      ...(input.markUnread === false ? { markUnread: false } : {}),
+    });
     if (activate) {
       this.emit("tab_focused", id);
     }
@@ -2829,7 +2833,7 @@ export class BoardStore extends EventEmitter {
     if (input.folderId) {
       this.requireFolder(input.folderId);
     }
-    const { tab } = this.upsert({ title: name, html: filePlaceholderHtml(name, input.path ?? name), activate, temp: input.temp === true && !input.folderId });
+    const { tab } = this.upsert({ title: name, html: filePlaceholderHtml(name, input.path ?? name), activate, temp: input.temp === true && !input.folderId, markUnread: false });
     try {
       tab.file = input.path ? { path: path.resolve(input.path) } : { path: storeCopy(tab.id, name, input.bytes!), copy: true };
     } catch (err) {

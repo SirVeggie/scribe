@@ -419,6 +419,8 @@ export function visibleTo(tab: { agentHidden?: boolean }, viewer: Viewer): boole
 
 export type UpsertNotice = {
   activate: boolean;
+  /** User imports are already known to the user; keep their initial notification read. */
+  markUnread?: boolean;
   /** HTML, title, or an in-archive write; pin-only updates on open tabs are not structural. */
   structural: boolean;
   /** In-app chat that made this write, so a focused page can take that thread with it. */
@@ -445,7 +447,7 @@ export type BoardEvent =
   | { type: "spaces"; spaces: SpacesView }
   | { type: "page_permission"; id: string; perm: string; value: string }
   | { type: "appearance"; settings: Record<string, string>; revision: number }
-  | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean; template?: boolean }
+  | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean; template?: boolean; markUnread?: boolean }
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }
   | { type: "tab_focus_request"; id: string; thread?: string }
@@ -463,6 +465,8 @@ export type BoardEvent =
   | AgentEvent;
 
 export type UpsertInput = {
+  /** Suppress the new-page indicator for user-imported files. Only applies to creation. */
+  markUnread?: boolean;
   key?: string;
   title: string;
   html: string;

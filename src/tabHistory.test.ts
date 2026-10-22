@@ -50,6 +50,26 @@ function viewer(ids: string[], activeId = ids[0]) {
   };
 }
 
+test("closed imports stay read and subsequent content changes get an unread indicator", () => {
+  const state = { tabs: [], closed: [], activeId: null };
+  const unreadLibrary = new Set<string>();
+  const api: any = {};
+  const upsert = app.slice(app.indexOf("  function upsertClosed("), app.indexOf("  function libraryPages("));
+  runInNewContext(`${upsert}\napi.upsertClosed = upsertClosed;`, {
+    api, state, unreadLibrary, unread: new Set(),
+    views: { isShown: () => false }, discardFrame() {}, neighborTabId: () => null,
+  });
+  const tab = { id: "import", revision: 1, stateRevision: 0 };
+  api.upsertClosed(tab, true, false);
+  assert.equal(unreadLibrary.has(tab.id), false);
+  api.upsertClosed({ ...tab }, false);
+  assert.equal(unreadLibrary.has(tab.id), false);
+  api.upsertClosed({ ...tab, revision: 2 }, true);
+  assert.equal(unreadLibrary.has(tab.id), true);
+  api.upsertClosed({ id: "agent", revision: 1 }, true);
+  assert.equal(unreadLibrary.has("agent"), true);
+});
+
 test("closing the focused tab returns to its source instead of its strip neighbor", () => {
   const v = viewer(["source", "left", "linked", "right"]);
   v.select("linked");

@@ -8,7 +8,7 @@ import { parseImport, serializeExport } from "./boardExport.js";
 import { RevisionConflictError } from "./htmlEdit.js";
 import { templateFingerprint } from "./templates.js";
 import { BoardStore } from "./store.js";
-import { toMeta, type Template } from "./types.js";
+import { toMeta, type Template, type UpsertNotice } from "./types.js";
 
 let dir = "";
 let prevHome: string | undefined;
@@ -37,6 +37,34 @@ function loaded(): BoardStore {
 function titles(store: BoardStore): string[] {
   return store.list().map((tab) => tab.title);
 }
+
+test("imports and disk folder files start read, while later agent writes still notify", () => {
+  const store = loaded();
+  const notices: UpsertNotice[] = [];
+  store.on("tab_upserted", (_tab, _index, notice) => notices.push(notice));
+  const imported = store.importBoard({ templates: [], pages: [
+    { title: "Open import", html: "<p>open</p>" },
+    { title: "Closed import", html: "<p>closed</p>", closedAt: 1 },
+  ] }, "meta");
+  assert.equal(notices.length, 2);
+  assert.ok(notices.every(notice => notice.structural && notice.markUnread === false));
+
+  const files = path.join(dir, "files");
+  fs.mkdirSync(files);
+  fs.writeFileSync(path.join(files, "one.md"), "one");
+  fs.writeFileSync(path.join(files, "two.md"), "two");
+  notices.length = 0;
+  assert.equal(store.openDiskFolder(files, null).pages, 2);
+  assert.equal(notices.filter(notice => notice.structural).length, 2);
+  assert.ok(notices.filter(notice => notice.structural).every(notice => notice.markUnread === false));
+
+  notices.length = 0;
+  store.upsert({ key: imported.tabs[0].key, title: "Updated", html: "<p>changed</p>", activate: false });
+  store.upsert({ title: "Agent page", html: "<p>new</p>", activate: false });
+  assert.equal(notices.length, 2);
+  assert.ok(notices.every(notice => notice.structural && notice.markUnread !== false));
+  store.closeDb();
+});
 
 test("closed boards retain blocked form continuations across restart and dispatch after blockers clear", async () => {
   const store = loaded();
