@@ -36,6 +36,7 @@ async function fixture(browser: Browser) {
       ...["x", "y", "z"].map((id, libPos) => ({ id, title: id.toUpperCase(), libPos })),
     ];
     w.requests = []; w.opened = []; w.exported = [];
+    w.choices = []; w.choice = "delete"; w.recycle = false;
     w.fetch = async (url: string, options: any) => {
       const body = options.body ? JSON.parse(options.body) : {};
       w.requests.push({ url, method: options.method, ...body });
@@ -49,6 +50,11 @@ async function fixture(browser: Browser) {
       isOpen: () => false, isUnread: () => false, icons: {},
       hoverCard: { hide() {}, bind() {}, suspend() {}, resume() {} },
       showNotice() {}, confirm: async () => true, fileSettings: () => ({}),
+      choose: async (message: string, _buttons: any, opts: any = {}) => {
+        w.choices.push({ message, checked: opts.check?.checked });
+        if (opts.check) opts.check.checked = w.recycle;
+        return w.choice;
+      },
       modeFromEvent: (event: any) => event.shiftKey ? "split" : null,
       openIn: (id: string, mode: string) => w.opened.push({ id, mode }),
       openPage: (id: string) => w.opened.push({ id }), clearStripSlot() {}, stripSlot: () => null,
@@ -99,6 +105,46 @@ test("Library selection entry, toggles, ranges, folder coverage and split clicks
     await page.keyboard.press("Escape");
     await row("x").click({ modifiers: ["Shift"] });
     assert.equal(await page.evaluate(() => (window as any).opened.length), 2);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test("file deletion defaults to keeping files and folder choices include nested files", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "File deletion choices test" });
+  try {
+    const { page, errors } = await fixture(browser);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.pages.find((p: any) => p.id === "c").file = { path: "C:/Notes/nested.md" };
+      w.pages.find((p: any) => p.id === "x").file = { path: "C:/Notes/x.md" };
+      w.pages.find((p: any) => p.id === "b").file = { path: "C:/Copies/b.md", copy: true };
+      w.library.render();
+    });
+    const remove = async (id: string, label = "Delete") => {
+      await page.locator(`.lib-row[data-id="${id}"]`).dispatchEvent("contextmenu", { clientX: 130, clientY: 120 });
+      await page.getByRole("menuitem", { name: label, exact: true }).click();
+    };
+    await remove("x");
+    assert.deepEqual(await page.evaluate(() => (window as any).requests.at(-1)), { url: "/api/tabs/x?permanent=true", method: "DELETE" });
+    assert.equal(await page.evaluate(() => (window as any).choices.at(-1).checked), false);
+    await page.evaluate(() => { (window as any).choice = null; });
+    await remove("work", "Delete folder…");
+    assert.equal(await page.evaluate(() => (window as any).requests.length), 1, "cancel leaves pages and files alone");
+    await page.evaluate(() => { const w = window as any; w.choice = "lift"; w.recycle = true; });
+    await remove("work", "Delete folder…");
+    assert.deepEqual(await page.evaluate(() => (window as any).requests.at(-1)), { url: "/api/folders/work?mode=lift", method: "DELETE" });
+    await page.evaluate(() => { (window as any).choice = "delete"; });
+    await remove("work", "Delete folder…");
+    assert.deepEqual(await page.evaluate(() => (window as any).requests.at(-1)), {
+      url: "/api/library/delete", method: "POST", pages: ["c"], folders: ["work"], recycle: ["c"],
+    });
+    await page.locator('.lib-row[data-id="work"]').click({ modifiers: ["Control"] });
+    await page.locator('.lib-row[data-id="x"]').click();
+    await remove("work", "Delete…");
+    const bulk = await page.evaluate(() => (window as any).requests.at(-1));
+    assert.deepEqual(bulk.recycle.sort(), ["c", "x"]);
+    assert.deepEqual(bulk.pages.sort(), ["c", "x"]);
+    assert.deepEqual(bulk.folders, ["work"]);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

@@ -1059,22 +1059,18 @@ window.createLibrary = function createLibrary(host) {
   }
 
   async function deleteSelection(items) {
-    if (!await host.confirm(`Delete ${plural(items.length, "selected item")} and all contents of selected folders?`, "Delete")) return;
-    const files = items.filter((item) => item.kind === "page" && model.pageById.get(item.id)?.file && !model.pageById.get(item.id).file.copy);
-    let recycle = host.fileSettings().deleteFiles === "trash";
-    if (files.length && !host.fileSettings().deleteFiles) {
-      const check = { label: "Don't ask again", checked: false };
-      const choice = await host.choose(`Also move ${plural(files.length, "file")} to the Recycle Bin?`, [
-        { value: "keep", label: "Keep the files" }, { value: "trash", label: "Recycle the files", danger: true },
-      ], { check });
-      if (!choice) return;
-      recycle = choice === "trash";
-      if (check.checked) void host.setDeleteFiles(choice);
-    }
+    const files = selectedPages(items).filter((page) => page.file && !page.file.copy);
+    const check = fileDeletionCheck(files);
+    const message = `Delete ${plural(items.length, "selected item")} and all contents of selected folders?`;
+    const accepted = check
+      ? await host.choose(message, [{ value: "delete", label: "Delete", danger: true }], { check })
+      : await host.confirm(message, "Delete");
+    if (!accepted) return;
+    const recycle = check?.checked ? files.map((page) => page.id) : [];
     const res = await send("POST", "/api/library/delete", {
-      pages: items.filter((item) => item.kind === "page").map((item) => item.id),
+      pages: [...new Set([...items.filter((item) => item.kind === "page").map((item) => item.id), ...recycle])],
       folders: items.filter((item) => item.kind === "folder").map((item) => item.id),
-      recycle: recycle ? files.map((item) => item.id) : [],
+      recycle,
     });
     if (!res.ok) {
       host.showNotice((await res.json().catch(() => ({}))).error || "Could not delete the selected items");
@@ -1404,29 +1400,24 @@ window.createLibrary = function createLibrary(host) {
     rowFor("folder", folder.id)?.scrollIntoView({ block: "nearest" });
   }
 
+  function fileDeletionCheck(files) {
+    return files.length ? {
+      label: files.length === 1 ? "Also move the file to the Recycle Bin" : `Also move ${files.length} files to the Recycle Bin`,
+      checked: host.fileSettings().deleteFiles === "trash",
+    } : undefined;
+  }
+
   async function deletePage(id) {
     const page = model.pageById.get(id);
     let recycle = false;
-    // A file page's file can go to the Recycle Bin with it (#707): ask, unless told not to.
+    // Always confirm filesystem deletion; keep the file unless the checkbox is selected.
     if (page?.file && !page.file.copy) {
-      const mode = host.fileSettings().deleteFiles;
-      if (mode === "trash") {
-        recycle = true;
-      } else if (!mode) {
-        const name = page.file.path.split(/[\\/]/).pop();
-        const check = { label: "Don't ask again", checked: false };
-        const choice = await host.choose(`Delete “${page.title}”. Also move ${name} to the Recycle Bin?`, [
-          { value: "keep", label: "Keep the file" },
-          { value: "trash", label: "Recycle the file", danger: true },
-        ], { check });
-        if (!choice) {
-          return;
-        }
-        if (check.checked) {
-          void host.setDeleteFiles(choice);
-        }
-        recycle = choice === "trash";
-      }
+      const check = fileDeletionCheck([page]);
+      const choice = await host.choose(`Delete “${page.title}”?`, [
+        { value: "delete", label: "Delete", danger: true },
+      ], { check });
+      if (!choice) return;
+      recycle = check.checked;
     }
     const res = await send("DELETE", `/api/tabs/${encodeURIComponent(id)}?permanent=true${recycle ? "&file=trash" : ""}`);
     if (res.ok) {
@@ -1449,16 +1440,23 @@ window.createLibrary = function createLibrary(host) {
       return;
     }
     const what = describeContents(pages, subfolders);
+    const files = selectedPages([{ kind: "folder", id }]).filter((page) => page.file && !page.file.copy);
+    const check = fileDeletionCheck(files);
     const choice = await host.choose(`Delete the folder “${folder.name}”? It holds ${what}.`, [
       { value: "lift", label: "Move contents up" },
       { value: "delete", label: "Delete all", danger: true },
-    ]);
+    ], { check });
     if (!choice) {
       return;
     }
-    const res = await send("DELETE", `/api/folders/${encodeURIComponent(id)}?mode=${choice}`);
+    const recycle = check?.checked && choice === "delete" ? files.map((page) => page.id) : [];
+    const res = recycle.length
+      ? await send("POST", "/api/library/delete", { pages: recycle, folders: [id], recycle })
+      : await send("DELETE", `/api/folders/${encodeURIComponent(id)}?mode=${choice}`);
     if (res.ok && choice === "delete") {
       host.showNotice(`Deleted “${folder.name}” with ${what}`, { undo: true });
+    } else if (!res.ok) {
+      host.showNotice((await res.json().catch(() => ({}))).error || "Could not delete the folder");
     }
   }
 
@@ -3019,6 +3017,7 @@ window.createLibrary = function createLibrary(host) {
 
   return {
     openHomeFolderPicker,
+    deletePage(id) { model = buildModel(); return deletePage(id); },
     render,
     reveal,
     pageMenu,

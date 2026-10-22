@@ -3504,6 +3504,10 @@
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
       return;
     }
+    if (tab?.file) {
+      await library.deletePage(id);
+      return;
+    }
     const res = await fetch(`/api/tabs/${encodeURIComponent(id)}?permanent=true`, { method: "DELETE" });
     if (res.ok) {
       showNotice(`Deleted “${tab?.title || "page"}”`, { undo: true });
@@ -4080,9 +4084,8 @@
   const filesDefaultBtn = document.getElementById("files-default");
   const filesDeleteTrack = document.getElementById("files-delete");
   const DELETE_FILE_MODES = [
-    { id: "", name: "Ask" },
+    { id: "", name: "Keep the file" },
     { id: "trash", name: "Recycle the file" },
-    { id: "keep", name: "Keep the file" },
   ];
   const NEW_FILE_NAMES = { md: "Untitled.md", txt: "Untitled.txt" };
   /** Where new files go and what deleting a file page does (the daemon keeps them). */
@@ -4115,7 +4118,7 @@
         const btn = document.createElement("button");
         btn.type = "button";
         btn.textContent = item.name;
-        btn.setAttribute("aria-pressed", String((fileSettings.deleteFiles || "") === item.id));
+        btn.setAttribute("aria-pressed", String((fileSettings.deleteFiles === "trash" ? "trash" : "") === item.id));
         btn.addEventListener("click", () => void saveFileSettings({ deleteFiles: item.id || null }));
         return btn;
       })
