@@ -5,12 +5,17 @@
 //! browser reads them. A cross-origin frame is its own DevTools target and its later navigations
 //! never reach the page's session, so every frame target is auto-attached and intercepted too.
 //! The board's own pages keep their headers.
+//!
+//! Component frames (chat and page components) are also held to their own origin here. Their CSP
+//! blocks fetches, frames and forms, but no policy stops a document navigating its own frame, and
+//! that request would carry whatever the component put in its URL. Document requests are paused
+//! before they are sent too, and a frame that has loaded a component may only load components.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{Manager, WebviewWindow};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2DevToolsProtocolEventReceivedEventArgs,
@@ -73,9 +78,11 @@ unsafe fn intercept(core: &ICoreWebView2, board_port: u16, app: &tauri::AppHandl
     let cdp = core.cast::<ICoreWebView2_11>()?;
 
     let for_paused = cdp.clone();
+    // Frame ids are the browser's frame tokens, the same in every session of this webview.
+    let components: ComponentFrames = Arc::default();
     let paused = DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
         if let Some((session, params)) = args.as_ref().and_then(|args| unsafe { event(args) }) {
-            unsafe { on_paused(&for_paused, &session, &params, board_port) };
+            unsafe { on_paused(&for_paused, &session, &params, board_port, &components) };
         }
         Ok(())
     }));
@@ -124,13 +131,20 @@ unsafe fn intercept(core: &ICoreWebView2, board_port: u16, app: &tauri::AppHandl
     Ok(())
 }
 
-/// Pause frame documents at their response, and hold new frame targets until they are watched too.
+/// Frames that have loaded a component document.
+type ComponentFrames = Arc<Mutex<HashSet<String>>>;
+
+/// Pause frame documents before they are requested and at their response, and hold new frame
+/// targets until they are watched too.
 unsafe fn watch(cdp: &ICoreWebView2_11, session: &str) {
     send(
         cdp,
         session,
         "Fetch.enable",
-        json!({ "patterns": [{ "urlPattern": "*", "resourceType": "Document", "requestStage": "Response" }] }),
+        json!({ "patterns": [
+            { "urlPattern": "*", "resourceType": "Document", "requestStage": "Request" },
+            { "urlPattern": "*", "resourceType": "Document", "requestStage": "Response" },
+        ] }),
     );
     send(
         cdp,
@@ -140,11 +154,21 @@ unsafe fn watch(cdp: &ICoreWebView2_11, session: &str) {
     );
 }
 
-unsafe fn on_paused(cdp: &ICoreWebView2_11, session: &str, params: &Value, board_port: u16) {
+unsafe fn on_paused(cdp: &ICoreWebView2_11, session: &str, params: &Value, board_port: u16, components: &ComponentFrames) {
     let Some(request_id) = params.get("requestId").and_then(Value::as_str) else {
         return;
     };
     let url = params.pointer("/request/url").and_then(Value::as_str).unwrap_or_default();
+    // Only response-stage pauses carry a status or an error.
+    if params.get("responseStatusCode").is_none() && params.get("responseErrorReason").is_none() {
+        let frame = params.get("frameId").and_then(Value::as_str).unwrap_or_default();
+        if navigation_allowed(&mut components.lock().unwrap(), frame, url, board_port) {
+            send(cdp, session, "Fetch.continueRequest", json!({ "requestId": request_id }));
+        } else {
+            send(cdp, session, "Fetch.failRequest", json!({ "requestId": request_id, "errorReason": "BlockedByClient" }));
+        }
+        return;
+    }
     let headers = params.get("responseHeaders").and_then(Value::as_array);
     let status = params.get("responseStatusCode").and_then(Value::as_u64);
     let rewritten = match (headers, status) {
@@ -190,6 +214,29 @@ unsafe fn fulfill(cdp: &ICoreWebView2_11, session: &str, request_id: &str, statu
     });
 }
 
+/// Whether a frame may request this document: once a frame has loaded a component, only
+/// components. The component host replaces a frame that loads twice, so this only has to keep
+/// the request from leaving.
+fn navigation_allowed(components: &mut HashSet<String>, frame: &str, url: &str, board_port: u16) -> bool {
+    if frame.is_empty() {
+        return true;
+    }
+    if is_component(url, board_port) {
+        components.insert(frame.to_owned());
+        return true;
+    }
+    !components.contains(frame)
+}
+
+/// A chat or page component document, on its own host on the board port.
+fn is_component(url: &str, board_port: u16) -> bool {
+    let Ok(url) = tauri::Url::parse(url) else {
+        return false;
+    };
+    url.port_or_known_default() == Some(board_port)
+        && url.host_str().and_then(|host| host.strip_suffix(".localhost")).is_some_and(is_component_label)
+}
+
 /// The board and its tab pages (127.0.0.1, 127.0.0.2 and each page's own <label>.localhost, on the board port).
 fn is_board_page(url: &str, board_port: u16) -> bool {
     let Ok(url) = tauri::Url::parse(url) else {
@@ -205,11 +252,25 @@ fn is_board_page(url: &str, board_port: u16) -> bool {
 
 /// A page or component host, as the daemon names it (src/config.ts).
 fn is_page_label(label: &str) -> bool {
-    if let Some(hex) = label.strip_prefix("w-it-") {
-        return hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if is_component_label(label) {
+        return true;
     }
     let hex = label.strip_prefix("t-").or_else(|| label.strip_prefix('x')).unwrap_or_default();
-    !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    !hex.is_empty() && is_hex(hex)
+}
+
+/// w-it-<12 hex> for a chat component, w-pc-<16 hex> for a page component.
+fn is_component_label(label: &str) -> bool {
+    let (hex, len) = match (label.strip_prefix("w-it-"), label.strip_prefix("w-pc-")) {
+        (Some(hex), _) => (hex, 12),
+        (_, Some(hex)) => (hex, 16),
+        _ => return false,
+    };
+    hex.len() == len && is_hex(hex)
+}
+
+fn is_hex(text: &str) -> bool {
+    text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// The response headers without anything that forbids framing, or None when nothing did.
@@ -345,5 +406,24 @@ mod tests {
         assert!(!is_board_page("http://app.localhost:4747/", 4747));
         assert!(!is_board_page("http://127.0.0.1:8188/", 4747));
         assert!(!is_board_page("https://github.com/", 4747));
+        assert!(is_board_page("http://w-pc-0123456789abcdef.localhost:4747/component/pc_0123456789abcdef?page=t_1", 4747));
+        assert!(!is_board_page("http://w-pc-012345abcdef.localhost:4747/", 4747));
+    }
+
+    #[test]
+    fn component_frames_only_load_components() {
+        let mut frames = HashSet::new();
+        let chat = "http://w-it-012345abcdef.localhost:4747/component/it_012345abcdef?thread=a";
+        let page = "http://w-pc-0123456789abcdef.localhost:4747/component/pc_0123456789abcdef?page=t_1";
+        assert!(navigation_allowed(&mut frames, "F1", "https://example.com/", 4747));
+        assert!(navigation_allowed(&mut frames, "F2", chat, 4747));
+        assert!(!navigation_allowed(&mut frames, "F2", "https://example.com/?leak", 4747));
+        assert!(!navigation_allowed(&mut frames, "F2", "http://127.0.0.1:4747/", 4747));
+        assert!(!navigation_allowed(&mut frames, "F2", "http://w-it-012345abcdef.localhost:8188/", 4747));
+        assert!(navigation_allowed(&mut frames, "F2", chat, 4747));
+        assert!(navigation_allowed(&mut frames, "F3", page, 4747));
+        assert!(!navigation_allowed(&mut frames, "F3", "https://example.com/", 4747));
+        assert!(navigation_allowed(&mut frames, "F1", "https://example.org/", 4747));
+        assert!(navigation_allowed(&mut frames, "", "https://example.org/", 4747));
     }
 }
