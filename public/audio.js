@@ -118,8 +118,26 @@
       throw Object.assign(new Error(message), { audioError: err.audioError || (err.name === "NotAllowedError" || err.name === "SecurityError" ? "denied" : "no_mic") });
     }
   }
+  /** 16 kHz mono PCM WAV: local servers (llama.cpp) cannot decode the WebM/Opus that MediaRecorder makes. */
+  async function toWav(blob) {
+    if (/^audio\/(wav|x-wav|mpeg|flac)/.test(blob.type)) return blob;
+    try {
+      const audio = await new OfflineAudioContext(1, 1, 16000).decodeAudioData(await blob.arrayBuffer());
+      const pcm = new Float32Array(audio.length);
+      for (let c = 0; c < audio.numberOfChannels; c++) audio.getChannelData(c).forEach((v, i) => { pcm[i] += v / audio.numberOfChannels; });
+      const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+      const text = (at, s) => [...s].forEach((ch, i) => out.setUint8(at + i, ch.charCodeAt(0)));
+      text(0, "RIFF"); out.setUint32(4, 36 + pcm.length * 2, true); text(8, "WAVEfmt ");
+      out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+      out.setUint32(24, 16000, true); out.setUint32(28, 32000, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+      text(36, "data"); out.setUint32(40, pcm.length * 2, true);
+      pcm.forEach((v, i) => out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 0x7fff, true));
+      return new Blob([out], { type: "audio/wav" });
+    } catch { return blob; }
+  }
   async function transcribe(blob, opts = {}) {
     try {
+      blob = await toWav(blob);
       const query = new URLSearchParams();
       if (opts.language) query.set("language", opts.language);
       if (opts.prompt) query.set("prompt", opts.prompt);

@@ -134,15 +134,18 @@ test("OpenAI adapter uploads multipart with daemon-only auth and maps response e
   const app = express(); const server = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => server.once("listening", resolve));
   const baseUrl = `http://127.0.0.1:${(server.address() as any).port}/v1`;
-  let status = 200, content = "";
+  let status = 200, content = "", text = "Words";
   app.post("/v1/audio/transcriptions", express.raw({ type: () => true }), (req, res) => {
     assert.equal(req.get("authorization"), "Bearer secret-key"); content = req.body.toString();
-    res.status(status).json(status === 200 ? { text: "Words" } : { error: { message: "secret-key" } });
+    res.status(status).json(status === 200 ? { text } : { error: { message: "secret-key" } });
   });
   try {
     const request = { source: { ...source, baseUrl }, model: "whisper-1", audio: clip(), language: "en", prompt: "Names", signal: AbortSignal.timeout(2000) };
     assert.deepEqual(await openAiEngine.transcribe(request), { ok: true, text: "Words" });
     assert.match(content, /name="file"; filename="recording.webm"/); assert.match(content, /name="model"/); assert.match(content, /whisper-1/); assert.match(content, /name="language"/); assert.match(content, /Names/);
+    text = "language English<asr_text>Scribe audio test.";
+    assert.deepEqual(await openAiEngine.transcribe(request), { ok: true, text: "Scribe audio test." }, "Qwen3-ASR's language tag is dropped");
+    text = "Words";
     for (const [code, error, retryable] of [[401, "auth", false], [429, "rate_limit", true], [503, "engine", true], [400, "engine", false]] as const) {
       status = code; const result = await openAiEngine.transcribe(request);
       assert.equal((result as any).error, error); assert.equal((result as any).retryable, retryable); assert.ok(!JSON.stringify(result).includes("secret-key"));

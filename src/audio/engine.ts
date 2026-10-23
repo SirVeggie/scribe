@@ -17,6 +17,7 @@ export const openAiEngine: SttEngine = {
       return { ok: false, error, message: `Speech-to-text request failed (${res.status}).`, retryable: res.status === 429 || res.status >= 500 };
     }
     const body = await res.json() as { text?: unknown };
-    return typeof body.text === "string" ? { ok: true, text: body.text } : { ok: false, error: "engine", message: "Speech-to-text returned no transcript." };
+    // Qwen3-ASR on llama.cpp returns its raw "language English<asr_text>…" output.
+    return typeof body.text === "string" ? { ok: true, text: body.text.replace(/^[^<]*<asr_text>/, "").trim() } : { ok: false, error: "engine", message: "Speech-to-text returned no transcript." };
   },
 };
