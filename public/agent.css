@@ -6180,3 +6180,8 @@ html.tight-small .agent-full {
   font-size: 13px;
   line-height: normal;
 }
+/* Inline kit components use the same card chrome as questions and settings. */
+.ag-component-body { position: relative; }
+.ag-component-body iframe { display: block; width: 100%; border: 0; background: var(--bg); }
+.ag-component-fallback { padding: 12px; max-height: 480px; overflow: auto; }
+.ag-component .ag-card-head .ag-btn { margin-left: auto; }

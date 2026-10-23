@@ -177,6 +177,7 @@ export function threadStats(thread: Thread, turns: Turn[], items: Item[], worksp
         messages.attachments.bytes += file.size ?? 0;
       }
     } else if (item.kind === "text") add(messages.text, item.text);
+    else if (item.kind === "component") add(messages.text, item.summary ?? item.fallback ?? item.title ?? "Interactive component");
     else if (item.kind === "reasoning") {
       add(messages.reasoning, item.text);
       if (item.endedAt) messages.reasoning.ms += Math.max(0, item.endedAt - item.startedAt);

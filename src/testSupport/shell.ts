@@ -62,7 +62,7 @@ export async function loadShellScripts(page: Page, options: {
 }
 
 /** Shared subset for chat function fixtures with a deliberately minimal DOM. */
-export const chatScripts = ["motion.js", "popout.js", "dom-sync.js", "audio.js", "audio-composer.js", "agent-render.js", "settings-ui.js"];
+export const chatScripts = ["motion.js", "popout.js", "dom-sync.js", "audio.js", "audio-composer.js", "component-host.js", "agent-render.js", "settings-ui.js"];
 
 export async function loadChatFixture(page: Page, agentSource: string): Promise<void> {
   await loadShellScripts(page, {

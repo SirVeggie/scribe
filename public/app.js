@@ -120,7 +120,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.2.1";
+  const BOARD_VERSION = "3.2.2";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -3099,6 +3099,13 @@
     // Scribe's own pages run the key script; the desktop app catches shortcuts natively in other frames.
     el.toggleAttribute("data-scribe-page", !tab.embedUrl);
     const url = viewUrl(tab);
+    if (/^https?:\/\/w-it-[0-9a-f]{12}\.localhost(?::\d+)?\/component\//.test(url)) {
+      el.sandbox = "allow-scripts";
+      el.dataset.src = url;
+      void window.ScribeComponents.attachUrl(el, url).catch(error => showNotice(error.message));
+      return;
+    }
+    el.sandbox = SANDBOX;
     if (el.dataset.src && el.contentWindow) {
       try {
         el.contentWindow.location.replace(url);

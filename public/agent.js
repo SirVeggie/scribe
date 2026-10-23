@@ -690,6 +690,7 @@
         return;
       }
       case "agent_item": {
+        if (msg.item.kind === "component") window.ScribeComponents?.update(msg.item);
         const detail = S.details.get(msg.item.threadId);
         if (!detail) return;
         const prev = detail.byId.get(msg.item.id);
@@ -3878,6 +3879,7 @@
       bubble.append(content);
       if (item.card) bubble.prepend(el("div", "ag-from-page", item.card.reply ? `Reply on card #${item.card.num}` : item.card.resume ? `Continue card #${item.card.num}` : `Comment on card #${item.card.num}`));
       else if (item.from === "page") bubble.prepend(el("div", "ag-from-page", "Sent by the page"));
+      else if (item.from === "component") bubble.prepend(el("div", "ag-from-page", "Sent by a component"));
       else if (item.from === "scribe") bubble.prepend(el("div", "ag-from-page", "Sent by Scribe"));
       else if (item.from === "hook") bubble.prepend(el("div", "ag-from-page", "Sent by a hook"));
       const flags = hookFlags(item);
@@ -3980,6 +3982,8 @@
           return this.renderPlan(it);
         case "settings":
           return this.renderSettings(it);
+        case "component":
+          return window.ScribeComponents.render(it, R, mdCtx);
         case "todos":
           return this.renderTodos(it);
         case "notice": {
@@ -4747,7 +4751,7 @@
     renderTurnFooter(turn, items) {
       const foot = el("div", `ag-turn-foot s-${turn.status}`);
       if (turn.status === "running") {
-        const waiting = items.some((it) => (it.kind === "approval" || it.kind === "question" || it.kind === "plan") && it.status === "pending");
+        const waiting = items.some((it) => (it.kind === "approval" || it.kind === "question" || it.kind === "plan" || it.kind === "component") && it.status === "pending");
         foot.append(el("span", "ag-spin"), el("span", "ag-foot-label", waiting ? "Waiting for you" : "Working"), elapsed(turn.startedAt));
         foot.append(button(icon("stop"), "ag-btn tiny", () => this.stop(), "Stop", false));
         return foot;
@@ -6851,6 +6855,7 @@
 
   /** What an item's step shows, as a string: equal strings render the same. */
   function itemSig(it, byParent) {
+    if (it.kind === "component") return JSON.stringify([it.id, it.html, it.title, it.status]);
     const children = it.kind === "tool" && it.toolId ? byParent.get(it.toolId) : null;
     const page = it.kind === "tool" ? pageTool(it) : null;
     return JSON.stringify([it, page?.title, children?.map((child) => itemSig(child, byParent))]);
@@ -7997,7 +8002,7 @@
         else if (intent?.announced && item.threadId === intent.threadId && shownPageCall(item)) this.setPageIntent(null);
       }
       if (item.threadId !== this.view.threadId) return;
-      if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan") && item.status === "pending") {
+      if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan" || item.kind === "component") && item.status === "pending") {
         if (!S.dockShown) this.setShown(true);
         this.setExpanded(true);
         return;

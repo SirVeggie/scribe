@@ -46,6 +46,30 @@ const items = [
   { id: "p", threadId: "t", turnId: "u1", seq: 4, kind: "approval", requestId: "p", title: "Run rm", status: "pending", options: [{ id: "allow", kind: "allow_once", label: "Allow" }, { id: "deny", kind: "reject_once", label: "Deny" }] },
 ];
 
+test("component summary and local updates keep the live iframe through transcript reconciliation", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    let loads = 0;
+    await page.route("http://w-it-012345abcdef.localhost/**", route => {
+      loads++;
+      return route.fulfill({ contentType: "text/html", body: "<p>Inline kit</p>" });
+    });
+    const component = { id: "it_012345abcdef", threadId: "t", turnId: "u1", seq: 5, kind: "component", html: "<p>Inline kit</p>", fallback: "Color table", status: "shown", wait: false };
+    await page.evaluate(([thread, component, turn]) => (window as any).T.open(thread, [component], [turn]), [thread, component, turn] as const);
+    await page.locator(".ag-component iframe").waitFor();
+    await page.evaluate(() => { (window as any).originalFrame = document.querySelector(".ag-component iframe"); });
+    await page.evaluate(async component => {
+      const { T } = window as any;
+      T.onEvent({ type: "agent_item", item: { ...component, local: { tab: "two" }, summary: "Updated table" } });
+      T.onEvent({ type: "agent_item", item: { id: "later", threadId: "t", turnId: "u1", seq: 6, kind: "text", text: "After the table" } });
+      await T.frame();
+    }, component);
+    assert.equal(await page.evaluate(() => (window as any).originalFrame === document.querySelector(".ag-component iframe")), true);
+    assert.equal(loads, 1);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test("missing workspaces offer manual repair when automatic recovery finds nothing", async () => {
   const { browser, page, errors } = await chatPage();
   try {

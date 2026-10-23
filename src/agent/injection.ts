@@ -67,6 +67,7 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "ask_user",
   "settings_find",
   "settings_show",
+  "component_show",
   "page_wait",
   "library_folders",
   "scribe_docs",

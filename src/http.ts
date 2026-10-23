@@ -4,6 +4,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { componentSite } from "./components.js";
+import { parseComponentInput } from "./agent/componentTool.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
@@ -178,6 +180,7 @@ export async function startHttp(): Promise<http.Server> {
   const app = express();
   app.disable("x-powered-by");
   app.use(contentOriginGate);
+  app.use(componentSite(() => agentHost ?? undefined, publicDir));
   // A worktree's UI preview, on its chat's own origin (#703); other hosts go on.
   app.use(worktreePreviewSite(id => agentHost?.getThread(id)?.worktree));
   // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
@@ -1076,6 +1079,23 @@ export async function startHttp(): Promise<http.Server> {
         if (!res.writableEnded) res.status(400).json({ error: err.message === "aborted" ? "The question was cancelled." : err.message });
       })
       .finally(() => res.off("close", onClientGone));
+  });
+
+  app.post("/api/component", (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) { res.status(403).json({ error: "component_show only works in Scribe chat threads." }); return; }
+    let input;
+    try { input = parseComponentInput(req.body); }
+    catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const gone = () => { if (!res.writableEnded) abort.abort(); };
+    res.on("close", gone);
+    agentHost.showComponent(thread, input, abort.signal)
+      .then(result => { if (!res.writableEnded) res.json(result); })
+      .catch(error => { if (!res.writableEnded) res.status(400).json({ error: error.message }); })
+      .finally(() => res.off("close", gone));
   });
 
   /** The app window's list of its settings dialogs' sections and rows, for settings_find. */

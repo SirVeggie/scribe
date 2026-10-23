@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Daemon/UI protocol version. Bump with any API or event change; public/app.js BOARD_VERSION must match. */
-export const VERSION = "3.2.1";
+export const VERSION = "3.2.2";
 /** The install (checkout) this process runs from: the folder above src/ or dist/. */
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 export const HOST = "127.0.0.1";
@@ -70,6 +70,17 @@ export function shellOrigins(): string[] {
  * resolve *.localhost to loopback, where the board listens. Ids outside t_<hex> use x<hex of the id>.
  */
 export const PAGE_HOST_SUFFIX = ".localhost";
+
+/** Keep the full item prefix: w-<hex> is already a worktree preview. */
+export function componentHost(itemId: string): string {
+  if (!/^it_[0-9a-f]{12}$/.test(itemId)) throw new Error("Invalid component item id");
+  return `w-it-${itemId.slice(3)}.localhost`;
+}
+
+export function componentItemFromHost(hostname: string): string | undefined {
+  const match = /^w-it-([0-9a-f]{12})\.localhost$/.exec(hostname.toLowerCase());
+  return match ? `it_${match[1]}` : undefined;
+}
 
 export function pageHost(id: string): string {
   const label = /^t_[0-9a-f]+$/.test(id) ? `t-${id.slice(2)}` : `x${Buffer.from(id, "utf8").toString("hex")}`;

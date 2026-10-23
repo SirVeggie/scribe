@@ -1,5 +1,5 @@
 import type express from "express";
-import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost, previewHost, previewThreadFromHost } from "./config.js";
+import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost } from "./config.js";
 
 /** A tab page's origin (t-ab12cd34.localhost) or the shared content origin (127.0.0.2): never the board's. */
 export function isContentHost(req: express.Request): boolean {
@@ -90,6 +90,13 @@ function hostRedirect(req: express.Request, host: string, path: string): string 
 const PREVIEW_PATH = /^\/preview\/([^/]+)(\/.*)?$/;
 
 export function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const component = componentItemFromHost(req.hostname);
+  if (component) {
+    // No API, assets, blobs, pages or shell scripts are available on a component origin.
+    if (req.method === "GET" && req.path === `/component/${component}`) next();
+    else res.status(403).type("text").send("This origin only serves its component.");
+    return;
+  }
   if (previewThreadFromHost(req.hostname) !== undefined) {
     // Agent-written scripts: the worktree's files (worktreePreviewSite) and previewShared, read only.
     if (req.method === "GET") next();

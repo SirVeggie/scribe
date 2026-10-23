@@ -1489,6 +1489,7 @@ export async function startMcp(): Promise<void> {
     if (pages) registerAsk(server);
     registerQuestion(server);
     registerSettings(server);
+    registerComponent(server);
     registerWebRequest(server);
     registerThreadUpdate(server);
     if (!off.has("threads")) registerThreadTools(server);
@@ -1602,6 +1603,25 @@ function registerSettings(server: McpServer): void {
  * ask_user: Scribe's own question tool, the same on every provider. The chat shows the questions as
  * a card (a form dialog when there are many) and the turn waits for the answers.
  */
+function registerComponent(server: McpServer): void {
+  server.tool("component_show", "Show agent-written kit HTML inline in chat (at most 256 KiB). No network or page API access. Use kit classes, data-reply buttons or forms, or scribe.reply(data,{summary}). scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text; open(link) opens a link. With wait:true, waits for reply or Skip; otherwise replies send their summary as a chat message. Include fallback markdown for history. Plugin/component/props inputs are reserved for a later release.", {
+    html: z.string().describe("HTML fragment or document; kit.css and kit.js are included."),
+    title: z.string().optional(), fallback: z.string().optional(), wait: z.boolean().optional(),
+  }, { readOnlyHint: true }, async (input, extra) => {
+    const started = Date.now();
+    const token = extra._meta?.progressToken;
+    const heartbeat = input.wait && token !== undefined ? setInterval(() => {
+      extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: Math.round((Date.now() - started) / 1000), message: "Waiting for the component's reply" } }).catch(() => {});
+    }, WAIT_HEARTBEAT_MS) : undefined;
+    try {
+      const { status, data } = await api("POST", "/api/component", input, { signal: extra.signal });
+      if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+    } catch (error) { return errorResult((error as Error).message); }
+    finally { clearInterval(heartbeat); }
+  });
+}
+
 function registerQuestion(server: McpServer): void {
   const question = z.object({
     question: z.string().describe("The full question."),

@@ -138,7 +138,7 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
   switch (item.kind) {
     case "user": {
       if (item.dropped) return null;
-      const who = item.from === "page" ? "user (sent by page)" : item.from === "scribe" ? "scribe" : item.from === "hook" ? "scribe hook" : item.from === "agent" ? "agent that started this helper" : "user";
+      const who = item.from === "page" ? "user (sent by page)" : item.from === "component" ? "user (sent by component)" : item.from === "scribe" ? "scribe" : item.from === "hook" ? "scribe hook" : item.from === "agent" ? "agent that started this helper" : "user";
       return `[${who}] ${clip(item.text, max * 2)}`;
     }
     case "text":
@@ -157,6 +157,8 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
     }
     case "plan":
       return `[plan ${item.status}] ${clip(item.text, max * 2)}`;
+    case "component":
+      return `[component ${item.status}] ${clip(item.summary ?? item.fallback ?? item.title ?? "Interactive component", max * 2)}`;
     case "settings":
       return `[settings shown] ${item.ids.join(", ")}`;
     case "todos":
@@ -176,6 +178,7 @@ export function itemMatches(item: Item, words: string[]): boolean {
   else if (item.kind === "tool") hay = `${item.name} ${item.title} ${item.detail ?? ""} ${item.output ?? ""}`;
   else if (item.kind === "approval") hay = `${item.title} ${item.detail ?? ""}`;
   else if (item.kind === "question") hay = `${item.title ?? ""} ${item.questions.map((q) => q.prompt).join(" ")}`;
+  else if (item.kind === "component") hay = `${item.title ?? ""} ${item.summary ?? item.fallback ?? ""}`;
   hay = hay.toLowerCase();
   return words.every((w) => hay.includes(w));
 }

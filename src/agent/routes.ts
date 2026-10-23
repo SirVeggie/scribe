@@ -17,6 +17,7 @@ import { workspaceKey, type ThreadPatch } from "./prefs.js";
 import { hookCoverage } from "./hooks.js";
 import { copySkill, createSkill, readHarnessFile, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
+import { componentHost, PORT } from "../config.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
 import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
@@ -669,6 +670,18 @@ export function agentRouter(host: AgentHost): express.Router {
       return { ok: true };
     })
   );
+
+  router.get("/threads/:id/components/:itemId", wrap(req => host.componentItem(req.params.id, req.params.itemId)));
+  router.post("/threads/:id/components/:itemId", wrap(req => {
+    const body = isPlainRecord(req.body) ? req.body : {};
+    return host.updateComponent(req.params.id, req.params.itemId, body);
+  }));
+  router.post("/threads/:id/components/:itemId/expand", wrap(req => {
+    const item = host.componentItem(req.params.id, req.params.itemId);
+    const url = `http://${componentHost(item.id)}:${PORT}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
+    const { tab } = store.openTempUrl(url, { activate: false });
+    return { key: tab.key };
+  }));
 
   router.post(
     "/questions/:requestId",

@@ -548,7 +548,7 @@ export type ItemBody =
       /** Temporarily held in the queue while an editing popup is open. */
       editing?: boolean;
       /** Sent by the code of the thread's page (board.agent), by Scribe itself (going on after a restart), by the agent this helper thread works for, or by a hook's context action; not typed by the user. */
-      from?: "page" | "scribe" | "agent" | "hook";
+      from?: "page" | "component" | "scribe" | "agent" | "hook";
       /** Typed into the floating chat over a page. Kept so tools/replay-page-intent.ts can measure on those turns alone. */
       dock?: boolean;
       /** Sent by a Kanban board about one of its cards: a comment on it, or Continue (resume). */
@@ -618,6 +618,7 @@ export type ItemBody =
     }
   /** settings_show: rows of Scribe's settings dialogs, shown in the chat to change there (ids from the client's settings index). */
   | { kind: "settings"; ids: string[]; title?: string }
+  | { kind: "component"; html: string; title?: string; fallback?: string; summary?: string; local?: Record<string, unknown>; wait: boolean; status: "shown" | "pending" | "answered" | "skipped" | "expired" }
   | { kind: "todos"; todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | { kind: "notice"; level: "info" | "warn" | "error"; text: string };
 
