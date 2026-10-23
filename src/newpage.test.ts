@@ -37,7 +37,7 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
   const effects: { canvas: any; destroyed: boolean; ready: () => void; fail: () => void }[] = [];
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChanges.push(fn); } };
   const node = () => ({
-    hidden: false, textContent: "", innerHTML: "",
+    hidden: false, inert: false, textContent: "", innerHTML: "",
     children: [] as any[], listeners: {} as Record<string, () => void>,
     dataset: {} as Record<string, string>, style: { cssText: "" },
     append(...children: any[]) { this.children.push(...children); },
