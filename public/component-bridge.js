@@ -21,6 +21,7 @@ function componentBridge(initialLocal) {
         reply(data, options = {}) { return call("reply", { data, summary: options.summary ?? "" }); },
         setSummary(summary) { return call("summary", { summary }); },
         open(link) { return call("open", { link }); },
+        signal() {}, // kit's page-only fallback is intentionally unavailable in components.
     };
     Object.defineProperty(window, "scribe", { value: api, writable: false });
     window.addEventListener("message", function init(event) {
@@ -33,6 +34,7 @@ function componentBridge(initialLocal) {
                 for (const [key, value] of Object.entries(data.vars))
                     document.documentElement.style.setProperty(key, String(value));
                 document.documentElement.style.colorScheme = data.scheme;
+                document.documentElement.style.visibility = "visible";
             }
             else if (data.type === "state")
                 local = data.local;

@@ -1,4 +1,6 @@
 import type { Item } from "./types.js";
+import { isIP } from "node:net";
+import { safeEmbedUrl } from "../embed.js";
 
 export const MAX_COMPONENT_HTML = 256 * 1024;
 export const MAX_COMPONENT_STATE = 64 * 1024;
@@ -29,4 +31,17 @@ export function parseComponentInput(value: unknown): ComponentInput {
 
 export function componentText(item: ComponentItem): string {
   return item.summary ?? item.fallback ?? item.title ?? "Interactive component";
+}
+
+/** Only page/card keys and external websites. Components cannot promote files into page access. */
+export function componentLink(value: unknown): string {
+  const link = componentString(value, "link", 8000);
+  if (/^scribe:[a-zA-Z0-9_-]+(?:#[^\s]*)?$/.test(link)) return link;
+  const safe = safeEmbedUrl(link);
+  if (safe) {
+    const url = new URL(safe);
+    const name = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    if (!isIP(name) && name !== "localhost" && !name.endsWith(".localhost")) return safe;
+  }
+  throw new Error("Components can open Scribe page/card keys or external http(s) websites.");
 }

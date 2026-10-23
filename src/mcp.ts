@@ -1604,7 +1604,7 @@ function registerSettings(server: McpServer): void {
  * a card (a form dialog when there are many) and the turn waits for the answers.
  */
 function registerComponent(server: McpServer): void {
-  server.tool("component_show", "Show agent-written kit HTML inline in chat (at most 256 KiB). No network or page API access. Use kit classes, data-reply buttons or forms, or scribe.reply(data,{summary}). scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text; open(link) opens a link. With wait:true, waits for reply or Skip; otherwise replies send their summary as a chat message. Include fallback markdown for history. Plugin/component/props inputs are reserved for a later release.", {
+  server.tool("component_show", "Show agent-written kit HTML inline in chat (at most 256 KiB). No network or page API access. Use kit classes, data-reply buttons or forms, or scribe.reply(data,{summary}). scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text; open(link) opens Scribe page/card keys or external http(s) websites. With wait:true, waits for reply data or Skip; otherwise replies send only their summary as a chat message. Include fallback markdown for history. Plugin/component/props inputs are reserved for a later release.", {
     html: z.string().describe("HTML fragment or document; kit.css and kit.js are included."),
     title: z.string().optional(), fallback: z.string().optional(), wait: z.boolean().optional(),
   }, { readOnlyHint: true }, async (input, extra) => {

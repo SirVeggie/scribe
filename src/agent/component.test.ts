@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { parseComponentInput, MAX_COMPONENT_HTML, type ComponentItem } from "./componentTool.js";
+import { parseComponentInput, componentLink, MAX_COMPONENT_HTML, type ComponentItem } from "./componentTool.js";
 import { componentHost, componentItemFromHost, previewThreadFromHost, pageIdFromHost } from "../config.js";
 import { contentOriginGate } from "../contentOrigin.js";
 import { componentDocument, COMPONENT_CSP } from "../components.js";
@@ -56,6 +56,22 @@ test("component hosts cannot collide with page or worktree origins and expose no
   assert.match(COMPONENT_CSP, /sandbox allow-scripts;/);
 });
 
+test("component links cannot open files or loopback aliases", () => {
+  for (const link of ["file:///C:/private.txt", "javascript:alert(1)", "http://localhost/", "http://127.1/", "http://0.0.0.0/", "http://[::ffff:7f00:1]/", "http://w-it-012345abcdef.localhost/"]) assert.throws(() => componentLink(link), /Components can open/);
+  assert.equal(componentLink("scribe:agent-todo#card=777"), "scribe:agent-todo#card=777");
+  assert.equal(componentLink("https://example.com/test"), "https://example.com/test");
+});
+
+test("question consumers can skip component waits and server caps write bursts", async () => {
+  const thread = runningThread();
+  const pending = host.showComponent(thread, { html: "<p>choice</p>", wait: true });
+  const item = component(thread);
+  host.resolveQuestion(item.id, { skipped: true });
+  assert.deepEqual(await pending, { skipped: true });
+  for (let i = 0; i < 10; i++) host.updateComponent(thread, item.id, { action: "summary", summary: String(i) });
+  assert.throws(() => host.updateComponent(thread, item.id, { action: "summary", summary: "too many" }), /too frequent/);
+});
+
 test("wait returns structured clicks; local/summary persist without exposing HTML in history", async () => {
   const thread = runningThread();
   const pending = host.showComponent(thread, { html: "<p>secret raw markup</p>", fallback: "Fallback", wait: true });
@@ -98,7 +114,7 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     const pending = host.showComponent(thread, { html: `<table class="table"><thead><tr><th>Color</th></tr></thead><tbody><tr><td>Blue</td></tr></tbody></table><button data-reply="Red" data-context='{"color":"red"}'>Red</button><button data-reply="Blue" data-context='{"color":"blue"}'>Blue</button><button data-reply="Green">Green</button><script>window.loads = 1; fetch('https://example.test/leak').catch(()=>window.blocked=true);</script>`, wait: true });
     const item = component(thread);
     const read = (name: string) => fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8");
-    let outgoing = 0, documents = 0;
+    let outgoing = 0, documents = 0, writes = 0;
     const page = await browser.newPage();
     page.setDefaultTimeout(7000);
     await page.route("**/*", async route => {
@@ -108,6 +124,7 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
         return route.fulfill({ contentType: "text/html", headers: { "Content-Security-Policy": COMPONENT_CSP }, body: componentDocument(host.componentItem(thread, item.id), { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") }) });
       }
       if (target.pathname.startsWith("/api/agent")) {
+        if (req.method() === "POST") writes++;
         try { const result = req.method() === "GET" ? host.componentItem(thread, item.id) : host.updateComponent(thread, item.id, req.postDataJSON()); return route.fulfill({ json: result }); }
         catch (error) { return route.fulfill({ status: 400, json: { error: (error as Error).message } }); }
       }
@@ -134,6 +151,13 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     await frame.locator("body").evaluate(async () => { await (window as any).scribe.setLocal({ tab: "saved" }); await (window as any).scribe.setSummary("Table of colors"); });
     assert.equal(host.componentItem(thread, item.id).local?.tab, "saved");
     assert.equal(host.componentItem(thread, item.id).summary, "Table of colors");
+    const beforeBurst = writes;
+    await frame.locator("body").evaluate(async () => {
+      const api = (window as any).scribe;
+      await Promise.all(Array.from({ length: 30 }, (_, i) => api.setLocal({ tab: `saved-${i}` })));
+    });
+    assert.equal(writes - beforeBurst, 1, "typing coalesces to one persisted state write");
+    assert.equal(host.componentItem(thread, item.id).local?.tab, "saved-29");
     assert.equal(outgoing, 0);
     const child = page.frames().find(f => f.url().includes("/component/"))!;
     assert.equal(await child.evaluate(() => { try { return !!parent.document; } catch { return false; } }), false);
@@ -146,7 +170,7 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     await page.evaluate(() => scrollTo(0, 0));
     await page.waitForFunction(() => !!document.querySelector(".ag-component iframe"));
     await frame.getByRole("button", { name: "Blue", exact: true }).waitFor();
-    assert.equal(await frame.locator("body").evaluate(() => (window as any).scribe.local.tab), "saved");
+    assert.equal(await frame.locator("body").evaluate(() => (window as any).scribe.local.tab), "saved-29");
     // The shell's temporary embed uses this same URL and attachment path, never a full page bridge.
     await page.evaluate(async item => {
       const w = window as any;

@@ -102,7 +102,7 @@ import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
 import { injectionDetectors } from "./injection.js";
 
-import { parseComponentInput, componentJson, componentString, componentText, type ComponentAnswer, type ComponentItem, type ComponentInput } from "./componentTool.js";
+import { parseComponentInput, componentJson, componentString, componentText, componentLink, type ComponentAnswer, type ComponentItem, type ComponentInput } from "./componentTool.js";
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
 
@@ -515,6 +515,7 @@ export class AgentHost {
   private seq = new Map<string, number>();
   private dirty = new Map<string, Item>();
   private pending = new Map<string, Pending>();
+  private componentWrites = new Map<string, { at: number; count: number }>();
   /** "Allow once" answers to web_request, per thread, until a web call uses them. */
   private webPasses = new Map<string, Array<{ call: WebCall; at: number }>>();
   /** agent_run calls waiting for a helper thread to go idle. */
@@ -4030,8 +4031,19 @@ export class AgentHost {
     return this.waitPending<ComponentAnswer>(threadId, run, "component", item.id, signal);
   }
 
-  updateComponent(threadId: string, itemId: string, change: Record<string, unknown>): { ok: true } {
+  updateComponent(threadId: string, itemId: string, change: Record<string, unknown>): { ok: true; link?: string } {
     const item = this.componentItem(threadId, itemId);
+    if (change.action === "open") return { ok: true, link: componentLink(change.link) };
+    if (change.action === "local" || change.action === "summary") {
+      let rate = this.componentWrites.get(itemId);
+      if (!rate || Date.now() - rate.at >= 1000) {
+        rate = { at: Date.now(), count: 0 };
+        this.componentWrites.delete(itemId);
+        this.componentWrites.set(itemId, rate);
+        if (this.componentWrites.size > 500) this.componentWrites.delete(this.componentWrites.keys().next().value!);
+      }
+      if (++rate.count > 10) throw new Error("Component updates are too frequent; coalesce view state updates.");
+    }
     if (change.action === "local") {
       const local = componentJson(change.local);
       if (!local || typeof local !== "object" || Array.isArray(local)) throw new Error("local must be an object.");
@@ -4712,6 +4724,10 @@ export class AgentHost {
 
   resolveQuestion(requestId: string, answer: QuestionAnswer): void {
     const pending = this.pending.get(requestId);
+    if (pending?.kind === "component" && "skipped" in answer) {
+      this.updateComponent(pending.threadId, pending.itemId, { action: "skip" });
+      return;
+    }
     if (!pending || pending.kind !== "question") throw new Error("This question is no longer waiting.");
     this.pending.delete(requestId);
     const item = this.loadItems(pending.threadId).find((it) => it.id === pending.itemId);

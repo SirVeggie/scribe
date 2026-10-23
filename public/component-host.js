@@ -20,19 +20,11 @@
     for (const key of ["--bg", "--text", "--muted", "--border", "--accent", "--code-bg"]) vars[key] = style.getPropertyValue(key);
     port.postMessage({ type: "theme", vars, scheme: style.colorScheme || "dark" });
   }
-  function safeLink(link) {
-    if (typeof link !== "string" || link.length > 8000) return false;
-    if (/^scribe:[a-zA-Z0-9_-]+(?:#[^\s]*)?$/.test(link)) return true;
-    // File links use Scribe's file viewer and existing access rules, never direct navigation.
-    if (/^file:\/\//i.test(link)) return true;
-    try {
-      const target = new URL(link);
-      return ["http:", "https:"].includes(target.protocol) && !["localhost", "127.0.0.1", "127.0.0.2", "[::1]"].includes(target.hostname) && !target.hostname.endsWith(".localhost");
-    } catch { return false; }
-  }
   function attach(frame, item, { expanded = false } = {}) {
     attached.get(frame)?.();
     let port, loaded = false, disposed = false, lastReply = 0;
+    let writeTimer, writing = Promise.resolve(), localWrites = 0;
+    const queued = new Map();
     const entry = { frame, item, dispose, update };
     live.add(entry);
     attached.set(frame, dispose);
@@ -41,10 +33,38 @@
     frame.setAttribute("allow", "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
     function update(next) {
       entry.item = next;
-      port?.postMessage({ type: "state", local: next.local || {} });
+      if (!queued.has("local") && !localWrites) port?.postMessage({ type: "state", local: next.local || {} });
+    }
+    function respond(id, result, error) { if (!disposed) port?.postMessage({ id, result, error }); }
+    function flush() {
+      clearTimeout(writeTimer);
+      writeTimer = null;
+      const batch = [...queued.values()];
+      queued.clear();
+      if (batch.some(request => request.data.action === "local")) localWrites++;
+      writing = writing.then(async () => {
+        for (const request of batch) {
+          try {
+            const result = await api("POST", base(entry.item), request.data);
+            for (const id of request.ids) respond(id, result);
+          } catch (error) { for (const id of request.ids) respond(id, undefined, error.message); }
+        }
+        if (batch.some(request => request.data.action === "local")) localWrites--;
+      });
+      return writing;
+    }
+    function queueWrite(data) {
+      const previous = queued.get(data.action);
+      const ids = previous?.ids || [];
+      if (ids.length >= 100) throw new Error("Component updates are too frequent.");
+      ids.push(data.id);
+      queued.set(data.action, { data, ids });
+      // A fixed window coalesces continuous typing without starving persistence.
+      if (!writeTimer) writeTimer = setTimeout(flush, 400);
     }
     function dispose() {
       if (disposed) return;
+      void flush();
       disposed = true;
       port?.close();
       frame.removeEventListener("load", load);
@@ -80,11 +100,14 @@
           }
           let result;
           if (data.action === "open") {
-            if (!safeLink(data.link)) throw new Error("Unsupported link.");
-            app()?.openLink(data.link);
-            result = { ok: true };
-          } else if (["local", "summary", "reply"].includes(data.action)) {
-            if (data.action === "reply") lastReply = Date.now();
+            result = await api("POST", base(entry.item), { action: "open", link: data.link });
+            app()?.openLink(result.link);
+          } else if (data.action === "local" || data.action === "summary") {
+            queueWrite(data);
+            return;
+          } else if (data.action === "reply") {
+            lastReply = Date.now();
+            await flush();
             result = await api("POST", base(entry.item), data);
           } else throw new Error("Unsupported component action.");
           if (!disposed) port.postMessage({ id, result });
@@ -116,6 +139,7 @@
     body.style.minHeight = `${heights.get(item.id) || 160}px`;
     const fallback = el("div", "ag-md ag-component-fallback");
     R.renderMarkdown(fallback, item.summary ?? item.fallback ?? "", mdCtx);
+    node._updateComponent = next => { R.renderMarkdown(fallback, next.summary ?? next.fallback ?? "", mdCtx); };
     body.append(fallback);
     node.append(body);
     let frame, dispose;
@@ -154,8 +178,9 @@
   const originalRender = render;
   let cleanup;
   new MutationObserver(() => {
-    clearTimeout(cleanup);
+    if (cleanup) return;
     cleanup = setTimeout(() => {
+      cleanup = null;
       for (const node of observed) if (!node.isConnected) { node._disposeComponent(); observed.delete(node); }
       for (const entry of [...live]) if (!entry.frame.isConnected) entry.dispose();
     }, 200);
@@ -165,7 +190,10 @@
   new MutationObserver(refreshTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
   window.ScribeComponents = {
     render(item, R, ctx) { const node = originalRender(item, R, ctx); observed.add(node); return node; },
-    update(item) { for (const entry of live) if (entry.item.id === item.id) entry.update(item); },
+    update(item) {
+      for (const entry of live) if (entry.item.id === item.id) entry.update(item);
+      for (const node of observed) if (node.dataset.itemId === item.id) node._updateComponent(item);
+    },
     attach, url,
     async attachUrl(frame, raw) {
       const target = new URL(raw);

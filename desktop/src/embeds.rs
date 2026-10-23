@@ -203,8 +203,11 @@ fn is_board_page(url: &str, board_port: u16) -> bool {
     board_host && url.port_or_known_default() == Some(board_port)
 }
 
-/// A page host's label, as the daemon names it (src/config.ts pageHost): t-<hex> or x<hex>.
+/// A page or component host, as the daemon names it (src/config.ts).
 fn is_page_label(label: &str) -> bool {
+    if let Some(hex) = label.strip_prefix("w-it-") {
+        return hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    }
     let hex = label.strip_prefix("t-").or_else(|| label.strip_prefix('x')).unwrap_or_default();
     !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
@@ -334,6 +337,10 @@ mod tests {
         assert!(is_board_page("http://127.0.0.1:4747/", 4747));
         assert!(is_board_page("http://127.0.0.2:4747/t/abc", 4747));
         assert!(is_board_page("http://t-ab12cd34.localhost:4747/view/t_ab12cd34", 4747));
+        assert!(is_board_page("http://w-it-012345abcdef.localhost:4747/component/it_012345abcdef", 4747));
+        assert!(!is_board_page("http://w-it-012345abcdef.localhost:8188/", 4747));
+        assert!(!is_board_page("http://w-it-xyz.localhost:4747/", 4747));
+        assert!(!is_board_page("http://w-it-012345abcdef.evil.localhost:4747/", 4747));
         assert!(!is_board_page("http://t-ab12cd34.localhost:8188/", 4747));
         assert!(!is_board_page("http://app.localhost:4747/", 4747));
         assert!(!is_board_page("http://127.0.0.1:8188/", 4747));

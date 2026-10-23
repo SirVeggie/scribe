@@ -13,7 +13,7 @@ export function componentDocument(item: ComponentItem, kit: { css: string; js: s
   const boot = `<script>${kit.bridge};componentBridge(${jsonScript(item.local ?? {})});</script>`;
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:dark;--bg:#1a1a1d;--text:#e8e8ea;--muted:#8e8e96;--border:#ffffff18;--accent:#c9c9d0;--code-bg:#131315}*{box-sizing:border-box}html,body{margin:0}body{padding:12px;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,sans-serif}</style><style>${kit.css}</style>${boot}`;
   // Full documents and fragments both get the same trusted prefix, before agent-written HTML.
-  return `<!doctype html><html><head>${head}</head><body>${item.html}<script>${kit.js}</script></body></html>`;
+  return `<!doctype html><html style="visibility:hidden"><head>${head}</head><body>${item.html}<script>${kit.js}</script></body></html>`;
 }
 
 export function componentSite(host: () => AgentHost | undefined, publicDir: string): express.RequestHandler {
