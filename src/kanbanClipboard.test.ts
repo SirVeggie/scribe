@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
+import { markdownVendor } from "./vendorFixture.js";
 
 test("comments can be copied from a separate-origin Scribe page", async (t) => {
   let browser;
@@ -31,12 +32,15 @@ test("comments can be copied from a separate-origin Scribe page", async (t) => {
         description: "", labels: [], priority: 0, checklist: [], images: [], blockedBy: [], movedAt: 1,
         comments: [{ id: "cm1", by: "user", at: 1, text: comment }] }],
     };
-    await page.route("https://content.test/**", route => route.fulfill({ contentType: "text/html", body:
-      kanban.replace("<head>", `<head><script>window.scribe = {
-        id: 'board', title: 'Board', state: ${JSON.stringify(state)}, local: {},
-        onChange() {}, set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); }, signal() {}
-      };</script>`),
-    }));
+    await page.route("https://content.test/**", route => {
+      const vendor = markdownVendor(route.request().url());
+      if (vendor !== null) return route.fulfill({ contentType: "text/javascript", body: vendor });
+      return route.fulfill({ contentType: "text/html", body:
+        kanban.replace("<head>", `<head><script>window.scribe = {
+          id: 'board', title: 'Board', state: ${JSON.stringify(state)}, local: {},
+          onChange() {}, set(patch) { Object.assign(this.state, patch); }, setLocal(patch) { Object.assign(this.local, patch); }, signal() {}
+        };</script>`) });
+    });
     await page.route("https://scribe.test/**", route => route.fulfill({ contentType: "text/html", body: `<iframe style="width:1300px;height:900px"></iframe><script>
       ${constants}
       const cancelPageAudio = () => {}, viewUrl = () => 'https://content.test/board';

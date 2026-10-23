@@ -8,6 +8,7 @@
 <script src="/vendor/highlight.js"></script>
 <script src="/vendor/marked.js"></script>
 <script src="/vendor/purify.js"></script>
+<script src="/vendor/scribe-md.js"></script>
 <style>
   :root {
     color-scheme: dark;
@@ -187,6 +188,11 @@
   .md-doc table { border-collapse: collapse; margin: 0.6em 0; }
   .md-doc th, .md-doc td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
   .md-doc th { background: rgba(255, 255, 255, 0.04); }
+  .md-doc th[align="center"], .md-doc td[align="center"] { text-align: center; }
+  .md-doc th[align="right"], .md-doc td[align="right"] { text-align: right; }
+  .md-doc .table-wrap { overflow-x: auto; }
+  .md-doc .page-link { text-decoration: none; border-bottom: 1px dotted currentColor; }
+  .md-doc .page-link:hover { border-bottom-style: solid; }
   .md-doc img { max-width: 100%; }
   .md-doc hr { border: 0; border-top: 1px solid var(--border); }
 
@@ -592,59 +598,23 @@
     localImages.clear();
   }
 
-  function sanitize(html) {
-    if (!window.DOMPurify) return "";
-    var clean = DOMPurify.sanitize(html, { FORBID_TAGS: ["style", "form", "button", "textarea", "select", "iframe", "object", "embed"], FORBID_ATTR: ["style"], RETURN_DOM_FRAGMENT: true });
-    // A task list item's checkbox is the only input kept: a click ticks it in the text.
-    clean.querySelectorAll("input").forEach(function (input) {
-      if (input.type !== "checkbox") return input.remove();
-      input.removeAttribute("disabled");
-      input.className = "task-box";
-    });
-    var box = document.createElement("div");
-    box.append(clean);
-    return box.innerHTML;
-
-  }
   function renderMarkdown() {
     editing = null;
     var text = current();
     mdDoc.replaceChildren();
     blocks = [];
-    if (!window.marked) {
+    if (!window.ScribeMd) {
       mdDoc.textContent = text;
       return;
     }
-    var tokens = marked.lexer(text, { gfm: true });
-    var pos = 0;
-    tokens.forEach(function (tok) {
-      var at = text.indexOf(tok.raw, pos);
-      if (at === -1) at = pos;
-      var end = at + tok.raw.length;
-      pos = end;
-      if (tok.type === "space") return;
-      var one = [tok];
-      one.links = tokens.links;
-      var el = document.createElement("div");
+    // The shared renderer (/vendor/scribe-md.js): a file's own HTML shows, sanitized, and its images keep
+    // their paths for loadLocalImages.
+    ScribeMd.blocks(text, { tasks: true, breaks: false, html: true, image: function (url) { return url; } }).forEach(function (b) {
+      var el = b.el;
       el.className = "blk";
-      el.innerHTML = sanitize(marked.parser(one, { gfm: true }));
-      el.querySelectorAll("pre code").forEach(highlightBlock);
-      el.querySelectorAll("pre").forEach(function (pre) {
-        var copy = document.createElement("button");
-        copy.type = "button";
-        copy.className = "code-copy";
-        copy.textContent = "Copy";
-        var wrap = document.createElement("div");
-        wrap.className = "code-block";
-        pre.replaceWith(wrap);
-        wrap.append(pre, copy);
-      });
-
       loadLocalImages(el);
-      // A block's own trailing newlines stay outside its editor.
-      var raw = tok.raw.replace(/\n+$/, "");
-      el.dataset.start = String(at);
-      el.dataset.end = String(at + raw.length);
+      el.dataset.start = String(b.start);
+      el.dataset.end = String(b.end);
       blocks.push(el);
       mdDoc.append(el);
     });
@@ -657,15 +627,6 @@
       tail.append(empty);
     }
     mdDoc.append(tail);
-  }
-  function highlightBlock(el) {
-    var lang = (/language-([\w+-]+)/.exec(el.className) || [])[1];
-    if (!window.hljs) return;
-    try {
-      el.innerHTML = lang && hljs.getLanguage(lang)
-        ? hljs.highlight(el.textContent, { language: lang, ignoreIllegals: true }).value
-        : hljs.highlightAuto(el.textContent).value;
-    } catch (err) { /* plain */ }
   }
   function editBlock(el, start, end, caretAtEnd) {
     // Going from one block's edit to another: show the first one rendered again.
@@ -757,59 +718,21 @@
     area.style.height = "auto";
     area.style.height = area.scrollHeight + 2 + "px";
   }
-  // The nth checkbox of a block is the nth "- [ ]" line in its text. Ticking one ticks its sub-items too, and a
-  // parent is ticked once all of its sub-items are.
-  var LIST_ITEM = /^([ \t]*)([-*+]|\d+[.)])\s+(.*)$/;
-  var TASK_ITEM = /^([ \t]*(?:[-*+]|\d+[.)])\s+)\[([ xX])\](?=\s|$)/;
-  function indentOf(line) {
-    var w = 0;
-    for (var k = 0; k < line.length && (line[k] === " " || line[k] === "\t"); k++) w += line[k] === "\t" ? 4 : 1;
-    return w;
-  }
-  function toggleTask(lines, line) {
-    function set(k, on) { lines[k] = lines[k].replace(TASK_ITEM, function (_, lead) { return lead + (on ? "[x]" : "[ ]"); }); }
-    function subTasks(k) {
-      var out = [], base = indentOf(lines[k]);
-      for (var j = k + 1; j < lines.length && (indentOf(lines[j]) > base || !lines[j].trim()); j++) if (TASK_ITEM.test(lines[j])) out.push(j);
-      return out;
-    }
-    var on = TASK_ITEM.exec(lines[line])[2] === " ";
-    set(line, on);
-    subTasks(line).forEach(function (k) { set(k, on); });
-    for (var k = line, indent = indentOf(lines[line]); k > 0 && indent > 0;) {
-      k--;
-      if (!LIST_ITEM.test(lines[k]) || indentOf(lines[k]) >= indent) continue;
-      indent = indentOf(lines[k]);
-      var subs = subTasks(k);
-      if (TASK_ITEM.test(lines[k]) && subs.length) set(k, subs.every(function (j) { return TASK_ITEM.exec(lines[j])[2] !== " "; }));
-    }
-    return lines;
-  }
-  function toggleTaskIn(el, box) {
-    var start = Number(el.dataset.start), end = Number(el.dataset.end);
-    var nth = Array.prototype.indexOf.call(el.querySelectorAll("input.task-box"), box);
-    var lines = current().slice(start, end).split("\n");
-    for (var k = 0, seen = -1; k < lines.length; k++) {
-      if (TASK_ITEM.test(lines[k]) && ++seen === nth) {
-        editor.replaceRange(start, end, toggleTask(lines, k).join("\n"));
-        break;
-      }
+  // Ticking a checkbox ticks its sub-items too, and a parent is ticked once all of its sub-items are.
+  function toggleTaskAt(line) {
+    var text = current();
+    var next = ScribeMd.toggleTask(text, line);
+    if (next != null && next.length === text.length) {
+      var a = 0, b = text.length;
+      while (a < b && text[a] === next[a]) a++;
+      while (b > a && text[b - 1] === next[b - 1]) b--;
+      if (a < b) editor.replaceRange(a, b, next.slice(a, b));
     }
     renderMarkdown();
   }
-  function copyCode(button) {
-    var code = button.parentNode.querySelector("code");
-    if (!code || !navigator.clipboard || !navigator.clipboard.writeText) return;
-    navigator.clipboard.writeText(code.textContent).then(function () {
-      button.textContent = "Copied";
-      setTimeout(function () { button.textContent = "Copy"; }, 1200);
-    }, function () { button.textContent = "Not copied"; });
-  }
-  function selectingText(root) {
-    var sel = window.getSelection && window.getSelection();
-    return !!(sel && !sel.isCollapsed && root.contains(sel.anchorNode));
-  }
   mdDoc.addEventListener("click", function (event) {
+    // Page links open through the page bridge.
+    if (event.target.closest("[data-scribe-open]")) return;
     var link = event.target.closest("a[href]");
     if (link) {
       event.preventDefault();
@@ -820,15 +743,15 @@
     if (event.target.closest(".blk-edit")) return;
     var el = event.target.closest(".blk");
     if (el && event.target.classList.contains("code-copy")) {
-      copyCode(event.target);
+      ScribeMd.copyCode(event.target);
       return;
     }
     if (el && event.target.classList.contains("task-box")) {
-      toggleTaskIn(el, event.target);
+      toggleTaskAt(Number(event.target.getAttribute("data-line")));
       return;
     }
     // A drag that selected text keeps it selected.
-    if (selectingText(mdDoc)) return;
+    if (window.ScribeMd && ScribeMd.selectingText(mdDoc)) return;
     if (el) {
       editBlock(el, Number(el.dataset.start), Number(el.dataset.end), false);
       return;

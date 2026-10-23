@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
+import { markdownVendor } from "./vendorFixture.js";
 import { BOARD_BRIDGE_JS } from "./bridge.js";
 
 const card = (id: string, num: number, title: string) => ({
@@ -45,6 +46,8 @@ test("a remote change repaints only the cards it touched, in place", async (t) =
     let serverRevision = 1;
     const frameHtml = kanban.replace("<head>", `<head><script>window.__SCRIBE_BOOT__=${JSON.stringify(boot)};</script><script>${BOARD_BRIDGE_JS}</script>`);
     await page.route("http://kanban.test/**", (route) => {
+      const vendor = markdownVendor(route.request().url());
+      if (vendor !== null) return route.fulfill({ contentType: "text/javascript", body: vendor });
       const url = route.request().url();
       if (url.endsWith("/assets") && route.request().method() === "POST") {
         uploads++;

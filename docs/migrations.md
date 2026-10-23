@@ -1,5 +1,15 @@
 # Migrations
 
+## Shared markdown renderer `/vendor/scribe-md.js` (#770, additive, no data change)
+
+- **What changed:** The markdown note, the kanban board (descriptions and comments) and the file page render markdown with one script, `templates/scribe-md.js`, served as `/vendor/scribe-md.js` on top of `/vendor/marked.js` and `/vendor/purify.js`. It replaces the note's and board's own parsers. Notes and cards keep their line-by-line reading (a single newline is a break, a plain line ends the list or quote above it, one `~` is not a strike) and show raw HTML as text; the file page keeps standard markdown with sanitized HTML.
+- **Why no version bump:** The route is additive. A page whose HTML loads the script from a daemon without it shows the text unrendered.
+- **Data:** none. Card and note text is unchanged; checkboxes still write `[x]` / `[ ]` into it.
+- **Protocol:** additive: the content origin (and worktree previews) may load `/vendor/scribe-md.js`. `VERSION` stays as is.
+- **Where:** `templates/scribe-md.js`, `src/http.ts`, `src/contentOrigin.ts`, `templates/builtin/markdown-note.html`, `templates/builtin/kanban.html`, `templates/file-page.html`.
+- **How to verify:** `src/scribeMd.test.ts`, `src/shellAssets.test.ts`.
+- **When to remove:** Keep.
+
 ## `folders.disk` column and the `files` meta key (#707, additive, schema still 3)
 
 - **What changed:** A Library folder can stand for a disk folder: `folders.disk TEXT` holds its absolute path (`Folder.disk`). Subfolders without one inherit `<parent's location>\<name>`; renaming or moving one whose disk folder exists pins that path as its own link. Open folder now links the folder it makes (and updates the folder already linked to that disk folder instead of making a second one); one Library folder per disk folder. The meta table gains a `files` key (JSON `{ defaultLocation?, deleteFiles?: "trash" | "keep" }`): where new files go when the target folder is not on disk, and what deleting a file page does with its file. The daemon watches each linked disk folder (one recursive `fs.watch` per root; nested and equal links share it) and gives new files there pages.

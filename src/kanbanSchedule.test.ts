@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
+import { markdownVendor } from "./vendorFixture.js";
 import { BOARD_BRIDGE_JS } from "./bridge.js";
 import { applyStateOps } from "./stateOps.js";
 
@@ -30,6 +31,8 @@ test("card schedules use local time, survive reload, duplicate, clear and expire
     };
     let revision = 1;
     await page.route("http://kanban.test/**", route => {
+      const vendor = markdownVendor(route.request().url());
+      if (vendor !== null) return route.fulfill({ contentType: "text/javascript", body: vendor });
       const request = route.request(), url = request.url();
       if (url.endsWith("/state") && request.method() === "PUT") {
         const ops = request.postDataJSON().ops;

@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Markdown note</title>
+<script src="/vendor/marked.js"></script>
+<script src="/vendor/purify.js"></script>
+<script src="/vendor/scribe-md.js"></script>
 <style>
   :root {
     --bg: #0f1115;
@@ -109,6 +112,13 @@
     margin: 8px 0;
   }
   .md-preview li > ul, .md-preview li > ol { margin: 0.1em 0; }
+  .md-preview blockquote > p, .md-preview li > p { margin: 0.2em 0; }
+  .md-preview .table-wrap { overflow-x: auto; margin: 0.6em 0; }
+  .md-preview table { border-collapse: collapse; }
+  .md-preview th, .md-preview td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+  .md-preview th { background: rgba(255, 255, 255, .04); }
+  .md-preview th[align="center"], .md-preview td[align="center"] { text-align: center; }
+  .md-preview th[align="right"], .md-preview td[align="right"] { text-align: right; }
   .md-preview li.task { list-style: none; }
   .md-preview .task-box { margin: 0 0.45em 0 -1.35em; vertical-align: -2px; accent-color: var(--accent); cursor: pointer; }
   .md-preview .code-block { position: relative; }
@@ -185,7 +195,9 @@
       return;
     }
     preview.className = "md-preview";
-    preview.innerHTML = renderMarkdown(src);
+    // The shared renderer (/vendor/scribe-md.js); the text as it is if it did not load.
+    if (window.ScribeMd) preview.innerHTML = ScribeMd.render(src, { tasks: true });
+    else preview.textContent = src;
   }
 
   function startEdit() {
@@ -210,208 +222,6 @@
     showPreview();
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-
-  function safeUrl(url, forImage) {
-    url = String(url || "").trim();
-    if (/^https?:\/\//i.test(url)) return url;
-    if (forImage && /^data:image\/(png|jpeg|jpg|gif|webp);/i.test(url)) return url;
-    return "";
-  }
-
-  // ---------- page links ----------
-  // [[scribe:key]] (or a bare page id) shows the page's title, [[target|label]] your own text, [[peek:target]] /
-  // [[split:target]] pick a mode, and [label](scribe:key) / (peek:…) / (split:…) is the markdown form. A key or id
-  // written on its own (scribe:some-key, t_1a2b3c4d) links too. Scribe resolves titles and strikes out missing pages.
-  var LINK_MODES = { tab: "tab", peek: "peek", split: "split" };
-  var PAGE_LINK_RES = [
-    /\[\[\s*(?:(tab|peek|split):)?([^\]|]+?)\s*(?:\|([^\]]*))?\]\]/g,
-    /\[([^\]]+)\]\((?:(tab|peek|split):([^)\s]+)|(scribe:[^)\s]+))\)/g,
-    /(^|[^\w\/#:-])((?:scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?:#[\w=&%.:-]*\w)?)(?![\w-])/g
-  ];
-  function pageLinkHtml(target, label, mode) {
-    return '<a href="#" class="page-link" data-scribe-open="' + escapeHtml(target) + '"' +
-      (mode ? ' data-scribe-mode="' + mode + '"' : "") + ">" + escapeHtml(label) + "</a>";
-  }
-  /** Replace page links in raw text with held anchors; `hold` returns a placeholder the caller swaps back. */
-  function holdPageLinks(s, hold) {
-    s = s.replace(PAGE_LINK_RES[0], function (_, mode, target, label) {
-      return hold(pageLinkHtml(target, String(label || "").trim(), mode ? LINK_MODES[mode] : ""));
-    });
-    s = s.replace(PAGE_LINK_RES[1], function (_, label, mode, target, key) {
-      return hold(pageLinkHtml(target || key, label, mode ? LINK_MODES[mode] : ""));
-    });
-    return s.replace(PAGE_LINK_RES[2], function (_, pre, target) {
-      return pre + hold(pageLinkHtml(target, "", ""));
-    });
-  }
-
-  function mdInline(raw) {
-    var held = [];
-    function hold(html) {
-      held.push(html);
-      return "\u0000" + (held.length - 1) + "\u0000";
-    }
-    var str = String(raw || "");
-    str = str.replace(/`([^`]+)`/g, function (_, c) {
-      return hold("<code>" + escapeHtml(c) + "</code>");
-    });
-    str = holdPageLinks(str, hold);
-    str = str.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
-      var src = safeUrl(url, true);
-      if (!src) return _;
-      return hold('<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '">');
-    });
-    str = str.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, t, url) {
-      var href = safeUrl(url, false);
-      if (!href) return _;
-      return hold('<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener">' + escapeHtml(t) + "</a>");
-    });
-    str = escapeHtml(str);
-    str = str.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    str = str.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-    str = str.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    str = str.replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1<em>$2</em>");
-    str = str.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-    str = str.replace(/\u0000(\d+)\u0000/g, function (_, i) { return held[+i]; });
-    return str;
-  }
-
-  // Lists nest by indentation, spaces or tabs. "- [ ] " and "- [x] " items are checkboxes: ticking one ticks its
-  // sub-items too, and a parent is ticked once all of its sub-items are.
-  var LIST_ITEM = /^([ \t]*)([-*+]|\d+\.)\s+(.*)$/;
-  var TASK_ITEM = /^([ \t]*(?:[-*+]|\d+\.)\s+)\[([ xX])\](?=\s|$)/;
-  function indentOf(line) {
-    var w = 0;
-    for (var k = 0; k < line.length && (line[k] === " " || line[k] === "\t"); k++) w += line[k] === "\t" ? 4 : 1;
-    return w;
-  }
-  function renderList(lines, i, inlineHtml, tasks) {
-    var root = { indent: -1, children: [] }, path = [root];
-    for (; i < lines.length; i++) {
-      var m = LIST_ITEM.exec(lines[i]);
-      if (!m) break;
-      var node = { indent: indentOf(m[1]), ordered: /\d/.test(m[2]), num: parseInt(m[2], 10), text: m[3], line: i, children: [] };
-      while (path.length > 1 && node.indent <= path[path.length - 1].indent) path.pop();
-      path[path.length - 1].children.push(node);
-      path.push(node);
-    }
-    function items(list) {
-      var out = "";
-      for (var k = 0; k < list.length;) {
-        var ordered = list[k].ordered;
-        out += ordered ? (list[k].num !== 1 ? '<ol start="' + list[k].num + '">' : "<ol>") : "<ul>";
-        for (; k < list.length && list[k].ordered === ordered; k++) out += item(list[k]);
-        out += ordered ? "</ol>" : "</ul>";
-      }
-      return out;
-    }
-    function item(node) {
-      var task = /^\[([ xX])\](?:\s+|$)(.*)$/.exec(node.text);
-      if (!task) return "<li>" + inlineHtml(node.text) + items(node.children) + "</li>";
-      return '<li class="task"><input type="checkbox" class="task-box" data-line="' + node.line + '"' +
-        (task[1] !== " " ? " checked" : "") + (tasks ? "" : " disabled") + ">" + inlineHtml(task[2]) + items(node.children) + "</li>";
-    }
-    return { html: items(root.children), next: i };
-  }
-  /** The text with the checkbox on `line` flipped, its sub-items with it and its parents updated; null if no checkbox is there. */
-  function toggleTask(src, line) {
-    var lines = String(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
-    var m = TASK_ITEM.exec(lines[line] || "");
-    if (!m) return null;
-    function set(k, on) { lines[k] = lines[k].replace(TASK_ITEM, function (_, lead) { return lead + (on ? "[x]" : "[ ]"); }); }
-    function subTasks(k) {
-      var out = [], base = indentOf(lines[k]);
-      for (var j = k + 1; j < lines.length && LIST_ITEM.test(lines[j]) && indentOf(lines[j]) > base; j++) if (TASK_ITEM.test(lines[j])) out.push(j);
-      return out;
-    }
-    var on = m[2] === " ";
-    set(line, on);
-    subTasks(line).forEach(function (k) { set(k, on); });
-    for (var k = line, indent = indentOf(lines[line]); k > 0 && LIST_ITEM.test(lines[k - 1]);) {
-      k--;
-      if (indentOf(lines[k]) >= indent) continue;
-      indent = indentOf(lines[k]);
-      var subs = subTasks(k);
-      if (TASK_ITEM.test(lines[k]) && subs.length) set(k, subs.every(function (j) { return TASK_ITEM.exec(lines[j])[2] !== " "; }));
-    }
-    return lines.join("\n");
-  }
-  function codeBlockHtml(codeHtml) {
-    return '<div class="code-block"><button type="button" class="code-copy">Copy</button><pre><code>' + codeHtml + "</code></pre></div>";
-  }
-  function copyCode(button) {
-    var code = button.parentNode.querySelector("code");
-    if (!code || !navigator.clipboard || !navigator.clipboard.writeText) return;
-    navigator.clipboard.writeText(code.textContent).then(function () {
-      button.textContent = "Copied";
-      setTimeout(function () { button.textContent = "Copy"; }, 1200);
-    }, function () { button.textContent = "Not copied"; });
-  }
-  /** A click that ends a drag-selection of text in root: it should leave the text selected, not start editing. */
-  function selectingText(root) {
-    var sel = window.getSelection && window.getSelection();
-    return !!(sel && !sel.isCollapsed && root.contains(sel.anchorNode));
-  }
-  function renderMarkdown(src) {
-    var lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
-    var html = [];
-    var i = 0;
-    function isFence(line) { return /^```/.test(line); }
-    function isHeading(line) { return /^#{1,6} /.test(line); }
-    function isQuote(line) { return /^>\s?/.test(line); }
-    function isHr(line) { return /^(---+|\*\*\*+|___+)\s*$/.test(line); }
-    function isBlock(line) {
-      return isFence(line) || isHeading(line) || isQuote(line) || LIST_ITEM.test(line) || isHr(line);
-    }
-    while (i < lines.length) {
-      var line = lines[i];
-      if (isFence(line)) {
-        var code = [];
-        i++;
-        while (i < lines.length && !isFence(lines[i])) code.push(lines[i++]);
-        if (i < lines.length) i++;
-        html.push(codeBlockHtml(escapeHtml(code.join("\n"))));
-        continue;
-      }
-      if (isHeading(line)) {
-        var n = line.match(/^#+/)[0].length;
-        html.push("<h" + n + ">" + mdInline(line.replace(/^#+\s+/, "")) + "</h" + n + ">");
-        i++;
-        continue;
-      }
-      if (isQuote(line)) {
-        var q = [];
-        while (i < lines.length && isQuote(lines[i])) q.push(lines[i++].replace(/^>\s?/, ""));
-        html.push("<blockquote>" + q.map(mdInline).join("<br>") + "</blockquote>");
-        continue;
-      }
-      if (isHr(line)) {
-        html.push("<hr>");
-        i++;
-        continue;
-      }
-      if (LIST_ITEM.test(line)) {
-        var list = renderList(lines, i, mdInline, true);
-        html.push(list.html);
-        i = list.next;
-        continue;
-      }
-      if (!line.trim()) {
-        i++;
-        continue;
-      }
-      var p = [];
-      while (i < lines.length && lines[i].trim() && !isBlock(lines[i])) p.push(lines[i++]);
-      html.push("<p>" + p.map(mdInline).join("<br>") + "</p>");
-    }
-    return html.join("");
-  }
-
   function insertAtCursor(textarea, text) {
     var start = textarea.selectionStart || 0;
     var end = textarea.selectionEnd || 0;
@@ -423,14 +233,15 @@
 
   preview.onclick = function (event) {
     if (event.target.closest && event.target.closest("a")) return;
-    if (event.target.classList.contains("code-copy")) return copyCode(event.target);
+    if (!window.ScribeMd) return startEdit();
+    if (event.target.classList.contains("code-copy")) return ScribeMd.copyCode(event.target);
     if (event.target.classList.contains("task-box")) {
-      var next = toggleTask(text(), Number(event.target.getAttribute("data-line")));
+      var next = ScribeMd.toggleTask(text(), Number(event.target.getAttribute("data-line")));
       if (next != null) scribe.set({ text: next });
       showPreview();
       return;
     }
-    if (selectingText(preview)) return;
+    if (ScribeMd.selectingText(preview)) return;
     startEdit();
   };
   preview.onkeydown = function (event) {

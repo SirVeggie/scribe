@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kanban board</title>
+<script src="/vendor/marked.js"></script>
+<script src="/vendor/purify.js"></script>
+<script src="/vendor/scribe-md.js"></script>
 <style>
   :root {
     --bg: #0f1115;
@@ -708,8 +711,11 @@
   .md-preview table { border-collapse: collapse; font-size: .95em; }
   .md-preview th, .md-preview td { padding: 4px 10px; border: 1px solid rgba(255, 255, 255, .1); text-align: left; vertical-align: top; }
   .md-preview th { background: rgba(255, 255, 255, .04); font-weight: 600; }
+  .md-preview th[align="center"], .md-preview td[align="center"] { text-align: center; }
+  .md-preview th[align="right"], .md-preview td[align="right"] { text-align: right; }
   .md-preview td img { margin: 0; }
   .md-preview li > ul, .md-preview li > ol { margin: .1em 0; }
+  .md-preview blockquote > p, .md-preview li > p { margin: .2em 0; }
   .md-preview li.task { list-style: none; }
   .md-preview .task-box { margin: 0 .45em 0 -1.25em; vertical-align: -2px; accent-color: var(--accent); cursor: pointer; }
   .md-preview .task-box:disabled { cursor: default; }
@@ -3496,18 +3502,18 @@
   });
   mdPreview.addEventListener("click", function (e) {
     if (e.target.tagName === "IMG") { showLightbox(e.target.src); return; }
-    if (e.target.tagName === "A") return;
+    if (e.target.closest("a")) return;
     if (e.target.classList.contains("code-copy")) { copyCode(e.target); return; }
     if (e.target.classList.contains("task-box")) {
       var line = Number(e.target.getAttribute("data-line"));
       updateCard(openId, function (x) {
-        var next = toggleTask(x.description, line);
+        var next = ScribeMd.toggleTask(x.description, line);
         if (next != null) x.description = next;
         return x;
       });
       return;
     }
-    if (selectingText(mdPreview)) return;
+    if (window.ScribeMd && ScribeMd.selectingText(mdPreview)) return;
     startEditDesc();
   });
   mdPreview.addEventListener("keydown", function (e) {
@@ -4455,175 +4461,17 @@
     if (/^data:image\/(png|jpeg|gif|webp);/i.test(url)) return url;
     return "";
   }
-  function inline(raw, images) {
-    var held = [];
-    function hold(html) { held.push(html); return "\u0000" + (held.length - 1) + "\u0000"; }
-    var s = raw.replace(/`([^`]+)`/g, function (_, code) { return hold("<code>" + escapeHtml(code) + "</code>"); });
-    s = holdPageLinks(s, hold);
-    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
-      var src = resolveImg(url, images);
-      return src ? hold('<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '">') : "";
-    });
-    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, text, url) {
-      if (!/^https?:\/\//i.test(url)) return text;
-      return hold('<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(text) + "</a>");
-    });
-    s = escapeHtml(s);
-    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
-    s = s.replace(/(^|[\s(])#(\d+)\b/g, function (m, pre, n) {
-      var target = byNum(Number(n));
-      return target ? pre + '<a href="#" data-card="' + target.id + '">#' + n + "</a>" : m;
-    });
-    return s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return held[Number(i)]; });
-  }
-  // GFM tables: a header row, a |---|:--:| delimiter row, then body rows until a line without a pipe.
-  // \| keeps a pipe inside a cell.
-  var TABLE_DELIM = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
-  function tableCells(line) {
-    var s = line.trim().replace(/^\|/, "").replace(/(^|[^\\])\|$/, "$1");
-    return s.split(/(?<!\\)\|/).map(function (c) { return c.trim().replace(/\\\|/g, "|"); });
-  }
-  function tableStart(lines, i) {
-    return i + 1 < lines.length && lines[i].indexOf("|") >= 0 && lines[i + 1].indexOf("-") >= 0 &&
-      TABLE_DELIM.test(lines[i + 1]) && (lines[i + 1].indexOf("|") >= 0 || /^\s*\|/.test(lines[i]));
-  }
-  function renderTable(lines, i, images) {
-    var head = tableCells(lines[i]);
-    var align = tableCells(lines[i + 1]).map(function (d) {
-      var l = d.charAt(0) === ":", r = d.charAt(d.length - 1) === ":";
-      return l && r ? "center" : r ? "right" : l ? "left" : "";
-    });
-    function row(cells, tag) {
-      var out = "";
-      for (var k = 0; k < head.length; k++) {
-        var a = align[k] ? ' style="text-align:' + align[k] + '"' : "";
-        out += "<" + tag + a + ">" + inline(cells[k] || "", images) + "</" + tag + ">";
-      }
-      return "<tr>" + out + "</tr>";
-    }
-    var body = [];
-    for (i += 2; i < lines.length && lines[i].trim() && lines[i].indexOf("|") >= 0; i++) body.push(row(tableCells(lines[i]), "td"));
-    var html = '<div class="table-wrap"><table><thead>' + row(head, "th") + "</thead>" +
-      (body.length ? "<tbody>" + body.join("") + "</tbody>" : "") + "</table></div>";
-    return { html: html, next: i };
-  }
-  // Lists nest by indentation, spaces or tabs. "- [ ] " and "- [x] " items are checkboxes: ticking one ticks its
-  // sub-items too, and a parent is ticked once all of its sub-items are.
-  var LIST_ITEM = /^([ \t]*)([-*+]|\d+\.)\s+(.*)$/;
-  var TASK_ITEM = /^([ \t]*(?:[-*+]|\d+\.)\s+)\[([ xX])\](?=\s|$)/;
-  function indentOf(line) {
-    var w = 0;
-    for (var k = 0; k < line.length && (line[k] === " " || line[k] === "\t"); k++) w += line[k] === "\t" ? 4 : 1;
-    return w;
-  }
-  function renderList(lines, i, inlineHtml, tasks) {
-    var root = { indent: -1, children: [] }, path = [root];
-    for (; i < lines.length; i++) {
-      var m = LIST_ITEM.exec(lines[i]);
-      if (!m) break;
-      var node = { indent: indentOf(m[1]), ordered: /\d/.test(m[2]), num: parseInt(m[2], 10), text: m[3], line: i, children: [] };
-      while (path.length > 1 && node.indent <= path[path.length - 1].indent) path.pop();
-      path[path.length - 1].children.push(node);
-      path.push(node);
-    }
-    function items(list) {
-      var out = "";
-      for (var k = 0; k < list.length;) {
-        var ordered = list[k].ordered;
-        out += ordered ? (list[k].num !== 1 ? '<ol start="' + list[k].num + '">' : "<ol>") : "<ul>";
-        for (; k < list.length && list[k].ordered === ordered; k++) out += item(list[k]);
-        out += ordered ? "</ol>" : "</ul>";
-      }
-      return out;
-    }
-    function item(node) {
-      var task = /^\[([ xX])\](?:\s+|$)(.*)$/.exec(node.text);
-      if (!task) return "<li>" + inlineHtml(node.text) + items(node.children) + "</li>";
-      return '<li class="task"><input type="checkbox" class="task-box" data-line="' + node.line + '"' +
-        (task[1] !== " " ? " checked" : "") + (tasks ? "" : " disabled") + ">" + inlineHtml(task[2]) + items(node.children) + "</li>";
-    }
-    return { html: items(root.children), next: i };
-  }
-  /** The text with the checkbox on `line` flipped, its sub-items with it and its parents updated; null if no checkbox is there. */
-  function toggleTask(src, line) {
-    var lines = String(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
-    var m = TASK_ITEM.exec(lines[line] || "");
-    if (!m) return null;
-    function set(k, on) { lines[k] = lines[k].replace(TASK_ITEM, function (_, lead) { return lead + (on ? "[x]" : "[ ]"); }); }
-    function subTasks(k) {
-      var out = [], base = indentOf(lines[k]);
-      for (var j = k + 1; j < lines.length && LIST_ITEM.test(lines[j]) && indentOf(lines[j]) > base; j++) if (TASK_ITEM.test(lines[j])) out.push(j);
-      return out;
-    }
-    var on = m[2] === " ";
-    set(line, on);
-    subTasks(line).forEach(function (k) { set(k, on); });
-    for (var k = line, indent = indentOf(lines[line]); k > 0 && LIST_ITEM.test(lines[k - 1]);) {
-      k--;
-      if (indentOf(lines[k]) >= indent) continue;
-      indent = indentOf(lines[k]);
-      var subs = subTasks(k);
-      if (TASK_ITEM.test(lines[k]) && subs.length) set(k, subs.every(function (j) { return TASK_ITEM.exec(lines[j])[2] !== " "; }));
-    }
-    return lines.join("\n");
-  }
-  function codeBlockHtml(codeHtml) {
-    return '<div class="code-block"><button type="button" class="code-copy">Copy</button><pre><code>' + codeHtml + "</code></pre></div>";
-  }
-  function copyCode(button) {
-    var code = button.parentNode.querySelector("code");
-    if (!code || !navigator.clipboard || !navigator.clipboard.writeText) return;
-    navigator.clipboard.writeText(code.textContent).then(function () {
-      button.textContent = "Copied";
-      setTimeout(function () { button.textContent = "Copy"; }, 1200);
-    }, function () { button.textContent = "Not copied"; });
-  }
-  /** A click that ends a drag-selection of text in root: it should leave the text selected, not start editing. */
-  function selectingText(root) {
-    var sel = window.getSelection && window.getSelection();
-    return !!(sel && !sel.isCollapsed && root.contains(sel.anchorNode));
-  }
+  // The shared renderer (/vendor/scribe-md.js): #12 card links and #img- images resolve here.
   // tasks: the checkboxes can be ticked (the description); a comment's stay as they are.
   function renderMarkdown(src, images, tasks) {
-    var lines = str(src).replace(/\r\n?/g, "\n").split("\n");
-    var html = [];
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (tableStart(lines, i)) {
-        var t = renderTable(lines, i, images);
-        html.push(t.html);
-        i = t.next - 1;
-        continue;
-      }
-      if (/^```/.test(line)) {
-        var code = [];
-        for (i++; i < lines.length && !/^```/.test(lines[i]); i++) code.push(lines[i]);
-        html.push(codeBlockHtml(escapeHtml(code.join("\n"))));
-        continue;
-      }
-      var h = /^(#{1,3})\s+(.*)$/.exec(line);
-      if (h) { html.push("<h" + h[1].length + ">" + inline(h[2], images) + "</h" + h[1].length + ">"); continue; }
-      if (/^>\s?/.test(line)) {
-        var q = [];
-        for (; i < lines.length && /^>\s?/.test(lines[i]); i++) q.push(inline(lines[i].replace(/^>\s?/, ""), images));
-        i--;
-        html.push("<blockquote>" + q.join("<br>") + "</blockquote>");
-        continue;
-      }
-      if (LIST_ITEM.test(line)) {
-        var list = renderList(lines, i, function (text) { return inline(text, images); }, tasks);
-        html.push(list.html);
-        i = list.next - 1;
-        continue;
-      }
-      if (!line.trim()) continue;
-      var para = [];
-      for (; i < lines.length && lines[i].trim() && !/^(```|#{1,3}\s|>)/.test(lines[i]) && !LIST_ITEM.test(lines[i]) && !tableStart(lines, i); i++) para.push(inline(lines[i], images));
-      i--;
-      html.push("<p>" + para.join("<br>") + "</p>");
-    }
-    return html.join("");
+    if (!window.ScribeMd) return escapeHtml(str(src)).replace(/\n/g, "<br>");
+    return ScribeMd.render(src, {
+      tasks: !!tasks,
+      image: function (url) { return resolveImg(url, images); },
+      card: byNum,
+    });
   }
+  function copyCode(button) { if (window.ScribeMd) ScribeMd.copyCode(button); }
   mdPreview.addEventListener("click", function (e) {
     var a = e.target.closest && e.target.closest("a[data-card]");
     if (a) { e.preventDefault(); e.stopPropagation(); openCard(a.getAttribute("data-card")); }
