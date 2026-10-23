@@ -15,10 +15,10 @@ export function componentCsp(page?: string): string {
 export const COMPONENT_CSP = componentCsp();
 const jsonScript = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 
-export function componentDocument(item: Pick<ComponentItem, "html" | "local" | "props" | "plugin">, kit: { css: string; js: string; bridge: string }, diagnostics?: { token: string; capture?: boolean; relay?: boolean }): string {
+export function componentDocument(item: Pick<ComponentItem, "html" | "local" | "props" | "plugin"> & Partial<Pick<ComponentItem, "status" | "summary">>, kit: { css: string; js: string; bridge: string }, diagnostics?: { token: string; capture?: boolean; relay?: boolean }): string {
   // Install the small bridge before any agent script or kit code runs. No page bridge or API tokens.
   const reports = diagnostics ? `<script>window.__SCRIBE_PROBLEMS__={...${jsonScript({ ...diagnostics, tones: KIT_TONES, insertLine: 0, insertedLines: 0 })},report:function(data){${diagnostics.capture && !diagnostics.relay ? "window.__componentReport=data" : "window.__scribeComponentReport(data)"}}};${PAGE_PROBLEM_JS}</script>` : "";
-  const boot = `${reports}<script>${kit.bridge};componentBridge(${jsonScript(item.local ?? {})},${jsonScript(item.props ?? {})},${Boolean(item.plugin)});</script>`;
+  const boot = `${reports}<script>${kit.bridge};componentBridge(${jsonScript(item.local ?? {})},${jsonScript(item.props ?? {})},${Boolean(item.plugin)},${jsonScript({ status: item.status, summary: item.summary })});</script>`;
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{color-scheme:dark;--bg:#1a1a1d;--text:#e8e8ea;--muted:#8e8e96;--border:#ffffff18;--accent:#c9c9d0;--code-bg:#131315}*{box-sizing:border-box}html,body{margin:0}body{padding:12px;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,sans-serif}</style><style>${kit.css}</style>${boot}`;
   // Full documents and fragments both get the same trusted prefix, before agent-written HTML.
   return `<!doctype html><html style="visibility:hidden"><head>${head}</head><body>${item.html ?? ""}<script>${kit.js}</script></body></html>`;

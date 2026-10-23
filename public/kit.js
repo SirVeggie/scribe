@@ -14,6 +14,27 @@
   var DRAFTS = "kitForms";
   var forms = Array.prototype.slice.call(document.querySelectorAll("form[data-reply]"));
   var replyPending = false;
+  function replyClosed() {
+    return scribe.replyState && /^(answered|skipped|expired)$/.test(scribe.replyState.status);
+  }
+  function buttonSummary(button) {
+    return button.getAttribute("data-reply").trim() || button.textContent.trim();
+  }
+  function restoreReplyState() {
+    if (!replyClosed()) return;
+    var state = scribe.replyState;
+    document.querySelectorAll('button[data-reply]').forEach(function (button) {
+      button.disabled = true;
+      var chosen = state.status === "answered" && buttonSummary(button) === state.summary;
+      button.classList.toggle("kit-reply-chosen", chosen);
+      if (chosen) button.setAttribute("aria-pressed", "true");
+      else button.removeAttribute("aria-pressed");
+    });
+    forms.forEach(function (form) {
+      Array.prototype.forEach.call(form.elements, function (el) { el.disabled = true; });
+    });
+  }
+  window.addEventListener("scribe-reply-state", restoreReplyState);
 
   function formKey(form, i) {
     return form.id || "form" + i;
@@ -106,8 +127,8 @@
     var button = event.target.closest && event.target.closest('button[data-reply]');
     if (!button) return;
     event.preventDefault(); // Do not also submit a surrounding form.
-    if (replyPending || button.disabled) return;
-    var summary = button.getAttribute("data-reply").trim() || button.textContent.trim();
+    if (replyClosed() || replyPending || button.disabled) return;
+    var summary = buttonSummary(button);
     var answers = {};
     try {
       if (button.hasAttribute("data-context")) answers = JSON.parse(button.getAttribute("data-context"));
@@ -138,6 +159,7 @@
       button.classList.remove("kit-reply-chosen");
       button.removeAttribute("aria-pressed");
       show(button, "Not sent: " + ((error && error.message) || error), "error");
+      restoreReplyState();
     });
   });
 
@@ -148,6 +170,7 @@
     form.addEventListener("change", function () { saveDraft(form, key); });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      if (replyClosed()) return;
       var answers = answersOf(form);
       var summary = summaryOf(answers);
       var submit = event.submitter || form.querySelector('button[type="submit"], button:not([type])');
@@ -170,8 +193,9 @@
       }, function (err) {
         show(form, "Not sent: " + ((err && err.message) || err), "error");
       }).then(function () {
-        if (submit) submit.disabled = false;
+        if (submit && !replyClosed()) submit.disabled = false;
       });
     });
   });
+  restoreReplyState();
 })();

@@ -35,8 +35,10 @@
     frame.setAttribute("allow", "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
     function update(next) {
       entry.item = { ...next, height: entry.item.height };
+      sendReplyState();
       if (!queued.has("local") && !localWrites) port?.postMessage({ type: "state", local: next.local || {} });
     }
+    function sendReplyState() { port?.postMessage({ type: "reply-state", replyState: { status: entry.item.status, summary: entry.item.summary } }); }
     function respond(id, result, error) { if (!disposed) port?.postMessage({ id, result, error }); }
     function flush() {
       clearTimeout(writeTimer);
@@ -142,11 +144,16 @@
             lastReply = Date.now();
             await flush();
             result = await api("POST", base(entry.item), data);
+            if (entry.item.wait && result.ok) {
+              entry.item = { ...entry.item, status: "answered", summary: data.summary };
+              sendReplyState();
+            }
           } else throw new Error("Unsupported component action.");
           if (!disposed) port.postMessage({ id, result });
         } catch (error) { if (!disposed) port.postMessage({ id, error: error.message }); }
       };
       frame.contentWindow.postMessage({ type: "scribe-component-init" }, "*", [channel.port2]);
+      sendReplyState();
       entry.theme = () => theme(frame, port);
       theme(frame, port);
     }
@@ -173,7 +180,7 @@
     body.style.minHeight = `${heights.get(item.id) || 160}px`;
     const fallback = el("div", "ag-md ag-component-fallback");
     R.renderMarkdown(fallback, item.summary ?? item.fallback ?? "", mdCtx);
-    node._updateComponent = next => { R.renderMarkdown(fallback, next.summary ?? next.fallback ?? "", mdCtx); };
+    node._updateComponent = next => { item = next; R.renderMarkdown(fallback, next.summary ?? next.fallback ?? "", mdCtx); };
     body.append(fallback);
     node.append(body);
     let frame, dispose;

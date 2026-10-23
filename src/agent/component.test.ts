@@ -240,6 +240,8 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     await page.waitForFunction(() => !!document.querySelector(".ag-component iframe"));
     await frame.getByRole("button", { name: "Blue", exact: true }).waitFor();
     assert.equal(await frame.locator("body").evaluate(() => (window as any).scribe.local.tab), "saved-29");
+    assert.equal(await frame.locator("button:disabled").count(), 3);
+    assert.equal(await frame.locator('.kit-reply-chosen[aria-pressed="true"]').innerText(), "Blue");
     // The shell's temporary embed uses this same URL and attachment path, never a full page bridge.
     await page.evaluate(async item => {
       const w = window as any;
@@ -251,8 +253,45 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     }, item);
     const expanded = page.frameLocator("#expanded");
     await expanded.getByRole("button", { name: "Blue", exact: true }).waitFor();
+    assert.equal(await expanded.locator("button:disabled").count(), 3);
+    assert.equal(await expanded.locator(".kit-reply-chosen").innerText(), "Blue");
     assert.equal(await page.locator("#expanded").getAttribute("sandbox"), "allow-scripts");
     assert.equal(await expanded.locator("body").evaluate(() => (window as any).scribe.state), undefined);
+  } finally { await browser.close(); }
+});
+
+test("kit restores terminal reply state for buttons and forms, while shown components stay interactive", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Component reply state test" });
+  try {
+    const read = (name: string) => fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8");
+    const kit = { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") };
+    for (const status of ["answered", "skipped", "expired", "shown", "pending"] as const) {
+      const page = await browser.newPage();
+      await page.setContent(componentDocument({ html: '<button data-reply="Blue">Choose blue</button><button data-reply="">Red</button><form data-reply><input name="note"><button type="submit">Send</button></form>', status, summary: "Blue" }, kit));
+      const closed = ["answered", "skipped", "expired"].includes(status);
+      assert.equal(await page.locator(":disabled").count(), closed ? 4 : 0, status);
+      assert.equal(await page.locator('.kit-reply-chosen[aria-pressed="true"]').count(), status === "answered" ? 1 : 0, status);
+      if (!closed) {
+        await page.evaluate(() => {
+          (window as any).scribe.reply = () => new Promise((_resolve, reject) => { (window as any).rejectReply = reject; });
+          document.querySelector<HTMLButtonElement>('button[data-reply]')!.click();
+        });
+      }
+      // Exercise an update to an already mounted bridge, without recreating the kit.
+      await page.evaluate(async () => {
+        const channel = new MessageChannel();
+        const received = new Promise<void>(resolve => window.addEventListener("scribe-reply-state", () => resolve(), { once: true }));
+        window.postMessage({ type: "scribe-component-init" }, "*", [channel.port2]);
+        channel.port1.postMessage({ type: "reply-state", replyState: { status: "skipped" } });
+        await received;
+        channel.port1.close();
+        (window as any).rejectReply?.(new Error("This component is no longer waiting."));
+      });
+      if (!closed) await page.locator(".kit-status.error").waitFor({ state: "attached" });
+      assert.equal(await page.locator(":disabled").count(), 4);
+      assert.equal(await page.locator(".kit-reply-chosen").count(), 0);
+      await page.close();
+    }
   } finally { await browser.close(); }
 });
 

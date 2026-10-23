@@ -1,5 +1,5 @@
 /** Self-contained: serialized into the opaque-origin document. */
-function componentBridge(initialLocal, initialProps = {}, hasPlugin = false) {
+function componentBridge(initialLocal, initialProps = {}, hasPlugin = false, initialReplyState = {}) {
     let port;
     let next = 0;
     const waiting = new Map();
@@ -23,6 +23,7 @@ function componentBridge(initialLocal, initialProps = {}, hasPlugin = false) {
         for (const fn of listener ? [listener] : stateListeners.get(key) || []) fn(result.value, result.revision);
     }
     const freeze = value => { if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
+    let replyState = freeze(initialReplyState);
     let listening = false;
     function listen() { if (!listening) { listening = true; void call("plugin-listen", {}).catch(error => { listening = false; console.error(error); }); } }
     function on(map, key, fn, op) {
@@ -37,6 +38,7 @@ function componentBridge(initialLocal, initialProps = {}, hasPlugin = false) {
     }
     const api = {
         props: freeze(initialProps),
+        get replyState() { return replyState; },
         ...(hasPlugin ? { plugin: {
             call(method, args = {}) { return call("plugin", { op: "call", method, args }); },
             state: {
@@ -78,6 +80,10 @@ function componentBridge(initialLocal, initialProps = {}, hasPlugin = false) {
                 for (const key of keys) if (stateListeners.has(key)) void api.plugin.state.get(key).then(result => {
                     deliverState(key, result);
                 }).catch(console.error);
+            }
+            else if (data.type === "reply-state") {
+                replyState = freeze(data.replyState);
+                window.dispatchEvent(new Event("scribe-reply-state"));
             }
             else if (data.type === "state")
                 local = data.local;
