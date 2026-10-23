@@ -4761,8 +4761,8 @@
       }
       const usage = turn.usage || {};
       if (usage.plan?.length) parts.append(el("span", null, usage.plan.map((w) => `${planPct(w.used)} of ${planWindowShort(w)}`).join(" · ")));
-      else if (usage.costUsd !== undefined || usage.costRecords?.length || usage.billingSource) {
-        const label = usage.costUsd === undefined ? "Cost unknown" : `${usage.costPartial ? "Partial" : usage.estimatedCostUsd !== undefined ? "Estimated" : usage.reportedCostUsd !== undefined ? "Provider-reported" : "Recorded"} $${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`;
+      else if (usage.costUsd !== undefined) {
+        const label = `${usage.costPartial ? "Partial" : usage.estimatedCostUsd !== undefined ? "Estimated" : usage.reportedCostUsd !== undefined ? "Provider-reported" : "Recorded"} $${usage.costUsd.toFixed(usage.costUsd < 0.1 ? 3 : 2)}`;
         const cost = el("span", null, label);
         const detail = () => (usage.costRecords || []).map((r) => {
           const rates = r.rate.rates ? Object.entries(r.rate.rates).map(([key, price]) => `${key}: $${price}`).join(", ") : "No prices";
