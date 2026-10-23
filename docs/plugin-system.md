@@ -20,6 +20,16 @@ Agent-callable methods declare `agent: "read" | "board" | "ask"`. Read methods w
 
 Plugin authoring tools work on Board and higher; Read-only chats can inspect source, guides and logs. Catalog instructions include enabled plugin IDs and short summaries; full guides and method signatures are loaded on demand.
 
+## Chat components
+
+Manifests can declare `components: { name: {description, html, props, height: {min,max}, methods, state, events} }`. `html` is a package-relative file (at most 256 KiB); heights are 64–1200 pixels. `props` is an object JSON Schema. Supported keywords are type, properties, required, additionalProperties, items, enum, const, numeric bounds/multipleOf, string length/pattern, array length, anyOf/allOf/oneOf, title and description. Unsupported keywords are rejected during package validation. Methods must be agent-callable. State declarations are exact keys or prefixes ending in `/*`; events are exact names.
+
+Only `component_show({plugin,component,props,title?,wait?,fallback?})` creates a chat item. Props are checked before insertion and on each render. The history stores identity and props, and renders the installed version now; disabled, missing or incompatible plugins display fallback markdown with a reason. First-render diagnostics return capped problems; the bounded background probe cannot execute methods.
+
+Components receive deep-frozen `scribe.props`, `scribe.plugin.call(method,args)` (returns the method result directly), `scribe.plugin.state.get(key)` (returns `{value,revision}`), `state.on(key,(value,revision)=>...)`, and `scribe.plugin.on(event,fn)`. Listeners return unsubscribe functions. State is shared and live; writes go through declared methods. Subscriptions close on lazy unmount, reread on remount, and are checked against current permissions. Calls use the thread rung, plugin grants and home-page permission; Deny wins. An idle thread cannot prompt for missing consent. Components have no network, raw state writes or page API. The shared component reply/local/summary APIs work as for agent HTML.
+
+Git history 1.2.0 includes an `activity` heatmap component. Existing bundled plugin installs are preserved when Scribe updates; receiving the new example currently requires a reviewed package update. Fresh installs receive it automatically.
+
 ## Template actions
 
 Templates have normal metadata and HTML files plus declared actions and hooks. Backend template sets provide actions, seed, reply, replyDelivered, sweep, drive and launch callbacks. Calls run outside the daemon. A state-changing result applies only to the revision it read; a concurrent edit retries the computation up to three times. Hooks must be safe to compute repeatedly. Side effects belong in explicit methods or in post-commit lifecycle callbacks, not speculative action computation.

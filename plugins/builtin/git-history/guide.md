@@ -1,5 +1,7 @@
 # Git history
 
+For an inline chat heatmap use `component_show({plugin:"git-history",component:"activity",props:{repository,weeks:52},fallback:"Activity summary"})`. The repository must already be approved. This component reads the current activity through the plugin; it has no network access.
+
 Use `repositories` to discover approved local repositories, then `log` with an exact repository path, optional `since` (Git date expression) and a limit of 1–2000. Calls read Git only and never fetch from the network.
 
 For complete activity charts, use `activity({repository})` instead of counting a limited log response. It returns `{repository,branch,days,total,queriedAt}` for the whole history reachable from HEAD, including merges and reverts. `days` maps `YYYY-MM-DD` to a count using each commit's author calendar date, matching `git log --date=format:%Y-%m-%d --format=%ad`.

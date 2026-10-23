@@ -1,0 +1,31 @@
+<style>
+  .activity-grid { display:grid; grid-auto-flow:column; grid-template-rows:repeat(7,9px); grid-auto-columns:9px; gap:3px; overflow:auto; margin-top:12px; padding-bottom:4px }
+  .activity-day { background:var(--accent); border-radius:2px }
+</style>
+<div id="summary" class="muted" role="status">Loading activity…</div>
+<div id="heat" class="activity-grid" role="img" aria-label="Daily commit activity"></div>
+<script>
+  (async () => {
+    const summary = document.getElementById('summary'), heat = document.getElementById('heat');
+    try {
+      const result = await scribe.plugin.call('activity', { repository: scribe.props.repository });
+      if (result?.error === 'capture') { summary.textContent = 'Activity preview'; return; }
+      const weeks = scribe.props.weeks || 52, end = new Date();
+      end.setHours(12,0,0,0);
+      const start = new Date(end); start.setDate(start.getDate() - (weeks * 7 - 1));
+      let total = 0;
+      const maximum = Math.max(1, ...Object.values(result.days));
+      for (let i = 0; i < weeks * 7; i++) {
+        const date = new Date(start); date.setDate(date.getDate() + i);
+        const key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+        const count = result.days[key] || 0; total += count;
+        const day = document.createElement('span'); day.className = 'activity-day';
+        day.style.opacity = count ? String(0.25 + 0.75 * Math.sqrt(count / maximum)) : '0.08';
+        day.setAttribute('aria-label', `${key}: ${count} commits`); heat.append(day);
+      }
+      const text = `${total.toLocaleString()} commits · ${weeks} weeks · ${result.branch}`;
+      summary.textContent = text; heat.setAttribute('aria-label', text);
+      await scribe.setSummary(`${scribe.props.repository}: ${text}`);
+    } catch (error) { summary.textContent = error.message; }
+  })();
+</script>

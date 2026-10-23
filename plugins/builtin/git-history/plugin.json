@@ -1,7 +1,7 @@
 {
   "id": "git-history",
   "name": "Git history",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "summary": "Read commit history from approved local repositories for live activity pages.",
   "author": "Scribe",
   "risky": false,
@@ -11,6 +11,15 @@
   "access": { "files": ["Repositories listed in this plugin's settings (read only)"], "network": [] },
   "settings": {
     "repositories": { "label": "Repositories", "type": "paths", "description": "Local repositories this plugin may read. Pages ask before adding another.", "default": [] }
+  },
+  "components": {
+    "activity": {
+      "description": "Commit activity heatmap for an approved repository, with optional weeks (1–104).",
+      "html": "components/activity.html",
+      "props": { "type": "object", "required": ["repository"], "additionalProperties": false, "properties": { "repository": { "type": "string", "minLength": 1 }, "weeks": { "type": "integer", "minimum": 1, "maximum": 104 } } },
+      "height": { "min": 120, "max": 320 },
+      "methods": ["activity"]
+    }
   },
   "methods": {
     "repositories": { "description": "List approved repositories: {}.", "agent": "read" },

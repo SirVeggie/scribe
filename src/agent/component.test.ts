@@ -9,6 +9,14 @@ import { contentOriginGate } from "../contentOrigin.js";
 import { componentDocument, COMPONENT_CSP } from "../components.js";
 import { itemText } from "./threadAccess.js";
 import { launchChromium } from "../chromium.js";
+import { PluginService } from "../plugins/service.js";
+import { setPlugins } from "../plugins/current.js";
+import { parseManifest, componentStateAllowed } from "../plugins/manifest.js";
+import express from "express";
+import { agentRouter } from "./routes.js";
+import { componentSite } from "../components.js";
+import { shellOrigins } from "../config.js";
+import { probeComponent } from "../screenshot.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-components-"));
 process.env.SCRIBE_HOME = dir;
@@ -33,11 +41,72 @@ function component(threadId: string): ComponentItem {
   return item;
 }
 
-test("input caps count UTF-8 bytes and reject reserved plugin inputs", () => {
+test("input caps count UTF-8 bytes and enforce exclusive HTML or plugin inputs", () => {
   assert.throws(() => parseComponentInput({ html: "å".repeat(MAX_COMPONENT_HTML) }), /UTF-8/);
   assert.throws(() => parseComponentInput({ html: " " }), /empty/);
-  assert.throws(() => parseComponentInput({ html: "ok", plugin: "test" }), /reserved/);
+  assert.throws(() => parseComponentInput({ html: "ok", plugin: "test" }), /either/);
   assert.throws(() => parseComponentInput({ html: "ok", wait: "yes" }), /true or false/);
+});
+
+const pluginManifest = { id: "component-fixture", name: "Component fixture", version: "1.0.0", summary: "Component tests", backend: "backend.mjs", risky: false,
+  methods: { update: { description: "Update", agent: "board" }, read: { description: "Read", agent: "read" }, ask: { description: "Ask", agent: "ask" } },
+  components: { counter: { description: "Live counter", html: "counter.html", props: { type: "object", required: ["name"], additionalProperties: false, properties: { name: { type: "string" } } }, methods: ["update", "read", "ask"], state: ["count", "rows/*"], events: ["tick"], height: { min: 100, max: 220 } } } };
+const pluginHtml = `<p id="name"></p><p id="count"></p><script>
+  nameNode = document.getElementById('name'); nameNode.textContent = scribe.props.name;
+  window.seen = []; window.ticks = [];
+  scribe.plugin.state.on('count', (value, revision) => { window.seen.push({value, revision}); document.getElementById('count').textContent = String(value); });
+  scribe.plugin.on('tick', data => window.ticks.push(data));
+</script>`;
+function pluginFiles(html = pluginHtml, manifest = pluginManifest) {
+  return { "plugin.json": Buffer.from(JSON.stringify(manifest)), "counter.html": Buffer.from(html), "backend.mjs": Buffer.from(`export default { methods: { read: () => 42, ask: () => true, update: async (args,ctx) => { const result = await ctx.state.set('count', args.value); await ctx.emit('tick',args.value); return result; } } }`) };
+}
+
+test("plugin manifests reject bad schemas, paths and capabilities", () => {
+  assert.equal(parseManifest(pluginManifest).components.counter.height.max, 220);
+  for (const props of [{ type: "object", wat: true }, { type: "object", properties: { n: { type: "number", default: 1 } } }, { type: "array" }]) {
+    assert.throws(() => parseManifest({ ...pluginManifest, components: { counter: { ...pluginManifest.components.counter, props } } }), /props/i);
+  }
+  assert.equal(componentStateAllowed(["rows/*"], "rows/a"), true);
+  assert.equal(componentStateAllowed(["rows/*"], "rows-private/a"), false);
+  assert.throws(() => parseManifest({ ...pluginManifest, components: { counter: { ...pluginManifest.components.counter, html: "../escape" } } }));
+});
+
+test("plugin items validate before insertion, preserve identity, gate calls and use current versions", async () => {
+  const service = new PluginService(path.join(dir, "component-plugins")); setPlugins(service);
+  try {
+    const files = pluginFiles(); await service.install(files, service.preview(files).hash);
+    const thread = runningThread(); host.updateThread(thread, { approval: "full" });
+    await assert.rejects(host.showComponent(thread, { plugin: pluginManifest.id, component: "counter", props: { name: 2 } }), /props/);
+    assert.equal(host.threadDetail(thread)!.items.filter(i => i.kind === "component").length, 0);
+    const showing = host.showComponent(thread, { plugin: pluginManifest.id, component: "counter", props: { name: "Hello" }, fallback: "Saved counter" });
+    const item = component(thread);
+    // Settle the mounted-render path without launching a background browser in this server test.
+    const boot = host.componentProblems.boot(item.id, 0)!;
+    host.componentProblems.report(item.id, { token: boot.token, phase: "done", problems: [] }); await showing;
+    assert.equal(item.html, undefined); assert.equal(item.plugin, pluginManifest.id);
+    assert.match(itemText(item)!, /Saved counter/);
+    assert.equal(await host.componentPluginAction(thread, item.id, { op: "call", method: "read" }), 42);
+    await assert.rejects(host.componentPluginAction(thread, item.id, { op: "call", method: "other" }), /declared/);
+    await assert.rejects(host.componentPluginAction(thread, item.id, { op: "state", key: "private" }), /declared/);
+    await assert.rejects(host.componentPluginAction(thread, item.id, { op: "subscribe", event: "private" }), /declared/);
+    host.updateThread(thread, { approval: "readonly" });
+    await assert.rejects(host.componentPluginAction(thread, item.id, { op: "call", method: "update" }), /Board/);
+    const home = store.upsert({ key: "component-home", title: "Component home", html: "<p>Home</p>", activate: false }).tab;
+    host.updateThread(thread, { scope: { kind: "page", ref: home.id }, approval: "full" });
+    store.setPagePermission(home.id, `plugin.${pluginManifest.id}`, "deny");
+    await assert.rejects(host.componentPluginAction(thread, item.id, { op: "call", method: "read" }), /denies/);
+    assert.equal(host.componentView(thread, item.id).available, false);
+    store.setPagePermission(home.id, `plugin.${pluginManifest.id}`, "allow");
+    const updated = pluginFiles("<p>Current version</p>", { ...pluginManifest, version: "1.1.0" });
+    assert.deepEqual(service.preview(updated).changes?.components, []);
+    await service.install(updated, service.preview(updated).hash, true);
+    assert.match(host.componentPlugin(thread, item.id).html, /Current version/);
+    const incompatible = pluginFiles("<p>New</p>", { ...pluginManifest, version: "1.2.0", components: { counter: { ...pluginManifest.components.counter, props: { ...pluginManifest.components.counter.props, required: ["missing"] } } } });
+    await service.install(incompatible, service.preview(incompatible).hash, true);
+    assert.equal(host.componentView(thread, item.id).available, false);
+    await service.enable(pluginManifest.id, false);
+    assert.equal(host.componentView(thread, item.id).available, false);
+  } finally { setPlugins(null); await service.close(); }
 });
 
 test("component hosts cannot collide with page or worktree origins and expose no APIs", () => {
@@ -185,4 +254,129 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     assert.equal(await page.locator("#expanded").getAttribute("sandbox"), "allow-scripts");
     assert.equal(await expanded.locator("body").evaluate(() => (window as any).scribe.state), undefined);
   } finally { await browser.close(); }
+});
+
+test("plugin frames relay live revisions/events, release subscriptions on unmount and fall back on disable", { timeout: 30_000 }, async () => {
+  const service = new PluginService(path.join(dir, "live-plugins")); setPlugins(service);
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Plugin component bridge test" });
+  const app = express();
+  app.use(componentSite(() => host, path.resolve("public")));
+  app.use("/api/agent", agentRouter(host));
+  app.get("/", (_req, res) => res.send("<main></main><div style='height:4000px'></div>"));
+  const server = app.listen(0, "0.0.0.0"); await new Promise<void>(resolve => server.once("listening", resolve));
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  try {
+    const files = pluginFiles(); await service.install(files, service.preview(files).hash);
+    service.database.set(pluginManifest.id, "count", 1);
+    const thread = runningThread(); host.updateThread(thread, { approval: "full" });
+    const showing = host.showComponent(thread, { plugin: pluginManifest.id, component: "counter", props: { name: "Live" }, fallback: "Counter fallback" });
+    const item = component(thread), boot = host.componentProblems.boot(item.id, 0)!;
+    host.componentProblems.report(item.id, { token: boot.token, phase: "done", problems: [] }); await showing;
+    const page = await browser.newPage(); page.setDefaultTimeout(7000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("requestfailed", request => errors.push(`${request.url()}: ${request.failure()?.errorText}`));
+    // The fixture uses an ephemeral port; production uses the configured shell origin.
+    await page.route("**/api/agent/**", async route => {
+      if (route.request().method() === "GET") return route.continue();
+      const response = await route.fetch({ headers: { ...route.request().headers(), origin: shellOrigins()[0] } });
+      return route.fulfill({ response });
+    });
+    await page.route("**/component/**", async route => {
+      const read = (file: string) => fs.readFileSync(`public/${file}`, "utf8");
+      await route.fulfill({ contentType: "text/html", body: componentDocument({ ...item, html: host.componentPlugin(thread, item.id).html }, { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") }), headers: { "content-security-policy": COMPONENT_CSP.replace(/frame-ancestors[^;]+/, `frame-ancestors http://localhost:${port}`) } });
+    });
+    await page.goto(`http://localhost:${port}/`);
+    await page.addScriptTag({ content: "window.__name = value => value; window.scribeApp = { showNotice: console.error };" });
+    await page.addScriptTag({ content: fs.readFileSync("public/component-host.js", "utf8") });
+    await page.evaluate(item => {
+      const w = window as any;
+      const R = { el(tag: string, cls: string, text: string) { const n = document.createElement(tag); n.className = cls || ""; n.textContent = text || ""; return n; }, button(text: string, cls: string, fn: () => void) { const n = R.el("button", cls, text); n.onclick = fn; return n; }, renderMarkdown(n: HTMLElement, text: string) { n.textContent = text; } };
+      document.querySelector("main")!.append(w.ScribeComponents.render(item, R, {}));
+    }, item);
+    const frame = page.frameLocator(".ag-component iframe");
+    try { await frame.locator("#name").waitFor(); } catch (error) { throw new Error(`${error}\n${errors.join("\n")}\n${await page.locator("main").innerText()}\n${page.frames().map(f=>f.url()).join("\n")}`); }
+    await page.waitForFunction(() => !!document.querySelector("iframe"));
+    const child = () => page.frames().find(f => f.url().includes("/component/"))!;
+    try { await child().waitForFunction(() => (window as any).seen.some((v: any) => v.value === 1)); } catch (error) { throw new Error(`${error}\n${errors.join("\n")}`); }
+    await child().waitForFunction(() => (window as any).ticks !== undefined);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await host.componentPluginAction(thread, item.id, { op: "call", method: "update", args: { value: 2 } });
+    await child().waitForFunction(() => (window as any).seen.some((v: any) => v.value === 2 && v.revision === 2));
+    await child().waitForFunction(() => (window as any).ticks.includes(2));
+    await assert.rejects(child().evaluate(() => (window as any).scribe.plugin.state.get("private")), /not declared/);
+    assert.equal(await child().evaluate(() => Object.isFrozen((window as any).scribe.props)), true);
+    await page.evaluate(() => scrollTo(0, 3500));
+    await page.waitForFunction(() => !document.querySelector(".ag-component iframe"));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal((service as any).listeners.size, 0, "unmount closes server subscription");
+    await host.componentPluginAction(thread, item.id, { op: "call", method: "update", args: { value: 3 } });
+    await page.evaluate(() => scrollTo(0, 0));
+    await frame.locator("#count").waitFor();
+    await child().waitForFunction(() => (window as any).seen.some((v: any) => v.value === 3 && v.revision === 3));
+    // Simulate the stream and websocket both requesting a remount during a slow metadata GET.
+    await page.route("**/api/agent/threads/*/components/*", async route => {
+      if (route.request().method() === "GET" && !route.request().url().endsWith("/events")) await new Promise(resolve => setTimeout(resolve, 100));
+      await route.fallback();
+    });
+    await page.evaluate(plugin => {
+      (window as any).ScribeComponents.pluginChanged({plugin});
+      setTimeout(() => (window as any).ScribeComponents.pluginChanged({plugin}), 25);
+    }, pluginManifest.id);
+    await frame.locator("#count").waitFor();
+    await child().waitForFunction(() => (window as any).seen.some((v: any) => v.value === 3));
+    host.updateThread(thread, { approval: "readonly" });
+    const revokeBy = Date.now() + 2500;
+    while ((service as any).listeners.size && Date.now() < revokeBy) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal((service as any).listeners.size, 0, "dropping Full access revokes the established stream");
+    host.updateThread(thread, { approval: "full" });
+    await page.evaluate(plugin => (window as any).ScribeComponents.pluginChanged({plugin}), pluginManifest.id);
+    await frame.locator("#count").waitFor();
+    await child().waitForFunction(() => (window as any).seen.some((v: any) => v.value === 3));
+    await service.enable(pluginManifest.id, false);
+    await page.waitForFunction(() => !document.querySelector(".ag-component iframe") && document.querySelector(".ag-component")?.textContent?.includes("disabled"));
+    assert.match(await page.locator(".ag-component").innerText(), /Counter fallback/);
+    assert.equal((service as any).listeners.size, 0);
+  } finally {
+    await browser.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    setPlugins(null); await service.close();
+  }
+});
+
+test("component diagnostic capture reports script and bridge errors without invoking methods", { timeout: 15_000 }, async () => {
+  const item: ComponentItem = { id: "it_012345abcdef", threadId: "th_capture", turnId: "tu_capture", seq: 1, createdAt: Date.now(), kind: "component", plugin: "component-fixture", component: "counter", props: { name: "Capture" }, wait: false, status: "shown", html: `<script>window.calls=0; scribe.plugin.call('update',{value:99}).then(result=>{if(result.error!=='capture')throw new Error('capture failed')}); setTimeout(()=>{throw new Error('Render failure')},0);</script>` };
+  const controller = new AbortController();
+  const report = await probeComponent(item, controller.signal) as { problems: Array<{code:string;message:string}> };
+  assert.ok(report.problems.some(p => p.code === "uncaught_error" && p.message.includes("Render failure")));
+  assert.ok(!report.problems.some(p => p.message.includes("capture failed")));
+});
+
+test("Allow once live consent expires when its specific turn ends", { timeout: 10_000 }, async () => {
+  const service = new PluginService(path.join(dir, "once-plugins")); setPlugins(service);
+  const app = express(); app.use("/api/agent", agentRouter(host));
+  const server = app.listen(0, "127.0.0.1"); await new Promise<void>(resolve => server.once("listening", resolve));
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  const approve = host.requestPluginApproval;
+  try {
+    const files = pluginFiles(); await service.install(files, service.preview(files).hash);
+    const thread = runningThread(); host.updateThread(thread, { approval: "readonly" });
+    const showing = host.showComponent(thread, { plugin: pluginManifest.id, component: "counter", props: { name: "Once" } });
+    const item = component(thread), boot = host.componentProblems.boot(item.id, 0)!;
+    host.componentProblems.report(item.id, { token: boot.token, phase: "done", problems: [] }); await showing;
+    host.requestPluginApproval = async () => ({ allowed: true });
+    const response = await fetch(`http://127.0.0.1:${port}/api/agent/threads/${thread}/components/${item.id}/events`, { signal: AbortSignal.timeout(4000) });
+    assert.equal(response.status, 200);
+    const reader = response.body!.getReader();
+    assert.match(new TextDecoder().decode((await reader.read()).value), /ready/);
+    (host as any).runs.delete(thread);
+    assert.equal(host.runInfo(thread).exists, true, "the thread still exists after its turn ends");
+    assert.match(new TextDecoder().decode((await reader.read()).value), /reload/);
+    assert.equal((await reader.read()).done, true);
+    assert.equal((service as any).listeners.size, 0);
+  } finally {
+    host.requestPluginApproval = approve;
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    setPlugins(null); await service.close();
+  }
 });
