@@ -4,25 +4,28 @@ import { openAiEngine } from "./engine.js";
 import { fileStore, normalizeSettings, type AudioStore } from "./settings.js";
 import type { AudioResult, SttEngine, SttSource, AudioSettings } from "./types.js";
 
+const wavKey = (source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export class AudioService {
   private store: AudioStore;
   private engine: SttEngine;
   private sources: () => OpenAISource[];
   private timeoutMs: number;
+  /** Sources that rejected compressed audio this run; the shell sends them WAV. Not saved, so a fixed server is found again after a restart. */
+  private wavOnly = new Set<string>();
   constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; timeoutMs?: number }) {
     this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine;
     this.sources = options.sources; this.timeoutMs = options.timeoutMs ?? 60_000;
   }
   view() {
-    const settings = this.store.read();
+    const settings = this.store.read(), selected = this.selected(settings), source = this.source(selected);
     const { custom, ...stt } = settings.stt;
     const sources = this.sources().map(({ id, name, baseUrl }) => ({ id, name, baseUrl }));
     const profiles = this.profiles(settings).map(({ custom, ...profile }) => ({ ...profile,
       ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) }));
     return { stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },
       input: settings.input, profiles, defaultSource: settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined),
-      sources, available: Boolean(this.source(this.selected(settings))), usage: this.usage() };
+      sources, available: Boolean(source), wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
   }
   private profiles(settings: AudioSettings): SttSource[] {
     return [...(settings.stt.source ? [{ ...settings.stt, id: "__legacy__", name: "Speech-to-text" }] : []), ...settings.sources];
@@ -113,6 +116,7 @@ export class AudioService {
       try { result = await Promise.race([run(), timeout]); }
       catch { result = { ok: false, error: controller.signal.aborted ? "timeout" : "network", message: controller.signal.aborted ? "Speech-to-text timed out." : "Cannot reach the speech-to-text source." }; }
       finally { clearTimeout(timer); }
+      if (!result.ok && result.error === "format") this.wavOnly.add(wavKey(source, selected!.model));
       const usage = this.usage(); usage.calls++; usage.bytes += audio.size; if (!result.ok) usage.failed++;
       this.store.writeUsage(usage);
       return result;

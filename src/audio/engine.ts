@@ -12,6 +12,9 @@ export const openAiEngine: SttEngine = {
     if (prompt) form.append("prompt", prompt);
     const res = await fetch(`${source.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`, { method: "POST", headers: authHeaders(source), body: form, signal });
     if (!res.ok) {
+      // llama.cpp's server reads only WAV/MP3/FLAC and answers other formats with 400.
+      if ((res.status === 400 || res.status === 415) && !["wav", "mp3", "flac"].includes(ext))
+        return { ok: false, error: "format", message: `This source cannot read ${ext} audio (${res.status}).` };
       const error = res.status === 401 || res.status === 403 ? "auth" : res.status === 429 ? "rate_limit" : "engine";
       // Never relay upstream bodies: they can contain credentials or endpoint details.
       return { ok: false, error, message: `Speech-to-text request failed (${res.status}).`, retryable: res.status === 429 || res.status >= 500 };

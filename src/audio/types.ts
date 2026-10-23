@@ -7,7 +7,7 @@ export type AudioSettings = {
   stt: { source?: string; model: string; language?: string; custom?: { baseUrl: string; apiKey?: string } };
   input: { sendAfterDictation: boolean; pushToTalk: boolean };
 };
-export type AudioErrorKind = "no_source" | "invalid_audio" | "too_large" | "timeout" | "network" | "auth" | "rate_limit" | "engine" | "permission";
+export type AudioErrorKind = "no_source" | "invalid_audio" | "too_large" | "timeout" | "network" | "auth" | "rate_limit" | "engine" | "permission" | "format";
 export type AudioResult = { ok: true; text: string } | { ok: false; error: AudioErrorKind; message: string; retryable?: boolean };
 export type SttRequest = { source: OpenAISource; model: string; audio: Blob; language?: string; prompt?: string; signal: AbortSignal };
 export interface SttEngine { transcribe(request: SttRequest): Promise<AudioResult> }

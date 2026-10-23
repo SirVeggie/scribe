@@ -118,7 +118,7 @@
       throw Object.assign(new Error(message), { audioError: err.audioError || (err.name === "NotAllowedError" || err.name === "SecurityError" ? "denied" : "no_mic") });
     }
   }
-  /** 16 kHz mono PCM WAV: local servers (llama.cpp) cannot decode the WebM/Opus that MediaRecorder makes. */
+  /** 16 kHz mono PCM WAV, for sources (llama.cpp) that cannot decode MediaRecorder's WebM/Opus; about 8x larger. */
   async function toWav(blob) {
     if (/^audio\/(wav|x-wav|mpeg|flac)/.test(blob.type)) return blob;
     try {
@@ -137,13 +137,19 @@
   }
   async function transcribe(blob, opts = {}) {
     try {
-      blob = await toWav(blob);
+      if (view?.wav) blob = await toWav(blob);
       const query = new URLSearchParams();
       if (opts.language) query.set("language", opts.language);
       if (opts.prompt) query.set("prompt", opts.prompt);
       const res = await fetch(`/api/audio/transcriptions?${query}`, { method: "POST", signal: opts.signal,
         headers: { "Content-Type": blob.type || "audio/webm", ...(opts.tabId ? { "x-scribe-tab": opts.tabId } : {}) }, body: blob });
-      return await res.json();
+      const result = await res.json();
+      if (result.error !== "format") return result;
+      // The source rejected the compressed clip; the daemon now reports it as WAV-only.
+      const wav = await toWav(blob);
+      if (wav === blob) return result;
+      void refresh().catch(() => {});
+      return transcribe(wav, opts);
     } catch (err) { return failure("network", err.name === "AbortError" ? "Dictation cancelled." : "Cannot reach speech-to-text."); }
   }
   async function dictate(opts = {}) {

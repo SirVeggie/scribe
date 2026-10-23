@@ -124,6 +124,12 @@ test("one retry for 429 and 5xx, none for auth or malformed output; failures nev
   const engine = setup([{ ok: false, error: "engine", message: "bad output" }]);
   await engine.service.transcribe(clip()); assert.equal(engine.calls.length, 1);
 });
+test("a source that rejects compressed audio is reported as WAV-only, without a retry", async () => {
+  const { service, calls } = setup([{ ok: false, error: "format", message: "cannot read webm" }]);
+  assert.equal(service.view().wav, false);
+  assert.equal((await service.transcribe(clip()) as any).error, "format"); assert.equal(calls.length, 1);
+  assert.equal(service.view().wav, true);
+});
 test("deadline also bounds a fake engine that ignores abort", async () => {
   let signal: AbortSignal | undefined;
   const service = new AudioService({ sources: () => [source], store: memoryStore({ stt: { source: "test" } }), timeoutMs: 10,
@@ -146,10 +152,12 @@ test("OpenAI adapter uploads multipart with daemon-only auth and maps response e
     text = "language English<asr_text>Scribe audio test.";
     assert.deepEqual(await openAiEngine.transcribe(request), { ok: true, text: "Scribe audio test." }, "Qwen3-ASR's language tag is dropped");
     text = "Words";
-    for (const [code, error, retryable] of [[401, "auth", false], [429, "rate_limit", true], [503, "engine", true], [400, "engine", false]] as const) {
+    for (const [code, error, retryable] of [[401, "auth", false], [429, "rate_limit", true], [503, "engine", true], [400, "format", undefined]] as const) {
       status = code; const result = await openAiEngine.transcribe(request);
       assert.equal((result as any).error, error); assert.equal((result as any).retryable, retryable); assert.ok(!JSON.stringify(result).includes("secret-key"));
     }
+    status = 400;
+    assert.equal((await openAiEngine.transcribe({ ...request, audio: new Blob(["sound"], { type: "audio/wav" }) }) as any).error, "engine", "a rejected WAV is not a format problem");
   } finally { server.close(); }
 });
 test("routes reject page origins, form uploads, oversize bytes, and ungranted tab headers; settings round trip", async () => {
