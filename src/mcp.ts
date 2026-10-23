@@ -342,7 +342,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_show",
-    "Show an HTML page in Scribe: creates it, or replaces the page with the same key (open or closed). Pass html (a document or fragment) or htmlPath (a local file; use it for large pages in Code mode). This alone shows the page; no separate open or refresh. For a small change to an existing page, use page_patch.",
+    "Show an HTML page in Scribe: creates it, or replaces the page with the same key (open or closed). Pass html (a document or fragment) or htmlPath (a local file; use it for large pages in Code mode). This alone shows the page; no separate open or refresh. For a small change to an existing page, use page_patch. May return a short problems list from the first render (also in the background); line uses page_read numbering. A timeout omits problems.",
     {
       key: z.string().optional().describe("Stable page identity, e.g. sprint-notes (stored as scribe:sprint-notes). Reuse it to update the same page."),
       title: z.string().describe("Tab title."),
@@ -407,6 +407,7 @@ export async function startMcp(): Promise<void> {
         expectedRevision: guard,
         replyTo,
         plugins,
+        checkProblems: true,
       });
       if (status === 409 && expectedRevision === undefined) {
         return errorResult(
@@ -417,6 +418,7 @@ export async function startMcp(): Promise<void> {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const payload = data as {
+        problems?: import("./pageProblems.js").PageProblem[];
         created?: boolean;
         closed?: boolean;
         titleKept?: boolean;
@@ -432,6 +434,7 @@ export async function startMcp(): Promise<void> {
         }
       }
       return jsonResult({
+        ...(payload.problems?.length ? { problems: payload.problems } : {}),
         created: Boolean(payload.created),
         open: !closed,
         id: tab.id,
@@ -449,7 +452,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_patch",
-    "Change part of an existing Scribe page (open or closed) without rewriting it; does not create pages or change page state. Edits apply in order and atomically: if one fails, nothing changes and the error shows where the stored HTML diverged. Match the body you wrote, not the wrapper Scribe adds around a fragment. For large pages, find the spot with page_grep or a page_read window first. Focuses the tab unless background is true. Details: scribe_docs \"Patch an existing page\".",
+    "Change part of an existing Scribe page (open or closed) without rewriting it; does not create pages or change page state. Edits apply in order and atomically: if one fails, nothing changes and the error shows where the stored HTML diverged. Match the body you wrote, not the wrapper Scribe adds around a fragment. For large pages, find the spot with page_grep or a page_read window first. Focuses the tab unless background is true. HTML changes may return a short problems list from the first render; line uses page_read numbering. A timeout omits problems. Details: scribe_docs \"Patch an existing page\".",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:sprint-notes (the scribe: prefix is optional)."),
@@ -510,11 +513,13 @@ export async function startMcp(): Promise<void> {
         title,
         activate,
         replyTo,
+        checkProblems: hasEdits || Boolean(htmlPath),
       });
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
       const payload = data as {
+        problems?: import("./pageProblems.js").PageProblem[];
         applied: number;
         closed: boolean;
         titleKept?: boolean;
@@ -528,6 +533,7 @@ export async function startMcp(): Promise<void> {
         }
       }
       return jsonResult({
+        ...(payload.problems?.length ? { problems: payload.problems } : {}),
         applied: payload.applied,
         open: !payload.closed,
         id: payload.tab.id,

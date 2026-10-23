@@ -26,7 +26,10 @@ import { store, type CleanupBasis, type CleanupOptions, type FolderDeleteMode } 
 import { isBlankPage, isPlainObject, toMeta, type BoardEvent, type BoardState, type BuiltinTemplateMeta, type AccessTarget, type Folder, type ImportDestination, type PageActor, type PageEvent, type Tab, type TabMeta, type Template, type TemplateMeta, type UpsertNotice, type Viewer } from "./types.js";
 import type { SpacesView } from "./spaces.js";
 import { ViewerHub } from "./viewers.js";
-import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus } from "./screenshot.js";
+import { captureBootOf, captureTab, closeScreenshotBrowser, screenshotHttpStatus, probeTab } from "./screenshot.js";
+import { PageProblems, PAGE_PROBLEM_JS, KIT_TONES } from "./pageProblems.js";
+import { embedUrlFromHtml } from "./embed.js";
+
 import {
   browserAct,
   browserConsole,
@@ -81,6 +84,7 @@ import { readPackage } from "./plugins/package.js";
 import { mainRepository } from "./plugins/git.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
+const pageProblems = new PageProblems();
 
 /**
  * Grammars chat fences often use that highlight.js's common bundle leaves out (js, ts, python,
@@ -259,6 +263,14 @@ export async function startHttp(): Promise<http.Server> {
     next();
   });
 
+  app.post("/api/tabs/:id/problems", (req, res) => {
+    const tab = store.get(req.params.id);
+    // Reports are private to the page's own origin and a random, short-lived render token.
+    if (!tab || framePageId(req) !== tab.id) { res.status(404).end(); return; }
+    pageProblems.report(tab.id, req.body);
+    res.status(204).end();
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({
       ok: true,
@@ -378,7 +390,7 @@ export async function startHttp(): Promise<http.Server> {
     res.json({ ...tab, folder: store.folderPath(tab.folderId), ...(usage.count ? { pageAssets: usage } : {}) });
   });
 
-  app.post("/api/tabs", (req, res) => {
+  app.post("/api/tabs", async (req, res) => {
     try {
       const assets = prepareAssets(parseAssetInputs(req.body?.assets));
       const rawRevision = req.body?.expectedRevision;
@@ -431,7 +443,8 @@ export async function startHttp(): Promise<http.Server> {
         agentRewrote(req, tab.id);
       }
       const shown = replyTo === undefined ? tab : store.setReplyTo(tab.id, replyTo);
-      res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(shown) });
+      const problems = await collectPageProblems(req, tab);
+      res.status(created ? 201 : 200).json({ created, closed, titleKept, tab: libraryMeta(shown), ...(problems.length ? { problems } : {}) });
     } catch (err) {
       res.status(err instanceof RevisionConflictError ? 409 : 400).json({ error: (err as Error).message });
     }
@@ -504,7 +517,7 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
-  app.post("/api/tabs/:id/patch", (req, res) => {
+  app.post("/api/tabs/:id/patch", async (req, res) => {
     try {
       const title = optionalString(req.body?.title);
       const html = typeof req.body?.html === "string" ? req.body.html : undefined;
@@ -541,7 +554,8 @@ export async function startHttp(): Promise<http.Server> {
         actor: actorOf(req),
       });
       agentRewrote(req, tab.id);
-      res.json({ applied, closed, titleKept, tab: libraryMeta(tab) });
+      const problems = await collectPageProblems(req, tab);
+      res.json({ applied, closed, titleKept, tab: libraryMeta(tab), ...(problems.length ? { problems } : {}) });
     } catch (err) {
       const message = (err as Error).message;
       const status = message.startsWith("tab not found") ? 404 : err instanceof RevisionConflictError ? 409 : 400;
@@ -2828,6 +2842,16 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
 })();
 </script>`;
 
+function collectPageProblems(req: express.Request, tab: Tab) {
+  if (req.body?.checkProblems !== true || tab.file || embedUrlFromHtml(tab.html)) return Promise.resolve([]);
+  const reach = reachFor(req);
+  return pageProblems.collect(tab.id, tab.revision, signal => probeTab(tab.id, signal), { exists: key => {
+    const linked = store.get(key);
+    if (linked && (reach ? reach(linked) !== "allow" : linked.agentHidden)) return undefined;
+    return Boolean(linked);
+  } });
+}
+
 function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: BoardState): string {
   const html = injectBoardKeys(tab.file ? fileViewerHtml() : rewriteAssetRefs(tab.html, tab.id));
   if (html.includes("data-scribe-bridge")) {
@@ -2851,12 +2875,23 @@ function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: Boar
         }
       : null,
   });
-  const snippet = `<script src="/tooltip.js?v=3" defer></script>
+  const diagnostic = pageProblems.boot(tab.id, tab.revision);
+  const opening = /<head[^>]*>/i.exec(html) || /<body[^>]*>/i.exec(html);
+  const at = opening ? opening.index + opening[0].length : 0;
+  const problemBoot = diagnostic ? {
+    ...diagnostic, id: tab.id, capture: capturing, tones: KIT_TONES,
+    insertLine: html.slice(0, at).split("\n").length, insertedLines: 0,
+  } : null;
+  const renderSnippet = () => `<script src="/tooltip.js?v=3" defer></script>
 <style data-scribe-bridge>${BOARD_STALE_CSS}</style>
 <script>window.__SCRIBE_BOOT__=${boot};
+${problemBoot ? `window.__SCRIBE_PROBLEMS__=${jsonForScript(problemBoot)};\n${PAGE_PROBLEM_JS}` : ""}
 ${BOARD_BRIDGE_JS}
+${diagnostic ? "window.__scribeWatchProblems && window.__scribeWatchProblems();" : ""}
 </script>`;
-  return injectIntoHead(html, snippet);
+  // JSON boot data contains no literal newlines, so filling the count cannot change it.
+  if (problemBoot) problemBoot.insertedLines = renderSnippet().split("\n").length - 1;
+  return injectIntoHead(html, renderSnippet());
 }
 
 function injectBoardKeys(html: string): string {

@@ -68,6 +68,8 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 
 If the result has `titleKept: true`, the user renamed that page in the last 24 hours and your `title` was ignored. Keep using their title; do not fight it.
 
+`page_show` and HTML-changing `page_patch` briefly check the first render, including background pages. A capped `problems: [{ code, message, line? }]` appears only when problems were found; fix those with `page_patch`. Lines, when present, use `page_read` numbering. An absent list also covers an unavailable or timed-out check. The check uses capture mode for background pages, so it does not exercise bridge calls that would write or need the board.
+
 Re-showing a page you read or wrote earlier in this session is refused if someone changed it since (the error says so). Their changes are in the page: `page_read` it, carry them into your HTML or switch to `page_patch`, then show again. Pass `expectedRevision` yourself to guard a page you read in an earlier session.
 
 **Small markup edits** to a page that already exists: `page_patch` (see below). Do not `page_show` the whole document again.

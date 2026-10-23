@@ -60,6 +60,36 @@ let launching: Promise<Browser> | null = null;
 let inFlight = 0;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
+let diagnosticViews = 0;
+
+/** A short-lived capture-mode view, sharing the screenshot browser without taking user focus. */
+export async function probeTab(id: string, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || diagnosticViews >= 2) return;
+  diagnosticViews += 1;
+  try {
+    await withBrowser(async opened => {
+      if (signal.aborted) return;
+      const context = await opened.newContext({ viewport: { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }, serviceWorkers: "block" });
+      const close = () => { void context.close().catch(() => {}); };
+      signal.addEventListener("abort", close, { once: true });
+      const shot = beginCaptureBoot({});
+      try {
+        if (signal.aborted) return;
+        await context.addInitScript(() => { (window as any).__SCRIBE_CAPTURE__ = true; });
+        const page = await context.newPage();
+        await page.goto(`${pageViewUrl(id)}?shot=${shot}`, { waitUntil: "commit", timeout: 1500 });
+        if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      } finally {
+        endCaptureBoot(shot);
+        signal.removeEventListener("abort", close);
+        await context.close().catch(() => {});
+      }
+    });
+  } finally {
+    diagnosticViews -= 1;
+  }
+}
+
 export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotResult> {
   const tab = store.get(input.idOrKey);
   if (!tab) {

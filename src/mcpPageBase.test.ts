@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { AGENT_CLIENT, CLIENT_HEADER, THREAD_HEADER, VERSION } from "./config.js";
 
-test("page_show forwards base with html or htmlPath", async () => {
+test("page_show forwards base with html or htmlPath, and page writes forward optional render problems", async () => {
   const posts: Record<string, unknown>[] = [];
   const server = http.createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
@@ -35,10 +35,16 @@ test("page_show forwards base with html or htmlPath", async () => {
           JSON.stringify({
             created: true,
             closed: false,
+            ...(json.title === "N" ? {problems: [{code: "uncaught_error", message: "broken page", line: 12}]} : {}),
             tab: { id: "t_1", key: "scribe:n", title: json.title, revision: 1, folder: null },
           })
         );
       });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/tabs/t_1/patch") {
+      res.end(JSON.stringify({applied: 1, closed: false, problems: [{code: "asset_load", message: "missing.png"}],
+        tab: {id: "t_1", key: "scribe:n", title: "N", revision: 2, htmlBytes: 10, folder: null}}));
       return;
     }
     res.end("{}");
@@ -76,6 +82,13 @@ test("page_show forwards base with html or htmlPath", async () => {
     assert.equal(posts[0]?.html, "<p>inner</p>");
     assert.equal(posts[0]?.base, "scribe:starter");
     assert.equal(posts[0]?.title, "N");
+    assert.equal(posts[0]?.checkProblems, true);
+    assert.deepEqual(JSON.parse(shown.content[0].text).problems, [{code: "uncaught_error", message: "broken page", line: 12}]);
+
+    const patched = await call("page_patch", {id: "t_1", edits: [{oldString: "x", newString: "y"}], background: true});
+    assert.deepEqual(JSON.parse(patched.content[0].text).problems, [{code: "asset_load", message: "missing.png"}]);
+    const clean = await call("page_show", {key: "clean", title: "Clean", html: "<p>ok</p>", background: true});
+    assert.equal("problems" in JSON.parse(clean.content[0].text), false);
 
     const fromFile = await call("page_show", {
       key: "n",
@@ -85,8 +98,8 @@ test("page_show forwards base with html or htmlPath", async () => {
       background: true,
     });
     assert.equal(fromFile.isError ?? false, false);
-    assert.equal(posts[1]?.html, "<p>from file</p>");
-    assert.equal(posts[1]?.base, "starter");
+    assert.equal(posts[2]?.html, "<p>from file</p>");
+    assert.equal(posts[2]?.base, "starter");
 
     const refused = await call("page_show", {
       key: "n",
