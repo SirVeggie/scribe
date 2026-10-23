@@ -1750,17 +1750,16 @@ export class AgentHost {
     this.sessions.delete(id);
     forgetGuides(id);
     void closeThreadBrowser(id);
-    const wt = openWorktree(thread);
+    for (let held; (held = this.worktreeClosing(id)); ) await held.catch(() => {});
+    const wt = openWorktree(this.threads.get(id) ?? thread);
     // A fork shares its worktree: the folder stays while another thread still works in it.
     if (wt && !this.sharers(id, wt).length) {
       // The folder goes; any work stays on the branch, so deleting a thread never loses it.
-      try {
+      await this.holdWorktree(wt.path, async () => {
         await commitAll(wt, `WIP: ${thread.title}`);
         await removeWorktree(wt);
         await dropBranchIfEmpty(wt);
-      } catch (err) {
-        log(`Removing the worktree of ${id} failed: ${(err as Error).message}`);
-      }
+      }).catch((err) => log(`Removing the worktree of ${id} failed: ${(err as Error).message}`));
     }
     this.threads.delete(id);
     if (this.claudeThreadLimits.delete(id)) this.db.setSetting("claudeThreadLimits", Object.fromEntries(this.claudeThreadLimits));
@@ -2219,7 +2218,8 @@ export class AgentHost {
     });
     const context = freshContext(supplied, this.knownContext(threadId, thread).filter((chip) => chip.kind !== "thread"));
     const wt = openWorktree(thread);
-    if (wt && !fs.existsSync(wt.path)) {
+    // A closure removing it lets the message wait: its turn opens a worktree again (#736).
+    if (wt && !fs.existsSync(wt.path) && !this.worktreeClosing(threadId)) {
       throw new Error(`This thread's worktree is gone (${wt.path}). Use Leave branch in the branch menu to go back to the main checkout; the branch ${wt.branch} keeps its commits.`);
     }
     const images = input.images ?? [];
@@ -3675,6 +3675,12 @@ export class AgentHost {
       this.db.setSetting(`checkpoint:${turn.id}`, { html: pageTab.html, revision: pageTab.revision });
     }
 
+    // A Merge or cleanup may be removing the thread's worktree: wait for it, then go on from the
+    // thread as it left it (closed, so a worktree opens again below, or still open if it failed).
+    if (this.worktreeClosing(threadId)) {
+      for (let held; (held = this.worktreeClosing(threadId)); ) await held.catch(() => {});
+      thread = this.threads.get(threadId) ?? thread;
+    }
     let setupError = workspaceFolderError(thread);
     if (thread.cwd && !setupError && !openWorktree(thread)) this.noteWorkspaces([thread.cwd]);
     let reopened = "";
@@ -4969,13 +4975,44 @@ export class AgentHost {
    * back to the main checkout with a new session.
    */
   async finishWorktree(threadId: string, how: "merge" | "leave" | "discard"): Promise<{ ok: true; message: string }> {
+    // Another closure of this folder (a fork's Merge, a cleanup) goes first; this one then sees what it left.
+    for (let held; (held = this.worktreeClosing(threadId)); ) await held.catch(() => {});
     if (this.runs.has(threadId)) throw new Error("Stop the running turn first.");
     const thread = this.requireThread(threadId);
     const wt = openWorktree(thread);
     if (!wt) throw new Error("This thread has no open worktree.");
-    const sharers = this.sharers(threadId, wt);
-    const busy = sharers.find((t) => this.runs.has(t.id));
+    const busy = this.sharers(threadId, wt).find((t) => this.runs.has(t.id));
     if (busy) throw new Error(`“${busy.title}” works in this worktree too and is running. Stop it first.`);
+    const message = await this.holdWorktree(wt.path, () => this.closeWorktree(thread, wt, how));
+    if (how === "merge") await this.closeLandedWorktrees(wt.repo).catch((err) => log(`Checking other landed worktrees failed: ${(err as Error).message}`));
+    return { ok: true, message };
+  }
+
+  /** Folders a closure is removing, by workspaceKey: turns and other closures of the folder wait for it (#736). */
+  private worktreeClosures = new Map<string, Promise<unknown>>();
+
+  /**
+   * The closure removing the thread's open worktree right now, if any. Callers wait in a loop and
+   * check the thread right after it, with no await in between, so nothing slips in before they act.
+   */
+  private worktreeClosing(threadId: string): Promise<unknown> | undefined {
+    const thread = this.threads.get(threadId);
+    const wt = thread && openWorktree(thread);
+    return wt ? this.worktreeClosures.get(workspaceKey(wt.path)) : undefined;
+  }
+
+  /** Close the folder holding its lock. Call it right after the checks that allow the closure. */
+  private holdWorktree<T>(dir: string, close: () => Promise<T>): Promise<T> {
+    const key = workspaceKey(dir);
+    if (this.worktreeClosures.has(key)) return Promise.reject(new Error("This worktree is already being closed."));
+    const done = close().finally(() => this.worktreeClosures.delete(key));
+    this.worktreeClosures.set(key, done);
+    return done;
+  }
+
+  private async closeWorktree(thread: Thread, wt: ThreadWorktree, how: "merge" | "leave" | "discard"): Promise<string> {
+    const threadId = thread.id;
+    const sharers = this.sharers(threadId, wt);
     let message: string;
     if (how === "merge") {
       const { commits } = await mergeWorktree(wt);
@@ -5017,7 +5054,8 @@ export class AgentHost {
     // Agent sessions are tied to their folder. Forks that shared the worktree can't all reopen its
     // folder, so only the thread itself keeps its session; the others start over in the main checkout.
     const closed = { how: how === "merge" ? ("merged" as const) : ("left" as const), at: Date.now() };
-    for (const id of [threadId, ...sharers.map((t) => t.id)]) {
+    // Again: a fork or helper made while Git worked shares the folder too.
+    for (const id of [threadId, ...this.sharers(threadId, wt).map((t) => t.id)]) {
       const reopen = how === "merge" && id === threadId;
       const cur = this.requireThread(id);
       const next: Thread = {
@@ -5037,8 +5075,7 @@ export class AgentHost {
       this.emitThread(id);
     }
     this.flushNow();
-    if (how === "merge") await this.closeLandedWorktrees(wt.repo).catch((err) => log(`Checking other landed worktrees failed: ${(err as Error).message}`));
-    return { ok: true, message };
+    return message;
   }
 
   /** Other threads with the same worktree open: forks share it. */
@@ -5114,13 +5151,25 @@ export class AgentHost {
   }
 
   private async expireWorktree(threadId: string, wt: ThreadWorktree, landed = false): Promise<void> {
+    // Another closure of the folder goes first; the Git check runs again after it, on what it left.
+    let remaining: { ahead: number; dirty: boolean };
+    do {
+      for (let held; (held = this.worktreeClosing(threadId)); ) await held.catch(() => {});
+      // The same worktree, not one a turn has opened again in its folder since.
+      const open = this.threads.has(threadId) ? openWorktree(this.threads.get(threadId)!) : null;
+      if (!open || open.path !== wt.path || open.createdAt !== wt.createdAt) return;
+      remaining = await worktreeRemaining(wt);
+    } while (this.worktreeClosing(threadId));
     const ids = [threadId, ...this.sharers(threadId, wt).map((t) => t.id)];
     // Git checks yield: a message or helper may have started since the sweep collected this folder.
-    const remaining = await worktreeRemaining(wt);
     if (remaining.ahead || remaining.dirty || ids.some((id) => {
       const run = this.pageRuns.get(id);
       return this.runs.has(id) || this.resuming.has(id) || (this.status.get(id) ?? "idle") !== "idle" || this.queues.get(id)?.length || (run && run.phase !== "ended");
     })) return;
+    await this.holdWorktree(wt.path, () => this.removeIdleWorktree(threadId, wt, ids, landed));
+  }
+
+  private async removeIdleWorktree(threadId: string, wt: ThreadWorktree, ids: string[], landed: boolean): Promise<void> {
     // The provider process runs in the folder; Windows will not remove a folder in use.
     for (const id of ids) {
       this.sessions.get(id)?.dispose();
@@ -5131,7 +5180,8 @@ export class AgentHost {
     await dropBranchIfEmpty(wt);
     const days = Math.round(WORKTREE_IDLE_MS / 86_400_000);
     const at = Date.now();
-    for (const id of ids) {
+    // Again: a fork or helper made while Git worked shares the folder too.
+    for (const id of new Set([...ids, ...this.sharers(threadId, wt).map((t) => t.id)])) {
       const cur = this.threads.get(id);
       if (!cur || openWorktree(cur)?.path !== wt.path) continue;
       // Like a merge: the thread keeps its session and its next message reopens the same folder where it

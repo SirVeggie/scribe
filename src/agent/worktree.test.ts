@@ -110,7 +110,7 @@ test("a landed merge closes successfully when its deregistered folder cannot be 
   const notices: { text: string }[] = [];
   const threads = new Map([[thread.id, thread]]);
   const host = Object.assign(Object.create(AgentHost.prototype), {
-    runs: new Map(), threads,
+    runs: new Map(), threads, worktreeClosures: new Map(),
     requireThread: (id: string) => threads.get(id),
     sharers: () => [],
     sessions: new Map([[thread.id, { dispose() {
@@ -164,7 +164,7 @@ test("idle worktrees close when empty and are listed as stale when they hold cha
   const settings = new Map<string, unknown>();
   const notices: { text: string }[] = [];
   const host = Object.assign(Object.create(AgentHost.prototype), {
-    threads, runs: new Map(), resuming: new Set(), status: new Map(), queues: new Map(), pageRuns: new Map(), sessions: new Map(), closed: false,
+    threads, runs: new Map(), resuming: new Set(), status: new Map(), queues: new Map(), pageRuns: new Map(), sessions: new Map(), closed: false, worktreeClosures: new Map(),
     db: {
       saveThread() {},
       listTurns: () => [],
@@ -312,7 +312,7 @@ test("a merge closes quiet worktrees whose work landed with it and keeps busy or
     id: wt.branch, title: wt.branch, cwd: wt.path, worktree: wt, useWorktree: true, nativeId: wt.branch,
   }]));
   const host = Object.assign(Object.create(AgentHost.prototype), {
-    threads, runs: new Map([[busy.branch, {}]]), resuming: new Set(), status: new Map(), queues: new Map(), pageRuns: new Map(), sessions: new Map(), closed: false,
+    threads, runs: new Map([[busy.branch, {}]]), resuming: new Set(), status: new Map(), queues: new Map(), pageRuns: new Map(), sessions: new Map(), closed: false, worktreeClosures: new Map(),
     db: { saveThread() {}, listTurns: () => [] },
     addItem() {}, emitThread() {}, flushNow() {},
   });
