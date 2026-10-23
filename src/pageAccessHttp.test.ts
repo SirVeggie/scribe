@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 import http from "node:http";
 import { pdfFixture } from "./pdfFixture.test.js";
+import { unzip } from "./plugins/package.js";
 import { AGENT_CLIENT, CLIENT_HEADER, LOCAL_TOKEN_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER } from "./config.js";
 
 // The daemon's page routes answer a chat's MCP by the chat's Scribe access (#269).
@@ -44,7 +45,12 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     Object.assign(headers, extra);
     for (const [name, value] of Object.entries(headers)) if (value === "") delete headers[name];
     const res = await fetch(url + route, { method, headers, body: body ? JSON.stringify(body) : undefined });
-    return { status: res.status, data: (await res.json().catch(() => ({}))) as Record<string, any> };
+    if (res.headers.get("content-type") === "application/zip") {
+      const archive = await unzip(Buffer.from(await res.arrayBuffer()));
+      assert.ok(archive["scribe.json"], "export archive contains scribe.json");
+      return { status: res.status, headers: res.headers, data: JSON.parse(archive["scribe.json"].toString("utf8")) as Record<string, any> };
+    }
+    return { status: res.status, headers: res.headers, data: (await res.json().catch(() => ({}))) as Record<string, any> };
   };
   /** A page's own script: the request comes in on that page's origin (#660). */
   const fromPage = (page: string, method: string, route: string, body?: unknown) =>
@@ -126,6 +132,8 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     const templateRoute = `/api/export/template/${template.id}`;
     const templateExport = await call("GET", templateRoute);
     assert.equal(templateExport.status, 200);
+    assert.equal(templateExport.headers.get("content-type"), "application/zip");
+    assert.match(templateExport.headers.get("content-disposition") ?? "", /^attachment;.*\.scribe\.zip"$/);
     assert.equal(templateExport.data.format, "scribe-export");
     assert.deepEqual(templateExport.data.pages, []);
     assert.deepEqual(templateExport.data.templates.map((item: any) => item.id), [template.id]);
@@ -138,6 +146,8 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     const loosePage = await show("selection-loose");
     const selectedExport = await call("GET", `/api/export?folder=${selectionFolder.id}&page=${loosePage.id}&page=${selectionPage.id}`);
     assert.equal(selectedExport.status, 200);
+    assert.equal(selectedExport.headers.get("content-type"), "application/zip");
+    assert.match(selectedExport.headers.get("content-disposition") ?? "", /^attachment;.*\.scribe\.zip"$/);
     assert.deepEqual(new Set(selectedExport.data.pages.map((page: any) => page.id || page.key)), new Set([selectionPage.key, loosePage.key]));
     assert.equal((await call("POST", "/api/library/delete", { pages: [loosePage.id], folders: ["missing"] })).status, 404);
     assert.equal((await call("GET", `/api/tabs/${loosePage.id}`)).status, 200, "invalid selection leaves every page in place");
