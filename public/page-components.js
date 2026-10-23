@@ -2,13 +2,44 @@
 function mountPageComponents(host) {
   if (customElements.get("scribe-component")) return;
   const live = new Set();
-  window.addEventListener("pagehide", () => { for (const el of live) el.dispose?.(); });
-  window.addEventListener("pageshow", event => { if (event.persisted) for (const el of live) el.schedule(); });
+  const leases = new Map();
+  let renewing = false;
+  const renew = async () => {
+    if (renewing || !leases.size) return;
+    renewing = true;
+    try {
+      const response = await fetch(host.base + "/leases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [...leases.keys()] }), signal: AbortSignal.timeout(10000) });
+      const result = await response.json();
+      for (const [id, error] of Object.entries(result.errors || {})) leases.get(id)?.(String(error));
+    } catch { /* A transient connection failure can recover on the next heartbeat. */ }
+    finally { renewing = false; }
+  };
+  setInterval(renew, 20000);
+  let suspended = false;
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const el = entry.target;
+      el.visible = host.capturing || entry.isIntersecting;
+      if (!el.visible || suspended) el.suspend();
+      if (!el.frame) el.schedule();
+    }
+  }, { rootMargin: "900px 0px" });
+  window.addEventListener("pagehide", () => { suspended = true; for (const el of live) el.suspend(true); });
+  window.addEventListener("pageshow", event => { if (event.persisted) { suspended = false; for (const el of live) el.schedule(); } });
+  document.addEventListener("focusin", () => { for (const el of live) if (!el.visible) el.suspend(); });
   class PageComponent extends HTMLElement {
     static observedAttributes = ["plugin", "name", "props"];
-    connectedCallback() { live.add(this); this.schedule(); }
-    disconnectedCallback() { live.delete(this); clearTimeout(this.pending); this.dispose?.(); }
-    attributeChangedCallback() { if (this.isConnected) this.schedule(); }
+    connectedCallback() { live.add(this); this.visible = Boolean(host.capturing); observer.observe(this); this.schedule(); }
+    disconnectedCallback() { live.delete(this); observer.unobserve(this); this.suspend(true); }
+    attributeChangedCallback() { if (this.isConnected) { this.suspend(true); this.schedule(); } }
+    suspend(force = false) {
+      const frame = this.frame;
+      if (!force && !suspended && frame && document.activeElement === frame) return;
+      clearTimeout(this.pending);
+      if (frame) this.style.minHeight = frame.getBoundingClientRect().height + "px";
+      this.dispose?.();
+      if (frame) this.replaceChildren(...(this.fallback || []));
+    }
     schedule() {
       clearTimeout(this.pending);
       if (document.readyState === "loading") {
@@ -16,15 +47,18 @@ function mountPageComponents(host) {
       } else this.pending = setTimeout(() => { if (this.isConnected) this.mount(); }, 0);
     }
     mount() {
+      const reports = window.__scribeComponentProblems;
+      this.style.display = "block";
+      if (!this.style.minHeight) this.style.minHeight = "160px";
+      if ((!this.visible || suspended) && !reports) return;
+      const release = reports?.hold();
       this.dispose?.();
       let disposed = false, port, events, loaded = false, lastReply = 0, lastOpen = 0, mountId;
       const abort = new AbortController();
-      const reports = window.__scribeComponentProblems;
-      const release = reports?.hold();
       let released = false;
       const finish = () => { if (!released) { released = true; release?.(); } };
       const releaseMount = id => { void fetch(host.base + "/" + id, { method: "DELETE", keepalive: true }).catch(() => {}); };
-      const cleanup = () => { disposed = true; abort.abort(); port?.close(); events?.close(); themeObserver.disconnect(); clearTimeout(timeout); if (mountId) releaseMount(mountId); finish(); };
+      const cleanup = () => { if (disposed) return; disposed = true; this.frame = null; abort.abort(); port?.close(); events?.close(); themeObserver.disconnect(); clearTimeout(timeout); if (mountId) { leases.delete(mountId); releaseMount(mountId); } finish(); };
       this.dispose = cleanup;
       const fail = message => {
         if (disposed) return;
@@ -33,6 +67,11 @@ function mountPageComponents(host) {
         const error = document.createElement("div"); error.className = "callout error"; error.setAttribute("role", "alert");
         error.textContent = "Component: " + String(message).slice(0, 300);
         this.replaceChildren(error, ...(this.fallback || []));
+      };
+      const leaseFailure = message => {
+        if (disposed) return;
+        if (/mount expired/.test(message)) { this.suspend(true); if (this.isConnected && this.visible && !suspended) this.schedule(); }
+        else fail(message);
       };
       const theme = () => {
         if (!port) return;
@@ -43,7 +82,6 @@ function mountPageComponents(host) {
       const themeObserver = new MutationObserver(theme);
       themeObserver.observe(document.documentElement, { attributes: true });
       const timeout = setTimeout(() => { if (!loaded) fail("Component did not load."); finish(); }, reports ? 2200 : 10000);
-      this.style.display = "block";
       this.fallback ??= Array.from(this.childNodes);
       this.replaceChildren(...this.fallback);
       let props;
@@ -61,15 +99,24 @@ function mountPageComponents(host) {
         return result;
       }
       const local = this.id ? host.local(this.id) : this.local || {};
-      void request("", { plugin, component: name, props, local, diagnostics: Boolean(reports), capture: host.capturing }).then(mount => {
+      const spec = { plugin, component: name, props };
+      // Validate literal tags even offscreen, without allocating an origin or asking for permission.
+      void (reports ? request("/validate", spec, false) : Promise.resolve({})).then(async metadata => {
+        if (disposed) return;
+        if (!this.lastHeight && metadata.height?.min) this.style.minHeight = metadata.height.min + "px";
+        if (!this.visible || suspended) { cleanup(); return; }
+        const mount = await request("", { ...spec, local, diagnostics: Boolean(reports), capture: host.capturing });
         if (disposed) { releaseMount(mount.id); return; }
         mountId = mount.id;
-        const frame = document.createElement("iframe");
+        leases.set(mountId, leaseFailure);
+        const frame = this.frame = document.createElement("iframe");
         frame.title = name || "Plugin component";
+        frame.addEventListener("blur", () => { if (!this.visible) this.suspend(); });
         frame.sandbox = "allow-scripts"; frame.referrerPolicy = "no-referrer";
         frame.setAttribute("allow", "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
         frame.style.cssText = "display:block;width:100%;border:0";
-        frame.style.height = (mount.height?.min || 160) + "px";
+        frame.style.height = this.lastHeight || (mount.height?.min || 160) + "px";
+        this.style.minHeight = frame.style.height;
         frame.addEventListener("load", () => {
           if (disposed) return;
           if (loaded) { fail("Component navigated away. Reload the page to reconnect."); return; }
@@ -78,7 +125,11 @@ function mountPageComponents(host) {
           port.onmessage = async ({ data }) => {
             if (disposed || !frame.isConnected || !data || typeof data !== "object") return;
             if (data.action === "height") {
-              if (Number.isFinite(data.height)) frame.style.height = Math.max(mount.height?.min || 64, Math.min(mount.height?.max || 480, data.height)) + "px";
+              if (Number.isFinite(data.height)) {
+                frame.style.height = Math.max(mount.height?.min || 64, Math.min(mount.height?.max || 480, data.height)) + "px";
+                this.style.minHeight = frame.style.height;
+                this.lastHeight = frame.style.height;
+              }
               return;
             }
             if (data.action === "problems") {
@@ -100,7 +151,7 @@ function mountPageComponents(host) {
                   events.onmessage = event => {
                     if (disposed) return;
                     const message = JSON.parse(event.data);
-                    if (message.type === "reload") { fail("Plugin or page permissions changed. Reload the page to reconnect."); return; }
+                    if (message.type === "reload") { this.suspend(true); if (this.isConnected && this.visible && !suspended) this.schedule(); return; }
                     port.postMessage(message.type === "ready" ? { type: "plugin-ready" } : message);
                   };
                   events.onerror = () => fail("Live updates disconnected. Reload the page to reconnect.");

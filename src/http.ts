@@ -763,6 +763,14 @@ export async function startHttp(): Promise<http.Server> {
     try { componentPage(req); res.json({ ok: true, ...pageComponents.resolve(req.params.id, req.body ?? {}) }); }
     catch (error) { res.json({ ok: false, error: (error as Error).message }); }
   });
+  app.post("/api/tabs/:id/components/validate", (req, res) => {
+    try { componentPage(req); res.json({ ok: true, ...pageComponents.validate(req.params.id, req.body ?? {}) }); }
+    catch (error) { res.json({ ok: false, error: (error as Error).message }); }
+  });
+  app.post("/api/tabs/:id/components/leases", (req, res) => {
+    try { componentPage(req); res.json(pageComponents.renewAll(req.params.id, req.body?.ids)); }
+    catch (error) { res.json({ ok: false, error: (error as Error).message }); }
+  });
   app.post("/api/tabs/:id/components/:component/plugin", async (req, res) => {
     try { componentPage(req); res.json({ ok: true, result: await pageComponents.action(req.params.id, req.params.component, req.body ?? {}) }); }
     catch (error) { res.json({ ok: false, error: (error as Error).message }); }
