@@ -183,7 +183,7 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
           limits() { return Promise.resolve({ ok: true, limits: { codex: { at: Date.now(), ordinaryUsageAllowed: false,
             windows: [{ id: 'codex:codex:primary', label: '5-hour', utilization: 1, resetsAt: Date.now() - 1000 },
               { id: 'codex:codex:secondary', label: 'Weekly', utilization: 0.5 }] },
-            claude: { at: Date.now(), windows: [{ id: 'five_hour', label: '5-hour', utilization: 0.75 },
+            claude: { at: Date.now(), windows: [{ id: 'five_hour', label: '5-hour', utilization: 0.75, resetsAt: Date.now() - 1000 },
               { id: 'seven_day', label: 'Weekly', utilization: 0.95 }] },
             cursor: { at: Date.now(), windows: [{ id: 'cursor_included', label: 'Included', utilization: 0.91 },
               { id: 'cursor_auto', label: 'Auto', utilization: 0.3 }, { id: 'cursor_api', label: 'API', utilization: 0.8 }] }
@@ -203,6 +203,7 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     assert.equal(await usage.locator('[data-provider="pi"]').count(), 0);
     assert.equal(await codex.locator('progress').getAttribute('value'), '100');
     assert.equal(await claude.locator('progress').getAttribute('value'), '75');
+    assert.match(await claude.getAttribute('data-tooltip') || '', /Reset passed · awaiting update/);
     assert.equal(await cursor.locator('progress').getAttribute('value'), '91');
     assert.match(await claude.getAttribute('class') || '', /lvl-warn/);
     assert.match(await cursor.getAttribute('class') || '', /lvl-high/);

@@ -6328,10 +6328,11 @@
   }
   function workerQuotaWindow(provider, w) {
     var expired = w.resetsAt && w.resetsAt <= Date.now();
-    var used = expired && provider !== "codex" ? 0 : Number(w.utilization);
+    var observed = provider === "codex" || provider === "claude";
+    var used = expired && !observed ? 0 : Number(w.utilization);
     var percent = Number.isFinite(used) ? Math.round(clamp(used, 0, 1) * 100) : null;
     var reset = !w.resetsAt ? "" : expired
-      ? provider === "codex" ? "Reset passed · awaiting update" : "Reset passed"
+      ? observed ? "Reset passed · awaiting update" : "Reset passed"
       : "Resets " + new Date(w.resetsAt).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
     return { percent: percent, reset: reset };
   }
