@@ -15,10 +15,31 @@ import { build } from "esbuild";
 import { unifiedDiff } from "../agent/textDiff.js";
 import { normalizeTemplateInput } from "../templates.js";
 const execute=promisify(execFile);
+const compareVersions=(a:string,b:string):number=>{const left=a.split(".").map(Number),right=b.split(".").map(Number);for(let i=0;i<3;i++)if(left[i]!==right[i])return left[i]>right[i]?1:-1;return 0;};
 
 export type PluginCaller = { kind: "page" | "agent" | "system"; page?: string; thread?: string };
 export type ExportParts = { source?: boolean; settings?: boolean; state?: boolean; data?: boolean };
 export class PluginService {
+  private bundled = new Map<string,{version:string;author?:string;hash:string;files:PackageFiles}>();
+  /** Advertise bundled code without changing an installed package or its editable source. */
+  registerBundled(files:PackageFiles):void {
+    const code=this.codeFiles(files),manifest=this.validate(code);
+    this.bundled.set(manifest.id,{version:manifest.version,author:manifest.author,hash:packageHash(code),files:code});
+  }
+  private bundledVersion(p:PluginRecord):string|undefined {
+    const bundle=this.bundled.get(p.manifest.id);
+    return bundle&&bundle.author===p.manifest.author&&!this.database.removed(p.manifest.id)&&compareVersions(bundle.version,p.manifest.version)>0?bundle.version:undefined;
+  }
+  bundledUpdate(id:string) {
+    const record=this.get(id);
+    if(!this.bundledVersion(record))throw new Error("No bundled update is available");
+    const files={...this.bundled.get(id)!.files};
+    if(record.bundledHash){const base=path.join(this.directory(id),"versions",record.bundledHash);if(fs.existsSync(base))for(const [name,data]of Object.entries(readPackage(base)))files[`scribe/base/${name}`]=data;}
+    const preview=this.preview(files,true);
+    // Older installs have no provenance. Treat them conservatively rather than
+    // hiding Merge merely because installed custom code matches the draft.
+    return {archive:zip(files).toString("base64"),preview:{...preview,previous:preview.previous?{...preview.previous,customized:record.hash!==record.bundledHash}:null}};
+  }
   private componentCache = new Map<string, { definition: PluginManifest["components"][string]; html: string; name: string; hash: string }>();
   private listeners = new Set<(id: string, name: string, data: unknown, registry?: boolean) => void>();
   subscribe(listener: (id: string, name: string, data: unknown, registry?: boolean) => void): () => void {
@@ -49,7 +70,7 @@ export class PluginService {
   draft(id: string): string { return path.join(this.directory(id), "source"); }
   get(id: string): PluginRecord { pluginId.parse(id); const record = this.database.list().find(p => p.manifest.id === id); if (!record) throw new Error(`Plugin not found: ${id}`); return record; }
   list() {
-    return this.database.list().map(p => ({ id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, summary: p.manifest.summary, enabled: p.enabled && this.database.enabled(), configuredEnabled: p.enabled, keepAlive: p.keepAlive, status: this.runtimes.get(p.manifest.id)?.status() ?? "idle", edited: fs.existsSync(this.draft(p.manifest.id)) && packageHash(readPackage(this.draft(p.manifest.id))) !== p.hash }));
+    return this.database.list().map(p => ({ id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, summary: p.manifest.summary, enabled: p.enabled && this.database.enabled(), configuredEnabled: p.enabled, keepAlive: p.keepAlive, status: this.runtimes.get(p.manifest.id)?.status() ?? "idle", edited: fs.existsSync(this.draft(p.manifest.id)) && packageHash(readPackage(this.draft(p.manifest.id))) !== p.hash, updateAvailable:this.bundledVersion(p) }));
   }
   inspect(id: string) {
     const p = this.get(id);
@@ -103,9 +124,10 @@ export class PluginService {
     const payload=this.payload(files,manifest),paths=Object.entries(payload.settings??{}).filter(([key])=>manifest.settings[key].type==="paths").map(([key,value])=>({key,label:manifest.settings[key].label,paths:(value as string[]).filter(folder=>!Array.isArray(previous?.settings[key])||!previous.settings[key].includes(folder))})).filter(item=>item.paths.length);
     const changed=(before:Record<string,unknown>,after:Record<string,unknown>)=>[...new Set([...Object.keys(before),...Object.keys(after)])].filter(key=>JSON.stringify(before[key])!==JSON.stringify(after[key]));
     let diff="";
-    if(detailed&&previous){const old=readPackage(this.snapshot(previous));for(const name of [...new Set([...Object.keys(old),...Object.keys(this.codeFiles(files))])].sort()){if(diff.length>250_000){diff+="\n…Diff preview limited. Inspect the archive for all remaining files.\n";break;}if(old[name]?.equals(files[name]))continue;diff+=unifiedDiff(old[name]?.toString("utf8")??null,files[name]?.toString("utf8")??null,name).patch+"\n";}}
+    if(detailed&&previous){const old=readPackage(this.snapshot(previous));for(const name of [...new Set([...Object.keys(old),...Object.keys(this.codeFiles(files))])].sort()){if(diff.length>250_000){diff+="\n…Diff preview limited. Inspect the archive for all remaining files.\n";break;}if(files[name]&&old[name]?.equals(files[name]))continue;diff+=unifiedDiff(old[name]?.toString("utf8")??null,files[name]?.toString("utf8")??null,name).patch+"\n";}}
     let sourceBytes=0;const source=detailed?Object.fromEntries(Object.entries(this.codeFiles(files)).filter(([,data])=>{sourceBytes+=data.length;return sourceBytes<250_000;}).map(([name,data])=>[name,data.toString("utf8")])):undefined;
-    let versionStatus="new";if(previous){versionStatus="same";const current=manifest.version.split(".").map(Number),old=previous.manifest.version.split(".").map(Number);for(let i=0;i<3;i++)if(current[i]!==old[i]){versionStatus=current[i]>old[i]?"newer":"older";break;}}
+    const order=previous?compareVersions(manifest.version,previous.manifest.version):0;
+    const versionStatus=previous?(order>0?"newer":order<0?"older":"same"):"new";
     return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { components:changed(previous.manifest.components??{},manifest.components),methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:JSON.stringify(previous.manifest.access)!==JSON.stringify(manifest.access) } : null };
   }
   /** Caller must collect consent for precisely this hash before invoking install. */
@@ -117,7 +139,8 @@ export class PluginService {
     if (previous && previous.hash !== packageHash(this.codeFiles(files)) && !replace) throw new Error("Plugin already exists; review changes and choose replace or keep mine");
     const settings = Object.fromEntries(Object.entries(manifest.settings).filter(([,v]) => v.type !== "secret").map(([k,v]) => [k, previous?.settings[k] ?? v.default ?? (v.type === "paths" ? [] : v.type === "boolean" ? false : "")]));
     const code=this.codeFiles(files),codeHash=packageHash(code);
-    const record: PluginRecord = { manifest, hash:codeHash, ...(previous&&previous.hash!==codeHash?{baseHash:previous.hash}:{}), enabled: true, keepAlive: previous?.keepAlive ?? false, settings, installedAt: Date.now() };
+    const bundledHash=this.bundled.get(manifest.id)?.hash===codeHash?codeHash:previous?.bundledHash;
+    const record: PluginRecord = { manifest, hash:codeHash, ...(previous&&previous.hash!==codeHash?{baseHash:previous.hash}:{}), ...(bundledHash?{bundledHash}:{}), enabled: previous?.enabled ?? true, keepAlive: previous?.keepAlive ?? false, settings, installedAt: Date.now() };
     writePackage(this.snapshot(record), code);
     await this.stop(manifest.id);
     const payload=this.payload(files,manifest);Object.assign(record.settings,payload.settings??{});

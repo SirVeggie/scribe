@@ -226,16 +226,17 @@ export async function startHttp(): Promise<http.Server> {
   sweepTimer.unref?.();
   scheduleSweep(5000);
   app.use("/api/agent", agentRouter(agentHost));
-  if(!pluginService.database.removed("git-history")&&!pluginService.database.list().some(p=>p.manifest.id==="git-history")){
-    try{
+  try{
     const folder=path.join(INSTALL_ROOT,"plugins","builtin","git-history");
     if(fs.existsSync(folder)){
-      const files=readPackage(folder);await pluginService.install(files,pluginService.preview(files).hash);
-      const repositories=[...new Set((await Promise.all([...agentHost.workspaceFolders().values()].map(folder=>mainRepository(folder)))).filter((folder):folder is string=>!!folder))];
-      await pluginService.configure("git-history",{repositories});
+      const files=readPackage(folder);pluginService.registerBundled(files);
+      if(!pluginService.database.removed("git-history")&&!pluginService.database.list().some(p=>p.manifest.id==="git-history")){
+        await pluginService.install(files,pluginService.preview(files).hash);
+        const repositories=[...new Set((await Promise.all([...agentHost.workspaceFolders().values()].map(folder=>mainRepository(folder)))).filter((folder):folder is string=>!!folder))];
+        await pluginService.configure("git-history",{repositories});
+      }
     }
-    }catch(error){log("Bundled Git history plugin could not be installed",String(error));}
-  }
+  }catch(error){log("Bundled Git history plugin could not be loaded",String(error));}
   pluginService.startKeptAlive();
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use("/api/plugins",express.json({limit:"90mb"}));

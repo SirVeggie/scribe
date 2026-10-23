@@ -60,7 +60,7 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
     const folders=service.prepareMerge(id,files),providers=await host.providerStatus(),provider=providers.find(p=>p.available)?.id;
     if(!provider)throw new Error("No agent provider is available for the merge");
     const thread=host.createThread({provider,model:"default",mode:"code",approval:"edits",cwd:folders.source,title:`Merge ${preview.manifest.name} update`,scope:{kind:"global",ref:null}},{remember:false});
-    host.send(thread.id,{text:`Merge an imported update of plugin ${id} into the source in this workspace. The user's local source is in the workspace root; incoming files are at ${folders.incoming}; the exported base (or installed version as reference when no base was provided) is at ${folders.base}. Preserve both sides' intended changes, update plugin.json's semver, run plugin_reload to validate and bundle, then plugin_install with replace:true to ask for activation. Do not edit .scribe-merge or .git. Plugin methods, settings, actions and permission changes need to remain visible in the install preview.`,from:"scribe"});
+    host.send(thread.id,{text:`Merge an imported update of plugin ${id} into the source in this workspace. The user's local source is in the workspace root; incoming files are at ${folders.incoming}; the exported base (or installed version as reference when no base was provided) is at ${folders.base}. ${Object.keys(files).some(name=>name.startsWith("scribe/base/"))?"An exported common base is provided.":"No common ancestor is known. The installed reference may itself contain local customizations: inspect and preserve them rather than treating it as an unchanged common base."} Preserve both sides' intended changes, update plugin.json's semver, run plugin_reload to validate and bundle, then plugin_install with replace:true to ask for activation. Do not edit .scribe-merge or .git. Plugin methods, settings, actions and permission changes need to remain visible in the install preview.`,from:"scribe"});
     return {ok:true,thread:thread.id};
   }));
   router.post("/install",wrap(async(req,_res,signal)=>{
@@ -78,6 +78,7 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
     await service.stop(preview.manifest.id);
     return service.install(files,preview.hash,req.body?.replace===true,req.body?.approvePaths===true);
   }));
+  router.get("/:plugin/bundled-update",wrap(req=>{user(req);return service.bundledUpdate(req.params.plugin);}));
   router.get("/:plugin/guide",wrap(req=>{thread(req);return service.guide(req.params.plugin);}));
   router.get("/:plugin/logs",wrap(req=>{thread(req);return {logs:service.logs(req.params.plugin)};}));
   router.get("/:plugin/state/:stateKey",wrap(async(req,_res,signal)=>{

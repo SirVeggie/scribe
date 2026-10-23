@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { PluginManifest } from "./manifest.js";
 
-export type PluginRecord = { manifest: PluginManifest; enabled: boolean; keepAlive: boolean; hash: string; baseHash?: string; settings: Record<string, unknown>; installedAt: number };
+export type PluginRecord = { manifest: PluginManifest; enabled: boolean; keepAlive: boolean; hash: string; baseHash?: string; bundledHash?: string; settings: Record<string, unknown>; installedAt: number };
 export class PluginDatabase {
   readonly db: DatabaseSync;
   constructor(file: string) {

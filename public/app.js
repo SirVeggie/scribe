@@ -120,7 +120,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.2.3";
+  const BOARD_VERSION = "3.2.4";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;

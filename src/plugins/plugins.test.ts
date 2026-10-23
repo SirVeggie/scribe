@@ -16,6 +16,50 @@ import { git } from "../agent/git.js";
 import { pathToFileURL } from "node:url";
 
 const manifest = { id:"fixture",name:"Fixture",version:"1.0.0",summary:"Test plugin",backend:"index.mjs",risky:false,methods:{echo:{description:"Echo",agent:"read"}} };
+test("bundled updates require review and preserve choices, source and a known merge base",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-bundled-update-")),service=new PluginService(root);
+  const original={"plugin.json":Buffer.from(JSON.stringify({...manifest,settings:{folder:{type:"string",label:"Folder",default:"default"}}})),"index.mjs":Buffer.from("export default {}")};
+  const incoming={...original,"plugin.json":Buffer.from(JSON.stringify({...JSON.parse(original["plugin.json"].toString()),version:"1.2.0"})),"index.mjs":Buffer.from("export default {methods:{echo:()=>42}}")};
+  try{
+    service.registerBundled(original);assert.equal(service.list().length,0);assert.throws(()=>service.bundledUpdate("fixture"),/not found/);
+    await service.install(original,service.preview(original).hash);const originalHash=service.get("fixture").hash;
+    assert.equal(service.get("fixture").bundledHash,originalHash);
+    await service.configure("fixture",{folder:"chosen"});await service.enable("fixture",false,true);service.enableAll(false);
+    service.database.set("fixture","cache",{keep:true});
+    await service.patch("fixture","local.txt","local draft");
+    service.registerBundled(incoming);
+    assert.equal(service.list()[0].updateAvailable,"1.2.0");
+    const before=service.get("fixture"),draft=packageHash(readPackage(service.draft("fixture")));
+    const review=service.bundledUpdate("fixture"),files=await unzip(Buffer.from(review.archive,"base64"));
+    assert.equal(review.preview.previous?.edited,true);assert.match(review.preview.diff!,/echo/);
+    assert.equal(review.preview.parts.settings,undefined);assert.equal(review.preview.parts.state,false);assert.equal(review.preview.parts.data,false);
+    assert.deepEqual(service.get("fixture"),before);assert.equal(packageHash(readPackage(service.draft("fixture"))),draft);
+    const merge=service.prepareMerge("fixture",files);assert.equal(fs.readFileSync(path.join(merge.source,"local.txt"),"utf8"),"local draft");assert.equal(packageHash(readPackage(merge.base)),originalHash);
+    await assert.rejects(()=>service.install(files,"unreviewed",true),/consent/);
+    await service.install(files,review.preview.hash,true);
+    assert.equal(service.get("fixture").enabled,false);assert.equal(service.database.enabled(),false);assert.equal(service.get("fixture").keepAlive,true);
+    assert.equal(service.get("fixture").settings.folder,"chosen");assert.deepEqual(service.database.get("fixture","cache").value,{keep:true});
+    assert.equal(service.list()[0].updateAvailable,undefined);assert.equal(service.get("fixture").bundledHash,service.get("fixture").hash);
+    service.registerBundled(original);assert.equal(service.list()[0].updateAvailable,undefined);assert.throws(()=>service.bundledUpdate("fixture"),/No bundled update/);
+    await service.remove("fixture");service.registerBundled(incoming);assert.equal(service.database.removed("fixture"),true);assert.equal(service.list().length,0);assert.throws(()=>service.bundledUpdate("fixture"),/not found/);
+  }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("bundled review exposes installed customizations and uses the bundled ancestor",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-bundled-custom-")),service=new PluginService(root);
+  const files=(version:string,extra={})=>({"plugin.json":Buffer.from(JSON.stringify({...manifest,version})),"index.mjs":Buffer.from("export default {}"),...extra});
+  try{
+    const original=files("1.0.0");service.registerBundled(original);await service.install(original,service.preview(original).hash);
+    const customized=files("1.0.1",{"custom.txt":Buffer.from("installed customization")});await service.install(customized,service.preview(customized).hash,true);
+    service.registerBundled(files("1.2.0"));const review=service.bundledUpdate("fixture");
+    assert.equal(review.preview.previous?.edited,false);assert.equal(review.preview.previous?.customized,true);
+    const merge=service.prepareMerge("fixture",await unzip(Buffer.from(review.archive,"base64")));
+    assert.equal(packageHash(readPackage(merge.base)),packageHash(original));assert.ok(!fs.existsSync(path.join(merge.base,"custom.txt")));assert.ok(fs.existsSync(path.join(merge.source,"custom.txt")));
+    const legacy=service.get("fixture");delete legacy.bundledHash;service.database.save(legacy);
+    const unknown=service.bundledUpdate("fixture");assert.equal(unknown.preview.previous?.customized,true);assert.equal(Object.keys(await unzip(Buffer.from(unknown.archive,"base64"))).some(name=>name.startsWith("scribe/base/")),false);
+    service.registerBundled({ ...files("2.0.0"),"plugin.json":Buffer.from(JSON.stringify({...manifest,version:"2.0.0",author:"Different author"})) });assert.equal(service.list()[0].updateAvailable,undefined);
+  }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
+});
 test("manifest validates paths and method levels; declarations never grant access",()=> {
   assert.throws(()=>parseManifest({...manifest,backend:"../escape.mjs"}));
   assert.throws(()=>parseManifest({...manifest,methods:{echo:{description:"Echo",agent:"full"}}}));

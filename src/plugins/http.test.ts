@@ -7,12 +7,19 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { zip } from "./package.js";
+import { zip, readPackage, packageHash } from "./package.js";
+import { PluginService } from "./service.js";
 import { launchChromium } from "../chromium.js";
 import { git } from "../agent/git.js";
 
 test("plugin HTTP gates, transfer and shell settings work on an isolated daemon",{timeout:90_000},async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-plugin-http-"));
+  // Simulate an older bundled install with a disabled flag and uninstalled edits.
+  const seed=new PluginService(path.join(root,"plugins"));
+  const oldBundle=readPackage(path.resolve("plugins/builtin/git-history"));
+  oldBundle["plugin.json"]=Buffer.from(JSON.stringify({...JSON.parse(oldBundle["plugin.json"].toString()),version:"1.1.0",components:{}}));
+  await seed.install(oldBundle,packageHash(oldBundle));await seed.enable("git-history",false);
+  await seed.patch("git-history","local.txt","Keep this local edit");await seed.close();
   const probe=net.createServer();await new Promise<void>(resolve=>probe.listen(0,"127.0.0.1",resolve));const port=(probe.address() as net.AddressInfo).port;await new Promise<void>(resolve=>probe.close(()=>resolve()));
   const child=spawn(process.execPath,["--import","tsx",path.resolve("src/index.ts"),"--daemon"],{env:{...process.env,SCRIBE_HOME:root,SCRIBE_PORT:String(port),SCRIBE_FAKE_AGENTS:"1"},windowsHide:true,stdio:["ignore","pipe","pipe"]});
   let output="";child.stdout.on("data",data=>{output+=String(data);});child.stderr.on("data",data=>{output+=String(data);});
@@ -43,6 +50,7 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     assert.equal((await call(`/api/plugins/${manifest.id}/call`,"POST",{method:"read"},agentHeaders)).data.result,42);
     assert.equal((await call(`/api/plugins/${manifest.id}/call`,"POST",{method:"change"},agentHeaders)).status,400);
     assert.equal((await call(`/api/plugins/${manifest.id}/files`,"PUT",{path:"oops",content:"bad"},agentHeaders)).status,400);
+    assert.equal((await call("/api/plugins/git-history/bundled-update","GET",undefined,agentHeaders)).status,400);
     assert.equal((await call(`/api/tabs/${id}/permissions`,"PUT",{perm:`plugin.${manifest.id}`,value:"allow"},agentHeaders)).status,403);
     const exported=await fetch(`${url}/api/export/${id}`,{headers:userHeaders()});assert.equal(exported.headers.get("content-type"),"application/zip");
     const bytes=Buffer.from(await exported.arrayBuffer());const imported=await fetch(`${url}/api/import?preview=1`,{method:"POST",headers:{...userHeaders(),"Content-Type":"application/octet-stream"},body:bytes});const importPreview=await imported.json();assert.equal(importPreview.plugins[0].manifest.id,manifest.id);
@@ -52,6 +60,18 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     await page.click("#settings-toggle");await page.getByRole("button",{name:"Plugins",exact:true}).click();
     const fixtureRow=page.locator(`.plugin-entry[data-plugin="${manifest.id}"]`);
     assert.match(await fixtureRow.textContent()??"",/1 page/);
+    const bundledRow=page.locator('.plugin-entry[data-plugin="git-history"]');
+    assert.match(await bundledRow.textContent()??"",/1\.1\.0/);assert.equal((await call("/api/plugins/git-history")).data.configuredEnabled,false);
+    await bundledRow.getByRole("button",{name:/Review update/}).click();
+    await page.locator('dialog[open] summary').filter({hasText:"View diff"}).click();
+    assert.match(await page.locator('dialog[open]').textContent()??"",/1\.1\.0/);
+    assert.equal(await page.getByRole("button",{name:"Merge with an agent",exact:true}).count(),1);
+    await page.getByRole("button",{name:"Keep mine",exact:true}).click();
+    assert.equal((await call("/api/plugins/git-history/files?path=local.txt")).data.files,"Keep this local edit");
+    await bundledRow.getByRole("button",{name:/Review update/}).click();await page.getByRole("button",{name:"Take theirs",exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('.plugin-entry[data-plugin="git-history"] .plugin-update'));
+    assert.equal((await call("/api/plugins/git-history")).data.configuredEnabled,false);
+    await bundledRow.getByRole("switch",{name:"Enable Git history",exact:true}).click();
     await page.getByRole("switch",{name:"Enable plugins",exact:true}).click();
     assert.equal(await page.getByRole("switch",{name:"Enable HTTP fixture",exact:true}).getAttribute("aria-checked"),"true");
     await page.getByRole("switch",{name:"Enable plugins",exact:true}).click();

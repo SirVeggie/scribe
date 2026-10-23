@@ -36,7 +36,7 @@
     title.append(el("strong","",item.name),el("span","plugin-version",item.version));
     const state=el("span",`plugin-state${item.edited?" is-edited":item.enabled&&item.status==="running"?" is-running":""}`,item.edited?"edited by agent":!item.enabled?"off":item.status==="idle"?"ready":item.status);
     meta.append(state);if(Number.isInteger(item.pages))meta.append(document.createTextNode(` · ${item.pages} ${item.pages===1?"page":"pages"}`));
-    info.append(title,meta);return info;
+    info.append(title,meta);if(item.updateAvailable){const update=button(`Review update ${item.updateAvailable}…`,()=>reviewBundled(item.id));update.className="plugin-update";info.append(update);}return info;
   }
   function pluginRow(parent,view,label,control,hint){
     const line=row(parent,`${view.name} · ${label}`,control,hint);
@@ -53,7 +53,8 @@
     form.append(el("h2","",`${preview.versionStatus==="older"?"Downgrade":preview.previous?"Update":"Install"} ${m.name} ${m.version}?`),el("p","",m.summary));
     if(m.backend)form.append(el("p","permission-ask-what","Runs code on this PC as you."));
     if(preview.previous?.author!==m.author && preview.previous)form.append(el("p","settings-hint","The author differs from the installed package."));
-    if(preview.previous?.edited)form.append(el("p","settings-hint","This plugin has local source edits. Keep mine preserves them; Take theirs replaces the installed version."));
+    const customized=preview.previous?.edited||preview.previous?.customized;
+    if(customized)form.append(el("p","settings-hint","This plugin may contain local source changes. Keep mine preserves them; Take theirs replaces them. Merge with an agent to combine both versions."));
     const access=el("ul");for(const folder of m.access.files)access.append(el("li","",`Files: ${folder}`));for(const host of m.access.network)access.append(el("li","",`Network: ${host}`));
     form.append(access,el("p","",`${m.templates.length} templates · ${Object.keys(m.methods).length} methods · ${m.risky?"resets page grants after agent edits":"keeps page grants after agent edits"}`));
     if(preview.changes){const changes=el("ul");for(const key of ["methods","settings","templates","components"])if(preview.changes[key]?.length)changes.append(el("li","",`${key}: ${preview.changes[key].join(", ")}`));if(preview.changes.access)changes.append(el("li","","Declared file or network access changed."));if(preview.changes.risky)changes.append(el("li","","Page grant reset behavior changed."));form.append(changes);}
@@ -70,7 +71,7 @@
     install.disabled=!approvePaths;
     if(!approvePaths){const paths=el("ul");for(const item of preview.parts.paths)for(const folder of item.paths)paths.append(el("li","",`${item.label}: ${folder}`));form.append(paths);const allow=button("",()=>{approvePaths=!approvePaths;allow.setAttribute("aria-checked",String(approvePaths));install.disabled=!approvePaths;});allow.className="pill-toggle";allow.setAttribute("role","switch");allow.setAttribute("aria-checked","false");row(form,"Allow imported folders",allow);}
     controls.append(cancel);
-    if(preview.previous?.edited){const merge=el("button","","Merge with an agent");merge.value="merge";controls.append(merge);}
+    if(customized){const merge=el("button","","Merge with an agent");merge.value="merge";controls.append(merge);}
     let copyId;
     if(preview.previous&&preview.previous.author!==m.author){copyId=el("input","ag-input");copyId.value=`${m.id.slice(0,58)}-copy`;row(form,"Copy id",copyId);const copy=el("button","","Install as a renamed copy");copy.value="copy";controls.append(copy);}
     controls.append(install);form.append(controls);dialog.append(form);document.body.append(dialog);dialog.showModal();
@@ -81,6 +82,7 @@
     await request("/install","POST",{archive,hash:preview.hash,replace:!!preview.previous,approvePaths});return true;
   }
   async function importFile(file){if(file.size>64*1024**2)throw new Error("Plugin packages must be under 64 MiB");const archive=await base64(file),preview=await request("/preview","POST",{archive});const installed=await reviewPackage(preview,archive,{allowOlder:true});await refresh();return installed;}
+  async function reviewBundled(id){const {preview,archive}=await request(`/${id}/bundled-update`);await reviewPackage(preview,archive);await refresh();}
   picker.addEventListener("change",()=>{const file=picker.files[0];picker.value="";if(file)importFile(file).catch(error=>{status.textContent=error.message;});});
   async function details(view,parent){
     const form=el("form","ml-source-form"),fields=[];

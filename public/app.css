@@ -5265,6 +5265,7 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .plugin-name strong { color: var(--heading); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .plugin-version { padding: 1px 6px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .plugin-meta { color: var(--muted); font-size: 11px; }
+button.plugin-update { align-self: flex-start; }
 .plugin-state::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 5px; border: 1px solid currentColor; border-radius: 50%; vertical-align: 1px; }
 .plugin-state.is-running { color: var(--accent); }
 .plugin-state.is-edited { color: rgb(var(--update-rgb)); }
