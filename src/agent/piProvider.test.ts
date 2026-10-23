@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PiProvider, builtinTools, modelRateSnapshot, sourceModelCost, sourceProviderId, splitPiModel } from "./providers/pi.js";
+import { PiProvider, builtinTools, modelRateSnapshot, sourceModelCost, sourceModelLimits, sourceProviderId, splitPiModel } from "./providers/pi.js";
 import { migrateOpenaiPrefs, migrateOpenaiThread } from "./legacyOpenai.js";
 import type { Prefs } from "./prefs.js";
 import type { Thread } from "./types.js";
@@ -210,6 +210,11 @@ test("DeepSeek source registration prices cached and uncached usage from the SDK
     assert.deepEqual(sourceModelCost({ ...source, baseUrl }, "deepseek-flash", catalog), zero);
   }
   assert.deepEqual(sourceModelCost({ ...source, baseUrl: "https://api.deepseek.com" }, "deepseek-flash", catalog), flash.cost);
+  // The official endpoint gets the catalog's context; a local copy what its server says (#774).
+  assert.equal(model.contextWindow, flash.contextWindow);
+  assert.ok(flash.contextWindow > 128_000);
+  assert.deepEqual(sourceModelLimits({ ...source, baseUrl: "http://localhost:1234/v1" }, "deepseek-flash", catalog, 32768), { contextWindow: 32768, maxTokens: 16384 });
+  assert.equal(sourceModelLimits({ ...source, baseUrl: "http://localhost:1234/v1" }, "deepseek-flash", catalog).contextWindow, 128_000);
   t.mock.method(globalThis, "fetch", async (url: unknown) => {
     assert.equal(String(url), "https://api.deepseek.com/v1/chat/completions");
     const chunks = [

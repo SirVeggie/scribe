@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { dataDir } from "../../config.js";
 import { log } from "../../log.js";
-import { fetchModelIds, type OpenAISource } from "../openaiSources.js";
+import { fetchModelInfo, type OpenAISource, type SourceModelInfo } from "../openaiSources.js";
 import { addCostRecord, estimateCost, type RateSnapshot } from "../pricing.js";
 import { deepSeekProfile, recordTariff } from "../tariffs.js";
 import { isPlainRecord, noPages, pagesReadsFiles, type ModelOption, type ProviderStatus, type QuestionSpec, type SlashCommand, type Thread, type ToolKind, type Usage } from "../types.js";
@@ -72,22 +72,39 @@ export function sourceProviderId(sourceId: string): string {
   return `src-${sourceId}`;
 }
 
+/** The catalog's DeepSeek model a source model is, only on the official endpoint, never a proxy or local copy. */
+function officialDeepSeekModel(source: OpenAISource, model: string, catalog: readonly Model[]): Model | undefined {
+  let url: URL;
+  try {
+    url = new URL(source.baseUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.origin !== "https://api.deepseek.com" || !["", "/", "/v1", "/v1/", "/beta", "/beta/"].includes(url.pathname)) return undefined;
+  // DeepSeek still accepts these retired Flash names at the current Flash price.
+  const id = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].includes(model) ? "deepseek-flash" : model;
+  return catalog.find((m) => m.provider === "deepseek" && m.id === id);
+}
+
 /** Catalog prices apply only to the official endpoint, never a proxy or local copy. */
 export function sourceModelCost(source: OpenAISource, model: string, catalog: readonly Model[]): Model["cost"] {
   const unknown = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const custom = source.pricing?.[model];
   if (custom?.mode === "unknown") return unknown;
   if (custom?.mode === "custom") return { input: Number(custom.rates.input), output: Number(custom.rates.output), cacheRead: Number(custom.rates.cacheRead ?? 0), cacheWrite: Number(custom.rates.cacheWrite ?? 0) };
-  let url: URL;
-  try {
-    url = new URL(source.baseUrl);
-  } catch {
-    return unknown;
-  }
-  if (url.origin !== "https://api.deepseek.com" || !["", "/", "/v1", "/v1/", "/beta", "/beta/"].includes(url.pathname)) return unknown;
-  // DeepSeek still accepts these retired Flash names at the current Flash price.
-  const id = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].includes(model) ? "deepseek-flash" : model;
-  return { ...(catalog.find((m) => m.provider === "deepseek" && m.id === id)?.cost ?? unknown) };
+  return { ...(officialDeepSeekModel(source, model, catalog)?.cost ?? unknown) };
+}
+
+/**
+ * A source model's context window and output cap: the catalog's on the official DeepSeek endpoint,
+ * else what the server reported for it, else defaults that assume nothing about the model.
+ */
+export function sourceModelLimits(source: OpenAISource, model: string, catalog: readonly Model[], reported?: number): { contextWindow: number; maxTokens: number } {
+  const known = officialDeepSeekModel(source, model, catalog);
+  if (known) return { contextWindow: known.contextWindow, maxTokens: known.maxTokens };
+  const contextWindow = reported ?? SOURCE_CONTEXT;
+  // A small local context must keep room for the prompt.
+  return { contextWindow, maxTokens: Math.min(SOURCE_MAX_TOKENS, Math.floor(contextWindow / 2)) };
 }
 
 export function modelRateSnapshot(model: Model, source?: OpenAISource): RateSnapshot {
@@ -224,15 +241,19 @@ export class PiProvider implements AgentProvider {
     this.registered.clear();
     await Promise.all(
       sources.map(async (source) => {
-        let ids = source.models;
-        if (!ids.length) {
+        // The endpoint's list also says how long a context each model has, so ask it even when the
+        // source names its models; the official DeepSeek one is covered by the catalog.
+        const official = source.models.length > 0 && source.models.every((model) => officialDeepSeekModel(source, model, deepseekModels));
+        let listed: SourceModelInfo[] = [];
+        if (!official) {
           try {
-            ids = await fetchModelIds(source);
+            listed = await fetchModelInfo(source, source.models.length ? 3000 : 8000);
           } catch (err) {
-            log(`Pi: model list of ${source.name} failed: ${(err as Error).message}`);
-            ids = [];
+            if (!source.models.length) log(`Pi: model list of ${source.name} failed: ${(err as Error).message}`);
           }
         }
+        const ids = source.models.length ? source.models : listed.map((m) => m.id);
+        const reported = new Map(listed.map((m) => [m.id, m.contextWindow]));
         const id = sourceProviderId(source.id);
         runtime.registerProvider(id, {
           name: source.name,
@@ -246,8 +267,7 @@ export class PiProvider implements AgentProvider {
             reasoning: Boolean(source.reasoning),
             input: ["text", "image"],
             cost: sourceModelCost(source, model, deepseekModels),
-            contextWindow: SOURCE_CONTEXT,
-            maxTokens: SOURCE_MAX_TOKENS,
+            ...sourceModelLimits(source, model, deepseekModels, reported.get(model)),
           })),
         });
         this.registered.add(id);

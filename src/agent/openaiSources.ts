@@ -95,14 +95,63 @@ export function authHeaders(source: OpenAISource): Record<string, string> {
   return source.apiKey ? { Authorization: `Bearer ${source.apiKey}` } : {};
 }
 
-/** The endpoint's own model list (GET /models), for sources that don't list theirs. */
-export async function fetchModelIds(source: OpenAISource, timeoutMs = 8000): Promise<string[]> {
+export type SourceModelInfo = { id: string; contextWindow?: number };
+
+const positive = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined);
+
+/**
+ * The context window a /models entry reports, under whichever name its server uses: the loaded
+ * length before the model's maximum (LM Studio), vLLM's max_model_len, OpenRouter's
+ * context_length, Groq's context_window, llama.cpp's trained length.
+ */
+export function entryContextWindow(entry: Record<string, unknown>): number | undefined {
+  const meta = isPlainRecord(entry.meta) ? entry.meta : {};
+  const topProvider = isPlainRecord(entry.top_provider) ? entry.top_provider : {};
+  return (
+    positive(entry.loaded_context_length) ??
+    positive(entry.max_model_len) ??
+    positive(entry.context_length) ??
+    positive(entry.context_window) ??
+    positive(topProvider.context_length) ??
+    positive(entry.max_context_length) ??
+    positive(meta.n_ctx) ??
+    positive(meta.n_ctx_train)
+  );
+}
+
+/** llama.cpp's server answers /props with the context it was started with (-c), which /models leaves out. */
+async function llamaCppContext(source: OpenAISource, timeoutMs: number): Promise<number | undefined> {
+  const url = new URL(source.baseUrl);
+  url.pathname = url.pathname.replace(/\/v1\/?$/, "").replace(/\/+$/, "") + "/props";
+  try {
+    const res = await fetch(url, { headers: authHeaders(source), signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as unknown;
+    if (!isPlainRecord(body)) return undefined;
+    const settings = isPlainRecord(body.default_generation_settings) ? body.default_generation_settings : {};
+    return positive(settings.n_ctx) ?? positive(body.n_ctx);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The endpoint's own model list (GET /models) with the context window each entry reports. */
+export async function fetchModelInfo(source: OpenAISource, timeoutMs = 8000): Promise<SourceModelInfo[]> {
   const res = await fetch(`${source.baseUrl}/models`, { headers: authHeaders(source), signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`${source.name}: GET /models failed (${res.status})`);
   const body = (await res.json()) as unknown;
   const data = isPlainRecord(body) && Array.isArray(body.data) ? body.data : Array.isArray(body) ? body : [];
-  return data
-    .map((m) => (isPlainRecord(m) && typeof m.id === "string" ? m.id : typeof m === "string" ? m : ""))
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b));
+  const models = data
+    .map((m): SourceModelInfo | null => {
+      if (typeof m === "string") return m ? { id: m } : null;
+      if (!isPlainRecord(m) || typeof m.id !== "string" || !m.id) return null;
+      const contextWindow = entryContextWindow(m);
+      return { id: m.id, ...(contextWindow ? { contextWindow } : {}) };
+    })
+    .filter((m): m is SourceModelInfo => m !== null)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  // A llama.cpp server (its entries carry meta) serves one model; its -c beats the trained length.
+  const llamaCpp = data.length === 1 && isPlainRecord(data[0]) && isPlainRecord(data[0].meta);
+  const served = llamaCpp ? await llamaCppContext(source, timeoutMs) : undefined;
+  return served ? models.map((m) => ({ ...m, contextWindow: served })) : models;
 }
