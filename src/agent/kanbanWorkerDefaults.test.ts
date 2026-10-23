@@ -159,6 +159,42 @@ test("board slot display follows provider and total limits and saves Any explici
   workers.implicit.solo = null;
   workers.web.solo = { manual: { card: 1 } };
   assert.equal(limited("web"), true);
+  workers.web.solo = null;
+  assert.equal(limited("sol"), false, "there is room for a second chat for the same worker");
+  settings.maxWorkersPerProvider = 1;
+  assert.equal(limited("sol"), true, "its own active chat occupies a provider slot");
+  settings.maxWorkersPerProvider = 3;
+  workers.sol.step = {};
+  assert.equal(limited("web"), false);
+  workers.sol.solo = { queued: { card: 2, queued: true } };
+  assert.equal(limited("web"), true, "the active chat, parallel lease and queued run take separate slots");
+});
+
+test("worker status and Stop now include every automatically queued chat and preserve manual runs", async () => {
+  const w: any = { run: { card: 1 }, threadId: "first", solo: {
+    second: { card: 2, queued: true }, manual: { card: 3 },
+  } };
+  const released: string[] = [], stopped: string[] = [];
+  let stopNow: () => void = () => {};
+  const context = vm.createContext({
+    stopWorkerId: "sol", worker: () => w, soloRuns: (worker: any) => worker.solo || {},
+    threadStatus: { first: { status: "running" }, second: { status: "running" } },
+    $: () => ({ addEventListener: (_event: string, handler: () => void) => { stopNow = handler; } }),
+    closeStop: () => {}, patchWorker: (_id: string, patch: any) => Object.assign(w, patch),
+    endRun: () => { delete w.run; delete w.threadId; }, render: () => {},
+    scribe: { agent: { release: (id: string) => released.push(id), stop: async (id: string) => { stopped.push(id); return { ok: true }; } } },
+  });
+  vm.runInContext(["workerChats", "workerRunning", "workerCardNames"].map(name => fn(board, name)).join("\n"), context);
+  assert.equal(vm.runInContext("workerRunning(worker())", context), true);
+  assert.equal(vm.runInContext("workerCardNames(worker())", context), "#1, #2");
+  const start = board.indexOf('  $("stopNow").addEventListener');
+  vm.runInContext(board.slice(start, board.indexOf("\n  });", start) + 7), context);
+  stopNow();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(released, ["first", "second"]);
+  assert.deepEqual(stopped, ["first", "second"]);
+  assert.deepEqual(Object.keys(w.solo), ["manual"]);
+  assert.equal(vm.runInContext("workerRunning(worker())", context), false);
 });
 
 test("Continue requests the continuation; it resumes only the same worker's chat", async () => {

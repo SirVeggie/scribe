@@ -5029,8 +5029,8 @@
     return value == null ? 1 : clamp(Math.floor(Number(value) || 0), 0, 99);
   }
   /**
-   * Every worker chat reserves both a total and a provider slot: the other running workers' chats
-   * and launch leases, and every one-card run (any worker's, this one's too). Same as atLimit in
+   * Every active chat, pending launch and one-card run reserves a total and a provider slot.
+   * Include this worker's active chats when considering an additional slot. Same as atLimit in
    * src/actions/kanbanWorkers.ts.
    */
   function atLimit(id) {
@@ -5040,7 +5040,8 @@
     var busy = [];
     workerIds().forEach(function (other) {
       var w = worker(other), p = str(w.provider) || fallback;
-      if (other !== id && workerOn(w) && (w.threadId || stepLeased(w) || launching[other])) busy.push(p);
+      if (workerOn(w) && w.threadId) busy.push(p);
+      if (other !== id && workerOn(w) && (stepLeased(w) || launching[other])) busy.push(p);
       Object.keys(soloRuns(w)).forEach(function (tid) { if (soloRuns(w)[tid]) busy.push(p); });
     });
     return Boolean((max && busy.length >= max) || (perProvider && busy.filter(function (p) {
@@ -5091,9 +5092,24 @@
     var t = threadId ? threadStatus[threadId] : null;
     return (t && t.run) || null;
   }
+  /** Automatically picked chats; manual one-card runs keep their own controls. */
+  function workerChats(w) {
+    var chats = w && w.run && w.threadId ? [{ thread: w.threadId, card: w.run.card }] : [];
+    Object.keys(soloRuns(w)).forEach(function (tid) {
+      var entry = soloRuns(w)[tid];
+      if (entry && entry.queued) chats.push({ thread: tid, card: entry.card });
+    });
+    return chats;
+  }
   function workerRunning(w) {
-    var t = w && w.threadId ? threadStatus[w.threadId] : null;
-    return Boolean(t && (t.status !== "idle" || t.queued > 0 || (t.run && t.run.phase === "running")));
+    return workerChats(w).some(function (chat) {
+      var t = threadStatus[chat.thread];
+      return Boolean(t && (t.status !== "idle" || t.queued > 0 || (t.run && t.run.phase === "running")));
+    });
+  }
+  function workerCardNames(w) {
+    var nums = workerChats(w).filter(function (chat) { return chat.card; }).map(function (chat) { return "#" + chat.card; });
+    return nums.join(", ") || "a card";
   }
   /** Started and not stopped: working on a card, or waiting for one. */
   function workerOn(w) { return Boolean(w && w.run); }
@@ -5363,7 +5379,7 @@
     var w = worker(id);
     if (!workerReady(w)) return !workerName(w) ? "needs a name" : FOLDER_MODES[workerMode(w)] && !str(w.cwd).trim() ? "needs a folder" : "needs instructions";
     if (launching[id] || (workerOn(w) && !w.threadId && stepLeased(w))) return "starting";
-    if (workerRunning(w)) return (w.stop ? "stopping after " : "working on ") + (w.run && w.run.card ? "#" + w.run.card : "a card");
+    if (workerRunning(w)) return (w.stop ? "stopping after " : "working on ") + workerCardNames(w);
     if (workerWaitUntil(w)) return "out of usage until " + limitTime(workerWaitUntil(w));
     if (workerOn(w)) return w.stop ? "stopping" : atLimit(id) && nextCard(id) ? "waiting for a free slot" : "waiting for cards";
     var soloUntil = soloWaitUntil(w);
@@ -5848,7 +5864,7 @@
   function toggleWorker(id) {
     var w = worker(id);
     if (!w || launching[id]) return;
-    if (workerRunning(w) || workerOn(w)) openStop(id);
+    if (workerChats(w).length || workerOn(w)) openStop(id);
     else launchWorker(id);
   }
 
@@ -5858,12 +5874,13 @@
     var w = worker(id);
     if (!w) return;
     stopWorkerId = id;
-    var working = workerRunning(w);
+    var working = workerChats(w).length > 0;
     var who = "\"" + (workerName(w) || "The agent") + "\"";
     $("stopText").textContent = working
-      ? who + " is working on " + (w.run && w.run.card ? "#" + w.run.card : "a card") + ". Stopping now cancels its turn; a card it holds goes back to its ready column, and its chat keeps any worktree for you to merge or leave."
+      ? who + " is working on " + workerCardNames(w) + ". Stopping now cancels its active turns; held cards go back to their ready columns, and each chat keeps its worktree for you to merge or leave."
       : who + " is waiting for cards assigned to it.";
     $("stopLater").classList.toggle("hidden", Boolean(w.stop) || !working);
+    $("stopLater").textContent = workerChats(w).length > 1 ? "Stop when these cards are done" : "Stop when its card is done";
     $("stopNow").textContent = working ? "Stop now" : "Stop";
     stopBack.classList.remove("hidden");
     $("stopCancel").focus();
@@ -5879,7 +5896,7 @@
     if (w) {
       patchWorker(stopWorkerId, { stop: true });
       scribe.signal("worker_stop", { worker: workerName(w), workerId: stopWorkerId });
-      appendLog(stopWorkerId, "stop", "Stop requested after this card", { card: w.run && w.run.card, thread: w.threadId });
+      appendLog(stopWorkerId, "stop", "Stop requested after " + workerCardNames(w), { card: w.run && w.run.card, thread: w.threadId });
     }
     closeStop();
     render();
@@ -5889,18 +5906,22 @@
     var w = worker(id);
     closeStop();
     if (!w) return;
-    var threadId = workerRunning(w) ? w.threadId : null;
+    var chats = workerChats(w);
     // Scribe stops seeing the chat through too: no resume after a usage limit, no merge. The chat keeps its worktree.
-    if (w.threadId) scribe.agent.release(w.threadId);
+    chats.forEach(function (chat) { scribe.agent.release(chat.thread); });
+    var remaining = Object.assign({}, soloRuns(w));
+    chats.forEach(function (chat) { delete remaining[chat.thread]; });
+    patchWorker(id, { solo: Object.keys(remaining).length ? remaining : null });
     endRun(id, null, true);
     render();
-    if (!threadId) return;
-    scribe.agent.stop(threadId).then(function (r) {
-      if (!r || !r.ok) {
-        workerErrors[id] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
-        appendLog(id, "pause", workerErrors[id], { thread: threadId });
-      }
-      render();
+    chats.forEach(function (chat) {
+      scribe.agent.stop(chat.thread).then(function (r) {
+        if (!r || !r.ok) {
+          workerErrors[id] = r && r.error === "denied" ? launchError(r) : "Could not stop the agent" + (r && r.error ? ": " + r.error : ".");
+          appendLog(id, "pause", workerErrors[id], { thread: chat.thread });
+        }
+        render();
+      });
     });
   });
 
@@ -6169,12 +6190,13 @@
         reorder.appendChild(button);
       });
       row.appendChild(reorder);
-      var tog = el("button", "tog" + (workerOn(w) || launching[id] ? " on" : ""));
+      var active = workerOn(w) || workerChats(w).length > 0;
+      var tog = el("button", "tog" + (active || launching[id] ? " on" : ""));
       tog.type = "button";
       tog.setAttribute("role", "switch");
-      tog.setAttribute("aria-checked", workerOn(w) ? "true" : "false");
-      tog.setAttribute("aria-label", (workerOn(w) ? "Stop " : "Start ") + (workerName(w) || "worker"));
-      tog.dataset.tooltip = !workerReady(w) ? "Set it up first: " + workerState(id) : workerOn(w) ? "Running. Click to stop." : "Stopped. Click to start.";
+      tog.setAttribute("aria-checked", active ? "true" : "false");
+      tog.setAttribute("aria-label", (active ? "Stop " : "Start ") + (workerName(w) || "worker"));
+      tog.dataset.tooltip = !workerReady(w) ? "Set it up first: " + workerState(id) : active ? "Running. Click to stop." : "Stopped. Click to start.";
       tog.disabled = Boolean(launching[id]);
       tog.addEventListener("click", function (e) { e.stopPropagation(); toggleWorker(id); });
       row.appendChild(tog);
