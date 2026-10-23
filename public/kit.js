@@ -1,5 +1,7 @@
 /*
- * Page kit (#630): the script half. Wires <form data-reply> so an agent's form needs no script:
+ * Page kit: wires <form data-reply> and <button data-reply> without page scripts.
+ * Buttons send their summary and optional JSON context through the host's scribe.reply.
+ * For forms,
  * typing is kept as this viewer's draft (scribe.local), and submit sends the named fields with
  * scribe.reply (the page's replyTo), or as a "submitted" signal on a page without one.
  */

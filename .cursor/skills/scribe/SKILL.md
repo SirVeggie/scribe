@@ -206,7 +206,7 @@ Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall bac
 
 ### Page kit: components without CSS
 
-**One-click replies.** `<button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button>` sends the optional JSON object as answers and `data-reply` as the summary through `scribe.reply`. An empty `data-reply` uses the button text. No form or script is needed. All reply buttons in the page are disabled after choosing, and the chosen button is marked; failed delivery allows retry. Invalid `data-context` shows an error without sending. Without `replyTo`, it logs `submitted` with `{ answers, summary }`, like a reply form. In chat component frames (inline kit HTML or plugins), it uses the component's `scribe.reply` bridge: answering a waiting call, or sending the summary as a chat message otherwise.
+**One-click replies.** `<button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button>` sends the optional JSON object as answers and `data-reply` as the summary through `scribe.reply`. An empty `data-reply` uses the button text. No form or script is needed. All reply buttons in the page are disabled after choosing, and the chosen button is marked; failed delivery allows retry. Invalid `data-context` shows an error without sending. Without `replyTo`, it logs `submitted` with `{ answers, summary }`, like a reply form. The wiring also works in any component host that provides `window.scribe.reply`; that host determines reply routing.
 
 Fragment pages also get Scribe's page kit: ready styles for the usual parts of reports and forms, and form wiring with no script. Use these classes instead of writing CSS for the same thing; your own `<style>` still wins over the kit where you need something else.
 
