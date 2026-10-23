@@ -5053,7 +5053,8 @@ main.blank-page #frames iframe:not(.inactive) {
   background: linear-gradient(100deg, rgba(255, 255, 255, 0.55) 30%, #fff 50%, rgba(255, 255, 255, 0.55) 70%) 0 0 / 200% 100% repeat-x;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: np-intent-sheen var(--dur-breathe) linear infinite;
+  /* Glint at rest mid-word; newpage.js sweeps it once per word, between the word changes. */
+  background-position: 50% 0;
 }
 
 .newpage-intent-title {
@@ -5066,12 +5067,6 @@ main.blank-page #frames iframe:not(.inactive) {
 
 .newpage-intent-title:empty {
   display: none;
-}
-
-@keyframes np-intent-sheen {
-  /* Move exactly one repeated tile, so the last frame meets the first. */
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
 }
 
 /* Over a page that is there already, a click puts the page back. */
@@ -5230,7 +5225,6 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
     scroll-behavior: auto !important;
   }
   .refresh-overlay-line { opacity: .5; }
-  .newpage-intent-word { background-position: 50% 0; }
 }
 
 /* Settings → Classifier (ml-settings.js) */

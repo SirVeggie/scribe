@@ -577,11 +577,13 @@ return glow(c,e);}`;
       intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
       if (!window.scribeMotion.enabled()) return;
       // Finish the exit before replacing the text; one timeline also survives timer throttling.
+      // The glint sweeps once while the word holds still, so the words go glint, change, glint.
       wordAnimation = window.scribeMotion.animate(intentWord, [
-        { opacity: 0, filter: "blur(8px)", transform: "translateY(8px)", offset: 0, easing: "ease-out" },
-        { opacity: 1, filter: "blur(0px)", transform: "none", offset: .2 },
-        { opacity: 1, filter: "blur(0px)", transform: "none", offset: .84, easing: "ease-in" },
-        { opacity: 0, filter: "blur(8px)", transform: "translateY(-6px)", offset: 1 },
+        { opacity: 0, filter: "blur(8px)", transform: "translateY(8px)", backgroundPosition: "140% 0", offset: 0, easing: "ease-out" },
+        { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "140% 0", offset: .2, easing: "ease-in-out" },
+        { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "-40% 0", offset: .8 },
+        { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "-40% 0", offset: .84, easing: "ease-in" },
+        { opacity: 0, filter: "blur(8px)", transform: "translateY(-6px)", backgroundPosition: "-40% 0", offset: 1 },
       ], { duration: INTENT_WORD_MS, fill: "both", easing: "linear" });
       wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
     }
