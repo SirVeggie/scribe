@@ -649,7 +649,8 @@ return glow(c,e);}`;
       if (sameIntent) intentTitle.textContent = intent.title || "";
       else setIntent(intent);
       lastIntent = intent ? intent.itemId : null;
-      body.inert = threads > 0;
+      // A page being made hides the options too, even when its chat belongs to another scope.
+      body.inert = threads > 0 || Boolean(intent);
       // Keep the existing text and template cards in place while they fade away.
       if (threads > 0) return;
       lede.textContent = "Start from a template, or ask the agent to make something here.";

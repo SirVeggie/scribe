@@ -269,6 +269,9 @@ test("word transitions finish their exit before replacement and cancel when leav
   const s = screen(false);
   s.intent({ itemId: "one", title: "A page" });
   s.page.render({ id: "first" });
+  // No chat of its own (a Global chat makes it): the options still step aside for the status.
+  assert.equal(s.classes.has("intent"), true);
+  assert.equal(s.parts.get(".newpage-body")!.inert, true);
   const word = s.parts.get(".newpage-intent-word")!;
   assert.equal(word.textContent, "Imagining…");
   const first = s.animations.at(-1)! as any;

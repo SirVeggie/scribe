@@ -5010,7 +5010,8 @@ main.blank-page #frames iframe:not(.inactive) {
   transition: opacity var(--dur-slow) ease-in-out, filter var(--dur-slow) ease-in-out, visibility 0s;
 }
 
-.newpage.has-thread .newpage-body {
+.newpage.has-thread .newpage-body,
+.newpage.intent .newpage-body {
   opacity: 0;
   filter: blur(12px);
   visibility: hidden;
