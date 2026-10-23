@@ -23,7 +23,7 @@
   function attach(frame, item, { expanded = false } = {}) {
     attached.get(frame)?.();
     frame.parentElement?.querySelector(".ag-component-disconnected")?.remove();
-    let port, loaded = false, disposed = false, lastReply = 0, events;
+    let port, loaded = false, disposed = false, lastReply = 0, lastOpen = 0, events;
     const requests = new AbortController();
     let writeTimer, writing = Promise.resolve(), localWrites = 0;
     const queued = new Map();
@@ -102,6 +102,8 @@
             // Activation propagates from a child frame to its ancestors; a widget cannot mint it.
             if (!navigator.userActivation?.isActive || document.activeElement !== frame) throw new Error("Click the component to continue.");
             if (data.action === "reply" && Date.now() - lastReply < 5000) throw new Error("This click has already sent a reply.");
+            // Activation stays active for seconds, so one click must not open a burst of links.
+            if (data.action === "open") { if (Date.now() - lastOpen < 1000) throw new Error("This click has already opened a link."); lastOpen = Date.now(); }
           }
           let result;
           if (data.action === "plugin") {

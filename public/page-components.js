@@ -17,7 +17,7 @@ function mountPageComponents(host) {
     }
     mount() {
       this.dispose?.();
-      let disposed = false, port, events, loaded = false, lastReply = 0, mountId;
+      let disposed = false, port, events, loaded = false, lastReply = 0, lastOpen = 0, mountId;
       const abort = new AbortController();
       const reports = window.__scribeComponentProblems;
       const release = reports?.hold();
@@ -115,6 +115,8 @@ function mountPageComponents(host) {
               else if (data.action === "reply" || data.action === "open") {
                 if (!navigator.userActivation?.isActive || document.activeElement !== frame) throw new Error("Click the component to continue.");
                 if (data.action === "open") {
+                  if (Date.now() - lastOpen < 1000) throw new Error("This click has already opened a link.");
+                  lastOpen = Date.now();
                   const checked = (await request("/" + mount.id + "/plugin", { op: "open", link: data.link })).result;
                   result = await host.open(checked.link);
                 }
