@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
  * The scribe skill in this repo is the one source for the page API and the rules for building
  * pages. The scribe_docs tool serves it from here, so clients without the skill (or with an old
  * copy) read the docs that match this daemon's version.
+ * Its Page kit table is generated from public/kit.catalog.json by npm run gen:kit-docs;
+ * keep serving the committed skill so installed skills and this tool see identical docs.
  */
 export const SKILL_DIR = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", ".cursor", "skills", "scribe");
 

@@ -1,7 +1,8 @@
 /*
  * Page kit (#630): ready-made components for fragment pages, so an agent writes only the content.
  * The fragment wrapper (src/wrapHtml.ts) links it; the scribe skill's "Page kit" section lists the
- * classes. Selectors sit in :where() so a page's own CSS always wins over the kit.
+ * classes. Add public features to public/kit.catalog.json and run npm run gen:kit-docs.
+ * Selectors sit in :where() so a page's own CSS always wins over the kit.
  * A full document can link it too (see the skill's "Full documents").
  */
 

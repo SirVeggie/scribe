@@ -212,27 +212,34 @@ Fragment pages also get Scribe's page kit: ready styles for the usual parts of r
 
 The kit is a baseline, not a look. A short report or a form needs little more. A design doc, investigation or comparison should be easy to scan: color-code categories and options (tags, toned boxes and cards, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG for anything richer), and show proposed UI as a mock-up rather than describing it. Add your own CSS or SVG wherever the kit falls short; a plain page of headings and default tables reads much worse.
 
-| Write | Gives |
-|---|---|
-| `<p class="lead">` | intro line under the title |
-| `<div class="callout">` (+ `ok` / `warn` / `error`) | a toned note box; info by default |
-| `<span class="badge">` (+ `ok` / `warn` / `error` / `info`) | a small tag, e.g. "recommended" |
-| `<div class="grid">` with `<div class="card">` children (`card rec` for the recommended one) | side-by-side boxes; `style="--min:320px"` on the grid sets the column width |
-| `<ul class="pros">` / `<ul class="cons">` | + and − lists |
-| `<dl class="kv"><dt>Files</dt><dd>12</dd>…</dl>` | key-value rows |
-| `<div class="row">` | a wrapping row of buttons or badges |
-| `<span class="tag">` (+ a tone) | a colored pill with a dot, for categories and color coding |
-| `<section class="box">` (+ a tone) | a toned section with a colored edge and heading; `info` by default |
-| `<div class="card warn">` | a card with a colored top edge |
-| `<div class="ask">` | a question to the user, set apart from the text (dashed box, `?` before its heading); holds the form fields |
-| `<div class="flow"><div>Agent</div><div class="ok">Daemon <small>port 7420</small></div></div>` | a diagram row: boxes joined by arrows, each toned |
-| `<ol class="steps">` | a numbered list with round markers |
-| `<div class="mock"><div class="mock-bar">Settings</div><div class="mock-body">…</div></div>` | a window frame for a UI mock-up; inside, `<div class="mock-row"><span>Label <small>hint</small></span> <span class="switch on"></span></div>` draws setting rows, and kit buttons and fields work as usual |
-| `class="mark-new"` | a dashed outline marking the new or changed part of a mock-up |
-| `<td class="ok">`, `<tr class="warn">` | toned table cells for comparison tables |
-
-Tones: `ok`, `warn`, `error`, `info`, and for plain color coding `purple`, `teal`, `orange`, `pink`; any other color with `style="--tone: #7fc8c0"`.
-| `<button>` / `<button class="primary">` / `<a class="button">` | app-style buttons |
+<!-- kit-catalog:start -->
+| Write | Gives | Example |
+|---|---|---|
+| ` .lead / .small ` | A muted intro line under the title, or smaller text. | ` <p class="lead">What we found</p><p class="small">Details</p> ` |
+| ` .grid; --min ` | Responsive columns; --min sets the minimum column width (240px by default). | ` <div class="grid" style="--min:320px"><div class="card">Option A</div><div class="card">Option B</div></div> ` |
+| ` .card / .card.rec ` | A padded box; rec marks the recommended option; a tone adds a colored top edge. | ` <div class="card rec ok"><h3>Recommended</h3>Option A</div> ` |
+| ` .row ` | A wrapping row of buttons or badges. | ` <div class="row"><button>Back</button><button class="primary">Next</button></div> ` |
+| ` .callout ` | A toned note box; info by default. | ` <div class="callout warn"><b>Note</b> Review the limits.</div> ` |
+| ` .badge ` | A small toned label. | ` <span class="badge ok">Recommended</span> ` |
+| ` .tag ` | A colored pill with a dot for categories. | ` <span class="tag purple">Storage</span> ` |
+| ` .box ` | A toned section with a colored edge and heading; info by default. | ` <section class="box teal"><h2>Findings</h2>Details</section> ` |
+| ` .ask ` | A question box with a dashed border and a question mark before its heading. | ` <div class="ask"><h3>Which option?</h3><textarea name="choice"></textarea></div> ` |
+| ` .flow ` | A diagram row of toned boxes joined by arrows. | ` <div class="flow"><div>Agent</div><div class="ok">Daemon <small>port 7420</small></div></div> ` |
+| ` ol.steps ` | A numbered list with round markers. | ` <ol class="steps"><li>Inspect</li><li>Implement</li></ol> ` |
+| ` .mock / .mock-bar / .mock-body / .mock-row ` | A window frame and setting rows for a UI mock-up. | ` <div class="mock"><div class="mock-bar">Settings</div><div class="mock-body"><div class="mock-row"><span>Enabled</span><span class="switch on"></span></div></div></div> ` |
+| ` .switch / .switch.on ` | A drawn switch for mock-ups; on shows its enabled state. | ` <span class="switch on"></span> ` |
+| ` .mark-new ` | A dashed outline marking a new or changed part of a mock-up. | ` <div class="mark-new">New control</div> ` |
+| ` .ok / .warn / .error / .info / .purple / .teal / .orange / .pink; --tone ` | Shared tones for boxes, cards, tags, badges, flows and table cells or rows; --tone accepts any custom color. | ` <table><tr class="warn"><td>Pending</td><td class="ok">Ready</td></tr></table><span class="tag" style="--tone:#7fc8c0">Custom</span> ` |
+| ` dl.kv ` | Key-value rows. | ` <dl class="kv"><dt>Files</dt><dd>12</dd></dl> ` |
+| ` ul.pros / ul.cons ` | Lists with plus and minus markers. | ` <ul class="pros"><li>Fast</li></ul><ul class="cons"><li>Limited</li></ul> ` |
+| ` button / button.primary / a.button ` | App-style buttons; primary highlights the main action. | ` <button class="primary">Save</button><a class="button" href="https://example.com">Open</a> ` |
+| ` input / textarea / select ` | Themed fields, radios and check boxes. | ` <input type="text" name="title"><textarea name="notes"></textarea> ` |
+| ` .q ` | Spacing for a question and its fields. | ` <div class="q"><h3>Anything else?</h3><textarea name="notes"></textarea></div> ` |
+| ` label.opt ` | A selectable option row with an optional small description. | ` <label class="opt"><input type="radio" name="approach" value="A">Patch <small>Low risk</small></label> ` |
+| ` .scale / .scale-ends ` | A radio scale with labels at its ends. | ` <div class="scale"><label><input type="radio" name="urgency" value="1">1</label><label><input type="radio" name="urgency" value="2">2</label></div><div class="scale-ends"><span>Later</span><span>Now</span></div> ` |
+| ` form[data-reply] ` | Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo. | ` <form data-reply><textarea name="notes"></textarea><button type="submit">Send answers</button></form> ` |
+| ` button[data-reply][data-context] ` | Sends the summary (button text when empty) and an optional JSON answers object through the host's scribe.reply. | ` <button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button> ` |
+<!-- kit-catalog:end -->
 
 **Forms.** `<form data-reply>` needs no script: Scribe keeps what the user types as their draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card), check boxes as lists, empty fields left out. On a page without `replyTo` it logs a `submitted` event with `{ answers, summary }` for `page_wait` instead. Radios, check boxes, inputs and textareas are styled like the chat's own question cards.
 

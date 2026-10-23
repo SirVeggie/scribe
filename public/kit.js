@@ -1,5 +1,6 @@
 /*
  * Page kit: wires <form data-reply> and <button data-reply> without page scripts.
+ * Add public hooks (including new bindings) to kit.catalog.json; run npm run gen:kit-docs.
  * Buttons send their summary and optional JSON context through the host's scribe.reply.
  * For forms,
  * typing is kept as this viewer's draft (scribe.local), and submit sends the named fields with

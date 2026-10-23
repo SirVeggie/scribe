@@ -1,0 +1,181 @@
+{
+  "entries": [
+    {
+      "id": "lead",
+      "classes": ["lead", "small"],
+      "write": ".lead / .small",
+      "gives": "A muted intro line under the title, or smaller text.",
+      "example": "<p class=\"lead\">What we found</p><p class=\"small\">Details</p>"
+    },
+    {
+      "id": "grid",
+      "classes": ["grid"],
+      "properties": ["--min"],
+      "write": ".grid; --min",
+      "gives": "Responsive columns; --min sets the minimum column width (240px by default).",
+      "example": "<div class=\"grid\" style=\"--min:320px\"><div class=\"card\">Option A</div><div class=\"card\">Option B</div></div>"
+    },
+    {
+      "id": "card",
+      "classes": ["card", "rec"],
+      "write": ".card / .card.rec",
+      "gives": "A padded box; rec marks the recommended option; a tone adds a colored top edge.",
+      "example": "<div class=\"card rec ok\"><h3>Recommended</h3>Option A</div>"
+    },
+    {
+      "id": "row",
+      "classes": ["row"],
+      "write": ".row",
+      "gives": "A wrapping row of buttons or badges.",
+      "example": "<div class=\"row\"><button>Back</button><button class=\"primary\">Next</button></div>"
+    },
+    {
+      "id": "callout",
+      "classes": ["callout"],
+      "write": ".callout",
+      "gives": "A toned note box; info by default.",
+      "example": "<div class=\"callout warn\"><b>Note</b> Review the limits.</div>"
+    },
+    {
+      "id": "badge",
+      "classes": ["badge"],
+      "write": ".badge",
+      "gives": "A small toned label.",
+      "example": "<span class=\"badge ok\">Recommended</span>"
+    },
+    {
+      "id": "tag",
+      "classes": ["tag"],
+      "write": ".tag",
+      "gives": "A colored pill with a dot for categories.",
+      "example": "<span class=\"tag purple\">Storage</span>"
+    },
+    {
+      "id": "box",
+      "classes": ["box"],
+      "write": ".box",
+      "gives": "A toned section with a colored edge and heading; info by default.",
+      "example": "<section class=\"box teal\"><h2>Findings</h2>Details</section>"
+    },
+    {
+      "id": "ask",
+      "classes": ["ask"],
+      "write": ".ask",
+      "gives": "A question box with a dashed border and a question mark before its heading.",
+      "example": "<div class=\"ask\"><h3>Which option?</h3><textarea name=\"choice\"></textarea></div>"
+    },
+    {
+      "id": "flow",
+      "classes": ["flow"],
+      "write": ".flow",
+      "gives": "A diagram row of toned boxes joined by arrows.",
+      "example": "<div class=\"flow\"><div>Agent</div><div class=\"ok\">Daemon <small>port 7420</small></div></div>"
+    },
+    {
+      "id": "steps",
+      "classes": ["steps"],
+      "write": "ol.steps",
+      "gives": "A numbered list with round markers.",
+      "example": "<ol class=\"steps\"><li>Inspect</li><li>Implement</li></ol>"
+    },
+    {
+      "id": "mock",
+      "classes": ["mock", "mock-bar", "mock-body", "mock-row"],
+      "write": ".mock / .mock-bar / .mock-body / .mock-row",
+      "gives": "A window frame and setting rows for a UI mock-up.",
+      "example": "<div class=\"mock\"><div class=\"mock-bar\">Settings</div><div class=\"mock-body\"><div class=\"mock-row\"><span>Enabled</span><span class=\"switch on\"></span></div></div></div>"
+    },
+    {
+      "id": "switch",
+      "classes": ["switch", "on"],
+      "write": ".switch / .switch.on",
+      "gives": "A drawn switch for mock-ups; on shows its enabled state.",
+      "example": "<span class=\"switch on\"></span>"
+    },
+    {
+      "id": "mark-new",
+      "classes": ["mark-new"],
+      "write": ".mark-new",
+      "gives": "A dashed outline marking a new or changed part of a mock-up.",
+      "example": "<div class=\"mark-new\">New control</div>"
+    },
+    {
+      "id": "tones",
+      "classes": ["ok", "warn", "error", "info", "purple", "teal", "orange", "pink"],
+      "properties": ["--tone"],
+      "write": ".ok / .warn / .error / .info / .purple / .teal / .orange / .pink; --tone",
+      "gives": "Shared tones for boxes, cards, tags, badges, flows and table cells or rows; --tone accepts any custom color.",
+      "example": "<table><tr class=\"warn\"><td>Pending</td><td class=\"ok\">Ready</td></tr></table><span class=\"tag\" style=\"--tone:#7fc8c0\">Custom</span>"
+    },
+    {
+      "id": "kv",
+      "classes": ["kv"],
+      "write": "dl.kv",
+      "gives": "Key-value rows.",
+      "example": "<dl class=\"kv\"><dt>Files</dt><dd>12</dd></dl>"
+    },
+    {
+      "id": "pros-cons",
+      "classes": ["pros", "cons"],
+      "write": "ul.pros / ul.cons",
+      "gives": "Lists with plus and minus markers.",
+      "example": "<ul class=\"pros\"><li>Fast</li></ul><ul class=\"cons\"><li>Limited</li></ul>"
+    },
+    {
+      "id": "buttons",
+      "classes": ["button", "primary"],
+      "hooks": [{"file":"kit.css","text":":where(button, .button)"}],
+      "write": "button / button.primary / a.button",
+      "gives": "App-style buttons; primary highlights the main action.",
+      "example": "<button class=\"primary\">Save</button><a class=\"button\" href=\"https://example.com\">Open</a>"
+    },
+    {
+      "id": "fields",
+      "hooks": [{"file":"kit.css","text":":where(textarea)"},{"file":"kit.css","text":"input[type=\"radio\"]"},{"file":"kit.css","text":"input[type=\"checkbox\"]"}],
+      "write": "input / textarea / select",
+      "gives": "Themed fields, radios and check boxes.",
+      "example": "<input type=\"text\" name=\"title\"><textarea name=\"notes\"></textarea>"
+    },
+    {
+      "id": "question",
+      "classes": ["q"],
+      "write": ".q",
+      "gives": "Spacing for a question and its fields.",
+      "example": "<div class=\"q\"><h3>Anything else?</h3><textarea name=\"notes\"></textarea></div>"
+    },
+    {
+      "id": "option",
+      "classes": ["opt"],
+      "write": "label.opt",
+      "gives": "A selectable option row with an optional small description.",
+      "example": "<label class=\"opt\"><input type=\"radio\" name=\"approach\" value=\"A\">Patch <small>Low risk</small></label>"
+    },
+    {
+      "id": "scale",
+      "classes": ["scale", "scale-ends"],
+      "write": ".scale / .scale-ends",
+      "gives": "A radio scale with labels at its ends.",
+      "example": "<div class=\"scale\"><label><input type=\"radio\" name=\"urgency\" value=\"1\">1</label><label><input type=\"radio\" name=\"urgency\" value=\"2\">2</label></div><div class=\"scale-ends\"><span>Later</span><span>Now</span></div>"
+    },
+    {
+      "id": "reply-form",
+      "attributes": ["data-reply"],
+      "hooks": [{"file":"kit.js","text":"form[data-reply]"}],
+      "write": "form[data-reply]",
+      "gives": "Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo.",
+      "example": "<form data-reply><textarea name=\"notes\"></textarea><button type=\"submit\">Send answers</button></form>"
+    },
+    {
+      "id": "reply-button",
+      "attributes": ["data-reply", "data-context"],
+      "hooks": [{"file":"kit.js","text":"button[data-reply]"},{"file":"kit.js","text":"getAttribute(\"data-context\")"}],
+      "write": "button[data-reply][data-context]",
+      "gives": "Sends the summary (button text when empty) and an optional JSON answers object through the host's scribe.reply.",
+      "example": "<button data-reply=\"Use option B\" data-context='{\"option\":\"B\"}'>Choose B</button>"
+    }
+  ],
+  "internal": [
+    {"class":"kit-status","why":"Status span generated by kit.js beside the reply control."},
+    {"class":"kit-reply-chosen","why":"Chosen reply button state managed by kit.js."}
+  ]
+}
