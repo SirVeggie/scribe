@@ -19,7 +19,7 @@ import { copySkill, createSkill, readHarnessFile, removeSkill, writeHarnessFile 
 import { store } from "../store.js";
 import { componentHost, PORT } from "../config.js";
 import { plugins } from "../plugins/current.js";
-import { componentStateAllowed } from "../plugins/manifest.js";
+import { relayComponentEvents } from "../plugins/componentHost.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
 import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
@@ -686,8 +686,6 @@ export function agentRouter(host: AgentHost): express.Router {
   router.get("/threads/:id/components/:itemId/events", async (req, res) => {
     const abort = new AbortController();
     res.on("close", () => abort.abort());
-    let unsubscribe: (() => void) | undefined, timer: ReturnType<typeof setInterval> | undefined;
-    const close = () => { unsubscribe?.(); clearInterval(timer); res.end(); };
     try {
       await host.componentPluginAction(req.params.id, req.params.itemId, { op: "listen" }, abort.signal);
       if (abort.signal.aborted) return;
@@ -695,28 +693,14 @@ export function agentRouter(host: AgentHost): express.Router {
       const persistent = (current: typeof initial) => current.permission === "allow" || current.thread.approval === "full" || current.thread.pluginGrants?.includes(current.plugin);
       const once = !persistent(initial), initialApproval = initial.thread.approval, initialPermission = initial.permission;
       const consentTurn = host.activeTurnId(req.params.id);
-      res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-store", "Connection": "keep-alive" });
-      res.flushHeaders();
-      const send = (data: unknown) => { if (!res.write(`data: ${JSON.stringify(data)}\n\n`)) close(); };
       const valid = () => {
         try {
           const current = host.componentPlugin(req.params.id, req.params.itemId);
           return current.hash === initial.hash && (persistent(current) || (once && consentTurn !== undefined && host.activeTurnId(req.params.id) === consentTurn && current.thread.approval === initialApproval && current.permission === initialPermission));
         } catch { return false; }
       };
-      unsubscribe = plugins!.subscribe((id, name, data, registry) => {
-        if (id !== initial.plugin && id !== "*") return;
-        if (registry || !valid()) { send({ type: "reload" }); close(); return; }
-        if (name === "state") {
-          const state = data as { key?: unknown; revision?: unknown };
-          if (typeof state?.key === "string" && componentStateAllowed(initial.definition.state, state.key)) send({ type: "plugin-state", key: state.key, revision: state.revision });
-        } else if (initial.definition.events.includes(name) && Buffer.byteLength(JSON.stringify(data) ?? "null") <= 64 * 1024) send({ type: "plugin-event", name, data });
-      });
-      // Permission changes need no plugin event to revoke a mounted subscription.
-      timer = setInterval(() => { if (!valid()) { send({ type: "reload" }); close(); } else res.write(": keepalive\n\n"); }, 1000);
-      abort.signal.addEventListener("abort", close, { once: true });
-      send({ type: "ready" });
-    } catch (error) { if (!res.headersSent) res.status(400).json({ error: (error as Error).message }); else close(); }
+      relayComponentEvents(res, { plugins: plugins!, plugin: initial.plugin, definition: initial.definition, valid });
+    } catch (error) { if (!res.headersSent) res.status(400).json({ error: (error as Error).message }); else res.end(); }
   });
   router.post("/threads/:id/components/:itemId", wrap(req => {
     const body = isPlainRecord(req.body) ? req.body : {};

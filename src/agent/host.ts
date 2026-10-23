@@ -1,3 +1,4 @@
+import { limitComponentAction, type ComponentRate } from "../plugins/componentHost.js";
 import type { EffectivePermissions } from "./effectivePermissions.js";
 import type { LaunchSettings, PageRunInput, ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
@@ -4054,7 +4055,7 @@ export class AgentHost {
     return { ...plugins.component(item.plugin, item.component, item.props), plugin: item.plugin, thread, permission };
   }
 
-  private componentCallRates = new Map<string, { at: number; count: number; active: number }>();
+  private componentCallRates = new Map<string, ComponentRate>();
   async componentPluginAction(threadId: string, itemId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     let rate = this.componentCallRates.get(itemId);
     if (!rate) {
@@ -4065,11 +4066,7 @@ export class AgentHost {
       }
       rate = { at: Date.now(), count: 0, active: 0 }; this.componentCallRates.set(itemId, rate);
     }
-    if (Date.now() - rate.at >= 1000) { rate.at = Date.now(); rate.count = 0; }
-    if (++rate.count > 100 || rate.active >= 16) throw new Error("Component plugin requests are too frequent.");
-    rate.active++;
-    try { return await this.performComponentPluginAction(threadId, itemId, input, signal); }
-    finally { rate.active--; }
+    return limitComponentAction(rate, () => this.performComponentPluginAction(threadId, itemId, input, signal));
   }
 
   private async performComponentPluginAction(threadId: string, itemId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {

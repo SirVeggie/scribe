@@ -1,3 +1,4 @@
+import { limitComponentAction, relayComponentEvents, type ComponentRate } from "./plugins/componentHost.js";
 import { randomBytes } from "node:crypto";
 import type express from "express";
 import type { BoardStore } from "./store.js";
@@ -7,7 +8,7 @@ import { checkPermission } from "./pagePermissions.js";
 import { componentJson, componentLink, parseComponentInput } from "./agent/componentTool.js";
 import { pageComponentHost, PORT } from "./config.js";
 
-type Mount = { id: string; page: string; revision: number; plugin: string; component: string; props: unknown; local: Record<string, unknown>; hash: string; token: string; diagnostics: boolean; capture: boolean; touched: number; at: number; count: number; active: number };
+type Mount = ComponentRate & { id: string; page: string; revision: number; plugin: string; component: string; props: unknown; local: Record<string, unknown>; hash: string; token: string; diagnostics: boolean; capture: boolean; touched: number };
 
 /** Ephemeral page mounts. Identity, revision and declarations are checked again on every operation. */
 export class PageComponents {
@@ -52,8 +53,10 @@ export class PageComponents {
 
   async action(page: string, id: string, input: Record<string, unknown>) {
     const { definition, mount } = this.current(page, id);
-    if (Date.now() - mount.at >= 1000) { mount.at = Date.now(); mount.count = 0; }
-    if (++mount.count > 100 || mount.active >= 16) throw new Error("Component plugin requests are too frequent.");
+    return limitComponentAction(mount, () => this.performAction(page, mount, definition, input));
+  }
+
+  private async performAction(page: string, mount: Mount, definition: ReturnType<PluginService["component"]>["definition"], input: Record<string, unknown>) {
     const key = String(input.key ?? ""), method = String(input.method ?? "");
     if (input.op === "open") return { link: componentLink(input.link) };
     if (input.op === "state") {
@@ -69,31 +72,14 @@ export class PageComponents {
       return { ok: true };
     }
     if (input.op !== "call" || !definition.methods.includes(method)) throw new Error("Component method is not declared.");
-    mount.active++;
-    try { return await this.plugins.call(mount.plugin, method, componentJson(input.args ?? {}), { kind: "page", page }); }
-    finally { mount.active--; }
+    return this.plugins.call(mount.plugin, method, componentJson(input.args ?? {}), { kind: "page", page });
   }
 
   events(page: string, id: string, res: express.Response) {
     const initial = this.current(page, id);
-    res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-store", "Connection": "keep-alive" });
-    res.flushHeaders();
-    let closed = false;
-    let unsubscribe: (() => void) | undefined;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const close = () => { if (closed) return; closed = true; unsubscribe?.(); clearInterval(timer); res.end(); };
-    const send = (data: unknown) => { if (!closed && !res.write(`data: ${JSON.stringify(data)}\n\n`)) close(); };
-    const valid = () => { try { this.current(page, id); return true; } catch { return false; } };
-    unsubscribe = this.plugins.subscribe((plugin, name, data, registry) => {
-      if (plugin !== initial.mount.plugin && plugin !== "*") return;
-      if (registry || !valid()) { send({ type: "reload" }); close(); return; }
-      if (name === "state") {
-        const state = data as { key?: unknown; revision?: unknown };
-        if (typeof state?.key === "string" && componentStateAllowed(initial.definition.state, state.key)) send({ type: "plugin-state", key: state.key, revision: state.revision });
-      } else if (initial.definition.events.includes(name) && Buffer.byteLength(JSON.stringify(data) ?? "null") <= 64 * 1024) send({ type: "plugin-event", name, data });
+    relayComponentEvents(res, {
+      plugins: this.plugins, plugin: initial.mount.plugin, definition: initial.definition,
+      valid: () => { try { this.current(page, id); return true; } catch { return false; } },
     });
-    timer = setInterval(() => { if (!valid()) { send({ type: "reload" }); close(); } else res.write(": keepalive\n\n"); }, 1000);
-    res.on("close", close);
-    send({ type: "ready" });
   }
 }
