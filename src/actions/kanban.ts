@@ -429,11 +429,16 @@ export function moveOps(state: BoardState, card: Card, col: Column, now: number,
   return ops;
 }
 
-function summary(state: BoardState, card: Card) {
+function summary(state: BoardState, card: Card, fullUsage = false) {
   const col = columns(state).find((c) => c.id === card.col);
   const comments = arr<Comment>(card.comments);
   const last = comments.at(-1);
-  const usage = cardUsage(card.usage);
+  const usage = fullUsage ? cardUsage(card.usage) : compactUsage(card.usage && {
+    turns: card.usage.turns,
+    promptTokens: card.usage.promptTokens,
+    outputTokens: card.usage.outputTokens,
+    costUsd: card.usage.costUsd,
+  });
   return {
     num: card.num,
     id: card.id,
@@ -609,7 +614,7 @@ function cardEvent(state: BoardState, card: Card): Record<string, unknown> {
 
 /** A whole card for get: the summary's resolved names, with the comments themselves instead of their count. */
 function fullCard(state: BoardState, card: Card): Record<string, unknown> {
-  const { comments: _count, lastComment: _last, ...brief } = summary(state, card);
+  const { comments: _count, lastComment: _last, ...brief } = summary(state, card, true);
   return { ...card, ...brief, comments: arr<Comment>(card.comments), labelIds: arr(card.labels) };
 }
 
@@ -696,7 +701,7 @@ export const kanbanActions: ActionSet = {
     },
     list: {
       description:
-        "Compact rows for the board's cards (no descriptions or comment text), plus the columns and the agent workers (stopRequested: true on one the user asked to stop). Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Rows follow board column order. With no column, done-role cards are omitted unless done: true (only that role) or q (search still finds them). Archived cards only with archived: true.",
+        "Compact rows for the board's cards (no descriptions or comment text), plus the columns and the agent workers (stopRequested: true on one the user asked to stop). Usage is summarized as { turns, promptTokens, outputTokens, costUsd }; get returns the full breakdown. Filter by column (role for every column with that role, or id or title), label, assignee, or q (words in title, description, comments, or checklist). Rows follow board column order. With no column, done-role cards are omitted unless done: true (only that role) or q (search still finds them). Archived cards only with archived: true.",
       args: "{ column?, label?, assignee?, q?, archived?, done?, limit? }",
       run(state, args) {
         let list = cards(state).filter((c) => (args.archived ? c.archived : !c.archived));

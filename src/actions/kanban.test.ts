@@ -83,16 +83,31 @@ test("create records the original worker and chat independently of later claims"
   assert.equal(user.createdThread, undefined);
 });
 
-test("list, get and logs preserve helper totals and the main chat breakdown", () => {
+test("list summarizes usage while get and logs preserve the full breakdown", () => {
   const state = board() as Record<string, unknown>;
   const usage = { turns: 3, inputTokens: 100, promptTokens: 100, outputTokens: 12,
     costUsd: 0.2, costPartial: true, main: { turns: 1, inputTokens: 10, promptTokens: 10 },
-    helpers: { threads: 2, turns: 2, inputTokens: 90, outputTokens: 12, costUsd: 0.2, costPartial: true } };
+    helpers: { threads: 2, turns: 2, inputTokens: 90, outputTokens: 12, costUsd: 0.2, costPartial: true },
+    at: 1234, thread: "th_usage" };
   card(state, 1).usage = usage;
   state.settings = { workerLog: [{ at: 1, kind: "done", text: "Done", usage }] };
-  assert.deepEqual((run(state, "list", {}).result.cards as Array<{ usage: unknown }>)[0].usage, usage);
+  const rows = run(state, "list", {}).result.cards as Array<{ usage?: unknown }>;
+  assert.deepEqual(rows[0].usage, { turns: 3, promptTokens: 100, outputTokens: 12, costUsd: 0.2 });
+  assert.equal(Object.hasOwn(rows[1], "usage"), false);
   assert.deepEqual(run(state, "get", { card: 1 }).result.usage, usage);
-  assert.deepEqual((run(state, "logs", {}).result.logs as Array<{ usage: unknown }>)[0].usage, usage);
+  assert.deepEqual((run(state, "get", { cards: [1] }).result.cards as Array<{ usage: unknown }>)[0].usage, usage);
+  const { at: _at, thread: _thread, ...logUsage } = usage;
+  assert.deepEqual((run(state, "logs", {}).result.logs as Array<{ usage: unknown }>)[0].usage, logUsage);
+  assert.deepEqual(card(state, 1).usage, usage);
+});
+
+test("list keeps zero usage totals and omits unavailable summary fields", () => {
+  const state = board() as Record<string, unknown>;
+  card(state, 1).usage = { turns: 2, inputTokens: 20, promptTokens: 0, costUsd: 0, main: { turns: 2 } };
+  card(state, 2).usage = { inputTokens: 20, helpers: { turns: 1 } };
+  const rows = run(state, "list", {}).result.cards as Array<{ usage?: unknown }>;
+  assert.deepEqual(rows[0].usage, { turns: 2, promptTokens: 0, costUsd: 0 });
+  assert.equal(Object.hasOwn(rows[1], "usage"), false);
 });
 
 test("claim moves a card to working, records the holder, and refuses a second agent", () => {
@@ -480,7 +495,7 @@ test("list filters by assignee regardless of case", () => {
   assert.deepEqual((run(state, "list", { assignee: "opus" }).result.cards as Array<{ num: number }>).map((c) => c.num), [2]);
 });
 
-test("list and get include a card's last-chat usage", () => {
+test("list summarizes legacy usage without inventing prompt totals; get retains it", () => {
   const state = {
     ...board(),
     cards: [
@@ -496,8 +511,8 @@ test("list and get include a card's last-chat usage", () => {
       },
     ],
   };
-  const row = (run(state, "list", {}).result.cards as Array<{ usage?: { inputTokens: number; at?: number } }>)[0];
-  assert.deepEqual(row.usage, { turns: 2, inputTokens: 3300000, outputTokens: 800, at: 9, thread: "th_1" });
+  const row = (run(state, "list", {}).result.cards as Array<{ usage?: unknown }>)[0];
+  assert.deepEqual(row.usage, { turns: 2, outputTokens: 800 });
   const got = run(state, "get", { card: 1 }).result as { usage?: { inputTokens: number } };
   assert.equal(got.usage?.inputTokens, 3300000);
 });
