@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { PAGE_PERMISSIONS } from "../pagePermissions.js";
-import { parseManifest, pluginId, declarePlugins, declaredPlugins, type PluginManifest } from "./manifest.js";
+import { parseManifest, pluginId, declarePlugins, declaredPlugins, validateComponentProps, type PluginManifest } from "./manifest.js";
 import { PluginDatabase, type PluginRecord } from "./database.js";
 import { packageHash, packagePath, readPackage, writePackage, zip, type PackageFiles } from "./package.js";
 import { PluginRuntime } from "./runtime.js";
@@ -19,6 +19,11 @@ const execute=promisify(execFile);
 export type PluginCaller = { kind: "page" | "agent" | "system"; page?: string; thread?: string };
 export type ExportParts = { source?: boolean; settings?: boolean; state?: boolean; data?: boolean };
 export class PluginService {
+  private componentCache = new Map<string, { definition: PluginManifest["components"][string]; html: string; name: string; hash: string }>();
+  private listeners = new Set<(id: string, name: string, data: unknown, registry?: boolean) => void>();
+  subscribe(listener: (id: string, name: string, data: unknown, registry?: boolean) => void): () => void {
+    this.listeners.add(listener); return () => { this.listeners.delete(listener); };
+  }
   readonly database: PluginDatabase;
   private secrets: PluginSecrets;
   private runtimes = new Map<string, PluginRuntime>();
@@ -28,6 +33,8 @@ export class PluginService {
   private closing?: Promise<void>;
   private pastLogs=new Map<string,string[]>();
   constructor(readonly root = path.join(dataDir(), "plugins"), private event: (id: string, name: string, data: unknown, registry?:boolean) => void = () => {}, private asset?: (page: string, name: string, mimeType: string, bytes: Buffer) => unknown) {
+    const emit = this.event;
+    this.event = (id, name, data, registry) => { emit(id, name, data, registry); for (const fn of this.listeners) fn(id, name, data, registry); };
     fs.mkdirSync(root, { recursive: true });
     this.database = new PluginDatabase(path.join(root, "plugins.sqlite")); this.secrets = new PluginSecrets(path.join(root, "secrets"));
     for (const record of this.database.list()) this.permission(record.manifest);
@@ -49,13 +56,30 @@ export class PluginService {
     return { ...this.list().find(p => p.id === id), manifest: p.manifest, settings: p.settings, secrets: Object.fromEntries(Object.entries(p.manifest.settings).filter(([,v]) => v.type === "secret").map(([k]) => [k, this.secrets.has(id,k)])), readme: this.text(id,p.manifest.readme), methods: p.manifest.methods, logs: this.logs(id) };
   }
   private text(id: string, file?: string): string { return file ? fs.readFileSync(packagePath(this.snapshot(this.get(id)),file),"utf8") : ""; }
-  guide(id: string) { const p = this.get(id); return { id, summary: p.manifest.summary, guide: this.text(id,p.manifest.guide), methods: p.manifest.methods }; }
+  guide(id: string) { const p = this.get(id); return { id, summary: p.manifest.summary, guide: this.text(id,p.manifest.guide), methods: p.manifest.methods, components: p.manifest.components ?? {} }; }
+  component(id: string, name: string, props: unknown) {
+    if (!this.enabled(id)) throw new Error("Plugin is disabled or removed.");
+    const record = this.get(id), definition = record.manifest.components?.[name];
+    if (!definition) throw new Error("Plugin component is unavailable.");
+    const key = `${record.hash}:${name}:${JSON.stringify(props)}`;
+    const cached = this.componentCache.get(key);
+    if (cached) return cached;
+    validateComponentProps(definition.props, props);
+    const result = { definition, html: this.text(id, definition.html), name: record.manifest.name, hash: record.hash };
+    this.componentCache.set(key, result);
+    if (this.componentCache.size > 64) this.componentCache.delete(this.componentCache.keys().next().value!);
+    return result;
+  }
   private snapshot(p: PluginRecord): string { return path.join(this.directory(p.manifest.id), "versions", p.hash); }
   validate(files: PackageFiles): PluginManifest {
     for(const name of Object.keys(files))if(name.split("/").some(part=>[".git","node_modules",".scribe-merge"].includes(part)))throw new Error("Reserved package directory");
     if (!files["plugin.json"]) throw new Error("Package needs plugin.json");
     const manifest = parseManifest(JSON.parse(files["plugin.json"].toString("utf8")));
-    for (const file of [manifest.backend, manifest.source, manifest.guide, manifest.readme, ...manifest.templates.flatMap(t => [t.metadata,t.html,t.guide])]) if (file && !files[file]) throw new Error(`Missing package file: ${file}`);
+    for (const file of [manifest.backend, manifest.source, manifest.guide, manifest.readme, ...Object.values(manifest.components).map(c => c.html), ...manifest.templates.flatMap(t => [t.metadata,t.html,t.guide])]) if (file && !files[file]) throw new Error(`Missing package file: ${file}`);
+    for (const component of Object.values(manifest.components)) {
+      if (files[component.html].length > 256 * 1024) throw new Error("Component HTML exceeds 256 KiB");
+      for (const method of component.methods) if (!Object.hasOwn(manifest.methods, method) || !manifest.methods[method].agent) throw new Error(`Unknown or non-agent component method: ${method}`);
+    }
     for(const template of manifest.templates)normalizeTemplateInput({...JSON.parse(files[template.metadata].toString("utf8")),html:files[template.html].toString("utf8")});
     if (!manifest.backend && (manifest.source || Object.keys(manifest.methods).length || manifest.templates.some(t => t.actions || t.hooks?.length))) throw new Error("Methods and hooks require a backend");
     for(const [key,field]of Object.entries(manifest.settings))if(field.type!=="secret"&&field.default!==undefined)this.settingValue(field.type,field.default,key);
@@ -82,7 +106,7 @@ export class PluginService {
     if(detailed&&previous){const old=readPackage(this.snapshot(previous));for(const name of [...new Set([...Object.keys(old),...Object.keys(this.codeFiles(files))])].sort()){if(diff.length>250_000){diff+="\n…Diff preview limited. Inspect the archive for all remaining files.\n";break;}if(old[name]?.equals(files[name]))continue;diff+=unifiedDiff(old[name]?.toString("utf8")??null,files[name]?.toString("utf8")??null,name).patch+"\n";}}
     let sourceBytes=0;const source=detailed?Object.fromEntries(Object.entries(this.codeFiles(files)).filter(([,data])=>{sourceBytes+=data.length;return sourceBytes<250_000;}).map(([name,data])=>[name,data.toString("utf8")])):undefined;
     let versionStatus="new";if(previous){versionStatus="same";const current=manifest.version.split(".").map(Number),old=previous.manifest.version.split(".").map(Number);for(let i=0;i<3;i++)if(current[i]!==old[i]){versionStatus=current[i]>old[i]?"newer":"older";break;}}
-    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:JSON.stringify(previous.manifest.access)!==JSON.stringify(manifest.access) } : null };
+    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { components:changed(previous.manifest.components??{},manifest.components),methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:JSON.stringify(previous.manifest.access)!==JSON.stringify(manifest.access) } : null };
   }
   /** Caller must collect consent for precisely this hash before invoking install. */
   async install(files: PackageFiles, expectedHash: string, replace = false,approvePaths=false): Promise<PluginRecord> {

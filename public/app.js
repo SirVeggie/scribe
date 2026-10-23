@@ -4740,6 +4740,7 @@
     } catch(error) {reply({ok:false,error:String(error.message||error)});}
   }
   async function forwardPluginEvent(message) {
+    if (message.registry) window.ScribeComponents?.pluginChanged(message);
     for (const [id,subscriptions] of pluginSubscriptions) {
       const frame=frames.get(id);
       if (!frame) {pluginSubscriptions.delete(id);continue;}

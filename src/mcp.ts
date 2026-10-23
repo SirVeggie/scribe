@@ -1604,8 +1604,9 @@ function registerSettings(server: McpServer): void {
  * a card (a form dialog when there are many) and the turn waits for the answers.
  */
 function registerComponent(server: McpServer): void {
-  server.tool("component_show", "Show agent-written kit HTML inline in chat (at most 256 KiB). No network or page API access. Use kit classes, data-reply buttons or forms, or scribe.reply(data,{summary}). scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text; open(link) opens Scribe page/card keys or external http(s) websites. With wait:true, waits for reply data or Skip; otherwise replies send only their summary as a chat message. Include fallback markdown for history. Plugin/component/props inputs are reserved for a later release.", {
-    html: z.string().describe("HTML fragment or document; kit.css and kit.js are included."),
+  server.tool("component_show", "Show UI inline in chat: provide either html (kit HTML, at most 256 KiB), or plugin/component/props from plugin_guide. Plugin props are schema-checked; saved items use the currently installed plugin version and fall back to markdown if unavailable. Only this tool creates chat components. No network or page API access. Plugin components can call only their own declared methods and read declared state/events, under the thread and page permissions. scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text. With wait:true, waits for scribe.reply(data,{summary}) or Skip; otherwise replies send their summary as a chat message. Include fallback markdown.", {
+    html: z.string().optional().describe("HTML fragment or document; kit.css and kit.js are included. Mutually exclusive with plugin/component/props."),
+    plugin: z.string().optional(), component: z.string().optional(), props: z.record(z.string(), z.unknown()).optional(),
     title: z.string().optional(), fallback: z.string().optional(), wait: z.boolean().optional(),
   }, { readOnlyHint: true }, async (input, extra) => {
     const started = Date.now();

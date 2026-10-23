@@ -581,7 +581,7 @@ export async function startHttp(): Promise<http.Server> {
     const guide=templateGuide;
     const thread = threadOf(req);
     const pluginGuides=declaredPlugins(tab.html).filter(id=>pluginService.enabled(id)).map(id=>{
-      const p=pluginService.guide(id),guide={id:`plugin:${p.id}`,title:`Plugin ${p.id}`,text:`${p.summary}\n${p.guide}\n${JSON.stringify(p.methods)}`};
+      const p=pluginService.guide(id),guide={id:`plugin:${p.id}`,title:`Plugin ${p.id}`,text:`${p.summary}\n${p.guide}\n${JSON.stringify({methods:p.methods,components:p.components})}`};
       const sent=thread&&req.query.deliver==="1"?req.query.force!=="1"&&guideSent(thread,guide):undefined;
       if(thread&&req.query.deliver==="1")markGuideSent(thread,guide);return {guide,...(sent===undefined?{}:{sent})};
     });

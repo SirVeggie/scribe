@@ -62,6 +62,32 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 let diagnosticViews = 0;
 
+/** Component fallback diagnostics never execute plugin methods or send replies. */
+export async function probeComponent(item: import("./agent/componentTool.js").ComponentItem, signal: AbortSignal): Promise<unknown> {
+  if (signal.aborted || diagnosticViews >= 2) return;
+  diagnosticViews++;
+  try {
+    return await withBrowser(async opened => {
+      const context = await opened.newContext({ serviceWorkers: "block" });
+      const close = () => { void context.close().catch(() => {}); };
+      signal.addEventListener("abort", close, { once: true });
+      try {
+        if (signal.aborted) return;
+        const { componentDocument, COMPONENT_CSP } = await import("./components.js");
+        const { readFileSync } = await import("node:fs");
+        const read = (name: string) => readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8");
+        const html = componentDocument(item, { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") }, { token: "capture", capture: true });
+        await context.addInitScript(() => { (window as any).__SCRIBE_CAPTURE__ = true; });
+        const page = await context.newPage();
+        await page.route("**/*", route => route.fulfill({ contentType: "text/html", headers: { "Content-Security-Policy": COMPONENT_CSP }, body: html }));
+        await page.goto("http://component-capture.localhost/", { waitUntil: "domcontentloaded", timeout: 1500 });
+        await page.waitForFunction(() => !!(window as any).__componentReport, undefined, { timeout: 1600 });
+        return await page.evaluate(() => (window as any).__componentReport);
+      } finally { signal.removeEventListener("abort", close); await context.close().catch(() => {}); }
+    });
+  } finally { diagnosticViews--; }
+}
+
 /** A short-lived capture-mode view, sharing the screenshot browser without taking user focus. */
 export async function probeTab(id: string, signal: AbortSignal): Promise<void> {
   if (signal.aborted || diagnosticViews >= 2) return;

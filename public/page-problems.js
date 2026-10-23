@@ -6,6 +6,7 @@
   var problems = [], links = [], done = false, restore = [];
   var endpoint = "/api/tabs/" + encodeURIComponent(boot.id) + "/problems";
   function send(phase) {
+    if (typeof boot.report === "function") { boot.report({ token: boot.token, phase: phase, problems: problems, links: links }); return; }
     fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: boot.token, phase: phase, problems: problems, links: links }) }).catch(function () {});
   }

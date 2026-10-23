@@ -19,6 +19,10 @@ import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headComm
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, implementText, pageKeysIn, planTurnNote, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { plugins, pluginActions } from "../plugins/current.js";
+import { componentStateAllowed } from "../plugins/manifest.js";
+import { checkPermission } from "../pagePermissions.js";
+import { PageProblems } from "../pageProblems.js";
+import { probeComponent } from "../screenshot.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
@@ -1972,8 +1976,8 @@ export class AgentHost {
     const info = this.scopePages(thread);
     if(plugins && !noPages(thread.scope)) {
       const key=`pluginCatalog:${thread.id}`;
-      let catalog=this.db.getSetting<Array<{id:string;summary:string}>|null>(key,null);
-      if(catalog===null){catalog=plugins.list().filter(p=>p.enabled).map(({id,summary})=>({id,summary}));this.db.setSetting(key,catalog);}
+      let catalog=this.db.getSetting<ScopeInfo["plugins"]|null>(key,null);
+      if(catalog===null){catalog=plugins.list().filter(p=>p.enabled).map(({id,summary})=>({id,summary,components:Object.entries(plugins!.get(id).manifest.components??{}).map(([name,c])=>({name,description:c.description}))}));this.db.setSetting(key,catalog);}
       info.plugins=catalog;
     }
     if (this.prefs().searxngUrl) info.webSearch = true;
@@ -4020,19 +4024,105 @@ export class AgentHost {
     if (!item || item.kind !== "component") throw new Error("Component not found.");
     return item;
   }
+  readonly componentProblems = new PageProblems();
+  activeTurnId(threadId: string): string | undefined { return this.runs.get(threadId)?.turn.id; }
+
+  componentView(threadId: string, itemId: string) {
+    const item = this.componentItem(threadId, itemId);
+    if (!item.plugin) return { ...item, available: true };
+    try {
+      const current = this.componentPlugin(threadId, itemId);
+      return { ...item, available: true, pluginName: current.name, height: current.definition.height, hash: current.hash };
+    } catch (error) { return { ...item, available: false, reason: (error as Error).message }; }
+  }
+
+  componentPlugin(threadId: string, itemId: string) {
+    const item = this.componentItem(threadId, itemId), thread = this.requireThread(threadId);
+    if (noPages(thread.scope)) throw new Error("Plugin components need page access.");
+    if (!item.plugin || !item.component || !plugins) throw new Error("Plugin component is unavailable.");
+    const permission = thread.scope.kind === "page" && thread.scope.ref
+      ? checkPermission(store.pagePermissions(thread.scope.ref), { perm: `plugin.${item.plugin}` }) : "ask";
+    if (permission === "deny") throw new Error("This page denies the plugin.");
+    return { ...plugins.component(item.plugin, item.component, item.props), plugin: item.plugin, thread, permission };
+  }
+
+  private componentCallRates = new Map<string, { at: number; count: number; active: number }>();
+  async componentPluginAction(threadId: string, itemId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    let rate = this.componentCallRates.get(itemId);
+    if (!rate) {
+      if (this.componentCallRates.size >= 500) {
+        const idle = [...this.componentCallRates].find(([, value]) => !value.active);
+        if (!idle) throw new Error("Too many active components.");
+        this.componentCallRates.delete(idle[0]);
+      }
+      rate = { at: Date.now(), count: 0, active: 0 }; this.componentCallRates.set(itemId, rate);
+    }
+    if (Date.now() - rate.at >= 1000) { rate.at = Date.now(); rate.count = 0; }
+    if (++rate.count > 100 || rate.active >= 16) throw new Error("Component plugin requests are too frequent.");
+    rate.active++;
+    try { return await this.performComponentPluginAction(threadId, itemId, input, signal); }
+    finally { rate.active--; }
+  }
+
+  private async performComponentPluginAction(threadId: string, itemId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    const current = this.componentPlugin(threadId, itemId), { definition, plugin, thread, permission } = current;
+    const initialApproval = thread.approval;
+    const op = input.op, key = String(input.key ?? ""), method = String(input.method ?? "");
+    let needsConsent = true;
+    if (op === "call") {
+      if (!definition.methods.includes(method)) throw new Error("Component method is not declared.");
+      const def = plugins!.get(plugin).manifest.methods[method];
+      if (!def?.agent) throw new Error("Method is not agent-callable.");
+      if (thread.approval === "readonly" && def.agent !== "read") throw new Error("Method requires Board or higher access.");
+      needsConsent = def.agent === "ask";
+    } else if (op === "state") {
+      if (!key || key.length > 200 || !componentStateAllowed(definition.state, key)) throw new Error("Component state key is not declared.");
+    } else if (op === "listen") {
+      if (!definition.events.length && !definition.state.length) throw new Error("Component has no live declarations.");
+    } else if (op === "subscribe") {
+      if (!definition.events.includes(String(input.event))) throw new Error("Component event is not declared.");
+    } else throw new Error("Unknown plugin component operation.");
+    if (needsConsent && permission !== "allow" && thread.approval !== "full" && !thread.pluginGrants?.includes(plugin)) {
+      if (!(await this.requestPluginApproval(threadId, `Use ${current.name}`, op === "call" ? method : key || String(input.event), true, plugin, { signal })).allowed) throw new Error("Plugin access denied. Allow the plugin on this page or for this thread.");
+    }
+    // Approval can outlive an update, disable or permission change.
+    const latest = this.componentPlugin(threadId, itemId);
+    if (signal?.aborted) throw new Error("Component request cancelled.");
+    if (latest.hash !== current.hash || latest.thread.approval !== initialApproval || latest.permission !== permission) throw new Error("Plugin or thread changed; retry the operation.");
+    if (op === "call") return plugins!.call(plugin, method, componentJson(input.args ?? {}), { kind: "agent", thread: threadId, ...(thread.scope.kind === "page" && thread.scope.ref ? { page: thread.scope.ref } : {}) });
+    if (op === "state") return plugins!.database.get(plugin, key);
+    return { ok: true };
+  }
 
   async showComponent(threadId: string, input: ComponentInput, signal?: AbortSignal): Promise<unknown> {
     const spec = parseComponentInput(input);
     const run = this.runs.get(threadId);
     if (!run) throw new Error("component_show only works while this chat thread has a turn running.");
+    if (spec.plugin) {
+      const thread = this.requireThread(threadId);
+      if (noPages(thread.scope) || !plugins) throw new Error("Plugin components need page access.");
+      if (thread.scope.kind === "page" && thread.scope.ref && checkPermission(store.pagePermissions(thread.scope.ref), { perm: `plugin.${spec.plugin}` }) === "deny") throw new Error("This page denies the plugin.");
+      plugins.component(spec.plugin, spec.component!, spec.props);
+    }
     this.closeBlocks(run);
     const item = this.addItem(threadId, run.turn.id, { kind: "component", ...spec, wait: spec.wait === true, status: spec.wait ? "pending" : "shown" });
-    if (!spec.wait) return { shown: true, itemId: item.id, text: spec.fallback ?? spec.title ?? "Component shown in chat." };
-    return this.waitPending<ComponentAnswer>(threadId, run, "component", item.id, signal);
+    const answer = spec.wait ? this.waitPending<ComponentAnswer>(threadId, run, "component", item.id, signal) : undefined;
+    // Register the wait immediately so a fast click cannot race the bounded diagnostic pass.
+    if (answer) void answer.catch(() => {});
+    const problems = spec.plugin ? await this.componentProblems.collect(item.id, 0, async captureSignal => {
+      const current = this.componentPlugin(threadId, item.id);
+      const report = await probeComponent({ ...item, html: current.html } as ComponentItem, captureSignal);
+      const boot = this.componentProblems.boot(item.id, 0);
+      if (boot && report && typeof report === "object") this.componentProblems.report(item.id, { ...report, token: boot.token });
+    }) : [];
+    if (!answer) return { shown: true, itemId: item.id, text: spec.fallback ?? spec.title ?? "Component shown in chat.", ...(problems.length ? { problems } : {}) };
+    const result = await answer;
+    return problems.length ? { ...result, problems } : result;
   }
 
   updateComponent(threadId: string, itemId: string, change: Record<string, unknown>): { ok: true; link?: string } {
     const item = this.componentItem(threadId, itemId);
+    if (change.action === "problems") { this.componentProblems.report(itemId, change.report); return { ok: true }; }
     if (change.action === "open") return { ok: true, link: componentLink(change.link) };
     if (change.action === "local" || change.action === "summary") {
       let rate = this.componentWrites.get(itemId);
