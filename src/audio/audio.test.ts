@@ -156,6 +156,8 @@ test("OpenAI adapter uploads multipart with daemon-only auth and maps response e
       status = code; const result = await openAiEngine.transcribe(request);
       assert.equal((result as any).error, error); assert.equal((result as any).retryable, retryable); assert.ok(!JSON.stringify(result).includes("secret-key"));
     }
+    status = 404;
+    assert.match((await openAiEngine.transcribe(request) as any).message, /\/v1/, "a missing endpoint hints at the /v1 path");
     status = 400;
     assert.equal((await openAiEngine.transcribe({ ...request, audio: new Blob(["sound"], { type: "audio/wav" }) }) as any).error, "engine", "a rejected WAV is not a format problem");
   } finally { server.close(); }

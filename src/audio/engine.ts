@@ -15,6 +15,7 @@ export const openAiEngine: SttEngine = {
       // llama.cpp's server reads only WAV/MP3/FLAC and answers other formats with 400.
       if ((res.status === 400 || res.status === 415) && !["wav", "mp3", "flac"].includes(ext))
         return { ok: false, error: "format", message: `This source cannot read ${ext} audio (${res.status}).` };
+      if (res.status === 404) return { ok: false, error: "engine", message: "No transcription endpoint at this URL (404). OpenAI-compatible URLs usually end in /v1." };
       const error = res.status === 401 || res.status === 403 ? "auth" : res.status === 429 ? "rate_limit" : "engine";
       // Never relay upstream bodies: they can contain credentials or endpoint details.
       return { ok: false, error, message: `Speech-to-text request failed (${res.status}).`, retryable: res.status === 429 || res.status >= 500 };

@@ -36,6 +36,15 @@
   const source = row("Source", "source", "select", form);
   const url = row("URL", "url", "url", form); url.placeholder = "https://api.openai.com/v1";
   const key = row("API key", "key", "password", form); key.autocomplete = "new-password";
+  const clearKey = document.createElement("button"); clearKey.type = "button"; clearKey.textContent = "Clear key";
+  clearKey.addEventListener("click", async () => {
+    clearKey.disabled = true;
+    if (await change("sources/" + encodeURIComponent(editing.id), "PUT", { custom: { apiKey: "" } })) {
+      editing = view.profiles.find(p => p.id === editing.id) || editing; key.placeholder = "Optional"; clearKey.hidden = true;
+    }
+    clearKey.disabled = false;
+  });
+  key.after(clearKey);
   let customUrl = "";
   url.addEventListener("input", () => { customUrl = url.value; });
   function customFields() {
@@ -60,6 +69,7 @@
     editing = profile; name.value = profile?.name || ""; model.value = profile?.model || "whisper-1";
     language.value = profile?.language || ""; customUrl = profile?.custom?.baseUrl || ""; key.value = "";
     key.placeholder = profile?.custom?.hasKey ? "Saved (type to replace)" : "Optional";
+    clearKey.hidden = !profile?.custom?.hasKey;
     source.replaceChildren(); option(source, "__custom__", "Custom");
     view.sources.forEach(s => option(source, s.id, s.name)); source.value = profile?.source || "__custom__";
     if (!source.value && profile?.source) { option(source, profile.source, "Saved source (unavailable)"); source.value = profile.source; }
@@ -106,7 +116,6 @@
         if (await confirmRemove("Remove “" + profile.name + "”?", "Remove")) await change("sources/" + encodeURIComponent(profile.id), "DELETE");
       });
       line.append(pick, text, testSource, button("Edit", () => edit(profile)), remove);
-      if (profile.custom?.hasKey) line.append(button("Clear key", () => change("sources/" + encodeURIComponent(profile.id), "PUT", { custom: { apiKey: "" } })));
       list.append(line);
     }
   }

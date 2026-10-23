@@ -5236,7 +5236,8 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .ml-status:empty { display: none; }
 .ml-status { margin: 8px 2px; overflow-wrap: anywhere; }
 .ml-source-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 2px 12px; }
-.ml-source-form[hidden] { display: none; }
+.ml-source-form[hidden], .ml-source-form .setting-row[hidden], .ml-source-form button[hidden] { display: none; }
+.ml-source-form .setting-row > label { margin-right: auto; }
 .ml-field { display: flex; align-items: center; gap: 12px; font-size: 13px; }
 .ml-field > span { flex: 0 0 76px; color: var(--muted); }
 .ml-field input {
