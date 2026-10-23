@@ -114,6 +114,8 @@ function waitingText(asking: NonNullable<Extract<ThreadRunInfo, { exists: true }
 export type SoloRun = {
   card?: number;
   at?: number;
+  /** Picked automatically to fill another slot for this worker. */
+  queued?: boolean;
   /** A Continue's run: only a turn started since then counts. */
   after?: number;
   wait?: { until?: number; count?: number; tries?: number };
@@ -890,7 +892,7 @@ export const kanbanActions: ActionSet = {
         }
         // A worker the user asked to stop takes no further card, so its agent needs no list to check.
         const thread = str(ctx.caller.thread);
-        const stopping = thread && !(card.claim && card.claim.thread === thread) && workerList(state).find(([, w]) => w.stop === true && str(w.threadId) === thread);
+        const stopping = thread && !(card.claim && card.claim.thread === thread) && workerList(state).find(([, w]) => w.stop === true && (str(w.threadId) === thread || w.solo?.[thread]?.queued));
         if (stopping) throw new ActionError(`The user asked the worker "${str(stopping[1].name)}" to stop after its card. Take no more cards; end your turn.`);
         const working = roleColumn(state, "working");
         const from = claimFrom(state, card);

@@ -21,6 +21,7 @@ import {
   type Card,
   type Column,
   type Comment,
+  type SoloRun,
   type UsageTotals,
   type Worker,
   type WorkerLogEntry,
@@ -145,17 +146,18 @@ export function nextCard(state: BoardState, w: Worker, skip: ReadonlySet<string>
 }
 
 /**
- * Reserve slots for every worker chat, across worker names using the same provider: the other
- * running workers' chats and launch leases, and every one-card run (any worker's, this one's too).
+ * Count chats and launch leases separately, including this worker's parallel one-card runs.
+ * An additional launch also counts its own worker's active thread; its lease is the candidate slot.
  */
-function atLimit(state: BoardState, id: string, now: number, defaultProvider = ""): boolean {
+function atLimit(state: BoardState, id: string, now: number, defaultProvider = "", ownThread = false): boolean {
   const max = Math.min(99, Math.max(0, Math.floor(Number(settingsOf(state).maxWorkers) || 0)));
   const value = settingsOf(state).maxWorkersPerProvider;
   const perProvider = value == null ? 1 : Math.min(99, Math.max(0, Math.floor(Number(value) || 0)));
   const busy: string[] = [];
   for (const [other, w] of workerList(state)) {
     const provider = str(w.provider) || defaultProvider;
-    if (other !== id && w.run && (w.threadId || leased(w.step, now))) busy.push(provider);
+    if ((other !== id || ownThread) && w.run && w.threadId) busy.push(provider);
+    if (other !== id && w.run && leased(w.step, now)) busy.push(provider);
     for (const entry of Object.values(w.solo ?? {})) if (entry && typeof entry === "object") busy.push(provider);
   }
   const provider = str(workerOf(state, id)?.provider) || defaultProvider;
@@ -424,7 +426,7 @@ class Plan {
   }
 
   /** Keep a chat with the worker's one-card runs, so it is wrapped up like one. */
-  addSolo(id: string, threadId: string, entry: { card?: number; at: number }): void {
+  addSolo(id: string, threadId: string, entry: SoloRun): void {
     const solo = workerOf(this.state, id)?.solo;
     if (solo && typeof solo === "object") this.ops.push({ op: "merge", path: `${workerPath(id)}/solo`, value: { [threadId]: entry } });
     else this.patchWorker(id, { solo: { [threadId]: entry } });
@@ -439,7 +441,8 @@ class Plan {
   /** Stop the worker, with the reason when it paused. Without clearThread, the next start merges its last chat first. */
   endRun(id: string, error: string | null, clearThread: boolean, usage?: UsageTotals): void {
     const w = workerOf(this.state, id);
-    const patch: Record<string, unknown> = { run: null, step: null, stop: null, error, merge: null, wait: null, fix: null };
+    const stopping = w?.stop && Object.values(w.solo ?? {}).some((entry) => entry?.queued);
+    const patch: Record<string, unknown> = { run: null, step: null, stop: stopping || null, error, merge: null, wait: null, fix: null };
     if (clearThread) patch.threadId = null;
     else if (w?.threadId) patch.merge = w.threadId;
     this.patchWorker(id, patch);
@@ -537,27 +540,41 @@ function wrapUp(plan: Plan, state: BoardState, id: string, w: Worker, threadId: 
 }
 
 /** A one-card run ended: a problem with it is its card's, not the worker's, so the card is blocked and the worker goes on. */
-function finishSolo(plan: Plan, id: string, threadId: string, cardNum: number | undefined, info: Info, ctx: DriveContext): void {
+function finishSolo(plan: Plan, state: BoardState, id: string, threadId: string, entry: SoloRun, info: Info, ctx: DriveContext): void {
+  const cardNum = entry.card;
   const run = info.exists ? info.run : undefined;
   const out = run?.outcome;
   const usage = info.exists ? compactUsage(info.usage) : undefined;
-  const what = `One-card run${cardNum ? ` #${cardNum}` : ""}`;
+  const what = `${entry.queued ? "Run" : "One-card run"}${cardNum ? ` #${cardNum}` : ""}`;
   const extra = { card: cardNum, thread: threadId, usage };
   if (out?.kind === "limit") {
     plan.blockChatCards(id, threadId, `${str(out.error)} ${KEPT_NOTE}`, "Out of plan usage", usage);
   } else if (out && (out.kind === "failed" || out.kind === "cancelled")) {
     const how = out.kind === "failed" ? `failed${out.error ? `: ${out.error}` : ""}` : "was stopped";
     if (Number(run?.fixes) > 0) plan.mergeFailed(id, threadId, `the agent's turn to fix it ${how}.`, usage);
+    else if (entry.queued) plan.blockChatCards(id, threadId, `The agent's turn ${how} before it finished this card. ${KEPT_NOTE}`, out.kind === "failed" ? "Agent turn failed" : "Agent turn stopped", usage);
     else plan.log(id, "solo", `${what}: the agent's turn ${how}. Its chat keeps its branch.`, extra);
   } else if (out?.kind === "merge_failed") {
     plan.mergeFailed(id, threadId, str(out.message), usage);
   } else if (out?.held) {
-    plan.log(id, "solo", `${what} ended without finishing its card (${out.held}). Its chat keeps its branch.`, extra);
+    if (entry.queued) plan.blockChatCards(id, threadId, `The agent ended its turn without finishing this card. ${KEPT_NOTE}`, "Agent didn't finish", usage);
+    else plan.log(id, "solo", `${what} ended without finishing its card (${out.held}). Its chat keeps its branch.`, extra);
   } else if (out) {
-    plan.log(id, out.merged ? "merge" : "done", `${out.merged ? "Merged" : "Finished"} one-card run${cardNum ? ` #${cardNum}` : ""}`, extra);
+    if (entry.queued) {
+      if (liveCards(state).some((c) => c.claim && !c.claim.stale && c.claim.thread === threadId)) {
+        plan.blockChatCards(id, threadId, `The agent ended its turn without finishing this card. ${KEPT_NOTE}`, "Agent didn't finish", usage);
+      }
+      const given = cards(state).find((c) => c.num === cardNum);
+      if (given && isReady(colOf(state, given)) && (Number(given.movedAt) || 0) <= (Number(entry.at) || 0) && given.status?.kind !== "blocked") {
+        plan.blockCards(id, [given.id], "The agent's chat ended without taking this card. Comment here to let the worker try again.", "Agent didn't take it", threadId, false, usage);
+      }
+    }
+    plan.log(id, out.merged ? "merge" : "done", `${out.merged ? "Merged" : "Finished"}${entry.queued ? "" : " one-card run"}${cardNum ? ` #${cardNum}` : ""}`, extra);
   }
   if (out) ctx.release(threadId);
   plan.forgetSolo(id, threadId);
+  const w = workerOf(state, id);
+  if (w?.stop && !w.run && !Object.entries(w.solo ?? {}).some(([tid, run]) => tid !== threadId && run?.queued)) plan.patchWorker(id, { stop: null });
 }
 
 /** A chat Scribe isn't seeing through yet (one from before Scribe had runs, or whose run was lost): hand it over. */
@@ -575,7 +592,7 @@ function soloStep(state: BoardState, id: string, w: Worker, ctx: DriveContext): 
     if (info.exists && info.run && info.run.phase !== "ended") continue;
     if (leased(entry.step, ctx.now)) continue;
     const plan = new Plan(state, ctx.now);
-    finishSolo(plan, id, tid, entry.card, info, ctx);
+    finishSolo(plan, state, id, tid, entry, info, ctx);
     return plan.outcome();
   }
   return null;
@@ -586,11 +603,12 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
   if (!w.run || leased(w.step, ctx.now)) return null;
   const plan = new Plan(state, ctx.now);
   let skip = new Set<string>();
+  let parallel = false;
   const threadId = str(w.threadId);
   if (threadId) {
     const info = ctx.thread(threadId);
-    if (info.exists && info.running) return null;
-    if (needsWatch(info) && ctx.watch(threadId, workerRun(w, id, w.run.card, false, 0))) {
+    parallel = Boolean(info.exists && (info.running || (info.run && info.run.phase !== "ended")));
+    if (!parallel && needsWatch(info) && ctx.watch(threadId, workerRun(w, id, w.run.card, false, 0))) {
       // A click went on from a merge pause: Scribe merges it again, asking the agent to fix it if it can.
       if (w.merge === threadId) {
         plan.patchWorker(id, { merge: null });
@@ -598,16 +616,18 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
       }
       return null;
     }
-    if (info.exists && info.run && info.run.phase !== "ended") return null;
-    const wrapped = wrapUp(plan, state, id, w, threadId, info, ctx);
-    if (!wrapped.go) return plan.outcome();
-    skip = new Set(wrapped.blocked);
+    if (!parallel) {
+      const wrapped = wrapUp(plan, state, id, w, threadId, info, ctx);
+      if (!wrapped.go) return plan.outcome();
+      skip = new Set(wrapped.blocked);
+    }
   } else if (!w.stop && (!nextCard(state, w, undefined, ctx.now) || atLimit(state, id, ctx.now, ctx.defaultProvider))) {
     return null;
   }
   const since = Number(w.run.since) || ctx.now;
   if (w.stop) {
-    plan.endRun(id, null, true);
+    if (parallel) return null;
+    plan.endRun(id, str(w.error) || null, true);
     return plan.outcome();
   }
   const c = nextCard(state, w, skip, ctx.now);
@@ -617,11 +637,12 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
   if (previousInfo?.exists && (previousInfo.running || (previousInfo.run && previousInfo.run.phase !== "ended"))) {
     if (c?.continuation && previousInfo.run?.data?.continuation === c.continuation.id) {
       // Delivery was accepted before a crash or before its result reached the board.
-      return workerLaunched(state, { prompt: "", settings: workerSettings(w, c), run: workerRun(w, id, c.num, false), ref: { worker: id, card: c.num, token: w.step?.token, continuation: c.continuation.id, since } }, { threadId: previous! }, ctx.now);
+      return workerLaunched(state, { prompt: "", settings: workerSettings(w, c), run: workerRun(w, id, c.num, parallel), ref: { worker: id, card: c.num, token: w.step?.token, continuation: c.continuation.id, since, parallel } }, { threadId: previous! }, ctx.now);
     }
     return plan.empty ? null : plan.outcome();
   }
-  if (!c || atLimit(state, id, ctx.now, ctx.defaultProvider)) {
+  if (!c || atLimit(state, id, ctx.now, ctx.defaultProvider, parallel)) {
+    if (parallel) return null;
     plan.patchWorker(id, { threadId: null, step: null, merge: null, wait: null, fix: null, run: { since } });
     plan.log(id, "wait", !c ? "Waiting for cards" : "Waiting for a free slot");
     return plan.outcome();
@@ -630,19 +651,22 @@ function workerStep(state: BoardState, id: string, w: Worker, ctx: DriveContext)
   const denied = ctx.mayStart(settings);
   if (denied) {
     if (c.continuation) return plan.empty ? null : plan.outcome();
-    plan.endRun(id, denied, true);
+    if (parallel) {
+      plan.patchWorker(id, { stop: true, error: denied });
+      plan.log(id, "pause", denied);
+    } else plan.endRun(id, denied, true);
     return plan.outcome();
   }
   const token = newId("st");
-  plan.patchWorker(id, { threadId: null, step: { token, at: ctx.now }, merge: null, wait: null, fix: null });
+  plan.patchWorker(id, { step: { token, at: ctx.now }, ...(!parallel ? { threadId: null, merge: null, wait: null, fix: null } : {}) });
   return plan.outcome({
     ...(previousInfo?.exists ? { resumeThread: previous } : {}),
     prompt: previousInfo?.exists
-      ? `Continue the work on card #${c.num}. Get the card again and read it in full, including all submitted answers, before you go on. Follow the current worker instructions below.\n\n${workerPrompt(state, ctx.page, w, c)}`
-      : workerPrompt(state, ctx.page, w, c),
+      ? `Continue the work on card #${c.num}. Get the card again and read it in full, including all submitted answers, before you go on. Follow the current worker instructions below.\n\n${workerPrompt(state, ctx.page, w, c, parallel)}`
+      : workerPrompt(state, ctx.page, w, c, parallel),
     settings,
-    run: { ...workerRun(w, id, c.num, false), data: { ...workerRun(w, id, c.num, false).data, ...(c.continuation ? { continuation: c.continuation.id } : {}) } },
-    ref: { worker: id, card: c.num, token, since, startedAt: ctx.now, ...(c.continuation ? { continuation: c.continuation.id } : {}) },
+    run: { ...workerRun(w, id, c.num, parallel), data: { ...workerRun(w, id, c.num, parallel).data, ...(c.continuation ? { continuation: c.continuation.id } : {}) } },
+    ref: { worker: id, card: c.num, token, since, startedAt: ctx.now, parallel, defaultProvider: ctx.defaultProvider, ...(c.continuation ? { continuation: c.continuation.id } : {}) },
   });
 }
 
@@ -677,12 +701,11 @@ export function driveWorkers(state: BoardState, ctx: DriveContext): DriveOutcome
 export function workerLaunchAllowed(state: BoardState, launch: PageLaunch, now: number): boolean {
   const c = cards(state).find((c) => c.num === launch.ref.card);
   if (c && cardScheduled(c, now)) return false;
-  if (!launch.ref.continuation) return true;
   const w = workerOf(state, str(launch.ref.worker));
   return Boolean(w?.run && !w.stop && w.step?.token === launch.ref.token && c &&
-    c.continuation?.id === launch.ref.continuation && !c.archived &&
+    (!launch.ref.continuation || c.continuation?.id === launch.ref.continuation) && !c.archived &&
     workerCards(state, w).some((candidate) => candidate.id === c.id) &&
-    cardTakeable(state, c, now) && !atLimit(state, str(launch.ref.worker), now));
+    cardTakeable(state, c, now) && !atLimit(state, str(launch.ref.worker), now, str(launch.ref.defaultProvider), launch.ref.parallel === true));
 }
 
 /** The claim worker_claim makes: the card held by the new chat under the worker's name, in the working column. */
@@ -722,17 +745,22 @@ export function workerLaunched(state: BoardState, launch: PageLaunch, result: { 
       return plan.outcome();
     }
     // A worker stopped meanwhile keeps its state.
-    if (ours && w.run) plan.endRun(id, result.error, true);
+    if (ours && w.run) {
+      if (launch.ref.parallel) {
+        plan.patchWorker(id, { step: null, stop: true, error: result.error });
+        plan.log(id, "pause", result.error, { card: cardNum });
+      } else plan.endRun(id, result.error, true);
+    }
     return plan.empty ? null : plan.outcome();
   }
   const threadId = result.threadId;
   const c = cardNum ? cards(state).find((x) => x.num === cardNum) : undefined;
-  if (ours && w.run) {
+  if (ours && w.run && !launch.ref.parallel) {
     plan.patchWorker(id, { threadId, step: null, merge: null, wait: null, fix: null, error: null, run: { since: Number(launch.ref.since) || now, card: cardNum, startedAt: Number(launch.ref.startedAt) || now } });
   } else {
-    // Stopped while the chat started: it finishes its card as a one-card run, so it is still wrapped up.
+    // Additional slots and chats accepted while stopping each keep their own one-card lifecycle.
     if (ours) plan.patchWorker(id, { step: null });
-    plan.addSolo(id, threadId, { card: cardNum, at: now });
+    plan.addSolo(id, threadId, { card: cardNum, at: now, ...(launch.ref.parallel && w.run ? { queued: true } : {}) });
   }
   const resumed = launch.resumeThread === threadId;
   plan.log(id, resumed ? "resume" : "launch", `${resumed ? "Continued" : "Started"} #${cardNum} ${str(c?.title).slice(0, 80)}`, { card: cardNum, thread: threadId });

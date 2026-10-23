@@ -432,6 +432,114 @@ test("provider limit can be raised or disabled, independently of the total limit
   }
 });
 
+function busyWorker(settings: State = {}): State {
+  const state = board({ provider: "codex", run: { since: 5, card: 1, startedAt: 100 }, threadId: "first" });
+  Object.assign(state.settings as State, settings);
+  Object.assign(card(state, 1), { col: "work", thread: "first", claim: { holder: "Opus", thread: "first", at: 100 } });
+  return state;
+}
+
+test("raising limits while a worker is busy fills its new slot and refills it after completion", () => {
+  for (const limit of ["maxWorkersPerProvider", "maxWorkers"]) {
+    let state = busyWorker({ maxWorkersPerProvider: limit === "maxWorkers" ? 0 : 1, maxWorkers: limit === "maxWorkers" ? 1 : 0 });
+    const { c, released } = ctx({ first: ended({}, { running: true }) });
+    assert.equal(drive(state, c), null);
+    (state.settings as State)[limit] = 2;
+    const out = drive(state, c)!;
+    assert.equal(out.launch?.ref.card, 2);
+    assert.equal(out.launch?.ref.parallel, true);
+    assert.equal(out.launch?.run.data.solo, true);
+    assert.match(out.launch!.prompt, /one-off run for this card only/);
+    state = apply(state, out);
+    assert.equal(worker(state).threadId, "first", "the original chat stays owned by the worker");
+    assert.equal(drive(state, c), null, "a dispatch lease prevents duplicate starts");
+    assert.equal(kanbanActions.launchAllowed!(state, out.launch!, c.now), true);
+    state = applyStateOps(state, kanbanActions.launched!(state, out.launch!, { threadId: "second" }, c.now)!.ops);
+    assert.equal(worker(state).threadId, "first");
+    assert.deepEqual(worker(state).solo, { second: { card: 2, at: c.now, queued: true } });
+    assert.equal((card(state, 2).claim as State).thread, "second");
+    const both = ctx({ first: ended({}, { running: true }), second: ended({}, { running: true }) }).c;
+    assert.equal(drive(state, both), null);
+    // An eligible new card still waits until one of those two chats completes.
+    card(state, 3).assignee = "Opus";
+    assert.equal(drive(state, both), null);
+    Object.assign(card(state, 2), { col: "rev", claim: undefined });
+    const finished = { ...c, thread: (tid: string) => tid === "second" ? ended({ kind: "done", merged: true }, { usage: { turns: 2 } }) : c.thread(tid) };
+    state = apply(state, drive(state, finished));
+    assert.deepEqual(released, ["second"]);
+    assert.equal(worker(state).solo, undefined);
+    assert.equal(log(state).at(-1)?.text, "Merged #2 · 2 rounds");
+    assert.equal(drive(state, finished)?.launch?.ref.card, 3);
+  }
+});
+
+test("parallel dispatch rechecks lowered limits, worker stop, assignment and blockers", () => {
+  for (const gate of ["provider", "total", "stop", "assignee", "blocker", "pause"]) {
+    const state = busyWorker({ maxWorkersPerProvider: 2 });
+    const c = ctx({ first: ended({}, { running: true }) }).c;
+    const out = drive(state, c)!;
+    const leased = apply(state, out);
+    if (gate === "provider") (leased.settings as State).maxWorkersPerProvider = 1;
+    if (gate === "total") (leased.settings as State).maxWorkers = 1;
+    if (gate === "stop") worker(leased).stop = true;
+    if (gate === "assignee") card(leased, 2).assignee = "Someone";
+    if (gate === "blocker") card(leased, 2).blockedBy = ["c3"];
+    if (gate === "pause") (leased.columns as State[])[1].paused = true;
+    assert.equal(kanbanActions.launchAllowed!(leased, out.launch!, c.now), false, gate);
+    const retried = applyStateOps(leased, kanbanActions.launched!(leased, out.launch!, { error: "Worker conditions changed before dispatch" }, c.now)!.ops);
+    assert.equal(worker(retried).threadId, "first", gate);
+    assert.equal(worker(retried).step, undefined, gate);
+    assert.ok(worker(retried).run, gate);
+  }
+});
+
+test("a worker's parallel launch reserves a second slot against other workers", () => {
+  let state = busyWorker({ maxWorkersPerProvider: 2 });
+  ((state.settings as State).workers as State).w_two = { name: "Someone", mode: "ask", provider: "codex", run: { since: 5 } };
+  const c = ctx({ first: ended({}, { running: true }) }).c;
+  state = apply(state, drive(state, c));
+  assert.equal(drive(state, c), null, "the active chat plus the launch lease occupy both slots");
+});
+
+test("a failed parallel launch preserves the busy chat and the reason the worker paused", () => {
+  let state = busyWorker({ maxWorkersPerProvider: 2 });
+  const c = ctx({ first: ended({}, { running: true }) }).c;
+  const out = drive(state, c)!;
+  state = apply(state, out);
+  state = applyStateOps(state, kanbanActions.launched!(state, out.launch!, { error: "Unknown model" }, c.now)!.ops);
+  assert.equal(worker(state).threadId, "first");
+  assert.equal(worker(state).stop, true);
+  assert.equal(drive(state, c), null);
+  Object.assign(card(state, 1), { col: "rev", claim: undefined });
+  state = apply(state, drive(state, ctx({ first: ended({ kind: "done" }) }).c));
+  assert.equal(worker(state).run, undefined);
+  assert.equal(worker(state).error, "Unknown model");
+});
+
+test("lowering limits lets existing parallel chats finish and stop-after waits for all of them", () => {
+  let state = busyWorker({ maxWorkersPerProvider: 2 });
+  const c = ctx({ first: ended({}, { running: true }) }).c;
+  const out = drive(state, c)!;
+  state = apply(state, out);
+  state = applyStateOps(state, kanbanActions.launched!(state, out.launch!, { threadId: "second" }, c.now)!.ops);
+  (state.settings as State).maxWorkersPerProvider = 1;
+  card(state, 3).assignee = "Opus";
+  const both = ctx({ first: ended({}, { running: true }), second: ended({}, { running: true }) }).c;
+  assert.equal(drive(state, both), null);
+  worker(state).stop = true;
+  Object.assign(card(state, 1), { col: "rev", claim: undefined });
+  const finished = ctx({ first: ended({ kind: "done" }), second: ended({}, { running: true }) }).c;
+  state = apply(state, drive(state, finished));
+  assert.equal(worker(state).run, undefined);
+  assert.equal(worker(state).stop, true, "other queued chats still honor the user's stop request");
+  assert.throws(() => kanbanActions.actions.claim.run(state, { card: 3 }, { caller: { by: "agent", thread: "second" }, now: c.now, values: {} }), /stop/);
+  Object.assign(card(state, 2), { col: "rev", claim: undefined });
+  state = apply(state, drive(state, ctx({ second: ended({ kind: "done" }) }).c));
+  assert.equal(worker(state).solo, undefined);
+  assert.equal(worker(state).stop, undefined);
+  assert.equal(drive(state, c), null);
+});
+
 test("implicit provider shares the slot with the resolved board default", () => {
   const { c } = ctx({}, { defaultProvider: "codex" });
   for (const providers of [[undefined, "codex"], ["codex", undefined]]) {
