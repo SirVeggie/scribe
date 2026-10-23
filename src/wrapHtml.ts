@@ -30,9 +30,9 @@ const PAGE_THEME_CSS = Object.entries(PAGE_THEME)
   .map(([name, value]) => `  ${name}: ${value};`)
   .join("\n");
 
-/** Linked after DEFAULT_CSS on fragment pages. Downloads replace these exact tags with file contents. */
-export const KIT_CSS_TAG = `<link rel="stylesheet" href="/kit.css?v=1">`;
-export const KIT_JS_TAG = `<script src="/kit.js?v=1" defer></script>`;
+/** Linked after DEFAULT_CSS on fragment pages. Downloads replace these (and a full document's own kit tags) with file contents. */
+export const KIT_CSS_TAG = `<link rel="stylesheet" href="/kit.css?v=2">`;
+export const KIT_JS_TAG = `<script src="/kit.js?v=2" defer></script>`;
 
 const DEFAULT_CSS = `
 :root {
@@ -87,9 +87,12 @@ blockquote {
 ${BOARD_SCROLLBAR_CSS}
 `.trim();
 
-/** Swap the wrapper's kit <link>/<script> for inline copies so a downloaded page stands alone. */
+const KIT_CSS_LINK = /<link\b[^>]*\bhref=["']\/kit\.css(?:\?[^"']*)?["'][^>]*>/gi;
+const KIT_JS_SCRIPT = /<script\b[^>]*\bsrc=["']\/kit\.js(?:\?[^"']*)?["'][^>]*>\s*<\/script>/gi;
+
+/** Swap the kit <link>/<script> (the wrapper's or a full document's) for inline copies so a downloaded page stands alone. */
 export function inlineKit(html: string, read: (file: "kit.css" | "kit.js") => string): string {
-  return html.replaceAll(KIT_CSS_TAG, () => `<style>${read("kit.css")}</style>`).replaceAll(KIT_JS_TAG, () => `<script>${read("kit.js")}</script>`);
+  return html.replace(KIT_CSS_LINK, () => `<style>${read("kit.css")}</style>`).replace(KIT_JS_SCRIPT, () => `<script>${read("kit.js")}</script>`);
 }
 
 export function wrapHtml(title: string, raw: string): string {

@@ -58,7 +58,7 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 
 - `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`). Scribe stores it as `scribe:clims-12345-analysis`; either form finds the page later.
 - `title`: short tab label
-- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit, so you write only the content; see Theme and Page kit) or a complete HTML document with inline CSS
+- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit, so the usual parts need no CSS; see Theme and Page kit) or a complete HTML document with inline CSS
 - `base`: a starter page's key, when the user names one; your `html` fills its slot (see Page kit)
 - `htmlPath`: instead of `html`, a local HTML file. In Code mode, write a large page to a temp file (not the workspace) and pass the path so it is not pasted as a tool argument. Same title, state, assets, folder, and background rules as `html`. Mutually exclusive with `html`.
 - `assets`: omit unless the page needs images
@@ -206,7 +206,9 @@ Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall bac
 
 ### Page kit: components without CSS
 
-Fragment pages also get Scribe's page kit: ready styles for the usual parts of reports and forms, and form wiring with no script. Write only the content with these classes; do not write CSS or JS for them. Your own `<style>` still wins over the kit where you need something else.
+Fragment pages also get Scribe's page kit: ready styles for the usual parts of reports and forms, and form wiring with no script. Use these classes instead of writing CSS for the same thing; your own `<style>` still wins over the kit where you need something else.
+
+The kit is a baseline, not a look. A short report or a form needs little more. A design doc, investigation or comparison should be easy to scan: color-code categories and options (tags, toned boxes and cards, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG for anything richer), and show proposed UI as a mock-up rather than describing it. Add your own CSS or SVG wherever the kit falls short; a plain page of headings and default tables reads much worse.
 
 | Write | Gives |
 |---|---|
@@ -217,6 +219,17 @@ Fragment pages also get Scribe's page kit: ready styles for the usual parts of r
 | `<ul class="pros">` / `<ul class="cons">` | + and − lists |
 | `<dl class="kv"><dt>Files</dt><dd>12</dd>…</dl>` | key-value rows |
 | `<div class="row">` | a wrapping row of buttons or badges |
+| `<span class="tag">` (+ a tone) | a colored pill with a dot, for categories and color coding |
+| `<section class="box">` (+ a tone) | a toned section with a colored edge and heading; `info` by default |
+| `<div class="card warn">` | a card with a colored top edge |
+| `<div class="ask">` | a question to the user, set apart from the text (dashed box, `?` before its heading); holds the form fields |
+| `<div class="flow"><div>Agent</div><div class="ok">Daemon <small>port 7420</small></div></div>` | a diagram row: boxes joined by arrows, each toned |
+| `<ol class="steps">` | a numbered list with round markers |
+| `<div class="mock"><div class="mock-bar">Settings</div><div class="mock-body">…</div></div>` | a window frame for a UI mock-up; inside, `<div class="mock-row"><span>Label <small>hint</small></span> <span class="switch on"></span></div>` draws setting rows, and kit buttons and fields work as usual |
+| `class="mark-new"` | a dashed outline marking the new or changed part of a mock-up |
+| `<td class="ok">`, `<tr class="warn">` | toned table cells for comparison tables |
+
+Tones: `ok`, `warn`, `error`, `info`, and for plain color coding `purple`, `teal`, `orange`, `pink`; any other color with `style="--tone: #7fc8c0"`.
 | `<button>` / `<button class="primary">` / `<a class="button">` | app-style buttons |
 
 **Forms.** `<form data-reply>` needs no script: Scribe keeps what the user types as their draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card), check boxes as lists, empty fields left out. On a page without `replyTo` it logs a `submitted` event with `{ answers, summary }` for `page_wait` instead. Radios, check boxes, inputs and textareas are styled like the chat's own question cards.
@@ -236,7 +249,9 @@ Fragment pages also get Scribe's page kit: ready styles for the usual parts of r
 </form>
 ```
 
-Put each question next to the part of the page it is about; one form can wrap the whole page. Check boxes use `<label class="opt"><input type="checkbox" name="blocks" value="…">`.
+Put each question next to the part of the page it is about (an `ask` box sets it apart); one form can wrap the whole page. Check boxes use `<label class="opt"><input type="checkbox" name="blocks" value="…">`.
+
+**Full documents.** A page with its own look can still use the kit: put `<link rel="stylesheet" href="/kit.css">` and `<script src="/kit.js" defer></script>` in its `<head>`. It brings the theme variables (your own `:root` wins), the classes above and the `<form data-reply>` wiring; set the body's own background, color and font.
 
 **Starter pages.** When the user points you at a page to build from (their own layout or style), pass its key as `base` to `page_show`: your `html` goes into its element marked `data-slot` (else its `<main>`, else its `<body>`), so you write only the content. Its state and assets are not copied.
 
