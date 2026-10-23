@@ -162,45 +162,37 @@
 
   /* ---------- markdown ---------- */
 
-  const BOARD_LINK = /\[\[([^\]\|\n]{1,120})(?:\|([^\]\n]{1,200}))?\]\]/g;
+  // The shared renderer (/vendor/scribe-md.js) reads the text, Scribe's page links included, as pages do;
+  // the chat draws the blocks and adds its own links, code headers and table wrapping.
+  const MD_OPTIONS = { html: true, image: (url) => url };
 
-  function prepareMarkdown(text) {
-    // [[key]] and [[key|label]] become links the renderer can find after sanitizing.
-    // ?auto (not |auto) marks “fill in the page title”: a pipe in the hash is %-encoded and
-    // then looked up as part of the key (No page called “foo|auto”).
-    let out = String(text || "").replace(BOARD_LINK, (_m, target, label) => {
-      const t = target.trim();
-      return `[${(label || t).replace(/[\[\]]/g, "")}](#board:${encodeURIComponent(t)}${label ? "" : "?auto"})`;
-    });
-    // [label](scribe:key): a page key is its own link target. board: is the old form, still in older transcripts.
-    out = out.replace(/\]\((scribe:[^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
-    out = out.replace(/\]\(board:([^)\s]+)\)/g, (_m, target) => `](#board:${target})`);
-    // [label](file:///C:/a.png): a file on disk, opened as a temporary page (#655).
-    out = out.replace(/\]\((file:[^)\s]+)\)/gi, (_m, target) => `](#board:${encodeURIComponent(target)})`);
-    return out;
+  function lexMarkdown(text) {
+    try {
+      return window.ScribeMd?.lex ? window.ScribeMd.lex(text, MD_OPTIONS) : null;
+    } catch {
+      return null;
+    }
   }
 
-  const MD_OPTIONS = { gfm: true, breaks: false };
+  function plainMarkdown(target, text) {
+    const box = el("div", "", String(text || ""));
+    box.style.whiteSpace = "pre-wrap";
+    target.replaceChildren(box);
+  }
 
-  function sanitize(html, src) {
-    return window.DOMPurify
-      ? window.DOMPurify.sanitize(html, {
-          FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style", "iframe", "object", "embed", "dialog"],
-          FORBID_ATTR: ["style", "action", "formaction"],
-        })
-      : escapeHtml(src);
+  function renderBlock(block) {
+    try {
+      return block.render();
+    } catch {
+      return el("p", "", block.raw);
+    }
   }
 
   function renderMarkdown(target, text, ctx) {
     streams.delete(target);
-    const src = prepareMarkdown(text);
-    let html;
-    try {
-      html = window.marked ? window.marked.parse(src, MD_OPTIONS) : escapeHtml(src).replace(/\n/g, "<br>");
-    } catch {
-      html = escapeHtml(src);
-    }
-    target.innerHTML = sanitize(html, src);
+    const blocks = lexMarkdown(text);
+    if (!blocks) return plainMarkdown(target, text);
+    target.replaceChildren(...blocks.map(renderBlock));
     enhanceMarkdown(target, ctx);
   }
 
@@ -213,14 +205,8 @@
    * Draw the final text with renderMarkdown: a later block can change an earlier one (a reference link's definition).
    */
   function renderMarkdownStream(target, text, ctx) {
-    const marked = window.marked;
-    if (!marked?.lexer || !marked.parser || !window.DOMPurify) return renderMarkdown(target, text, ctx);
-    let tokens;
-    try {
-      tokens = marked.lexer(prepareMarkdown(text), MD_OPTIONS);
-    } catch {
-      return renderMarkdown(target, text, ctx);
-    }
+    const tokens = lexMarkdown(text);
+    if (!tokens) return renderMarkdown(target, text, ctx);
     let blocks = streams.get(target);
     if (!blocks) {
       target.replaceChildren();
@@ -233,14 +219,8 @@
     for (let i = keep; i < tokens.length; i += 1) {
       const token = tokens[i];
       const open = i === tokens.length - 1;
-      let html;
-      try {
-        html = marked.parser(Object.assign([token], { links: tokens.links }), MD_OPTIONS);
-      } catch {
-        html = escapeHtml(token.raw);
-      }
       const box = document.createElement("div");
-      box.innerHTML = sanitize(html, token.raw);
+      box.append(renderBlock(token));
       enhanceMarkdown(box, ctx, { highlight: !open });
       const nodes = [...box.childNodes];
       target.append(...nodes);
@@ -257,18 +237,23 @@
     const autoLinks = [];
     for (const a of root.querySelectorAll("a[href]")) {
       const href = a.getAttribute("href") || "";
-      if (href.startsWith("#board:")) {
-        let rest = href.slice(7);
-        const auto = /(?:\?|&|\||%7C)auto$/i.test(rest);
-        rest = rest.replace(/(?:\?|&|\||%7C)auto$/i, "");
-        let target = decodeURIComponent(rest);
-        if (target.endsWith("|auto")) target = target.slice(0, -5);
+      const target = a.dataset.scribeOpen;
+      if (target) {
+        // A page or file link: [[key]], [label](scribe:key), [[peek:key]], a key written on its own.
+        const mode = a.dataset.scribeMode;
         a.removeAttribute("href");
+        a.removeAttribute("data-scribe-open");
+        a.removeAttribute("data-scribe-mode");
         a.className = "ag-board-link";
         a.dataset.boardTarget = target;
+        if (mode) a.dataset.boardMode = mode;
         a.tabIndex = 0;
-        if (auto) autoLinks.push(a);
+        if (!a.textContent.trim()) {
+          a.textContent = target;
+          autoLinks.push(a);
+        }
       } else if (/^https?:/i.test(href)) {
+        a.removeAttribute("target");
         a.classList.add("ag-web-link");
         a.dataset.webHref = href;
       } else if (!href.startsWith("#") && !/^mailto:/i.test(href)) {

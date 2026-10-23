@@ -6880,7 +6880,7 @@
     const board = event.target.closest?.(".ag-board-link");
     if (board) {
       event.preventDefault();
-      app()?.openLink(board.dataset.boardTarget, event);
+      app()?.openLink(board.dataset.boardTarget, event, { mode: board.dataset.boardMode || null });
       return;
     }
     const web = event.target.closest?.("a.ag-web-link");

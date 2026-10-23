@@ -106,6 +106,39 @@ test("the shared markdown renderer handles Scribe's syntax and controls", async 
     // Blocks carry their offsets in the text.
     const blocks = await page.evaluate((s) => (window as any).ScribeMd.blocks(s, {}).map((b: any) => s.slice(b.start, b.end)), "# A\n\npara\nmore\n\n- x\n");
     assert.deepEqual(blocks, ["# A", "para\nmore", "- x"]);
+
+    // The chat (public/agent-render.js) reads the same syntax and draws its own links.
+    // A script tag, not page.evaluate: tsx would name the helpers with a __name the page doesn't have.
+    await page.addScriptTag({ content: read("../public/agent-render.js") });
+    await page.addScriptTag({
+      content: `window.chat = function (s, streaming) {
+        var R = window.AgentRender, box = document.createElement("div");
+        var ctx = { resolvePages: function (keys) { var out = {}; keys.forEach(function (k) { if (k === "scribe:notes") out[k] = { title: "Notes" }; }); return out; } };
+        if (streaming) [5, 20, s.length].forEach(function (end) { R.renderMarkdownStream(box, s.slice(0, end), ctx); });
+        else R.renderMarkdown(box, s, ctx);
+        return box.innerHTML;
+      };`,
+    });
+    const chat = (src: string, stream = false) => page.evaluate(([s, streaming]) => (window as any).chat(s, streaming), [src, stream] as const);
+    const links = "[[scribe:notes]], [[peek:scribe:a|A]], [B](split:scribe:b), [F](file:///C:/a.png), [O](board:scribe:old), scribe:gone and ~/.x~ [w](https://e.test)";
+    for (const stream of [false, true]) {
+      html = await chat(links, stream);
+      assert.match(html, /<a class="ag-board-link" data-board-target="scribe:notes" tabindex="0">Notes<\/a>/);
+      assert.match(html, /data-board-target="scribe:a" data-board-mode="peek" tabindex="0">A<\/a>/);
+      assert.match(html, /data-board-target="scribe:b" data-board-mode="split" tabindex="0">B<\/a>/);
+      assert.match(html, /data-board-target="file:\/\/\/C:\/a.png" tabindex="0">F<\/a>/);
+      assert.match(html, /data-board-target="scribe:old" tabindex="0">O<\/a>/);
+      assert.match(html, /class="ag-board-link missing" data-board-target="scribe:gone" tabindex="0">scribe:gone<\/a>/);
+      assert.match(html, /~\/\.x~/);
+      assert.match(html, /<a href="https:\/\/e.test" rel="noopener" class="ag-web-link" data-web-href="https:\/\/e.test">w<\/a>/);
+      assert.doesNotMatch(html, /data-scribe-open|page-link/);
+    }
+    html = await chat("one\ntwo\n\n- [x] done\n\n```ts\nlet a = 1;\n```\n\n<b>b</b><script>alert(1)</script>");
+    assert.match(html, /<p>one\ntwo<\/p>/, "standard markdown: one newline is not a break");
+    assert.match(html, /<li class="task"><input[^>]*disabled[^>]*class="task-box"|<li class="task"><input[^>]*class="task-box"[^>]*disabled/);
+    assert.match(html, /class="ag-code"/);
+    assert.match(html, /<b>b<\/b>/);
+    assert.doesNotMatch(html, /<script/);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

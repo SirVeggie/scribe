@@ -1,7 +1,7 @@
 /*
  * Scribe's shared markdown renderer (#770), served as /vendor/scribe-md.js for the markdown note, the kanban
- * board and the file page. Pages load it by URL after /vendor/marked.js and /vendor/purify.js, so a fix here
- * reaches pages that keep their saved HTML.
+ * board, the file page and the agent chat. Pages load it by URL after /vendor/marked.js and /vendor/purify.js,
+ * so a fix here reaches pages that keep their saved HTML.
  *
  * On top of marked (GFM) and DOMPurify it adds Scribe's syntax and controls:
  * - page links: [[scribe:key]] (the page's title), [[target|label]], [[peek:target]] / [[split:target]],
@@ -13,7 +13,8 @@
  * - selectingText, so a click that ends a text selection does not start editing.
  *
  * ScribeMd.render(src, opts) returns HTML; ScribeMd.blocks(src, opts) returns one element per top-level block
- * with its { start, end } offsets in src. opts:
+ * with its { start, end } offsets in src. ScribeMd.lex(src, opts) is for a caller that draws the blocks itself
+ * (the chat, while text streams in). opts:
  *   tasks     checkboxes can be ticked (default false: disabled)
  *   breaks    a single newline is a line break (default true, like Scribe's notes and cards)
  *   html      raw HTML in the text is rendered, sanitized (default false: shown as text)
@@ -113,6 +114,8 @@
           var label = this.parser.parseInline(token.tokens);
           var mode = /^(tab|peek|split):(.+)$/.exec(href);
           if (mode) return pageLinkHtml(mode[2], label, LINK_MODES[mode[1]]);
+          // board:key is the old form of scribe:key, still in older chat transcripts.
+          if (/^board:/i.test(href)) return pageLinkHtml(href.slice(6), label, "");
           if (/^(?:scribe|file):/i.test(href)) return pageLinkHtml(href, label, "");
           if (/^(?:https?:|mailto:)/i.test(href)) {
             return '<a href="' + escapeHtml(href) + '"' + (token.title ? ' title="' + escapeHtml(token.title) + '"' : "") +
@@ -221,8 +224,8 @@
   }
 
   // ---------- rendering ----------
-  /** Checkboxes, code blocks and tables in one sanitized block; taskLines are the source lines of its "- [ ]" items. */
-  function enhance(box, taskLines, opts) {
+  /** A block's checkboxes; taskLines are the source lines of its "- [ ]" items. */
+  function taskBoxes(box, taskLines, opts) {
     var boxes = [];
     box.querySelectorAll("input").forEach(function (input) {
       if (input.type !== "checkbox") return input.remove();
@@ -238,6 +241,11 @@
       var li = input.closest("li");
       if (li) li.classList.add("task");
     });
+  }
+
+  /** Checkboxes, code blocks and tables in one sanitized block. */
+  function enhance(box, taskLines, opts) {
+    taskBoxes(box, taskLines, opts);
     box.querySelectorAll("pre").forEach(function (pre) {
       var code = pre.querySelector("code");
       if (code && opts.highlight !== false) highlight(code);
@@ -342,6 +350,42 @@
     }
   }
 
+  /**
+   * The top-level blocks of src as [{ raw, render }], for a caller that draws them itself: render() gives the
+   * block as a sanitized fragment with read-only checkboxes, but no code block or table controls. Space between
+   * blocks is a block too (it renders empty). Reference link definitions apply across blocks. Standard markdown
+   * unless opts.breaks; null when marked or DOMPurify did not load.
+   */
+  function lex(src, opts) {
+    opts = opts || {};
+    var m = md();
+    if (!m || !window.DOMPurify) return null;
+    var options = Object.assign({}, m.defaults, { breaks: !!opts.breaks });
+    var mine = { image: opts.image, card: opts.card, html: !!opts.html };
+    function within(fn) {
+      ctx = mine;
+      try { return fn(); } finally { ctx = {}; }
+    }
+    var tokens = within(function () { return m.lexer(String(src == null ? "" : src).replace(/\r\n?/g, "\n"), options); });
+    return tokens.map(function (tok) {
+      return {
+        raw: tok.raw,
+        render: function () {
+          var one = [tok];
+          one.links = tokens.links;
+          var html;
+          try { html = within(function () { return m.parser(one, options); }); } catch (err) { html = "<p>" + escapeHtml(tok.raw) + "</p>"; }
+          var box = document.createElement("div");
+          box.append(window.DOMPurify.sanitize(html, PURIFY));
+          taskBoxes(box, [], {});
+          var frag = document.createDocumentFragment();
+          frag.append.apply(frag, Array.prototype.slice.call(box.childNodes));
+          return frag;
+        },
+      };
+    });
+  }
+
   /** The text as sanitized HTML. */
   function render(src, opts) {
     return blocks(src, opts).map(function (b) { return b.el.innerHTML; }).join("");
@@ -350,6 +394,7 @@
   window.ScribeMd = {
     render: render,
     blocks: blocks,
+    lex: lex,
     toggleTask: toggleTask,
     copyCode: copyCode,
     selectingText: selectingText,

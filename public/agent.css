@@ -849,6 +849,14 @@ html.tight-small .agent-pane {
 .ag-md li + li {
   margin-top: 0.15em;
 }
+.ag-md li.task {
+  list-style: none;
+}
+.ag-md .task-box {
+  margin: 0 0.45em 0 -1.35em;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+}
 
 .ag-md h1,
 .ag-md h2,
