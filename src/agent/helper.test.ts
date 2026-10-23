@@ -17,6 +17,8 @@ let host: InstanceType<typeof AgentHost>;
 const asked: Array<{ thread: Thread; input: TurnInput }> = [];
 let hanging = false;
 const helperWaits = new Map<string, () => void>();
+/** Messages steered into a running stub turn. */
+const steered: string[] = [];
 
 type Internals = { providers: Record<string, unknown>; runs: Map<string, unknown>; turns: Map<string, unknown[]>; pending: Map<string, { itemId: string; threadId: string }> };
 
@@ -42,6 +44,10 @@ before(() => {
       commands: async () => [],
       dispose: () => {},
       cancel: async () => helperWaits.get(thread.id)?.(),
+      steer: (input: { text: string }) => {
+        steered.push(input.text);
+        return `st_${steered.length}`;
+      },
       run: async (input: TurnInput, sink: RunSink): Promise<TurnResult> => {
         asked.push({ thread, input });
         sink.usage({ inputTokens: 20, cacheReadTokens: 10, outputTokens: 5 });
@@ -285,7 +291,7 @@ test("the caller's agent_run call names its helper thread", async () => {
   internals.runs.delete(id);
 });
 
-test("thread with no task waits for a working helper and returns its report", async () => {
+test("a working helper is steered by a follow-up, and thread with no task waits for its report", async () => {
   host.setPrefs({ helpers: true });
   const id = parent();
   const { thread } = await host.runHelper(id, { task: "one", title: "Inspect files", provider: "pi" });
@@ -295,7 +301,11 @@ test("thread with no task waits for a working helper and returns its report", as
   try {
     const first = host.runHelper(id, { task: "long", thread: String(thread) });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    await assert.rejects(host.runHelper(id, { task: "more", thread: String(thread) }), /no task to wait for its report/);
+    // A follow-up while it works steers its turn; one more while that is pending waits behind the turn.
+    const steer = await host.runHelper(id, { task: "more", thread: String(thread), background: true });
+    assert.equal(steer.status, "steered");
+    assert.ok(steered.at(-1)?.includes("more"));
+    assert.equal((await host.runHelper(id, { task: "later", thread: String(thread), background: true })).status, "queued");
     const waiting = host.runHelper(id, { thread: String(thread), task: "" });
     await new Promise((resolve) => setTimeout(resolve, 30));
     await host.cancel(String(thread));

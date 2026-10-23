@@ -1897,7 +1897,7 @@ function registerHelperTools(server: McpServer): void {
       model: z.string().optional().describe("Model from agent_models. Default: the provider's last used."),
       effort: z.string().optional().describe("One of the model's efforts in agent_models. Default: its last used."),
       access: z.enum(["readonly", "board", "edits", "auto", "full"]).optional().describe("New helper only: its approval rung, default the parent's. At most the parent's rung (readonly < board < edits < auto < full)."),
-      thread: z.string().optional().describe("A helper's thread from an earlier agent_run: send it a follow-up (it keeps context and access; provider, model, effort, access ignored), or with no task wait for its report."),
+      thread: z.string().optional().describe("A helper's thread from an earlier agent_run: send it a follow-up (it keeps context and access; provider, model, effort, access ignored; one still working takes it into its current turn), or with no task wait for its report."),
       background: z.boolean().optional().describe("Default true. false waits for the report during launch."),
       stop: z.boolean().optional().describe("With thread and no task: stop that helper."),
     },

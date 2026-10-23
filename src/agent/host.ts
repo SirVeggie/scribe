@@ -3332,7 +3332,7 @@ export class AgentHost {
    * agent_run from a thread's MCP: hand a task to a helper thread on another provider or model, wait
    * for its turn to end and return its final reply. The helper works in the caller's folder (an open
    * worktree is shared) with the same or a lower mode, and its approval and web setting. thread sends a follow-up to a helper
-   * this thread started earlier; with no task it only waits for that helper's turn (one a restart cut
+   * this thread started earlier (steered into its turn while it still works, #786); with no task it only waits for that helper's turn (one a restart cut
    * off and sent on) and returns its report.
    */
   async runHelper(
@@ -3349,8 +3349,6 @@ export class AgentHost {
       const existing = this.threads.get(opts.thread);
       if (!existing || existing.helperOf !== threadId) throw new Error(`No helper ${opts.thread} of this thread. Leave thread out to start a new one.`);
       if (opts.stop) await this.cancel(existing.id);
-      const working = this.runs.has(existing.id) || Boolean(this.queues.get(existing.id)?.length) || this.resuming.has(existing.id);
-      if (working && task) throw new Error("That helper is still working on its last task. Pass thread with no task to wait for its report.");
       if (!task && !this.loadTurns(existing.id).length) throw new Error("That helper has not run yet. Pass a task.");
       if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
       if (task && this.threads.get(threadId)?.tainted && !this.modelTrusted(existing.provider, existing.model)) await this.approveTaintedHelper(parent, existing.title.replace(/^Helper: /, ""), opts.signal);
@@ -3408,6 +3406,17 @@ export class AgentHost {
     }
     if (opts.signal?.aborted) throw new Error("cancelled");
     this.linkHelperCall(threadId, helper.id, task);
+    // A follow-up to a helper still at work steers it: into its running turn when the provider can
+    // take it, else queued to run right after that turn. Either way the report is the one after it.
+    let sent = false;
+    if (task && opts.thread && (this.runs.has(helper.id) || this.queues.get(helper.id)?.length || this.resuming.has(helper.id))) {
+      this.send(helper.id, { text: task, from: "agent" });
+      sent = true;
+      const steered = this.queues.get(helper.id)?.length === 1 && this.steerFirst(helper.id);
+      if (opts.background) {
+        return { thread: helper.id, provider: helper.provider, model: helper.model, status: steered ? "steered" : "queued", note: `${steered ? "The message went into the helper's running turn." : "The helper takes the message right after its current turn."} Call agent_run with this thread and no task to wait for its report.` };
+      }
+    }
     if (task && opts.background) {
       this.send(helper.id, { text: task, from: "agent" });
       return { thread: helper.id, provider: helper.provider, model: helper.model, status: "running", note: "The helper is working in the background. Continue other work or start independent helpers. Call agent_run with this thread and no task to wait for its report before using its work." };
@@ -3427,7 +3436,7 @@ export class AgentHost {
       // Explicit Stop cancels helpers through cancel(parent), independently of this signal.
       opts.signal?.addEventListener("abort", abortWait);
       try {
-        if (task) this.send(helper.id, { text: task, from: "agent" });
+        if (task && !sent) this.send(helper.id, { text: task, from: "agent" });
         if (opts.signal?.aborted) abortWait();
         await done;
       } finally {
