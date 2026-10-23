@@ -31,8 +31,8 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
   }
   try{
     for(let i=0;;i++){try{if(fs.existsSync(path.join(root,"local-token"))&&(await fetch(`${url}/api/health`)).ok)break;}catch{}if(i>250)throw new Error(output);await delay(100);}
-    const manifest={id:"http-fixture",name:"HTTP fixture",version:"1.0.0",summary:"HTTP plugin test",backend:"backend.mjs",risky:false,methods:{read:{description:"Read",agent:"read"},change:{description:"Change",agent:"board"},danger:{description:"Ask",agent:"ask"}},settings:{token:{label:"Token",type:"secret"}}};
-    const archive=zip({"plugin.json":Buffer.from(JSON.stringify(manifest)),"backend.mjs":Buffer.from('export default {methods:{read:()=>42,change:()=>true,danger:()=>true}}')}).toString("base64");
+    const manifest={id:"http-fixture",name:"HTTP fixture",version:"1.0.0",summary:"HTTP plugin test",backend:"backend.mjs",readme:"README.md",risky:false,methods:{read:{description:"Read",agent:"read"},change:{description:"Change",agent:"board"},danger:{description:"Ask",agent:"ask"}},settings:{token:{label:"Token",type:"secret"}}};
+    const archive=zip({"plugin.json":Buffer.from(JSON.stringify(manifest)),"README.md":Buffer.from("Fixture README"),"backend.mjs":Buffer.from('export default {methods:{read:()=>42,change:()=>true,danger:()=>true}}')}).toString("base64");
     const preview=await call("/api/plugins/preview","POST",{archive});assert.equal(preview.status,200,JSON.stringify(preview.data));
     assert.equal((await call("/api/plugins/install","POST",{archive,hash:preview.data.hash})).status,200);
     const repo=path.join(root,"repo"),sub=path.join(repo,"sub");fs.mkdirSync(sub,{recursive:true});await git(["init","--template="],repo);
@@ -94,6 +94,31 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     await page.getByRole("switch",{name:"HTTP fixture · Keep running",exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('.plugin-panel.is-active [aria-label="HTTP fixture · Keep running"]')?.getAttribute("aria-checked")==="true");
     assert.equal((await call(`/api/plugins/${manifest.id}`)).data.keepAlive,true);
+    const fixturePanel=page.locator('.plugin-panel.is-active'),readme=fixturePanel.locator('details[data-plugin-view="readme"]'),methods=fixturePanel.locator('details[data-plugin-view="methods"]'),logs=fixturePanel.locator('[data-plugin-logs]');
+    await readme.locator("summary").click();await methods.locator("summary").click();
+    let logReads=0;await page.route(`**/api/plugins/${manifest.id}/logs`,async route=>{logReads++;await route.fulfill({json:{logs:[`Log read ${logReads}`]}});});
+    const waitForLog=(read:number)=>page.waitForFunction(value=>document.querySelector('.plugin-panel[data-plugin="http-fixture"] [data-plugin-logs]')?.textContent===value,`Log read ${read}`);
+    await fixturePanel.getByRole("button",{name:"Logs",exact:true}).click();await waitForLog(1);
+    await page.evaluate(async()=>{await (window as any).scribePluginSettings.refresh();});
+    assert.equal(await readme.getAttribute("open"),"");assert.equal(await methods.getAttribute("open"),"");assert.equal(await logs.isVisible(),true);assert.equal(await logs.textContent(),"Log read 1");assert.equal(logReads,1);
+    // Preserve hidden panels too, without leaking their view choices to another plugin.
+    await fixturePanel.getByRole("button",{name:"‹ Plugins",exact:true}).click();await page.getByRole("button",{name:"Settings for Git history",exact:true}).click();
+    assert.equal(await page.locator('.plugin-panel.is-active details[data-plugin-view="readme"]').getAttribute("open"),null);
+    await page.evaluate(async()=>{await (window as any).scribePluginSettings.refresh();});
+    await page.getByRole("button",{name:"‹ Plugins",exact:true}).click();await page.getByRole("button",{name:"Settings for HTTP fixture",exact:true}).click();
+    assert.equal(await readme.getAttribute("open"),"");assert.equal(await logs.textContent(),"Log read 1");
+    await readme.locator("summary").click();await methods.locator("summary").click();await fixturePanel.getByRole("button",{name:"Logs",exact:true}).click();await waitForLog(2);
+    await page.evaluate(async()=>{await (window as any).scribePluginSettings.refresh();});
+    assert.equal(await readme.getAttribute("open"),null);assert.equal(await methods.getAttribute("open"),null);assert.equal(await logs.isVisible(),false);assert.equal(await logs.textContent(),"Log read 2");
+    await fixturePanel.getByRole("button",{name:"Logs",exact:true}).click();await waitForLog(3);
+    await page.unroute(`**/api/plugins/${manifest.id}/logs`);
+    let finishLog!:()=>void,logStarted!:()=>void;
+    const pendingLog=new Promise<void>(resolve=>{finishLog=resolve;}),startedLog=new Promise<void>(resolve=>{logStarted=resolve;});
+    await page.route(`**/api/plugins/${manifest.id}/logs`,async route=>{logStarted();await pendingLog;await route.fulfill({json:{logs:["Log read 4"]}});});
+    await fixturePanel.getByRole("button",{name:"Logs",exact:true}).click();await startedLog;
+    await page.evaluate(async()=>{await (window as any).scribePluginSettings.refresh();});assert.equal(await logs.textContent(),"Log read 3");
+    finishLog();await waitForLog(4);assert.equal(await logs.isVisible(),false);
+    await page.unroute(`**/api/plugins/${manifest.id}/logs`);
     assert.equal(await page.evaluate(()=>(window as any).scribeSettingsUI.catalog().find((row:any)=>row.kind==="row"&&row.label==="HTTP fixture")?.id),fixtureSettingId);
     await page.evaluate(()=>{(window as any).exportChoice=(window as any).scribePluginSettings.exportChoices([{id:"http-fixture",name:"HTTP fixture",version:"1.0.0"}]);});
     await page.locator("dialog[open] .select-button").click();await page.getByRole("option",{name:"Settings",exact:true}).click();await page.keyboard.press("Escape");await page.getByRole("button",{name:"Export",exact:true}).click();

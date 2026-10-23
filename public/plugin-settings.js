@@ -99,12 +99,12 @@
     }
     form.addEventListener("input",()=>{form.dataset.dirty="true";markDrafts();});
     form.addEventListener("submit",event=>event.preventDefault());parent.append(form);
-    const controls=el("div","settings-actions"),logs=el("pre","plugin-source");logs.hidden=true;
+    const controls=el("div","settings-actions"),logs=el("pre","plugin-source");logs.hidden=true;logs.dataset.pluginLogs="";
     const remove=button("Remove",async()=>{if(await confirmRemove(`Remove “${view.name}”? Its source and data stay on disk.`,"Remove")){await request(`/${view.id}`,"DELETE");form.dataset.dirty="false";await refresh();}});remove.classList.add("plugin-remove");
-    controls.append(button("Restart",async()=>{await request(`/${view.id}/restart`,"POST",{});await refresh();}),button("Logs",async()=>{logs.textContent=(await request(`/${view.id}/logs`)).logs.join("\n")||"No backend log yet.";logs.hidden=!logs.hidden;}),button("Export…",()=>exportPlugin(view.id)),button("Update from file…",()=>picker.click()),remove);parent.append(controls,logs);
-    if(view.readme){const readme=el("details"),summary=el("summary","","README"),text=el("pre","plugin-source",view.readme);readme.append(summary,text);parent.append(readme);}
+    controls.append(button("Restart",async()=>{await request(`/${view.id}/restart`,"POST",{});await refresh();}),button("Logs",async()=>{const result=await request(`/${view.id}/logs`),current=panels.querySelector(`[data-plugin="${view.id}"] [data-plugin-logs]`);if(current){current.textContent=result.logs.join("\n")||"No backend log yet.";current.hidden=!current.hidden;}}),button("Export…",()=>exportPlugin(view.id)),button("Update from file…",()=>picker.click()),remove);parent.append(controls,logs);
+    if(view.readme){const readme=el("details"),summary=el("summary","","README"),text=el("pre","plugin-source",view.readme);readme.dataset.pluginView="readme";readme.append(summary,text);parent.append(readme);}
     const methods=Object.entries(view.methods).filter(([,def])=>def.agent);
-    if(methods.length){const methodsView=el("details","plugin-methods");methodsView.append(el("summary","","Agent methods"));for(const [name,def]of methods)methodsView.append(el("p","settings-hint",`${name} · ${def.agent} — ${def.description}`));parent.append(methodsView);}
+    if(methods.length){const methodsView=el("details","plugin-methods");methodsView.dataset.pluginView="methods";methodsView.append(el("summary","","Agent methods"));for(const [name,def]of methods)methodsView.append(el("p","settings-hint",`${name} · ${def.agent} — ${def.description}`));parent.append(methodsView);}
   }
   async function exportPlugin(id){const parts=await chooseParts();if(!parts)return;const query=new URLSearchParams(parts),link=el("a");link.href=`/api/plugins/${id}/export?${query}`;link.download="";document.body.append(link);link.click();link.remove();}
   async function chooseParts(){
@@ -157,8 +157,15 @@
       const focused=section.contains(document.activeElement)?document.activeElement:document.activeElement===document.body&&toggleFocus?[...section.querySelectorAll("[aria-label]")].find(control=>control.getAttribute("aria-label")===toggleFocus):null;
       const focusLabel=focused?.getAttribute("aria-label"),focusText=focused?.textContent,focusPlugin=focused?.closest("[data-plugin]")?.dataset.plugin,focusPanel=!!focused?.closest(".plugin-panel");
       const content=section.closest(".settings-content"),scroll=content?.scrollTop;
-      const drafts=new Map([...panels.children].filter(panel=>panel.querySelector('form[data-dirty="true"]')).map(panel=>[panel.dataset.plugin,panel]));
-      const nextViews=views.map(panel=>{const draft=drafts.get(panel.dataset.plugin);if(!draft)return panel;draft.querySelector(".plugin-detail-title").replaceChildren(...panel.querySelector(".plugin-detail-title").childNodes);return draft;});
+      const previousPanels=new Map([...panels.children].map(panel=>[panel.dataset.plugin,panel]));
+      const nextViews=views.map(panel=>{
+        const previous=previousPanels.get(panel.dataset.plugin);if(!previous)return panel;
+        if(previous.querySelector('form[data-dirty="true"]')){previous.querySelector(".plugin-detail-title").replaceChildren(...panel.querySelector(".plugin-detail-title").childNodes);return previous;}
+        for(const disclosure of previous.querySelectorAll("details[data-plugin-view]"))panel.querySelector(`details[data-plugin-view="${disclosure.dataset.pluginView}"]`)?.toggleAttribute("open",disclosure.open);
+        const oldLogs=previous.querySelector("[data-plugin-logs]"),newLogs=panel.querySelector("[data-plugin-logs]");
+        if(oldLogs&&newLogs){newLogs.hidden=oldLogs.hidden;newLogs.textContent=oldLogs.textContent;}
+        return panel;
+      });
       list.replaceChildren(...entries);panels.replaceChildren(...nextViews);if(!data.plugins.some(item=>item.id===selectedPlugin))selectedPlugin=null;showPlugin(selectedPlugin,{navigate:false});
       if(focused&&document.activeElement!==focused){if(focused.isConnected)focused.focus({preventScroll:true});else{const scope=(focusPanel?panels:list).querySelector(`[data-plugin="${focusPlugin}"]`);const replacement=[...(scope?.querySelectorAll("button,input,textarea")??[])].find(node=>focusLabel?node.getAttribute("aria-label")===focusLabel:node.textContent===focusText);replacement?.focus({preventScroll:true});}}
       if(content)content.scrollTop=scroll;
