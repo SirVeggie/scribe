@@ -217,6 +217,7 @@ The kit is a baseline, not a look. A short report or a form needs little more. A
 <!-- kit-catalog:start -->
 | Write | Gives | Example |
 |---|---|---|
+| ` <scribe-component plugin="…" name="…" props='{}'></scribe-component> ` | Embeds a plugin_guide component in an isolated frame on a page; props follow its schema, calls and live state/events use the page's plugin permission, and replies use the page's replyTo or a reply event. | ` <scribe-component plugin="git-history" name="activity" props='{}'></scribe-component> ` |
 | ` .lead / .small ` | A muted intro line under the title, or smaller text. | ` <p class="lead">What we found</p><p class="small">Details</p> ` |
 | ` .grid; --min ` | Responsive columns; --min sets the minimum column width (240px by default). | ` <div class="grid" style="--min:320px"><div class="card">Option A</div><div class="card">Option B</div></div> ` |
 | ` .card / .card.rec ` | A padded box; rec marks the recommended option; a tone adds a colored top edge. | ` <div class="card rec ok"><h3>Recommended</h3>Option A</div> ` |

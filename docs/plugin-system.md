@@ -30,6 +30,14 @@ Components receive deep-frozen `scribe.props`, `scribe.plugin.call(method,args)`
 
 Git history 1.2.0 includes an `activity` heatmap component. Existing bundled plugin installs are preserved when Scribe updates; receiving the new example currently requires a reviewed package update. Fresh installs receive it automatically.
 
+## Components on pages
+
+Pages embed the same components with `<scribe-component id="activity" plugin="git-history" name="activity" props='{"repository":"/approved/repo","weeks":52}'></scribe-component>`. Props are JSON checked against the installed component schema. Invalid tags show an inline error and participate in first-render diagnostics. The tag also declares a plugin dependency; metadata never grants access. Optional child content is the fallback for unavailable components and exported pages.
+
+Each mount uses its own opaque sandboxed origin and the chat component bridge, with no network or page API. Calls, declared state and declared events use the host page's `plugin.<id>` permission. Ask requests the page permission; Deny wins. The page can read the same shared state through `scribe.plugin(id).state`. Removing a tag closes its port and live subscription. Plugin updates or permission changes disconnect live mounts; reload the page to reconnect.
+
+A clicked component's reply dispatches a cancelable, bubbling `scribe-component-reply` event on the tag (`detail: {data,summary}`). Unless handled with `preventDefault()`, it goes to the page's `replyTo`, or a `submitted` page signal when there is no target. Components with an `id` save `scribe.local` in the host page's viewer state; other mounts keep it in memory. `setSummary` has no effect on pages. Component tags in card descriptions and comments are not supported.
+
 ## Template actions
 
 Templates have normal metadata and HTML files plus declared actions and hooks. Backend template sets provide actions, seed, reply, replyDelivered, sweep, drive and launch callbacks. Calls run outside the daemon. A state-changing result applies only to the revision it read; a concurrent edit retries the computation up to three times. Hooks must be safe to compute repeatedly. Side effects belong in explicit methods or in post-commit lifecycle callbacks, not speculative action computation.

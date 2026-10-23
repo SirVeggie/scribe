@@ -1,6 +1,13 @@
 {
   "entries": [
     {
+      "id": "plugin-component",
+      "write": "<scribe-component plugin=\"…\" name=\"…\" props='{}'></scribe-component>",
+      "gives": "Embeds a plugin_guide component in an isolated frame on a page; props follow its schema, calls and live state/events use the page's plugin permission, and replies use the page's replyTo or a reply event.",
+      "example": "<scribe-component plugin=\"git-history\" name=\"activity\" props='{}'></scribe-component>",
+      "hooks": [{ "file": "page-components.js", "text": "customElements.define(\"scribe-component\", PageComponent)" }]
+    },
+    {
       "id": "lead",
       "classes": ["lead", "small"],
       "write": ".lead / .small",
