@@ -144,14 +144,22 @@ export function nextCard(state: BoardState, w: Worker, skip: ReadonlySet<string>
   return workerCards(state, w).find((c) => !skip.has(c.id) && cardTakeable(state, c, now)) ?? null;
 }
 
-/** Reserve slots for chats and launch leases, across worker names using the same provider. */
+/**
+ * Reserve slots for every worker chat, across worker names using the same provider: the other
+ * running workers' chats and launch leases, and every one-card run (any worker's, this one's too).
+ */
 function atLimit(state: BoardState, id: string, now: number, defaultProvider = ""): boolean {
   const max = Math.min(99, Math.max(0, Math.floor(Number(settingsOf(state).maxWorkers) || 0)));
   const value = settingsOf(state).maxWorkersPerProvider;
   const perProvider = value == null ? 1 : Math.min(99, Math.max(0, Math.floor(Number(value) || 0)));
-  const busy = workerList(state).filter(([other, w]) => other !== id && w.run && (w.threadId || leased(w.step, now)));
+  const busy: string[] = [];
+  for (const [other, w] of workerList(state)) {
+    const provider = str(w.provider) || defaultProvider;
+    if (other !== id && w.run && (w.threadId || leased(w.step, now))) busy.push(provider);
+    for (const entry of Object.values(w.solo ?? {})) if (entry && typeof entry === "object") busy.push(provider);
+  }
   const provider = str(workerOf(state, id)?.provider) || defaultProvider;
-  return Boolean((max && busy.length >= max) || (perProvider && busy.filter(([, w]) => (str(w.provider) || defaultProvider) === provider).length >= perProvider));
+  return Boolean((max && busy.length >= max) || (perProvider && busy.filter((p) => p === provider).length >= perProvider));
 }
 
 function clip(text: unknown, max: number): string {

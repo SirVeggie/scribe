@@ -34,7 +34,7 @@ If your thread fails or is stopped, Scribe moves your card back to the column it
 
 ## Agent workers
 
-The Workers panel's **Max parallel** setting caps total queued workers. **Per provider** caps workers sharing a provider, regardless of worker name, and defaults to 1. Choose **Any** to remove either limit. Existing chats finish when a limit is lowered.
+The Workers panel's **Max parallel** setting caps how many worker chats run at once: queued ones and one-card runs (right-click Run) alike, so a queued card waits for any of them to finish. **Per provider** caps the ones sharing a provider, regardless of worker name, and defaults to 1. Choose **Any** to remove either limit. Existing chats finish when a limit is lowered.
 
 The Workers popup's **Default model** selects a worker whose model and settings a posted comment's **Ask** button uses. Ask is available only with a default worker set. A comment on a card without a worker assignee offers Ask instead of Continue. Asking starts a separate question or investigation chat without claiming, assigning, moving, or changing the status of the card. Its first message includes the full card snapshot (including all comments) and its images, so no initial get is needed; images that cannot be attached within the message limits are noted. Answer briefly in a comment; for investigation or design, create a background report page and comment with a peek link. Change the card's workflow only when explicitly asked in the comment.
 

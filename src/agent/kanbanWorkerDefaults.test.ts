@@ -131,6 +131,7 @@ test("board slot display follows provider and total limits and saves Any explici
     settings: () => settings, worker: (id: string) => workers[id],
     workerIds: () => Object.keys(workers), workerOn: (w: any) => Boolean(w.run),
     stepLeased: (w: any) => Boolean(w.step), launching: {}, agentOptions: null,
+    soloRuns: (w: any) => w.solo || {},
     workerDefaults: () => ({ provider: "codex" }), str: (x: any) => x || "",
     clamp: (v: number, min: number, max: number) => Math.min(max, Math.max(min, v)),
     scribe: { set: (value: any) => { settings = value.settings; } },
@@ -149,6 +150,14 @@ test("board slot display follows provider and total limits and saves Any explici
   settings = { maxWorkersPerProvider: 2 };
   assert.equal(limited("web"), false);
   workers.implicit.step = {};
+  assert.equal(limited("web"), true);
+  // One-card runs take slots too, even a stopped worker's or the worker's own.
+  delete workers.implicit.step;
+  workers.implicit.run = null;
+  workers.implicit.solo = { manual: { card: 1 } };
+  assert.equal(limited("web"), true);
+  workers.implicit.solo = null;
+  workers.web.solo = { manual: { card: 1 } };
   assert.equal(limited("web"), true);
 });
 

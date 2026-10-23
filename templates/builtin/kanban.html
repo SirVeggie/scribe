@@ -5180,16 +5180,23 @@
     var value = settings().maxWorkersPerProvider;
     return value == null ? 1 : clamp(Math.floor(Number(value) || 0), 0, 99);
   }
-  /** Chats and launch leases reserve both total and provider slots. */
+  /**
+   * Every worker chat reserves both a total and a provider slot: the other running workers' chats
+   * and launch leases, and every one-card run (any worker's, this one's too). Same as atLimit in
+   * src/actions/kanbanWorkers.ts.
+   */
   function atLimit(id) {
     var max = maxWorkers(), perProvider = maxWorkersPerProvider();
-    var provider = str(worker(id).provider) || workerDefaults(agentOptions).provider;
-    var busy = workerIds().filter(function (other) {
-      var w = worker(other);
-      return other !== id && workerOn(w) && Boolean(w.threadId || stepLeased(w) || launching[other]);
+    var fallback = workerDefaults(agentOptions).provider;
+    var provider = str(worker(id).provider) || fallback;
+    var busy = [];
+    workerIds().forEach(function (other) {
+      var w = worker(other), p = str(w.provider) || fallback;
+      if (other !== id && workerOn(w) && (w.threadId || stepLeased(w) || launching[other])) busy.push(p);
+      Object.keys(soloRuns(w)).forEach(function (tid) { if (soloRuns(w)[tid]) busy.push(p); });
     });
-    return Boolean((max && busy.length >= max) || (perProvider && busy.filter(function (other) {
-      return (str(worker(other).provider) || workerDefaults(agentOptions).provider) === provider;
+    return Boolean((max && busy.length >= max) || (perProvider && busy.filter(function (p) {
+      return p === provider;
     }).length >= perProvider));
   }
   /** Scribe (or a window with an older copy of the board) is starting the worker's next chat. */
@@ -5798,8 +5805,8 @@
   }
 
   // ---------- one-card runs ----------
-  // Started from a card's menu with a worker's settings, beside its own run: the worker's own
-  // queue doesn't wait on them, and they don't take other cards. settings.workers[id].solo keeps
+  // Started from a card's menu with a worker's settings, beside its own run. They take up parallel
+  // slots like any worker chat (atLimit), so queued cards wait on them, but they don't take other cards. settings.workers[id].solo keeps
   // the ones still going ({ [threadId]: { card, at } }) so any window can wrap them up once their
   // run ends. Scribe sees them through like the worker's own chat (limit waits, merges).
   function soloRuns(w) {

@@ -398,6 +398,22 @@ test("provider limit defaults to one across different workers, including launch 
   assert.equal(drive(wrapped, finished)?.launch?.ref.worker, "w_two");
 });
 
+test("one-card runs take slots like queued chats, whichever worker started them", () => {
+  const running = { th_solo: ended({}, { running: true }) };
+  const { c } = ctx(running);
+  // A stopped worker's one-card run holds the provider slot the queued worker needs.
+  const other = queuedPair("codex", "codex");
+  Object.assign(((other.settings as State).workers as State).w_two as State, { run: undefined, solo: { th_solo: { card: 3, at: 1 } } });
+  assert.equal(drive(other, c), null);
+  // So does one of the worker's own, and it counts toward the total limit across providers.
+  const own = board({ provider: "codex", run: { since: 5 }, solo: { th_solo: { card: 3, at: 1 } } });
+  assert.equal(drive(own, c), null);
+  Object.assign(own.settings as State, { maxWorkersPerProvider: 0, maxWorkers: 1 });
+  assert.equal(drive(own, c), null);
+  Object.assign(own.settings as State, { maxWorkers: 2 });
+  assert.equal(drive(own, c)?.launch?.ref.worker, "w_op");
+});
+
 test("different providers run together unless the total limit is reached", () => {
   const { c } = ctx();
   for (const total of [0, 1]) {
