@@ -31,6 +31,8 @@ export type PageReader = {
   formerScopes?: ReaderScope[];
   trusted: boolean;
   grants: ThreadPageGrant[];
+  /** Ids of pages linked from the cards the chat holds (#762): it may read them when they are Normal or Open. Called only when needed. */
+  readLinks?: () => string[];
 };
 
 /** The page as the decision needs it. */
@@ -121,8 +123,8 @@ export function homeGrants(scope: ReaderScope, lookup: AccessLookup): AccessTarg
   return out;
 }
 
-/** What the chat may do with the page. */
-export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLookup): Reach {
+/** What the chat may do with the page; read for a request that only reads it. */
+export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLookup, read = false): Reach {
   if (reader.scope.kind === "workspace") return "hidden";
   if (reader.grants.some((g) => g.mention && targetCovers(g, page, lookup))) return "allow";
   const level = effectiveLevel(page, lookup);
@@ -144,6 +146,7 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
     if (origin && placeInScope(origin, scope, lookup)) return "allow";
     if (homeGrants(scope, lookup).some((g) => targetCovers(g, page, lookup))) return "allow";
   }
+  if (read && isOpenLevel(level) && reader.readLinks?.().includes(page.id)) return "allow";
   return "ask";
 }
 

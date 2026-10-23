@@ -805,6 +805,20 @@ export class BoardStore extends EventEmitter {
     }
   }
 
+  /** Ids of the pages linked from what these threads hold on pages (a board's claimed cards), for read access (#762). */
+  heldLinkPages(threads: string[]): string[] {
+    const ids = new Set<string>();
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      const set = this.actionsFor(tab);
+      if (!set?.heldLinks) continue;
+      for (const key of set.heldLinks(tab.state, threads)) {
+        const target = this.locate(key)?.tab;
+        if (target && target.id !== tab.id) ids.add(target.id);
+      }
+    }
+    return [...ids];
+  }
+
   /** Let each page's actions tidy up after agents that stopped (stale claims). */
   sweepActions(ctx: SweepContext): void {
     for (const tab of [...this.tabs.values(), ...this.closed.values()]) {

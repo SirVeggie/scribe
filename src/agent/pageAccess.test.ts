@@ -11,6 +11,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-page-access-"));
 process.env.SCRIBE_HOME = dir;
 const { store } = await import("../store.js");
 const { AgentHost } = await import("./host.js");
+const { pageReach } = await import("../pageAccess.js");
 
 let host: InstanceType<typeof AgentHost>;
 
@@ -199,4 +200,27 @@ test("a page made before origins were recorded counts as made from its creator's
   assert.equal(report.access?.origin, undefined);
   const chat = host.createThread({ provider: "claude", mode: "board", scope: { kind: "page", ref: board.id } });
   assert.equal(reach(chat.id, report.id), "allow");
+});
+
+test("a chat reads, but does not change, Normal pages linked from the card it holds (#762)", () => {
+  const { tab: board } = store.openFromTemplate("kanban", {}, { activate: false });
+  const design = page("held-design");
+  const askAlways = page("held-ask-always");
+  store.setPageAccessLevel(askAlways.id, "ask");
+  const worker = host.createThread({ provider: "claude", mode: "board", scope: { kind: "page", ref: board.id } });
+  const helper = host.createThread({ provider: "claude", mode: "board", scope: { kind: "page", ref: board.id } });
+  (host as unknown as { threads: Map<string, { helperOf?: string }> }).threads.get(helper.id)!.helperOf = worker.id;
+  const card = { id: "c_held", num: 900, col: "x", title: "Held", description: `See [[scribe:${design.key.replace(/^scribe:/, "")}]] and scribe:${askAlways.key.replace(/^scribe:/, "")}`, comments: [], createdAt: 1, movedAt: 1 };
+  assert.ok(store.writeState(board.id, { ops: [{ op: "insert", path: "cards", value: card }] }).ok);
+  const reader = (id: string) => host.pageReader(id)!;
+  const lookup = store.accessLookup();
+  const reachAs = (id: string, tabId: string, read: boolean) => pageReach(reader(id), host.accessPage(store.get(tabId)!), lookup, read);
+  assert.equal(reachAs(worker.id, design.id, true), "ask", "not before the claim");
+  store.runAction(board.id, "claim", { card: 900 }, { by: "agent", label: "Opus", thread: worker.id });
+  assert.equal(reachAs(worker.id, design.id, true), "allow");
+  assert.equal(reachAs(helper.id, design.id, true), "allow", "a helper reads its parent's card links");
+  assert.equal(reachAs(worker.id, design.id, false), "ask", "changing it still asks");
+  assert.equal(reachAs(worker.id, askAlways.id, true), "ask", "an Ask always page still asks");
+  store.runAction(board.id, "finish", { card: 900, summary: "x" }, { by: "agent", label: "Opus", thread: worker.id });
+  assert.equal(reachAs(worker.id, design.id, true), "ask", "the claim ended");
 });

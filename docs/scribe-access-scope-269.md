@@ -26,6 +26,10 @@ A chat reaches the pages in its Scribe scope plus anything it has been granted. 
 
 A link to an Open page that the user adds on a page bound to a built-in template (a Kanban card) grants the target to that page once the link has stayed for a minute. Agent writes never create grants. Removing the link does not revoke the grant; grants are listed and removable in **Agent access…**.
 
+## Reading what a held card links (#762)
+
+A chat that holds a Kanban card (and its helpers) may read, not change, the Normal or Open pages that card links: the links in its description and comments when the chat claimed it (`claim.links`; a card the chat created lends only its comments), plus links in the user's comments since. Reads are GET requests; writes, Ask always, Trusted only and Restricted pages still go through `page_access`. Links the holder writes after claiming grant nothing. The access ends with the claim.
+
 ## Trust and taint
 
 - Native model sources have a **Trusted** flag. Claude, Codex and Cursor are untrusted. A helper is no more trusted than the thread that started it.

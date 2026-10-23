@@ -25,7 +25,8 @@ type Label = { id: string; name: string; color?: string };
 export type Comment = { id: string; by: string; at: number; text: string };
 export type Status = { kind: string; text: string };
 /** waiting: set while the holder's turn waits on the user; keeps the status to put back after. */
-export type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string; waiting?: { status: Status | null } };
+/** links: page keys the card linked when it was claimed, which the holder's chat may read (#762). */
+export type Claim = { holder: string; session?: string; thread?: string; at: number; seenAt?: number; stale?: boolean; from?: string; links?: string[]; waiting?: { status: Status | null } };
 export type Card = {
   id: string;
   num: number;
@@ -482,7 +483,37 @@ function checkStatus(value: unknown): { kind: string; text: string } | null {
   return { kind, text: str(status?.text) };
 }
 
-function claimFor(ctx: ActionContext, now: number, from?: string): Claim {
+/** scribe: page keys in text, without repeats. */
+function linkedKeys(texts: string[]): string[] {
+  const keys = new Set<string>();
+  for (const text of texts) for (const m of text.matchAll(/(?<![\w-])scribe:([a-z0-9][a-z0-9._:-]*)/gi)) keys.add(`scribe:${m[1].replace(/[.:-]+$/, "").toLowerCase()}`);
+  return [...keys];
+}
+
+/**
+ * Pages a card links from its description and comments as a chat claims it (#762), so the chat can read
+ * them. Taken at the claim, so links the holder writes later don't count; a card the chat made itself
+ * lends only its comments.
+ */
+export function claimLinks(card: Card, thread: string | undefined): string[] {
+  if (!thread) return [];
+  const own = card.createdThread === thread;
+  return linkedKeys([...(own ? [] : [str(card.description)]), ...(card.comments ?? []).map((c) => str(c.text))]).slice(0, 50);
+}
+
+/** Pages linked from the cards a thread holds (#762): links taken at its claims, and the user's comments since. */
+export function heldLinks(state: BoardState, threads: string[]): string[] {
+  const out = new Set<string>();
+  for (const card of cards(state)) {
+    const claim = card.claim;
+    if (!claim?.thread || claim.stale || !threads.includes(claim.thread)) continue;
+    for (const key of claim.links ?? []) out.add(key);
+    for (const key of linkedKeys((card.comments ?? []).filter((c) => c.by === "user" && c.at >= claim.at).map((c) => str(c.text)))) out.add(key);
+  }
+  return [...out];
+}
+
+function claimFor(ctx: ActionContext, now: number, from?: string, links: string[] = []): Claim {
   const caller = ctx.caller;
   return {
     holder: caller.label || (caller.by === "agent" ? "agent" : "user"),
@@ -491,6 +522,7 @@ function claimFor(ctx: ActionContext, now: number, from?: string): Claim {
     at: now,
     seenAt: now,
     ...(from ? { from } : {}),
+    ...(links.length ? { links } : {}),
   };
 }
 
@@ -905,7 +937,7 @@ export const kanbanActions: ActionSet = {
             value: {
               assignee: claimAssignee(args, ctx),
               status: { kind: "working", text: str(args.text) || "Working on it" },
-              claim: claimFor(ctx, ctx.now, from),
+              claim: claimFor(ctx, ctx.now, from, claimLinks(card, ctx.caller.thread)),
               ...(ctx.caller.thread ? { thread: ctx.caller.thread, threadAssignee: claimAssignee(args, ctx) } : {}),
               ...(from ? { from } : {}),
             },
@@ -1097,6 +1129,7 @@ export const kanbanActions: ActionSet = {
     }
     return { ops, result: null };
   },
+  heldLinks,
   sweep(state: BoardState, ctx: SweepContext): ActionOutcome | null {
     const ops: unknown[] = [];
     const events: ActionOutcome["events"] = [];

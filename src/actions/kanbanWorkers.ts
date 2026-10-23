@@ -8,6 +8,7 @@ import {
   cardScheduled,
   cards,
   claimFrom,
+  claimLinks,
   columnById,
   columns,
   continuationReadyOps,
@@ -712,6 +713,7 @@ export function workerLaunchAllowed(state: BoardState, launch: PageLaunch, now: 
 export function claimOps(state: BoardState, card: Card, thread: string, name: string, now: number, text = "Agent starting"): unknown[] {
   const working = roleColumn(state, "working");
   const from = claimFrom(state, card);
+  const links = claimLinks(card, thread);
   const ops: unknown[] = [
     { op: "test", path: `${cardPath(card)}/claim`, value: card.claim ?? null },
     {
@@ -720,7 +722,7 @@ export function claimOps(state: BoardState, card: Card, thread: string, name: st
       value: {
         assignee: name,
         status: { kind: "working", text },
-        claim: { holder: name, thread, at: now, seenAt: now, ...(from ? { from } : {}) },
+        claim: { holder: name, thread, at: now, seenAt: now, ...(from ? { from } : {}), ...(links.length ? { links } : {}) },
         thread,
         threadAssignee: name,
         ...(from ? { from } : {}),

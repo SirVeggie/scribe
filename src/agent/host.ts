@@ -2637,12 +2637,14 @@ export class AgentHost {
     const thread = this.threads.get(threadId);
     if (!thread) return null;
     const parent = thread.helperOf ? this.threads.get(thread.helperOf) : undefined;
+    let links: string[] | undefined;
     return {
       thread: thread.id,
       scope: thread.scope,
       ...(thread.formerScopes?.length ? { formerScopes: thread.formerScopes } : {}),
       trusted: this.threadTrusted(thread),
       grants: addTargets<ThreadPageGrant>(thread.pageGrants, parent?.pageGrants ?? []),
+      readLinks: () => (links ??= store.heldLinkPages(parent ? [thread.id, parent.id] : [thread.id])),
     };
   }
 

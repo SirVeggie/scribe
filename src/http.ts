@@ -3018,7 +3018,9 @@ function reachFor(req: express.Request): ((tab: Tab) => Reach) | null {
       : null;
   if (!reader) return () => "hidden";
   const lookup = store.accessLookup();
-  return (tab) => pageReach(reader, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, lookup);
+  // Pages linked from a card the chat holds open for reading only (#762).
+  const read = req.method === "GET";
+  return (tab) => pageReach(reader, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, lookup, read);
 }
 
 /**

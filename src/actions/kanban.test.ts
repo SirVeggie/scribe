@@ -1112,3 +1112,16 @@ test("batch applies each card's update in order, all or none", () => {
   );
   assert.throws(() => run(board(), "batch", { changes: [] }), /changes is a list/);
 });
+
+test("a claim keeps the pages its card linked; the holder's chat reads those and the user's later links (#762)", () => {
+  let state = run(board(), "update", { card: 2, description: "See [[scribe:design-notes]].", comment: "Also [[peek:scribe:Old-Plan|plan]]." }).state;
+  state = run(state, "claim", { card: 2 }, agent({ thread: "th_w" })).state;
+  assert.deepEqual((card(state, 2).claim as { links?: string[] }).links, ["scribe:design-notes", "scribe:old-plan"]);
+  // Links the holder writes after claiming don't count; the user's comments do.
+  state = run(state, "comment", { card: 2, text: "scribe:agent-added" }, agent({ thread: "th_w", now: 2000 })).state;
+  state = run(state, "comment", { card: 2, text: "Read scribe:user-added." }, { caller: { by: "user" }, now: 3000, values: {} }).state;
+  assert.deepEqual(kanbanActions.heldLinks!(state, ["th_w"]), ["scribe:design-notes", "scribe:old-plan", "scribe:user-added"]);
+  assert.deepEqual(kanbanActions.heldLinks!(state, ["th_other"]), []);
+  state = run(state, "finish", { card: 2, summary: "Done" }, agent({ thread: "th_w" })).state;
+  assert.deepEqual(kanbanActions.heldLinks!(state, ["th_w"]), []);
+});

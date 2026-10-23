@@ -106,6 +106,8 @@ export type ActionSet = {
   reply?(state: BoardState, reply: InboundReply, ctx: ActionContext): ReplyOutcome;
   /** How the reply's delivery went (null: not sent); ops to record it, e.g. on the comment. */
   replyDelivered?(state: BoardState, deliver: ReplyDelivery, delivered: "steered" | "queued" | "started" | null, ctx: ActionContext): ActionOutcome | null;
+  /** Page keys linked from what these threads hold on the page (a board's claimed cards), which they may read (#762). */
+  heldLinks?(state: BoardState, threads: string[]): string[];
   /** Periodic check, e.g. for claims whose agent stopped. Returns null when nothing changes. */
   sweep?(state: BoardState, ctx: SweepContext): ActionOutcome | null;
   /** A run of this page's (see agent/pageRuns.ts) is done and would merge: a reason to keep its branch unmerged, or null. */
