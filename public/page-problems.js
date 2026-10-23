@@ -3,7 +3,17 @@
   var boot = window.__SCRIBE_PROBLEMS__;
   delete window.__SCRIBE_PROBLEMS__;
   if (!boot) return;
-  var problems = [], links = [], done = false, restore = [];
+  var problems = [], links = [], done = false, restore = [], components = 0, readyToFinish = false;
+  var componentReports = {
+    add: add,
+    hold: function () {
+      components++;
+      if (!done && components === 1) send("pending");
+      var released = false;
+      return function () { if (released) return; released = true; components--; if (readyToFinish) finish(); };
+    }
+  };
+  window.__scribeComponentProblems = componentReports;
   var endpoint = "/api/tabs/" + encodeURIComponent(boot.id) + "/problems";
   function send(phase) {
     if (typeof boot.report === "function") { boot.report({ token: boot.token, phase: phase, problems: problems, links: links }); return; }
@@ -113,16 +123,20 @@
       if (/^scribe:/.test(key) && links.length < 32 && !links.includes(key)) links.push(key);
     });
   }
-  function finish() {
+  function finish(force) {
     if (done) return;
+    readyToFinish = true;
+    if (components && force !== true) return;
     lint();
     send("done");
     done = true;
+    if (window.__scribeComponentProblems === componentReports) delete window.__scribeComponentProblems;
     restore.forEach(function (fn) { fn(); });
     window.removeEventListener("error", error, true);
     window.removeEventListener("unhandledrejection", rejection);
   }
-  setTimeout(finish, 1500);
+  var remaining = typeof boot.remainingMs === "number" ? Math.max(0, boot.remainingMs - 100) : 2400;
+  setTimeout(function () { finish(true); }, Math.min(2400, remaining));
   function ready() { setTimeout(finish, 1000); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, { once: true }); else ready();
 })();

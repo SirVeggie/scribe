@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Daemon/UI protocol version. Bump with any API or event change; public/app.js BOARD_VERSION must match. */
-export const VERSION = "3.2.2";
+export const VERSION = "3.2.3";
 /** The install (checkout) this process runs from: the folder above src/ or dist/. */
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 export const HOST = "127.0.0.1";
@@ -80,6 +80,16 @@ export function componentHost(itemId: string): string {
 export function componentItemFromHost(hostname: string): string | undefined {
   const match = /^w-it-([0-9a-f]{12})\.localhost$/.exec(hostname.toLowerCase());
   return match ? `it_${match[1]}` : undefined;
+}
+
+export function pageComponentHost(id: string): string {
+  if (!/^pc_[0-9a-f]{16}$/.test(id)) throw new Error("Invalid page component id");
+  return `w-pc-${id.slice(3)}.localhost`;
+}
+
+export function pageComponentFromHost(hostname: string): string | undefined {
+  const match = /^w-pc-([0-9a-f]{16})\.localhost$/.exec(hostname.toLowerCase());
+  return match ? `pc_${match[1]}` : undefined;
 }
 
 export function pageHost(id: string): string {

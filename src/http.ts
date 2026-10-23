@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { componentSite } from "./components.js";
+import { PageComponents } from "./pageComponents.js";
 import { parseComponentInput } from "./agent/componentTool.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
@@ -180,7 +181,8 @@ export async function startHttp(): Promise<http.Server> {
   const app = express();
   app.disable("x-powered-by");
   app.use(contentOriginGate);
-  app.use(componentSite(() => agentHost ?? undefined, publicDir));
+  const pageComponents = new PageComponents(store, pluginService);
+  app.use(componentSite(() => agentHost ?? undefined, publicDir, pageComponents));
   // A worktree's UI preview, on its chat's own origin (#703); other hosts go on.
   app.use(worktreePreviewSite(id => agentHost?.getThread(id)?.worktree));
   // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
@@ -751,6 +753,26 @@ export async function startHttp(): Promise<http.Server> {
       const message = (err as Error).message;
       res.status(message.startsWith("tab not found") ? 404 : 400).json({ error: message });
     }
+  });
+
+  const componentPage = (req: express.Request) => {
+    if (viewerOf(req) === "agent" || framePageId(req) !== req.params.id) throw new Error("Components must name their host page.");
+  };
+  app.post("/api/tabs/:id/components", (req, res) => {
+    try { componentPage(req); res.json({ ok: true, ...pageComponents.resolve(req.params.id, req.body ?? {}) }); }
+    catch (error) { res.json({ ok: false, error: (error as Error).message }); }
+  });
+  app.post("/api/tabs/:id/components/:component/plugin", async (req, res) => {
+    try { componentPage(req); res.json({ ok: true, result: await pageComponents.action(req.params.id, req.params.component, req.body ?? {}) }); }
+    catch (error) { res.json({ ok: false, error: (error as Error).message }); }
+  });
+  app.delete("/api/tabs/:id/components/:component", (req, res) => {
+    try { componentPage(req); pageComponents.release(req.params.id, req.params.component); res.json({ ok: true }); }
+    catch (error) { res.status(403).json({ error: (error as Error).message }); }
+  });
+  app.get("/api/tabs/:id/components/:component/events", (req, res) => {
+    try { componentPage(req); pageComponents.events(req.params.id, req.params.component, res); }
+    catch (error) { res.status(403).json({ error: (error as Error).message }); }
   });
 
   app.post("/api/tabs/:id/plugins/:plugin/call", async (req,res)=> {

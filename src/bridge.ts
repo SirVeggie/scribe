@@ -2,6 +2,7 @@ import { createStateOps } from "./stateOps.js";
 import { readFileSync } from "node:fs";
 
 const POINTER_DRAG_JS = readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8");
+const PAGE_COMPONENTS_JS = readFileSync(new URL("../public/page-components.js", import.meta.url), "utf8");
 
 /**
  * Injected into every tab page. Gives the page `window.scribe`:
@@ -1980,6 +1981,15 @@ ${POINTER_DRAG_JS}
       };
     }
   };
+  ${PAGE_COMPONENTS_JS}
+  mountPageComponents({ base: "/api/tabs/" + encodeURIComponent(tabId) + "/components", capturing: capturing,
+    allow: function (id) { return askBoard({ type: "scribe-plugin", op: "allow", plugin: id }, AGENT_ASK_MS); },
+    open: open, reply: reply, signal: signal,
+    local: function (id, value) {
+      var key = "component:" + id;
+      if (value === undefined) return local[key] || {};
+      var patch = {}; patch[key] = value; return setLocal(patch);
+    } });
 })();
 `.trim();
 

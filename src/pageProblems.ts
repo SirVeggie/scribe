@@ -14,6 +14,8 @@ type Session = {
   served: boolean;
   exists: (key: string) => boolean | undefined;
   servedNow: () => void;
+  pendingNow: () => void;
+  expiresAt: number;
   finish: (problems: PageProblem[]) => void;
 };
 
@@ -21,18 +23,19 @@ type Session = {
 export class PageProblems {
   private sessions = new Map<string, Session>();
 
-  boot(id: string, revision: number): { token: string } | undefined {
+  boot(id: string, revision: number): { token: string; remainingMs: number } | undefined {
     const session = this.sessions.get(id);
     if (session?.revision !== revision) return undefined;
     session.started = true;
     if (!session.served) { session.served = true; session.servedNow(); }
-    return { token: session.token };
+    return { token: session.token, remainingMs: Math.max(0, session.expiresAt - Date.now()) };
   }
 
   report(id: string, input: any): void {
     const session = this.sessions.get(id);
     if (!session || input?.token !== session.token) return;
     session.started = true;
+    if (input.phase === "pending") { session.pendingNow(); return; }
     if (input.phase !== "done") return;
     const problems = cleanProblems(input.problems);
     const links = Array.isArray(input.links) ? input.links.slice(0, 32) : [];
@@ -54,12 +57,16 @@ export class PageProblems {
       const timeoutMs = options.timeoutMs ?? 1800;
       const began = Date.now();
       const session: Session = {
-        token: randomBytes(16).toString("hex"), revision, started: false, served: false,
+        token: randomBytes(16).toString("hex"), revision, started: false, served: false, expiresAt: began + 3000,
         exists: options.exists ?? (() => undefined),
         servedNow: () => {
           clearTimeout(deadline);
           // Allow the first second after a cold launch, with a hard bound even for a hung page.
           deadline = setTimeout(() => session.finish([]), Math.min(3000 - (Date.now() - began), Math.max(timeoutMs - (Date.now() - began), 1500)));
+        },
+        pendingNow: () => {
+          clearTimeout(deadline);
+          deadline = setTimeout(() => session.finish([]), Math.max(0, session.expiresAt - Date.now()));
         },
         finish: problems => {
           if (this.sessions.get(id) !== session) return;

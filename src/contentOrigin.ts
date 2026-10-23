@@ -1,5 +1,5 @@
 import type express from "express";
-import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost } from "./config.js";
+import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost, pageComponentFromHost } from "./config.js";
 
 /** A tab page's origin (t-ab12cd34.localhost) or the shared content origin (127.0.0.2): never the board's. */
 export function isContentHost(req: express.Request): boolean {
@@ -18,6 +18,7 @@ const ACTION_PATH = /^\/api\/tabs\/[^/]+\/action$/;
 const PROBLEMS_PATH = /^\/api\/tabs\/[^/]+\/problems$/;
 const PLUGIN_PATH = /^\/api\/tabs\/[^/]+\/plugins\/[^/]+\/(call|state\/[^/]+)$/;
 const PLUGIN_STATUS_PATH = /^\/api\/tabs\/[^/]+\/plugins$/;
+const COMPONENT_PATH = /^\/api\/tabs\/[^/]+\/components(?:\/pc_[a-f0-9]{16}(?:\/(?:plugin|events))?)?$/;
 const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/;
 const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
@@ -55,6 +56,7 @@ export function previewShared(req: express.Request): boolean {
 /** The page routes a page's own script calls (src/bridge.ts), each for its own tab id. */
 function pageApi(req: express.Request): boolean {
   const { method, path } = req;
+  if (COMPONENT_PATH.test(path) && (method === "POST" || method === "DELETE" || (method === "GET" && path.endsWith("/events")))) return true;
   if(method==="GET"&&PLUGIN_STATUS_PATH.test(path))return true;
   if (PLUGIN_PATH.test(path) && ((method === "POST" && path.endsWith("/call")) || (method === "GET" && path.includes("/state/")))) return true;
   if ((method === "GET" || method === "PUT") && (STATE_PATH.test(path) || LOCAL_PATH.test(path))) return true;
@@ -90,7 +92,7 @@ function hostRedirect(req: express.Request, host: string, path: string): string 
 const PREVIEW_PATH = /^\/preview\/([^/]+)(\/.*)?$/;
 
 export function contentOriginGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  const component = componentItemFromHost(req.hostname);
+  const component = componentItemFromHost(req.hostname) ?? pageComponentFromHost(req.hostname);
   if (component) {
     // No API, assets, blobs, pages or shell scripts are available on a component origin.
     if (req.method === "GET" && req.path === `/component/${component}`) next();

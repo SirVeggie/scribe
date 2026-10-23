@@ -87,6 +87,11 @@ export function parseManifest(value: unknown): PluginManifest { return manifestS
 /** Declaration is metadata only; it can never grant access. */
 export function declaredPlugins(html: string): string[] {
   const ids = new Set<string>();
+  for (const tag of html.match(/<scribe-component\b[^>]*>/gi) ?? []) {
+    const match = /\bplugin\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    const id = match?.[1] ?? match?.[2] ?? match?.[3];
+    if (pluginId.safeParse(id).success) ids.add(id!);
+  }
   for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
     const attrs = new Map([...tag.matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(m => [m[1].toLowerCase(), m[2] ?? m[3]]));
     if (attrs.get("name")?.toLowerCase() !== "scribe-plugins") continue;
