@@ -292,6 +292,8 @@ export type Tab = {
 export type FileBinding = {
   path: string;
   copy?: boolean;
+  /** Hidden sibling retained while the page is in Scribe Trash. */
+  trashed?: string;
 };
 
 /**
@@ -674,5 +676,6 @@ export function normalizeFileBinding(value: unknown): FileBinding | undefined {
   if (!isPlainObject(value) || typeof value.path !== "string" || !value.path.trim()) {
     return undefined;
   }
-  return { path: value.path, ...(value.copy === true ? { copy: true } : {}) };
+  return { path: value.path, ...(value.copy === true ? { copy: true } : {}),
+    ...(typeof value.trashed === "string" && value.trashed.trim() ? { trashed: value.trashed } : {}) };
 }

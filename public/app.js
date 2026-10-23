@@ -4077,6 +4077,8 @@
   async function undoClose() {
     const res = await fetch("/api/undo", { method: "POST" });
     if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showNotice(data.error || "Could not restore the page");
       return;
     }
     noticeEl.hidden = true;
@@ -4092,7 +4094,7 @@
   const filesDeleteTrack = document.getElementById("files-delete");
   const DELETE_FILE_MODES = [
     { id: "", name: "Keep the file" },
-    { id: "trash", name: "Recycle the file" },
+    { id: "trash", name: "Delete the file too" },
   ];
   const NEW_FILE_NAMES = { md: "Untitled.md", txt: "Untitled.txt" };
   /** Where new files go and what deleting a file page does (the daemon keeps them). */

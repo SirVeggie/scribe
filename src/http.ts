@@ -71,7 +71,7 @@ import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
-import { DiskLinkTakenError, FileExistsError, NeedsLocationError, recycleFile } from "./diskFolders.js";
+import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
@@ -1502,10 +1502,7 @@ export async function startHttp(): Promise<http.Server> {
         if (!tab) throw new Error(`tab not found: ${id}`);
         return tab;
       });
-      for (const tab of tabs) {
-        if (recycle.includes(tab.id) && tab.file && !tab.file.copy) await recycleFile(tab.file.path);
-      }
-      const deleted = store.deleteMany(pages, folders);
+      const deleted = store.deleteMany(tabs.map((tab: Tab) => tab.id), folders, { parkFiles: recycle });
       res.json({ deleted: deleted.map((tab) => tab.id) });
     } catch (err) { sendStoreError(res, err); }
   });
@@ -1514,18 +1511,10 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const permanent = req.query.permanent === "true" || req.query.permanent === "1";
       if (permanent) {
-        // file=trash: the user also sends a file page's file to the Recycle Bin (#707).
+        // file=trash: retain the disk file with the page in Scribe Trash, so Undo restores both.
         const file = req.query.file === "trash" && viewerOf(req) !== "agent" ? store.get(req.params.id)?.file : undefined;
-        if (file && !file.copy) {
-          try {
-            await recycleFile(file.path);
-          } catch (err) {
-            res.status(500).json({ error: `Could not move the file to the Recycle Bin: ${(err as Error).message}` });
-            return;
-          }
-        }
-        const tab = store.deletePermanent(req.params.id);
-        res.json({ deleted: [tab.id], ...(file && !file.copy ? { recycled: file.path } : {}) });
+        const tab = store.deletePermanent(req.params.id, { parkFiles: file && !file.copy ? [req.params.id] : [] });
+        res.json({ deleted: [tab.id] });
         return;
       }
       const tab = store.closeTab(req.params.id);
@@ -1671,7 +1660,8 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.delete("/api/trash", (_req, res) => {
-    res.json({ purged: store.emptyTrash() });
+    try { res.json({ purged: store.emptyTrash() }); }
+    catch (err) { sendStoreError(res, err); }
   });
 
   /** Library "Clean up tabs": `dryRun` lists what would go; otherwise deletes it as one undoable batch. */

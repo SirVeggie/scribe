@@ -267,6 +267,16 @@ export class BoardStore extends EventEmitter {
       }
     }
     this.deleted = [...batches.values()].sort((a, b) => a.deletedAt - b.deletedAt);
+    // Recover a rename interrupted before the delete reached SQLite, or a failed rollback.
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      if (!tab.file || tab.file.copy) continue;
+      const parked = this.trashFilePath(tab);
+      if (!tab.file.trashed && !fs.existsSync(tab.file.path) && fs.existsSync(parked)) tab.file.trashed = parked;
+      if (tab.file.trashed) {
+        try { this.moveTrashFiles([tab], true); }
+        catch (err) { log(`Could not recover retained file for ${tab.id}: ${String(err)}`); }
+      }
+    }
     this.expireTrash();
     this.trashTimer = setInterval(() => {
       if (this.expireTrash()) {
@@ -2232,7 +2242,7 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Open or closed pages to the deleted bin as one undoable batch. */
-  deleteMany(idsOrKeys: string[], folderIds: string[] = []): Tab[] {
+  deleteMany(idsOrKeys: string[], folderIds: string[] = [], opts: { parkFiles?: string[] } = {}): Tab[] {
     const batch: DeletedBatch = { id: newBatchId(), deletedAt: this.stamp(), tabs: [], folders: [] };
     const treeIds = new Set<string>();
     for (const id of folderIds) {
@@ -2241,6 +2251,11 @@ export class BoardStore extends EventEmitter {
     }
     batch.folders = this.listFolders().filter((folder) => treeIds.has(folder.id)).sort((a, b) => this.folderDepth(a) - this.folderDepth(b));
     const pageIds = new Set([...idsOrKeys, ...this.libraryTabs().filter((tab) => tab.folderId && treeIds.has(tab.folderId)).map((tab) => tab.id)]);
+    const park = new Set(opts.parkFiles);
+    this.moveTrashFiles([...pageIds].flatMap((id) => {
+      const tab = this.locate(id)?.tab;
+      return tab && park.has(tab.id) && !isAppTab(tab) ? [tab] : [];
+    }), false);
     const wasActive = this.activeId;
     const prevOrder = this.order;
     for (const idOrKey of pageIds) {
@@ -2273,10 +2288,11 @@ export class BoardStore extends EventEmitter {
     if (wasActive !== this.activeId) {
       this.emit("tab_focused", this.activeId);
     }
+    if (park.size) this.persist();
     return batch.tabs;
   }
 
-  deletePermanent(idOrKey: string): Tab {
+  deletePermanent(idOrKey: string, opts: { parkFiles?: string[] } = {}): Tab {
     const located = this.locate(idOrKey);
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
@@ -2284,7 +2300,7 @@ export class BoardStore extends EventEmitter {
     if (isAppTab(located.tab)) {
       return this.discardAppTab(located.tab);
     }
-    this.deleteMany([located.tab.id]);
+    this.deleteMany([located.tab.id], [], opts);
     return located.tab;
   }
 
@@ -2363,8 +2379,10 @@ export class BoardStore extends EventEmitter {
       throw new Error("nothing to restore");
     }
     if (batch && (!newestClosed || batch.deletedAt >= (newestClosed.closedAt ?? 0))) {
+      this.moveTrashFiles(batch.tabs, true);
       this.deleted.pop();
       const tab = this.restoreBatch(batch);
+      this.persist();
       this.emit("trash");
       return { tab };
     }
@@ -2694,21 +2712,21 @@ export class BoardStore extends EventEmitter {
 
   /** Put a trashed page, or a trashed folder with what it held, back in the Library (closed). */
   restoreFromTrash(id: string): { tabs: Tab[]; folders: Folder[] } {
-    const part = this.takeFromTrash(id);
+    const part = this.takeFromTrash(id, (part) => this.moveTrashFiles(part.tabs, true));
     for (const tab of part.tabs) {
       if (typeof tab.closedAt !== "number") {
         tab.closedAt = this.stamp();
       }
     }
     this.restoreBatch(part);
+    this.persist();
     this.emit("trash");
     return { tabs: part.tabs, folders: part.folders };
   }
 
   /** Delete a trashed page, or a trashed folder with what it held, for good. */
   purgeFromTrash(id: string): number {
-    const part = this.takeFromTrash(id);
-    this.dropForever(part);
+    const part = this.takeFromTrash(id, (part) => this.dropForever(part));
     this.persistSoon();
     this.emit("trash");
     return part.tabs.length;
@@ -2716,12 +2734,16 @@ export class BoardStore extends EventEmitter {
 
   emptyTrash(): number {
     let count = 0;
-    for (const batch of this.deleted.splice(0)) {
-      count += batch.tabs.length;
-      this.dropForever(batch);
+    try {
+      for (const batch of [...this.deleted]) {
+        this.dropForever(batch);
+        this.deleted.splice(this.deleted.indexOf(batch), 1);
+        count += batch.tabs.length;
+      }
+    } finally {
+      this.persistSoon();
+      this.emit("trash");
     }
-    this.persistSoon();
-    this.emit("trash");
     return count;
   }
 
@@ -3184,7 +3206,7 @@ export class BoardStore extends EventEmitter {
         stat = fs.statSync(p);
       } catch {
         const tab = known.get(norm(p));
-        if (tab) gone.push(tab);
+        if (tab && !tab.file?.trashed && (this.tabs.has(tab.id) || this.closed.has(tab.id))) gone.push(tab);
         continue;
       }
       if (stat.isDirectory()) {
@@ -3739,6 +3761,67 @@ export class BoardStore extends EventEmitter {
       this.emit("tab_focused", tab.id);
     }
     return tab;
+  }
+
+  private trashFilePath(tab: Tab): string {
+    return path.join(path.dirname(tab.file!.path), `.${path.basename(tab.file!.path)}.${tab.id}.deleted`);
+  }
+
+  /** Park/restore the whole selection before changing the Library or the Undo stack. */
+  private moveTrashFiles(tabs: Tab[], restore: boolean): void {
+    const moves: Array<{ tab: Tab; from: string; to: string }> = [];
+    const alreadyRestored: Tab[] = [];
+    const exists = (file: string): boolean => {
+      try { fs.lstatSync(file); return true; }
+      catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return false; throw err; }
+    };
+    for (const tab of new Set(tabs)) {
+      const file = tab.file;
+      if (!file || file.copy) continue;
+      if (restore && !file.trashed) continue;
+      if (!restore && (file.trashed || !exists(file.path))) continue;
+      const parked = file.trashed ?? this.trashFilePath(tab);
+      const from = restore ? parked : file.path;
+      const to = restore ? file.path : parked;
+      if (restore && !exists(from)) {
+        // A crash can leave SQLite behind a completed restore. If both paths are gone,
+        // restore the page as missing, like a file removed outside Scribe.
+        if (!exists(to)) log(`Retained file is missing while restoring ${tab.id}: ${from}`);
+        alreadyRestored.push(tab);
+        continue;
+      }
+      if (exists(to)) throw new FileExistsError(to);
+      moves.push({ tab, from, to });
+    }
+    const moved: typeof moves = [];
+    try {
+      for (const move of moves) {
+        moveFile(move.from, move.to);
+        moved.push(move);
+      }
+    } catch (err) {
+      for (const move of moved.reverse()) {
+        try { moveFile(move.to, move.from); }
+        catch (rollback) {
+          // Retain the actual location even if an external change prevents rollback.
+          if (restore) delete move.tab.file!.trashed;
+          else move.tab.file!.trashed = move.to;
+          this.markDirty(move.tab.id);
+          this.persistSoon();
+          log(`Could not roll back Trash file move: ${String(rollback)}`);
+        }
+      }
+      throw err;
+    }
+    for (const move of moved) {
+      if (restore) delete move.tab.file!.trashed;
+      else move.tab.file!.trashed = move.to;
+      this.markDirty(move.tab.id);
+    }
+    for (const tab of alreadyRestored) {
+      delete tab.file!.trashed;
+      this.markDirty(tab.id);
+    }
   }
 
   /** Put a deleted batch back where it was: folders first, then pages open or closed as they were. */
@@ -4425,7 +4508,13 @@ export class BoardStore extends EventEmitter {
     const cutoff = Date.now() - TRASH_TTL_MS;
     let dropped = false;
     while (this.deleted.length && this.deleted[0].deletedAt < cutoff) {
-      this.dropForever(this.deleted.shift()!);
+      try {
+        this.dropForever(this.deleted[0]);
+      } catch (err) {
+        log(`Could not expire Trash files: ${String(err)}`);
+        break;
+      }
+      this.deleted.shift();
       dropped = true;
     }
     if (dropped) {
@@ -4436,6 +4525,10 @@ export class BoardStore extends EventEmitter {
 
   /** Forget pages and folders already taken out of the Trash. */
   private dropForever(gone: DeletedBatch): void {
+    // Keep the Trash entry on failure so cleanup can be retried. Never touch the original path.
+    for (const tab of gone.tabs) {
+      if (tab.file?.trashed) fs.rmSync(tab.file.trashed, { force: true });
+    }
     for (const tab of gone.tabs) {
       this.removed.add(tab.id);
       this.dirty.delete(tab.id);
@@ -4452,7 +4545,7 @@ export class BoardStore extends EventEmitter {
   }
 
   /** Remove a page, or a folder subtree and its pages, from its Trash batch and return them as a batch. */
-  private takeFromTrash(id: string): DeletedBatch {
+  private takeFromTrash(id: string, prepare?: (part: DeletedBatch) => void): DeletedBatch {
     const at = this.deleted.findIndex(
       (batch) => batch.tabs.some((tab) => tab.id === id) || batch.folders.some((folder) => folder.id === id)
     );
@@ -4479,6 +4572,7 @@ export class BoardStore extends EventEmitter {
     } else {
       part.tabs = batch.tabs.filter((tab) => tab.id === id);
     }
+    prepare?.(part);
     batch.folders = batch.folders.filter((folder) => !part.folders.includes(folder));
     batch.tabs = batch.tabs.filter((tab) => !part.tabs.includes(tab));
     if (!batch.tabs.length && !batch.folders.length) {

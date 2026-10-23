@@ -14,7 +14,7 @@ import { log } from "./log.js";
 export type FileSettings = {
   /** Folder for new files when the target Library folder has no disk location. */
   defaultLocation?: string;
-  /** Deleting a file page: ask each time (unset), always move the file to the Recycle Bin, or keep it. */
+  /** Deleting a file page: default to retaining the file in Scribe Trash, or keeping it on disk. */
   deleteFiles?: "trash" | "keep";
 };
 

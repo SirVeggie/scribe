@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, test } from "node:test";
+import { afterEach, beforeEach, mock, test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError, uniqueFileName, watchRoots, within } from "./diskFolders.js";
 import { BoardStore } from "./store.js";
@@ -264,4 +264,164 @@ test("the watcher turns a file written on disk into a page", async () => {
     store.stopDiskWatch();
     store.closeDb();
   }
+});
+
+test("deleted disk files survive reload and restore with their pages", () => {
+  let store = loaded();
+  const file = write(path.join(work, "note.md"), "retained bytes");
+  const tab = store.openFilePage({ path: file }).tab;
+  store.deletePermanent(tab.id, { parkFiles: [tab.id] });
+  const parked = tab.file!.trashed!;
+  assert.ok(parked.endsWith(".deleted"));
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readFileSync(parked, "utf8"), "retained bytes");
+  store.closeDb();
+  store = loaded();
+  try {
+    store.restoreLast();
+    assert.equal(fs.readFileSync(file, "utf8"), "retained bytes");
+    assert.equal(fs.existsSync(parked), false);
+    assert.equal(store.get(tab.id)?.file?.trashed, undefined);
+  } finally { store.closeDb(); }
+});
+
+test("restore conflicts leave the page and retained file in Trash for retry", () => {
+  const store = loaded();
+  try {
+    const file = write(path.join(work, "note.md"), "old");
+    const tab = store.openFilePage({ path: file }).tab;
+    store.deletePermanent(tab.id, { parkFiles: [tab.id] });
+    const parked = tab.file!.trashed!;
+    write(file, "replacement");
+    assert.throws(() => store.restoreLast(), FileExistsError);
+    assert.equal(store.get(tab.id), undefined);
+    assert.equal(fs.readFileSync(file, "utf8"), "replacement");
+    assert.equal(fs.readFileSync(parked, "utf8"), "old");
+    assert.throws(() => store.restoreFromTrash(tab.id), FileExistsError);
+    fs.unlinkSync(file);
+    store.restoreFromTrash(tab.id);
+    assert.equal(fs.readFileSync(file, "utf8"), "old");
+    assert.ok(store.get(tab.id));
+  } finally { store.closeDb(); }
+});
+
+test("restore tolerates a completed disk restore whose SQLite update was interrupted", () => {
+  let store = loaded();
+  const file = write(path.join(work, "note.md"), "old");
+  const tab = store.openFilePage({ path: file }).tab;
+  store.deletePermanent(tab.id, { parkFiles: [tab.id] });
+  fs.renameSync(tab.file!.trashed!, file);
+  store.closeDb();
+  store = loaded();
+  try {
+    store.restoreFromTrash(tab.id);
+    assert.equal(fs.readFileSync(file, "utf8"), "old");
+    assert.equal(store.get(tab.id)?.file?.trashed, undefined);
+  } finally { store.closeDb(); }
+});
+
+test("a removed retained file restores as a missing file page without blocking Undo", () => {
+  const store = loaded();
+  try {
+    const file = write(path.join(work, "gone.md"), "gone");
+    const tab = store.openFilePage({ path: file }).tab;
+    store.deletePermanent(tab.id, { parkFiles: [tab.id] });
+    fs.unlinkSync(tab.file!.trashed!);
+    store.restoreLast();
+    assert.equal(store.get(tab.id)?.file?.path, file);
+    assert.equal(store.get(tab.id)?.file?.trashed, undefined);
+    assert.equal(fs.existsSync(file), false);
+  } finally { store.closeDb(); }
+});
+
+test("startup recovers a file parked before the page delete was persisted", () => {
+  let store = loaded();
+  const file = write(path.join(work, "note.md"), "crash recovery");
+  const tab = store.openFilePage({ path: file }).tab;
+  store.persist();
+  const parked = path.join(work, `.${path.basename(file)}.${tab.id}.deleted`);
+  fs.renameSync(file, parked);
+  store.closeDb();
+  store = loaded();
+  try {
+    assert.equal(fs.readFileSync(file, "utf8"), "crash recovery");
+    assert.equal(fs.existsSync(parked), false);
+    assert.ok(store.get(tab.id));
+  } finally { store.closeDb(); }
+});
+
+test("bulk file deletion rolls back earlier moves if a later rename fails", () => {
+  const store = loaded();
+  try {
+    const a = write(path.join(work, "a.md"), "a");
+    const b = write(path.join(work, "b.md"), "b");
+    const tabs = [a, b].map((file) => store.openFilePage({ path: file }).tab);
+    const ids = tabs.map((tab) => tab.id);
+    const rename = fs.renameSync;
+    const stub = mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+      if (from === b) throw new Error("locked file");
+      return rename(from, to);
+    });
+    try { assert.throws(() => store.deleteMany(ids, [], { parkFiles: ids }), /locked file/); }
+    finally { stub.mock.restore(); }
+    for (const tab of tabs) {
+      assert.ok(store.get(tab.id));
+      assert.equal(tab.file!.trashed, undefined);
+      assert.ok(fs.existsSync(tab.file!.path));
+    }
+    assert.deepEqual(fs.readdirSync(work).sort(), ["a.md", "b.md"]);
+  } finally { store.closeDb(); }
+});
+
+test("watcher events and rescans do not turn retained files into new or renamed pages", () => {
+  const store = loaded();
+  try {
+    const file = write(path.join(work, "a.md"), "a");
+    store.openDiskFolder(work, null);
+    const tab = store.findFilePage(file)!;
+    store.deletePermanent(tab.id, { parkFiles: [tab.id] });
+    const parked = tab.file!.trashed!;
+    const other = write(path.join(work, "b.md"), "b");
+    store.diskChanged([file, other]);
+    store.rescanDisk(work);
+    assert.equal(tab.file!.path, file);
+    assert.equal(tab.file!.trashed, parked);
+    assert.ok(store.findFilePage(other));
+    assert.equal(store.findFilePage(parked), undefined);
+    store.restoreFromTrash(tab.id);
+    assert.equal(fs.readFileSync(file, "utf8"), "a");
+  } finally { store.closeDb(); }
+});
+
+test("purging removes only the retained file, while keeping a replacement and kept files", () => {
+  const store = loaded();
+  try {
+    const a = write(path.join(work, "a.md"), "a");
+    const b = write(path.join(work, "b.md"), "b");
+    const first = store.openFilePage({ path: a }).tab;
+    const second = store.openFilePage({ path: b }).tab;
+    store.deleteMany([first.id, second.id], [], { parkFiles: [first.id] });
+    const parked = first.file!.trashed!;
+    write(a, "replacement");
+    store.purgeFromTrash(first.id);
+    assert.equal(fs.existsSync(parked), false);
+    assert.equal(fs.readFileSync(a, "utf8"), "replacement");
+    store.emptyTrash();
+    assert.equal(fs.readFileSync(b, "utf8"), "b");
+  } finally { store.closeDb(); }
+});
+
+test("Trash expiry also removes retained disk files", () => {
+  const store = loaded();
+  try {
+    const file = write(path.join(work, "old.md"), "old");
+    const tab = store.openFilePage({ path: file }).tab;
+    const now = Date.now();
+    store.deletePermanent(tab.id, { parkFiles: [tab.id] });
+    const batches = (store as unknown as { deleted: Array<{ deletedAt: number }> }).deleted;
+    batches[batches.length - 1].deletedAt = now - 40 * 24 * 60 * 60 * 1000;
+    const parked = tab.file!.trashed!;
+    store.deleteMany([store.upsert({ title: "Trigger expiry", html: "<p>x</p>" }).tab.id]);
+    assert.equal(fs.existsSync(parked), false);
+  } finally { store.closeDb(); }
 });

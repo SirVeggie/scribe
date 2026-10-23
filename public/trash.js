@@ -202,7 +202,8 @@ window.createTrash = function createTrash(host) {
     const found = find(kind, id);
     const res = await send("POST", `/api/trash/${encodeURIComponent(id)}/restore`);
     if (!res.ok) {
-      host.showNotice("Could not restore");
+      const data = await res.json?.().catch(() => ({}));
+      host.showNotice(data?.error || "Could not restore");
       return;
     }
     host.showNotice(`Restored “${found?.name ?? (kind === "folder" ? "folder" : "page")}” to the Library`);
@@ -222,7 +223,8 @@ window.createTrash = function createTrash(host) {
     }
     const res = await send("DELETE", `/api/trash/${encodeURIComponent(id)}`);
     if (!res.ok) {
-      host.showNotice("Could not delete");
+      const data = await res.json?.().catch(() => ({}));
+      host.showNotice(data?.error || "Could not delete");
       return;
     }
     host.showNotice(`Permanently deleted “${found.name}”`);
@@ -244,6 +246,9 @@ window.createTrash = function createTrash(host) {
     if (res.ok) {
       host.showNotice("Emptied the Trash");
       load();
+    } else {
+      const data = await res.json?.().catch(() => ({}));
+      host.showNotice(data?.error || "Could not empty the Trash");
     }
   }
 

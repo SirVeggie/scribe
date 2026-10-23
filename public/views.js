@@ -1668,7 +1668,8 @@ window.createViews = function createViews(host) {
 
   async function restoreFromTrash(id) {
     const res = await fetch(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }).catch(() => null);
-    host.showNotice(res?.ok ? "Restored to the Library" : "Could not restore");
+    const data = res && !res.ok ? await res.json().catch(() => ({})) : {};
+    host.showNotice(res?.ok ? "Restored to the Library" : data.error || "Could not restore");
   }
 
   /** Look pages up for a page's link labels: { [target]: { id, title, open } | null }. */

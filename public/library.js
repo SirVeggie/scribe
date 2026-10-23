@@ -1402,7 +1402,7 @@ window.createLibrary = function createLibrary(host) {
 
   function fileDeletionCheck(files) {
     return files.length ? {
-      label: files.length === 1 ? "Also move the file to the Recycle Bin" : `Also move ${files.length} files to the Recycle Bin`,
+      label: files.length === 1 ? "Also delete the file (Undo restores it)" : `Also delete ${files.length} files (Undo restores them)`,
       checked: host.fileSettings().deleteFiles === "trash",
     } : undefined;
   }
@@ -1421,7 +1421,7 @@ window.createLibrary = function createLibrary(host) {
     }
     const res = await send("DELETE", `/api/tabs/${encodeURIComponent(id)}?permanent=true${recycle ? "&file=trash" : ""}`);
     if (res.ok) {
-      host.showNotice(`Deleted “${page?.title ?? "page"}”${recycle ? " and moved its file to the Recycle Bin" : ""}`, { undo: true });
+      host.showNotice(`Deleted “${page?.title ?? "page"}”${recycle ? " and its file" : ""}`, { undo: true });
     } else if (recycle) {
       const data = await res.json().catch(() => ({}));
       host.showNotice(data.error || "Could not delete the page");
