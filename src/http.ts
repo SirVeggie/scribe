@@ -191,6 +191,7 @@ export async function startHttp(): Promise<http.Server> {
     "/vendor/purify.js": path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js"),
     "/vendor/highlight.js": () => highlightBundle ??= highlightScript(),
     "/vendor/editor.js": editorBundle,
+    "/vendor/scribe-md.js": path.join(publicDir, "..", "templates", "scribe-md.js"),
   }));
   agentHost = new AgentHost((event) => {
     broadcast(event);

@@ -39,7 +39,7 @@ test("content origin serves the injected tooltip script while rejecting other sh
     assert.match(worklet.headers.get("content-type")!, /javascript/);
     assert.equal(await worklet.text(), fs.readFileSync(path.join(publicDir, "audio-stream-worklet.js"), "utf8"));
     // The file viewer's shared libraries pass the gate (#654); other vendor files do not.
-    for (const url of ["/vendor/highlight.js", "/vendor/marked.js", "/vendor/purify.js", "/vendor/pdfjs/build/pdf.min.mjs", "/vendor/pdfjs/build/pdf.worker.min.mjs", "/vendor/pdfjs/cmaps/UniJIS-UCS2-H.bcmap", "/vendor/pdfjs/wasm/openjpeg.wasm"]) {
+    for (const url of ["/vendor/highlight.js", "/vendor/marked.js", "/vendor/purify.js", "/vendor/scribe-md.js", "/vendor/pdfjs/build/pdf.min.mjs", "/vendor/pdfjs/build/pdf.worker.min.mjs", "/vendor/pdfjs/cmaps/UniJIS-UCS2-H.bcmap", "/vendor/pdfjs/wasm/openjpeg.wasm"]) {
       assert.equal((await fetch(base + url)).status, 200, url);
     }
     for (const url of ["/app.js", "/app.css", "/vendor/other.js", "/vendor/marked.js/x", "/vendor/pdfjs/package.json", "/vendor/pdfjs/build/pdf.mjs.map", "/vendor/pdfjs/cmaps/../package.json", "/vendor/pdfjs/web/pdf_viewer.mjs", "/api/tabs", "/api/tabs/t_1/file", "/api/agent/threads", "/api/appearance", "/api/appearance/bootstrap.js", "/tooltip.js/extra", "/Tooltip.js", "/Kit.css", "/Kit.js"]) {
