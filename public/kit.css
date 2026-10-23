@@ -342,6 +342,7 @@
 }
 :where(button.primary, .button.primary, form[data-reply] button[type="submit"]):hover { filter: brightness(1.08); }
 :where(button):disabled { opacity: 0.55; cursor: default; filter: none; }
+:where(button.kit-reply-chosen):disabled { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- forms ---------- */
 

@@ -10,7 +10,7 @@
 
   var DRAFTS = "kitForms";
   var forms = Array.prototype.slice.call(document.querySelectorAll("form[data-reply]"));
-  if (!forms.length) return;
+  var replyPending = false;
 
   function formKey(form, i) {
     return form.id || "form" + i;
@@ -72,6 +72,15 @@
   }
 
   function statusEl(form) {
+    if (form.matches('button[data-reply]')) {
+      if (form._kitStatus) return form._kitStatus;
+      var buttonStatus = document.createElement("span");
+      buttonStatus.className = "kit-status";
+      buttonStatus.setAttribute("role", "status");
+      form.after(buttonStatus);
+      form._kitStatus = buttonStatus;
+      return buttonStatus;
+    }
     var status = form.querySelector(".kit-status");
     if (status) return status;
     status = document.createElement("span");
@@ -88,6 +97,46 @@
     status.textContent = text;
     status.className = "kit-status" + (tone ? " " + tone : "");
   }
+
+  // Use the host's reply bridge in pages and component frames alike.
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest && event.target.closest('button[data-reply]');
+    if (!button) return;
+    event.preventDefault(); // Do not also submit a surrounding form.
+    if (replyPending || button.disabled) return;
+    var summary = button.getAttribute("data-reply").trim() || button.textContent.trim();
+    var answers = {};
+    try {
+      if (button.hasAttribute("data-context")) answers = JSON.parse(button.getAttribute("data-context"));
+      if (!answers || typeof answers !== "object" || Array.isArray(answers)) throw new Error("data-context must be a JSON object");
+    } catch (error) {
+      show(button, "Not sent: " + error.message, "error");
+      return;
+    }
+    replyPending = true;
+    var buttons = Array.prototype.slice.call(document.querySelectorAll('button[data-reply]'));
+    var disabled = buttons.map(function (el) { return el.disabled; });
+    buttons.forEach(function (el) { el.disabled = true; });
+    button.classList.add("kit-reply-chosen");
+    button.setAttribute("aria-pressed", "true");
+    show(button, "Sending…");
+    Promise.resolve().then(function () {
+      return scribe.reply(answers, { summary: summary });
+    }).then(function (result) {
+      if (result && result.ok) return;
+      var error = (result && result.error) || "unknown error";
+      if (!/no reply target/i.test(error)) throw new Error(error);
+      scribe.signal("submitted", { answers: answers, summary: summary });
+    }).then(function () {
+      show(button, "Sent", "ok");
+    }, function (error) {
+      replyPending = false;
+      buttons.forEach(function (el, i) { el.disabled = disabled[i]; });
+      button.classList.remove("kit-reply-chosen");
+      button.removeAttribute("aria-pressed");
+      show(button, "Not sent: " + ((error && error.message) || error), "error");
+    });
+  });
 
   forms.forEach(function (form, i) {
     var key = formKey(form, i);
