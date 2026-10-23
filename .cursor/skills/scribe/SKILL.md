@@ -850,6 +850,15 @@ In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the pa
 - Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
 
+## Inline UI in chat: component_show
+
+For a small choice or table inside the reply itself (not a page), call `component_show` with `html`: a fragment that uses the Page kit (kit.css and kit.js are included, so `<button data-reply>` and `<form data-reply>` work). Or pass `plugin`, `component` and `props` from `plugin_guide`. Always add `fallback` markdown: history, `thread_read` and exports show it (or the `setSummary` text) in place of the widget.
+
+- The frame has its own sandboxed origin with no network and no page API. Its `window.scribe` has only `props`, `local`/`setLocal` (view state for this item), `reply(data, { summary })`, `setSummary(text)` and `open(link)` (`scribe:` keys or external websites). Plugin components also get `scribe.plugin.call/state/on` for their declared methods, state and events.
+- `wait: true` blocks until the user clicks a reply (the result has `data` and `summary`) or Skip. Without `wait`, a reply sends its summary as a chat message.
+- Replies and links need a real click in the frame; a script can't send one by itself.
+- Plugin components may return `problems` from their first render, like `page_show`.
+
 ## Page plugins
 
 Plugins give pages local backend methods, shared state and templates. Discover them with `plugin_list` and read a specific guide with `plugin_guide`. To build or edit a plugin, read `PLUGINS.md` (or `scribe_docs` with topic `plugins`) first. Ordinary pages use `scribe.plugin(id)` and declare dependencies through `page_show({plugins:[id]})`; Scribe controls access.

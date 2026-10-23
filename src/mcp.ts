@@ -1599,10 +1599,7 @@ function registerSettings(server: McpServer): void {
   );
 }
 
-/**
- * ask_user: Scribe's own question tool, the same on every provider. The chat shows the questions as
- * a card (a form dialog when there are many) and the turn waits for the answers.
- */
+/** component_show: sandboxed kit HTML or a plugin component as a chat item (src/components.ts). */
 function registerComponent(server: McpServer): void {
   server.tool("component_show", "Show UI inline in chat: provide either html (kit HTML, at most 256 KiB), or plugin/component/props from plugin_guide. Plugin props are schema-checked; saved items use the currently installed plugin version and fall back to markdown if unavailable. Only this tool creates chat components. No network or page API access. Plugin components can call only their own declared methods and read declared state/events, under the thread and page permissions. scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text. With wait:true, waits for scribe.reply(data,{summary}) or Skip; otherwise replies send their summary as a chat message. Include fallback markdown.", {
     html: z.string().optional().describe("HTML fragment or document; kit.css and kit.js are included. Mutually exclusive with plugin/component/props."),
@@ -1623,6 +1620,10 @@ function registerComponent(server: McpServer): void {
   });
 }
 
+/**
+ * ask_user: Scribe's own question tool, the same on every provider. The chat shows the questions as
+ * a card (a form dialog when there are many) and the turn waits for the answers.
+ */
 function registerQuestion(server: McpServer): void {
   const question = z.object({
     question: z.string().describe("The full question."),
