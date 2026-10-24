@@ -931,10 +931,11 @@ class ClaudeSession implements ProviderSession {
     void this.readLoop(q);
     this.queryReady = (async () => {
       const source = await q.accountInfo().then(claudeBillingSource, () => ({}));
+      const requestedAt = Date.now();
       const report = await queryPlanUsage(q);
       if (this.query !== q) return;
       this.accounting.baseline(report);
-      this.queryLimits = claudePlanSnapshot(report, source, Date.now(), this.queryLimits);
+      this.queryLimits = claudePlanSnapshot(report, source, requestedAt, this.queryLimits);
       this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
     })();
     await this.queryReady;
@@ -1398,10 +1399,14 @@ class ClaudeSession implements ProviderSession {
         if (parent) return; // modelUsage already includes SDK subagent calls.
         sink.usage({ ...this.accounting.result(m), billingSource: this.queryLimits.billingSource, ...(this.contextTokens ? { contextTokens: this.contextTokens } : {}) });
         const activeQuery = this.query;
+        // Stamp the reading with its request time, so a slow read cannot supersede a newer
+        // observation, and drop it when this query reported again while it was in flight.
+        const requestedAt = Date.now();
+        const beforeRead = this.queryLimits;
         if (activeQuery) void queryPlanUsage(activeQuery).then((report) => {
-          if (this.query !== activeQuery) return;
+          if (this.query !== activeQuery || this.queryLimits !== beforeRead) return;
           const current = this.queryLimits;
-          this.queryLimits = { ...claudePlanSnapshot(report, current.billingSource ?? {}, Date.now(), current),
+          this.queryLimits = { ...claudePlanSnapshot(report, current.billingSource ?? {}, requestedAt, current),
             ...(current.overageAt ? { overage: current.overage, overageAt: current.overageAt } : {}) };
           this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
         });

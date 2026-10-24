@@ -874,6 +874,8 @@ export class AgentHost {
     const windows = new Map((previous?.windows ?? []).map((w) => [w.id, w]));
     for (const window of next.windows) windows.set(window.id, window);
     const merged = { ...previous, ...next, windows: [...windows.values()] };
+    // Rate-limit events always carry a status; a newer reading without one is a full /usage read.
+    if (next.status === undefined) delete merged.status;
     if ((previous?.extraUsage?.at ?? 0) > (next.extraUsage?.at ?? 0)) merged.extraUsage = previous?.extraUsage;
     if ((previous?.overageAt ?? 0) > (next.overageAt ?? 0)) {
       merged.overage = previous?.overage;

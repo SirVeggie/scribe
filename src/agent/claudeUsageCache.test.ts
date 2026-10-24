@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { claudePlanSnapshot } from "./claudeUsage.js";
+import { planLimitsFromRateLimitInfo } from "./planLimits.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-claude-quota-"));
 process.env.SCRIBE_HOME = dir;
@@ -141,5 +142,57 @@ test("readings from either thread publish globally and an in-flight probe cannot
     internal.ctx.claudeLimits(b, { ...snapshot(45, now + 1), overage: true, overageAt: now + 4 });
     assert.equal(host.limits().claude?.windows[0].utilization, 0.7);
     assert.equal(host.limits().claude?.overage, true, "fresh overage events update globally without rolling back windows");
+  } finally { host.dispose(); }
+});
+
+test("a full reading or a reset clears a stale Claude rejection, so the provider is usable again", () => {
+  const host = new AgentHost(() => {}, async () => null);
+  const internal = host as any;
+  internal.fakes = {};
+  internal.planLimits = {};
+  const source = { tokenSource: "oauth" };
+  const now = Date.now();
+  try {
+    const a = host.createThread({ provider: "claude" }).id;
+    const rejected = (resetsAt: number, at: number) => ({ ...planLimitsFromRateLimitInfo({ status: "rejected", rateLimitType: "five_hour", utilization: 1, resetsAt }, at)!,
+      source: "claude" as const, availability: "available" as const, billingSource: source });
+    internal.ctx.claudeLimits(a, rejected(now + 3600000, now));
+    assert.equal(host.limits().claude?.status, "rejected");
+    internal.ctx.claudeLimits(a, claudePlanSnapshot({ rate_limits: { five_hour: { utilization: 5, resets_at: now + 18000000 } } }, source, now + 1));
+    assert.equal(host.limits().claude?.status, undefined, "a newer full reading drops the old rejection");
+
+    // No reading after the reset: the rejection expires with its full window.
+    internal.ctx.claudeLimits(a, rejected(now - 1000, now + 2));
+    assert.equal(host.limits().claude?.status, undefined);
+    assert.equal(host.limits().claude?.windows.find((w) => w.id === "five_hour")?.utilization, 0);
+  } finally { host.dispose(); }
+});
+
+test("a slow post-turn quota read cannot supersede a newer reading from another thread", async () => {
+  const host = new AgentHost(() => {}, async () => null);
+  const internal = host as any;
+  internal.fakes = {};
+  internal.planLimits = {};
+  const source = { tokenSource: "oauth" };
+  const now = Date.now();
+  const report = (percent: number) => ({ rate_limits: { five_hour: { utilization: percent, resets_at: now + 3600000 } } });
+  try {
+    const a = host.createThread({ provider: "claude" }).id;
+    const b = host.createThread({ provider: "claude" }).id;
+    const session = internal.providers.claude.createSession(internal.threads.get(a), internal.ctx);
+    let resolve!: (value: unknown) => void;
+    session.query = { getUsage: () => new Promise((r) => { resolve = r; }) };
+    session.queryLimits = claudePlanSnapshot(report(10), source, now - 10);
+    session.sink = { usage() {}, text() {}, notice() {} };
+    session.endTurn = () => {};
+    session.onMessage({ type: "result", ...{ subtype: "success", modelUsage: {} } });
+    await new Promise((r) => setTimeout(r, 5));
+    internal.ctx.claudeLimits(b, claudePlanSnapshot(report(60), source, Date.now()));
+    await new Promise((r) => setTimeout(r, 5));
+    resolve(report(20));
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.6, "the delayed read is older than b's reading");
+    session.sink = null;
+    session.dispose();
   } finally { host.dispose(); }
 });

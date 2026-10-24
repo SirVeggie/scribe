@@ -164,8 +164,13 @@ export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanL
     changed = true;
     return { ...w, utilization: 0, expired: true as const };
   });
-  if (!changed) return limits;
-  return { ...limits, windows };
+  // A rejection ends with the reset of the windows that caused it: once none is still full.
+  const staleRejection = limits.status === "rejected" && windows.some((w) => w.expired) &&
+    !windows.some((w) => !w.expired && w.id !== "overage" && w.utilization >= 1);
+  if (!changed && !staleRejection) return limits;
+  const out = { ...limits, windows };
+  if (staleRejection) delete out.status;
+  return out;
 }
 
 /** Soonest reset not yet handled, including ones already due. Null when none are known. */
