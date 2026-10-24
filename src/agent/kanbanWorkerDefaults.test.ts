@@ -73,7 +73,7 @@ test("page launch forwards card context through the bridge into the first messag
   assert.equal(calls[1].body.cardContext, 42);
 });
 
-test("page usage snapshots and board preserve Claude and Codex reports past reset", () => {
+test("page and board zero Claude after reset while Codex awaits confirmation", () => {
   const now = Date.now();
   const limits = {
     codex: { windows: [{ label: "5 hours", utilization: 1, resetsAt: now - 1000 }], ordinaryUsageAllowed: false },
@@ -88,13 +88,12 @@ test("page usage snapshots and board preserve Claude and Codex reports past rese
   const snapshot = vm.runInContext("pageLimits()", context);
   assert.equal(snapshot.codex.windows[0].utilization, 1);
   assert.equal(snapshot.codex.ordinaryUsageAllowed, false);
-  // Both surfaces retain provider observations until a fresh report confirms recovery.
-  assert.equal(snapshot.claude.windows[0].utilization, 0.8);
+  assert.equal(snapshot.claude.windows[0].utilization, 0);
   assert.equal(snapshot.cursor.windows[0].utilization, 0);
   assert.equal(vm.runInContext("workerQuotaWindow('codex', pageLimits().codex.windows[0]).percent", context), 100);
   assert.match(vm.runInContext("workerQuotaWindow('codex', pageLimits().codex.windows[0]).reset", context), /awaiting update/);
-  assert.equal(vm.runInContext("workerQuotaWindow('claude', pageLimits().claude.windows[0]).percent", context), 80);
-  assert.match(vm.runInContext("workerQuotaWindow('claude', pageLimits().claude.windows[0]).reset", context), /awaiting update/);
+  assert.equal(vm.runInContext("workerQuotaWindow('claude', pageLimits().claude.windows[0]).percent", context), 0);
+  assert.equal(vm.runInContext("workerQuotaWindow('claude', pageLimits().claude.windows[0]).reset", context), "Reset passed");
   assert.equal(vm.runInContext("workerQuotaWindow('cursor', pageLimits().cursor.windows[0]).percent", context), 0);
 });
 

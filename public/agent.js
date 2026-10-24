@@ -8953,9 +8953,9 @@
   }
 
   function planLimits(provider, thread = null) {
-    const limits = provider === "claude" && thread ? thread.claudeLimits : S.config.limits?.[provider];
+    const limits = S.config.limits?.[provider];
     if (!limits) return null;
-    return { ...limits, windows: provider === "codex" || provider === "claude" ? limits.windows || [] : liveWindows(limits.windows) };
+    return { ...limits, windows: provider === "codex" ? limits.windows || [] : liveWindows(limits.windows) };
   }
 
   function claudeSourceLabel(source) {
@@ -8995,7 +8995,7 @@
   }
 
   function quotaReset(provider, at) {
-    return at && at <= Date.now() ? "Reset passed · awaiting update" : resetText(at);
+    return at && at <= Date.now() ? provider === "codex" ? "Reset passed · awaiting update" : "Reset passed" : resetText(at);
   }
 
   function codexQuotaNotes(limits) {

@@ -12,7 +12,7 @@ const { AgentHost } = await import("./host.js");
 before(() => store.load());
 after(() => { store.closeDb(); fs.rmSync(dir, { recursive: true, force: true }); });
 
-test("Claude caches survive failed background reads and host restarts without crossing thread sources", async () => {
+test("Claude shared quota survives failed reads and restarts", async () => {
   let host = new AgentHost(() => {}, async () => null);
   let internal = host as any;
   const source = { tokenSource: "oauth", email: "one@example.invalid" };
@@ -31,18 +31,21 @@ test("Claude caches survive failed background reads and host restarts without cr
       };
       internal.lastUsageFetchAt = 0;
       await internal.refreshClaudeUsage();
-      assert.equal(host.limits().claude?.windows[0].utilization, 0.6);
+      assert.equal(host.limits().claude?.windows[0].utilization, 0);
       assert.equal(host.limits().claude?.at, 100);
     }
     internal.ctx.claudeLimits(threadId, claudePlanSnapshot(null, source, 200));
     assert.equal(internal.claudeThreadLimits.get(threadId).at, 100);
+    // Simulate the old version, where only a thread had the newest observation.
+    host.db.setSetting("limits", { claude: { ...snapshot, at: 50, windows: [] } });
   } finally { host.dispose(); }
 
   host = new AgentHost(() => {}, async () => null);
   internal = host as any;
   try {
     internal.fakes = {};
-    assert.equal(host.limits().claude?.windows[0].utilization, 0.6);
+    assert.equal(host.limits().claude?.windows[0].utilization, 0);
+    assert.equal(host.limits().claude?.at, 100);
     assert.equal(internal.claudeThreadLimits.get(threadId!).at, 100);
     internal.ctx.claudeLimits(threadId!, claudePlanSnapshot(null, { apiProvider: "bedrock" }, 300));
     assert.equal(internal.claudeThreadLimits.get(threadId!).windows.length, 0);
@@ -99,5 +102,44 @@ test("Claude account refresh survives busy turns and throttling with one retry t
     await internal.usageFetch;
     assert.equal(reads, 2);
     assert.equal(timers.filter(timer => timer.active).length, 0);
+  } finally { host.dispose(); }
+});
+
+test("readings from either thread publish globally and an in-flight probe cannot overwrite them", async () => {
+  const events: any[] = [];
+  const host = new AgentHost((event) => events.push(event), async () => null);
+  const internal = host as any;
+  internal.fakes = {};
+  internal.planLimits = {};
+  const source = { tokenSource: "oauth" };
+  const now = Date.now();
+  const snapshot = (percent: number, at: number) => claudePlanSnapshot({ rate_limits: {
+    five_hour: { utilization: percent, resets_at: now + 3600000 },
+  } }, source, at);
+  try {
+    const a = host.createThread({ provider: "claude" }).id;
+    const b = host.createThread({ provider: "claude" }).id;
+    internal.ctx.claudeLimits(a, snapshot(20, now));
+    internal.ctx.claudeLimits(b, snapshot(45, now + 1));
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.45);
+    assert.equal(events.filter(e => e.type === "agent_limits").at(-1).limits.claude.windows[0].utilization, 0.45);
+    assert.equal(internal.view(internal.threads.get(a)).claudeLimits.windows[0].utilization, 0.45);
+    internal.ctx.claudeLimits(a, snapshot(10, now - 1));
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.45, "old observations do not roll the meter back");
+    internal.ctx.claudeLimits(a, claudePlanSnapshot(null, { apiProvider: "bedrock" }, now + 2));
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.45, "unavailable query quota cannot clear the global meter");
+
+    let resolve!: (value: unknown) => void;
+    internal.providers.claude.fetchPlanUsage = () => new Promise(r => { resolve = r; });
+    internal.lastUsageFetchAt = 0;
+    const pending = internal.refreshClaudeUsage();
+    internal.ctx.claudeLimits(a, snapshot(70, now + 3));
+    resolve({ report: { rate_limits: { five_hour: { utilization: 30 } } }, billingSource: source });
+    await pending;
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.7);
+    assert.equal(host.db.getSetting<any>("limits", {}).claude.windows[0].utilization, 0.7);
+    internal.ctx.claudeLimits(b, { ...snapshot(45, now + 1), overage: true, overageAt: now + 4 });
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.7);
+    assert.equal(host.limits().claude?.overage, true, "fresh overage events update globally without rolling back windows");
   } finally { host.dispose(); }
 });

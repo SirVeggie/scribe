@@ -4,7 +4,7 @@ import fs from "node:fs";
 import test from "node:test";
 import { launchChromium } from "../chromium.js";
 
-test("Claude meters isolate thread quotas and distinguish period spend, live overage and estimates", async (t) => {
+test("Claude meters share current quota across old threads and distinguish spend and estimates", async (t) => {
   let browser;
   try { browser = await launchChromium({ headless: true, args: [], purpose: "Claude billing UI test" }); }
   catch (error) {
@@ -25,21 +25,23 @@ test("Claude meters isolate thread quotas and distinguish period spend, live ove
         windows: [{ id: "five_hour", label: "5-hour", utilization: 0.6, resetsAt: now - 1 }],
         extraUsage: { enabled: true, usedCredits: 2500, monthlyLimit: 10000, currency: "USD" } };
       S.config.limits = { claude: subscription };
+      const showTip = (limits: any) => { S.config.limits.claude = limits; return usageTip("claude", cloud).textContent; };
       const cloud = { claudeLimits: { at: now, availability: "unavailable", billingSource: { apiProvider: "bedrock" }, windows: [] } };
       const api = { claudeLimits: { at: now, availability: "unavailable", billingSource: { apiProvider: "firstParty", apiKeySource: "env", email: "api@example.invalid" }, windows: [] } };
       const cloudChip = usageChip("claude", false, null, cloud);
       const apiChip = usageChip("claude", false, null, api);
-      const tip = usageTip("claude", { claudeLimits: subscription }).textContent;
-      const staleTip = usageTip("claude", { claudeLimits: { ...subscription, at: now - 600000, overage: true, overageAt: now - 600000 } }).textContent;
-      const liveTip = usageTip("claude", { claudeLimits: { ...subscription, overage: false, overageAt: now } }).textContent;
-      const paidTip = usageTip("claude", { claudeLimits: { ...subscription, overage: true, overageAt: now } }).textContent;
+      const tip = showTip(subscription);
+      const staleTip = showTip({ ...subscription, at: now - 600000, overage: true, overageAt: now - 600000 });
+      const liveTip = showTip({ ...subscription, overage: false, overageAt: now });
+      const paidTip = showTip({ ...subscription, overage: true, overageAt: now });
       const routine = { ...subscription, windows: [{ ...subscription.windows[0], resetsAt: now + 3600000 }],
         extraUsage: { enabled: false, at: now - 600000 }, overage: false, overageAt: now };
-      const routineTip = usageTip("claude", { claudeLimits: routine }).textContent;
+      const routineTip = showTip(routine);
       const compact = usageChip("claude", true, null, { claudeLimits: routine });
       const staleChip = usageChip("claude", true, null, { claudeLimits: subscription });
-      const zeroTip = usageTip("claude", { claudeLimits: { ...routine, extraUsage: { usedCredits: 0, currency: "USD" } } }).textContent;
-      const capTip = usageTip("claude", { claudeLimits: { ...routine, extraUsage: { monthlyLimit: 10000, currency: "USD", at: now - 600000 } } }).textContent;
+      const zeroTip = showTip({ ...routine, extraUsage: { usedCredits: 0, currency: "USD" } });
+      const capTip = showTip({ ...routine, extraUsage: { monthlyLimit: 10000, currency: "USD", at: now - 600000 } });
+      S.config.limits.claude = subscription;
       const footer = ChatView.prototype.renderTurnFooter.call({}, { status: "done", threadId: "fixture", model: "sonnet", usage: { costUsd: 0.5, estimatedCostUsd: 0.5, billingSource: api.claudeLimits.billingSource } }, []);
       document.body.append(cloudChip, apiChip, footer);
       return { cloud: cloudChip.textContent, api: apiChip.textContent, tip, staleTip, liveTip, paidTip, routineTip, zeroTip, capTip,
@@ -48,8 +50,8 @@ test("Claude meters isolate thread quotas and distinguish period spend, live ove
         unknown: planLimits("claude", {}), footer: footer.textContent, estimate: footer.querySelector("[aria-description]")?.getAttribute("aria-description"),
         settings: usageMeters("claude").textContent };
     });
-    assert.match(result.cloud, /bedrock.*quota unavailable/);
-    assert.match(result.api, /API.*quota unavailable/);
+    assert.match(result.cloud, /0%/);
+    assert.match(result.api, /0%/);
     assert.doesNotMatch(result.cloud, /60%/);
     assert.match(result.tip, /Billing-period spend: \$25\.00 \/ \$100\.00 cap/);
     assert.doesNotMatch(result.tip, /paid-credit use unknown|Console API|sub@example|Token|extra usage: enabled/);
@@ -65,8 +67,8 @@ test("Claude meters isolate thread quotas and distinguish period spend, live ove
     assert.match(result.zeroTip, /Billing-period spend: \$0\.00/);
     assert.match(result.capTip, /Billing-period cap: \$100\.00/);
     assert.match(result.capTip, /Extra-usage snapshot is stale/);
-    assert.equal(result.expired, 0.6);
-    assert.equal(result.unknown, null);
+    assert.equal(result.expired, 0);
+    assert.equal(result.unknown.windows[0].utilization, 0);
     assert.match(result.footer, /Estimated \$0\.50/);
     assert.match(result.estimate, /API key \(env\)/);
     assert.match(result.estimate, /SDK estimate/);

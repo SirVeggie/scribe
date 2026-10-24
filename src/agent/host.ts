@@ -625,6 +625,7 @@ export class AgentHost {
         }
         this.claudeThreadLimits.set(threadId, limits);
         this.db.setSetting("claudeThreadLimits", Object.fromEntries(this.claudeThreadLimits));
+        this.recordClaudeLimits(limits);
         this.emitThread(threadId);
         if (limits.availability === "available" && !this.fakes) void this.refreshClaudeUsage();
       },
@@ -652,9 +653,12 @@ export class AgentHost {
           if (parsed) this.commitLimits(provider, parsed, false);
           return parsed;
         }
-        const parsed = this.claudeUsageSnapshot(await (this.providers.claude as ClaudeProvider).fetchPlanUsage());
+        const beforeRead = this.planLimits.claude;
+        const report = await (this.providers.claude as ClaudeProvider).fetchPlanUsage();
         if (this.closed) return null;
-        if (parsed) this.commitLimits(provider, applyExpiredWindows(parsed), false);
+        if (this.planLimits.claude !== beforeRead) return null;
+        const parsed = this.claudeUsageSnapshot(report);
+        if (parsed.availability === "available" || beforeRead?.availability !== "available") this.commitLimits(provider, applyExpiredWindows(parsed), false);
         return parsed;
       },
       start: async (provider, signal) => {
@@ -667,6 +671,8 @@ export class AgentHost {
         this.emit({ type: "agent_limits", limits: this.liveLimits() });
       },
     }, this.db.getSetting<WindowStartState>("usageWindowStarts", {}));
+    // Older versions kept fresher observations on individual threads only.
+    for (const limits of [...this.claudeThreadLimits.values()].sort((a, b) => a.at - b.at)) this.recordClaudeLimits(limits);
     if (!this.fakes) {
       this.usageWindowTimer = setInterval(() => void this.usageWindowStarts.tick(), 30_000);
       this.usageWindowTimer.unref?.();
@@ -809,7 +815,7 @@ export class AgentHost {
   private codexUsageFetchAt = 0;
   private closed = false;
 
-  /** Last reported plan usage. Claude and Codex retain observations past reset; legacy/Cursor windows zero. */
+  /** Shared provider usage for every meter. Claude/Cursor windows display zero after reset. */
   limits(): Partial<Record<ProviderId, PlanLimits>> {
     return this.liveLimits();
   }
@@ -851,6 +857,30 @@ export class AgentHost {
     }
     this.commitLimits(provider, next, true);
     if (provider === "codex") void this.refreshCodexUsage();
+  }
+
+  /** Publish live query readings to the same persisted snapshot used by board and chat meters. */
+  private recordClaudeLimits(next: PlanLimits): void {
+    const previous = this.planLimits.claude;
+    // Empty/API-only reports cannot erase a known subscription quota, nor can an old query replay.
+    if (next.availability !== "available") return;
+    if (previous && next.at < previous.at) {
+      // Overage-only events retain the query's old window timestamp.
+      if ((next.overageAt ?? 0) > Math.max(previous.at, previous.overageAt ?? 0)) {
+        this.commitLimits("claude", { ...previous, overage: next.overage, overageAt: next.overageAt }, false);
+      }
+      return;
+    }
+    const windows = new Map((previous?.windows ?? []).map((w) => [w.id, w]));
+    for (const window of next.windows) windows.set(window.id, window);
+    const merged = { ...previous, ...next, windows: [...windows.values()] };
+    if ((previous?.extraUsage?.at ?? 0) > (next.extraUsage?.at ?? 0)) merged.extraUsage = previous?.extraUsage;
+    if ((previous?.overageAt ?? 0) > (next.overageAt ?? 0)) {
+      merged.overage = previous?.overage;
+      merged.overageAt = previous?.overageAt;
+    }
+    this.usageWindowStarts.observe("claude", next);
+    this.commitLimits("claude", merged, false);
   }
 
   /** Poll without a model turn, including after a reset or a rolling notification. */
@@ -956,12 +986,14 @@ export class AgentHost {
       if (overlaid !== prev) this.commitLimits("claude", overlaid, false);
     }
     this.lastUsageFetchAt = Date.now();
+    const beforeRead = this.planLimits.claude;
     try {
       const report = await (this.providers.claude as ClaudeProvider).fetchPlanUsage();
       if (this.closed) return;
+      if (this.planLimits.claude !== beforeRead) return;
       const parsed = this.claudeUsageSnapshot(report);
       if (parsed) this.usageWindowStarts.observe("claude", parsed);
-      if (parsed) this.commitLimits("claude", applyExpiredWindows(parsed), false);
+      if (parsed && (parsed.availability === "available" || beforeRead?.availability !== "available")) this.commitLimits("claude", applyExpiredWindows(parsed), false);
     } catch {
       if (this.closed) return;
       // Retain the observation (and its timestamp) when the background probe fails.
@@ -1881,7 +1913,7 @@ export class AgentHost {
     const pageRun = this.pageRuns.get(thread.id);
     return {
       ...thread,
-      ...(thread.provider === "claude" ? { claudeLimits: this.claudeThreadLimits.get(thread.id) ?? claudePlanSnapshot(null, {}) } : {}),
+      ...(thread.provider === "claude" ? { claudeLimits: this.liveLimits().claude ?? claudePlanSnapshot(null, {}) } : {}),
       ...(this.effectivePermissions.has(thread.id) ? { effectivePermissions: this.effectivePermissions.get(thread.id) } : {}),
       status,
       unread,

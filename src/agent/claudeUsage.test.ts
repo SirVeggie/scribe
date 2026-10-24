@@ -93,9 +93,9 @@ test("period spend/cap/currency survive null utilization without asserting curre
   assert.deepEqual(planLimitsFromUsageReport({ rate_limits: { extra_usage: { is_enabled: false, used_credits: 0 } } }, 1)?.extraUsage, { at: 1, enabled: false, usedCredits: 0 });
 });
 
-test("a passed reset retains the observed Claude percentage and marks it expired", () => {
+test("a passed reset zeroes the Claude percentage and marks it expired", () => {
   const limits = claudePlanSnapshot({ rate_limits: { five_hour: { utilization: 90, resets_at: 1 } } }, {}, 500);
-  assert.equal(applyExpiredWindows(limits, 2000).windows[0].utilization, 0.9);
+  assert.equal(applyExpiredWindows(limits, 2000).windows[0].utilization, 0);
   assert.equal(applyExpiredWindows(limits, 2000).windows[0].expired, true);
 });
 

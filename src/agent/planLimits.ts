@@ -152,7 +152,7 @@ export function planLimitsFromUsageReport(report: unknown, now: number): PlanLim
 }
 
 /**
- * Flag passed resets as expired; keep observed Claude values, zero legacy projected windows.
+ * Flag passed resets as expired and display zero until the next report (except Codex).
  * The old reset stays as reported:
  * a new window starts on first use, so nothing is projected until the provider reports again.
  */
@@ -160,9 +160,9 @@ export function applyExpiredWindows(limits: PlanLimits, now = Date.now()): PlanL
   if (limits.source === "codex") return limits;
   let changed = false;
   const windows = limits.windows.map((w) => {
-    if (w.expired || !w.resetsAt || w.resetsAt > now) return w;
+    if (!w.resetsAt || w.resetsAt > now || (w.expired && w.utilization === 0)) return w;
     changed = true;
-    return { ...w, ...(limits.source === "claude" ? {} : { utilization: 0 }), expired: true as const };
+    return { ...w, utilization: 0, expired: true as const };
   });
   if (!changed) return limits;
   return { ...limits, windows };

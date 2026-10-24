@@ -6328,7 +6328,7 @@
   }
   function workerQuotaWindow(provider, w) {
     var expired = w.resetsAt && w.resetsAt <= Date.now();
-    var observed = provider === "codex" || provider === "claude";
+    var observed = provider === "codex";
     var used = expired && !observed ? 0 : Number(w.utilization);
     var percent = Number.isFinite(used) ? Math.round(clamp(used, 0, 1) * 100) : null;
     var reset = !w.resetsAt ? "" : expired

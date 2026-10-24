@@ -202,10 +202,11 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     assert.match(await codex.getAttribute('data-tooltip') || '', /Included usage blocked/);
     assert.equal(await usage.locator('[data-provider="pi"]').count(), 0);
     assert.equal(await codex.locator('progress').getAttribute('value'), '100');
-    assert.equal(await claude.locator('progress').getAttribute('value'), '75');
-    assert.match(await claude.getAttribute('data-tooltip') || '', /Reset passed · awaiting update/);
+    assert.equal(await claude.locator('progress').getAttribute('value'), '0');
+    assert.match(await claude.getAttribute('data-tooltip') || '', /Reset passed/);
+    assert.doesNotMatch(await claude.getAttribute('data-tooltip') || '', /awaiting update/);
     assert.equal(await cursor.locator('progress').getAttribute('value'), '91');
-    assert.match(await claude.getAttribute('class') || '', /lvl-warn/);
+    assert.doesNotMatch(await claude.getAttribute('class') || '', /lvl-warn/);
     assert.match(await cursor.getAttribute('class') || '', /lvl-high/);
     const headerBounds = (await usage.boundingBox())!;
     const actionBounds = (await page.locator('#workersBtn').boundingBox())!;
