@@ -5,6 +5,7 @@ import http from "node:http";
 import { test } from "node:test";
 import { launchChromium } from "../chromium.js";
 import { BOARD_BRIDGE_JS } from "../bridge.js";
+import { httpFixture } from "../test/httpFixture.js";
 
 function pageAudioHarness() {
   const posted: any[] = [], frames = new Map([["page", { revision: 1, el: { isConnected: true } }]]);
@@ -232,122 +233,133 @@ test("Chromium capture stops tracks, enforces one session and cap; composer hand
     assert.match(await page.evaluate(() => (window as any).notices[0]), /Microphone blocked.*site permissions/);
   } finally { await browser.close(); }
 });
-test("page listen, record and live samples round trip through a cross-origin iframe with no microphone delegation", async () => {
+test("page listen, record and live samples round trip through a cross-origin iframe with no microphone delegation", async t => {
   const browser = await launchChromium({ headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"], purpose: "Page audio test" });
+  t.after(() => browser.close());
   // Worklet module fetches bypass Playwright's page routes. Serve them on real loopback sockets.
   const worklet = fs.readFileSync(new URL("../../public/audio-stream-worklet.js", import.meta.url), "utf8");
   let failPlayback = false;
+  const workletRequests: string[] = [];
   const serveWorklet: http.RequestListener = (req, res) => {
+    workletRequests.push(req.headers.host!);
     res.writeHead(failPlayback && req.headers.host?.startsWith("127.0.0.2:") ? 500 : 200, { "Content-Type": "text/javascript" });
     res.end(worklet);
   };
-  const shellServer = http.createServer(serveWorklet), contentServer = http.createServer(serveWorklet);
-  await new Promise<void>(resolve => shellServer.listen(0, "127.0.0.1", resolve));
-  const port = (shellServer.address() as { port: number }).port;
-  await new Promise<void>(resolve => contentServer.listen(port, "127.0.0.2", resolve));
-  try {
-    const page = await browser.newPage(); page.setDefaultTimeout(7000);
-    const errors: string[] = []; page.on("pageerror", e => errors.push(e.message));
-    const app = fs.readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
-    const handlers = app.slice(app.indexOf("  const pageAudioSessions ="), app.indexOf("\n  /**", app.indexOf("  async function onPageAudio")));
-    const fixture = fs.readFileSync(new URL("./page-test.html", import.meta.url), "utf8");
-    await page.route(`http://127.0.0.2:${port}/**`, route => route.request().url().includes("/audio-stream-worklet.js")
-      ? route.fulfill({ contentType: "text/javascript", body: worklet })
-      : route.fulfill({ contentType: "text/html", body:
-        `<script>window.__SCRIBE_BOOT__ = {id:'page',capture:true};</script><script>${BOARD_BRIDGE_JS}</script>${fixture}` }));
-    await page.route(`http://127.0.0.1:${port}/**`, route => {
-      const url = route.request().url();
-      if (url.includes("/audio-stream-worklet.js")) return route.fulfill({ contentType: "text/javascript", body: worklet });
-      if (url.includes("/api/audio/settings")) return route.fulfill({ json: { available: true } });
-      if (url.includes("/api/audio/transcriptions")) {
-        assert.equal(route.request().headers()["x-scribe-tab"], "page");
-        return route.fulfill({ json: { ok: true, text: "spoken words" } });
+  const app = fs.readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
+  const handlers = app.slice(app.indexOf("  const pageAudioSessions ="), app.indexOf("\n  /**", app.indexOf("  async function onPageAudio")));
+  const fixture = fs.readFileSync(new URL("./page-test.html", import.meta.url), "utf8");
+  const { port } = await httpFixture(t, (req, res) => {
+    const path = new URL(req.url!, "http://fixture").pathname;
+    if (path === "/audio-stream-worklet.js") return serveWorklet(req, res);
+    if (path === "/api/audio/settings") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ available: true }));
+    }
+    if (path === "/api/audio/transcriptions") {
+      if (req.headers["x-scribe-tab"] !== "page") {
+        res.writeHead(400); return res.end("Missing page header");
       }
-      return route.fulfill({ contentType: "text/html", body: `<header class="chrome"></header><div id="tabs"><div class="tab" data-id="page"></div></div><iframe src="http://127.0.0.2:${port}/page" sandbox="allow-scripts allow-same-origin"></iframe>` });
-    });
-    await page.goto(`http://127.0.0.1:${port}/`);
-    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/audio.js", import.meta.url), "utf8") });
-    await page.addScriptTag({ content: `(() => {
-      const iframe = document.querySelector('iframe'), tabsEl = document.getElementById('tabs');
-      const frames = new Map([['page',{revision:1,el:iframe}]]);
-      window.audioVisible = true;
-      const views = {shownIds:() => new Set(window.audioVisible ? ['page'] : [])};
-      const frameIdByWindow = win => win === iframe.contentWindow ? 'page' : null;
-      const findAnyTab = () => ({id:'page'});
-      const frameActivated = id => navigator.userActivation.isActive && document.activeElement === iframe;
-      window.scribePermissions = {ensure:async () => ({ok:true})};
-      ${handlers}
-      window.hideAudioPage = () => { window.audioVisible = false; checkPageAudioVisibility(); };
-      window.revokeAudio = () => cancelPageAudio('page', 'revoked');
-      window.addEventListener('message', event => { if(event.origin === 'http://127.0.0.2:${port}' && event.data.type === 'scribe-audio') onPageAudio(event); });
-    })();` });
-    const frame = page.frameLocator("iframe");
-    await frame.locator("#record").click();
-    await frame.locator("#output").filter({ hasText: "Recording" }).waitFor();
-    assert.equal(await page.locator(".tab-recording").count(), 1);
-    await page.waitForTimeout(200); // Give the fake microphone time to produce an audio packet.
-    await frame.locator("#stop").click();
-    await frame.locator("#output").filter({ hasText: "mimeType" }).waitFor();
-    const result = JSON.parse(await frame.locator("#output").innerText());
-    assert.ok(result.bytes > 0); assert.ok(result.durationMs >= 0);
-    await frame.locator("#listen").click();
-    await frame.locator("#output").filter({ hasText: "Recording" }).waitFor();
-    await page.locator(".page-audio-stop").click();
-    await frame.locator("#stop").click();
-    await frame.locator("#output").filter({ hasText: "spoken words" }).waitFor();
-    const child = page.frames().find(f => f.url().includes("127.0.0.2"))!;
-    // Playwright evaluate grants activation; invoke from a timer after it expires.
-    assert.equal(await child.evaluate(() => new Promise(resolve => {
-      setTimeout(async () => resolve((await (window as any).scribe.audio.stream()).error), 5100);
-    })), "no_gesture");
-    await frame.locator("#stream").click();
-    await child.waitForFunction(() => Number((document.getElementById("level") as HTMLElement).dataset.peak) > .001).catch(async error => {
-      throw new Error(`${error.message}; page status: ${await frame.locator("#output").innerText()}; errors: ${errors.join("; ")}`);
-    });
-    assert.equal(await child.evaluate("session.stream instanceof MediaStream"), true);
-    assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "live");
-    assert.equal(await page.locator(".tab-recording").count(), 1);
-    await frame.locator("#stop").click();
-    await child.waitForFunction(() => document.getElementById("output")?.dataset.end === "stopped");
-    assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
-    await page.waitForFunction(() => (document.querySelector(".page-audio-stop") as HTMLButtonElement).hidden);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, text: "spoken words" }));
+    }
+    if (path === "/") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      return res.end(`<header class="chrome"></header><div id="tabs"><div class="tab" data-id="page"></div></div><iframe src="http://127.0.0.2:${port}/page" sandbox="allow-scripts allow-same-origin"></iframe>`);
+    }
+    res.writeHead(404); res.end();
+  });
+  await httpFixture(t, (req, res) => {
+    const path = new URL(req.url!, "http://fixture").pathname;
+    if (path === "/audio-stream-worklet.js") return serveWorklet(req, res);
+    if (path === "/page") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      return res.end(`<script>window.__SCRIBE_BOOT__ = {id:'page',capture:true};</script><script>${BOARD_BRIDGE_JS}</script>${fixture}`);
+    }
+    res.writeHead(404); res.end();
+  }, { host: "127.0.0.2", port });
+  const page = await browser.newPage(); page.setDefaultTimeout(7000);
+  const errors: string[] = []; page.on("pageerror", e => errors.push(e.message));
+  await page.goto(`http://127.0.0.1:${port}/`);
+  await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/audio.js", import.meta.url), "utf8") });
+  await page.addScriptTag({ content: `(() => {
+    const iframe = document.querySelector('iframe'), tabsEl = document.getElementById('tabs');
+    const frames = new Map([['page',{revision:1,el:iframe}]]);
+    window.audioVisible = true;
+    const views = {shownIds:() => new Set(window.audioVisible ? ['page'] : [])};
+    const frameIdByWindow = win => win === iframe.contentWindow ? 'page' : null;
+    const findAnyTab = () => ({id:'page'});
+    const frameActivated = id => navigator.userActivation.isActive && document.activeElement === iframe;
+    window.scribePermissions = {ensure:async () => ({ok:true})};
+    ${handlers}
+    window.hideAudioPage = () => { window.audioVisible = false; checkPageAudioVisibility(); };
+    window.revokeAudio = () => cancelPageAudio('page', 'revoked');
+    window.addEventListener('message', event => { if(event.origin === 'http://127.0.0.2:${port}' && event.data.type === 'scribe-audio') onPageAudio(event); });
+  })();` });
+  const frame = page.frameLocator("iframe");
+  await frame.locator("#record").click();
+  await frame.locator("#output").filter({ hasText: "Recording" }).waitFor();
+  assert.equal(await page.locator(".tab-recording").count(), 1);
+  await page.waitForTimeout(200); // Give the fake microphone time to produce an audio packet.
+  await frame.locator("#stop").click();
+  await frame.locator("#output").filter({ hasText: "mimeType" }).waitFor();
+  const result = JSON.parse(await frame.locator("#output").innerText());
+  assert.ok(result.bytes > 0); assert.ok(result.durationMs >= 0);
+  await frame.locator("#listen").click();
+  await frame.locator("#output").filter({ hasText: "Recording" }).waitFor();
+  await page.locator(".page-audio-stop").click();
+  await frame.locator("#stop").click();
+  await frame.locator("#output").filter({ hasText: "spoken words" }).waitFor();
+  const child = page.frames().find(f => f.url().includes("127.0.0.2"))!;
+  // Playwright evaluate grants activation; invoke from a timer after it expires.
+  assert.equal(await child.evaluate(() => new Promise(resolve => {
+    setTimeout(async () => resolve((await (window as any).scribe.audio.stream()).error), 5100);
+  })), "no_gesture");
+  await frame.locator("#stream").click();
+  await child.waitForFunction(() => Number((document.getElementById("level") as HTMLElement).dataset.peak) > .001).catch(async error => {
+    throw new Error(`${error.message}; page status: ${await frame.locator("#output").innerText()}; errors: ${errors.join("; ")}`);
+  });
+  assert.equal(await child.evaluate("session.stream instanceof MediaStream"), true);
+  assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "live");
+  assert.equal(await page.locator(".tab-recording").count(), 1);
+  await frame.locator("#stop").click();
+  await child.waitForFunction(() => document.getElementById("output")?.dataset.end === "stopped");
+  assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
+  await page.waitForFunction(() => (document.querySelector(".page-audio-stop") as HTMLButtonElement).hidden);
+  await frame.locator("#stream").click();
+  await child.waitForFunction(() => Number((document.getElementById("level") as HTMLElement).dataset.peak) > .001);
+  await page.evaluate(() => (window as any).hideAudioPage());
+  await child.waitForFunction(() => document.getElementById("output")?.dataset.end === "hidden");
+  assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
+  assert.equal(await page.locator(".tab-recording").count(), 0);
+  await page.evaluate(() => { (window as any).audioVisible = true; });
+  for (const reason of ["user", "revoked"] as const) {
     await frame.locator("#stream").click();
     await child.waitForFunction(() => Number((document.getElementById("level") as HTMLElement).dataset.peak) > .001);
-    await page.evaluate(() => (window as any).hideAudioPage());
-    await child.waitForFunction(() => document.getElementById("output")?.dataset.end === "hidden");
+    if (reason === "user") await page.locator(".page-audio-stop").click();
+    else await page.evaluate(() => (window as any).revokeAudio());
+    await child.waitForFunction(r => document.getElementById("output")?.dataset.end === r, reason);
     assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
-    assert.equal(await page.locator(".tab-recording").count(), 0);
-    await page.evaluate(() => { (window as any).audioVisible = true; });
-    for (const reason of ["user", "revoked"] as const) {
-      await frame.locator("#stream").click();
-      await child.waitForFunction(() => Number((document.getElementById("level") as HTMLElement).dataset.peak) > .001);
-      if (reason === "user") await page.locator(".page-audio-stop").click();
-      else await page.evaluate(() => (window as any).revokeAudio());
-      await child.waitForFunction(r => document.getElementById("output")?.dataset.end === r, reason);
-      assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
-    }
-    await child.evaluate("document.getElementById('stream').onclick = () => start('stream', 500)");
-    await frame.locator("#stream").click();
-    await child.waitForFunction(() => document.getElementById("output")?.dataset.end === "max");
-    assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
-    // An end during module setup must still reach a handler assigned after awaiting stream().
-    await child.evaluate(`document.getElementById('stream').onclick = async () => {
-      window.earlyLive = await scribe.audio.stream({ maxMs: 1 });
-      window.earlyLive.onend = reason => { window.earlyReason = reason; };
-    }`);
-    await frame.locator("#stream").click();
-    await child.waitForFunction(() => (window as any).earlyReason === "max");
-    assert.equal(await child.evaluate("earlyLive.stream.getAudioTracks()[0].readyState"), "ended");
-    // A page worklet load failure resolves a typed failure and releases the shell microphone.
-    failPlayback = true;
-    await child.evaluate("document.getElementById('stream').onclick = () => start('stream')");
-    await frame.locator("#stream").click();
-    await frame.locator("#output").filter({ hasText: "unavailable" }).waitFor();
-    await page.waitForFunction(() => (document.querySelector(".page-audio-stop") as HTMLButtonElement).hidden);
-    assert.equal(await page.locator("iframe").getAttribute("allow"), null);
-    assert.deepEqual(errors, []);
-  } finally {
-    await browser.close();
-    await Promise.all([shellServer, contentServer].map(server => new Promise<void>(resolve => server.close(() => resolve()))));
   }
+  await child.evaluate("document.getElementById('stream').onclick = () => start('stream', 500)");
+  await frame.locator("#stream").click();
+  await child.waitForFunction(() => document.getElementById("output")?.dataset.end === "max");
+  assert.equal(await child.evaluate("session.stream.getAudioTracks()[0].readyState"), "ended");
+  // An end during module setup must still reach a handler assigned after awaiting stream().
+  await child.evaluate(`document.getElementById('stream').onclick = async () => {
+    window.earlyLive = await scribe.audio.stream({ maxMs: 1 });
+    window.earlyLive.onend = reason => { window.earlyReason = reason; };
+  }`);
+  await frame.locator("#stream").click();
+  await child.waitForFunction(() => (window as any).earlyReason === "max");
+  assert.equal(await child.evaluate("earlyLive.stream.getAudioTracks()[0].readyState"), "ended");
+  // A page worklet load failure resolves a typed failure and releases the shell microphone.
+  failPlayback = true;
+  await child.evaluate("document.getElementById('stream').onclick = () => start('stream')");
+  await frame.locator("#stream").click();
+  await frame.locator("#output").filter({ hasText: "unavailable" }).waitFor();
+  await page.waitForFunction(() => (document.querySelector(".page-audio-stop") as HTMLButtonElement).hidden);
+  assert.equal(await page.locator("iframe").getAttribute("allow"), null);
+  assert.deepEqual(errors, []);
+  assert.ok(workletRequests.includes(`127.0.0.1:${port}`));
+  assert.ok(workletRequests.includes(`127.0.0.2:${port}`));
 });
