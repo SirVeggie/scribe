@@ -809,7 +809,7 @@ export class AgentHost {
   private codexUsageFetchAt = 0;
   private closed = false;
 
-  /** Last reported plan usage per provider. Expired windows read as 0% (flagged expired) until a fetch or turn updates them. */
+  /** Last reported plan usage. Claude and Codex retain observations past reset; legacy/Cursor windows zero. */
   limits(): Partial<Record<ProviderId, PlanLimits>> {
     return this.liveLimits();
   }
@@ -933,8 +933,20 @@ export class AgentHost {
 
   private async doRefreshClaudeUsage(): Promise<void> {
     if (this.closed) return;
-    if (this.claudeTurnRunning()) {
-      this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), 30_000);
+    if (this.usageTimer) {
+      clearTimeout(this.usageTimer);
+      this.usageTimer = null;
+    }
+    const sinceFetch = Date.now() - this.lastUsageFetchAt;
+    // Prefer an idle moment, but continuous worker turns must not starve the board's account meter.
+    if (this.claudeTurnRunning() && sinceFetch < 5 * 60_000) {
+      this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), Math.min(30_000, 5 * 60_000 - sinceFetch));
+      this.usageTimer.unref?.();
+      return;
+    }
+    if (sinceFetch < 60_000) {
+      // Keep the pending request: scheduling only by window reset could postpone it for hours.
+      this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), 60_000 - sinceFetch);
       this.usageTimer.unref?.();
       return;
     }
@@ -942,10 +954,6 @@ export class AgentHost {
     if (prev) {
       const overlaid = applyExpiredWindows(prev);
       if (overlaid !== prev) this.commitLimits("claude", overlaid, false);
-    }
-    if (Date.now() - this.lastUsageFetchAt < 60_000) {
-      this.scheduleClaudeUsageRefresh();
-      return;
     }
     this.lastUsageFetchAt = Date.now();
     try {

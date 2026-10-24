@@ -50,3 +50,52 @@ test("Claude caches survive failed background reads and host restarts without cr
     assert.equal(host.db.getSetting<Record<string, unknown>>("claudeThreadLimits", {})[threadId!], undefined);
   } finally { host.dispose(); }
 });
+
+test("Claude account refresh survives busy turns and throttling with one retry timer", async (t) => {
+  const host = new AgentHost(() => {}, async () => null);
+  const internal = host as any;
+  internal.fakes = {};
+  const now = 1_800_000_000_000;
+  const timers: Array<{ callback: () => void; delay: number; active: boolean; unref: () => void }> = [];
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(globalThis, "setTimeout", (callback: () => void, delay: number) => {
+    const timer = { callback, delay, active: true, unref() {} };
+    timers.push(timer);
+    return timer;
+  });
+  t.mock.method(globalThis, "clearTimeout", (timer: any) => { timer.active = false; });
+  let reads = 0;
+  let busy = true;
+  internal.claudeTurnRunning = () => busy;
+  internal.providers.claude.fetchPlanUsage = async () => {
+    reads++;
+    return { report: { rate_limits: { five_hour: { utilization: 42 } } }, billingSource: {} };
+  };
+  try {
+    internal.lastUsageFetchAt = now - 4 * 60_000;
+    await internal.refreshClaudeUsage();
+    await internal.refreshClaudeUsage();
+    assert.equal(reads, 0);
+    assert.deepEqual(timers.filter(timer => timer.active).map(timer => timer.delay), [30_000]);
+
+    internal.lastUsageFetchAt = now - 5 * 60_000;
+    await internal.refreshClaudeUsage();
+    assert.equal(reads, 1, "continuous turns cannot indefinitely defer the account probe");
+    assert.equal(host.limits().claude?.windows[0].utilization, 0.42);
+    assert.equal(timers.filter(timer => timer.active).length, 0);
+
+    busy = false;
+    internal.lastUsageFetchAt = now - 10_000;
+    await internal.refreshClaudeUsage();
+    await internal.refreshClaudeUsage();
+    assert.equal(reads, 1);
+    const pending = timers.filter(timer => timer.active);
+    assert.deepEqual(pending.map(timer => timer.delay), [50_000]);
+    // Run the retained request at the end of its throttle window.
+    internal.lastUsageFetchAt = now - 60_000;
+    pending[0].callback();
+    await internal.usageFetch;
+    assert.equal(reads, 2);
+    assert.equal(timers.filter(timer => timer.active).length, 0);
+  } finally { host.dispose(); }
+});
