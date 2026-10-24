@@ -116,7 +116,10 @@ export function modelRateSnapshot(model: Model, source?: OpenAISource): RateSnap
   if (custom?.mode === "custom") return { ...base, origin: "custom", rates: { ...custom.rates }, updatedAt: custom.updatedAt, freshness: "user-entered" };
   const tariffProfile = deepSeekProfile(model.provider, model.id, source ? base.endpoint : model.baseUrl);
   const automatic = { ...base, ...(tariffProfile ? { tariffProfile } : {}) };
-  if (Object.values(model.cost).some((n) => !Number.isFinite(n) || n < 0 || n > 1_000_000) || !Object.values(model.cost).some((n) => n > 0)) return automatic;
+  // Flat snapshots cannot represent prompt-length tiers without understating long prompts.
+  if (model.cost.tiers?.length) return automatic;
+  const rates = [model.cost.input, model.cost.output, model.cost.cacheRead, model.cost.cacheWrite];
+  if (rates.some((n) => !Number.isFinite(n) || n < 0 || n > 1_000_000) || !rates.some((n) => n > 0)) return automatic;
   const decimal = (n: number) => n.toFixed(9).replace(/\.?0+$/, "") || "0";
   return { ...automatic, origin: "catalog", rates: { input: decimal(model.cost.input), output: decimal(model.cost.output), cacheRead: decimal(model.cost.cacheRead), cacheWrite: decimal(model.cost.cacheWrite) } };
 }

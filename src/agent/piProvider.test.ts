@@ -245,6 +245,18 @@ test("DeepSeek source registration prices cached and uncached usage from the SDK
   assert.equal(modelRateSnapshot(model, { ...source, baseUrl: "https://secret:password@api.deepseek.com/v1?key=hidden" }).endpoint, "https://api.deepseek.com/v1");
 });
 
+test("Native rate snapshots keep flat prices and leave tiered catalog prices unavailable", () => {
+  const model = { provider: "test", id: "tiered", cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } } as Parameters<typeof modelRateSnapshot>[0];
+  assert.equal(modelRateSnapshot(model).origin, "catalog");
+  model.cost.tiers = [{ inputTokensAbove: 200000, input: 2, output: 4, cacheRead: 0, cacheWrite: 0 }];
+  assert.equal(modelRateSnapshot(model).origin, "unknown");
+  assert.equal(modelRateSnapshot(model).rates, undefined);
+  model.cost.tiers = [];
+  assert.equal(modelRateSnapshot(model).origin, "catalog");
+  model.cost.input = NaN;
+  assert.equal(modelRateSnapshot(model).origin, "unknown");
+});
+
 test("Pi payload/response hooks bracket a logical call but do not expose transport retries", async (t) => {
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-pi-timing-"));
