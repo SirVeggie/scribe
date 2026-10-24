@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser } from "playwright-core";
+import { sweepChromiumLeftovers } from "./chromiumSweep.js";
 import { log } from "./log.js";
 
 const CHANNELS = ["msedge", "chrome"] as const;
@@ -18,6 +19,7 @@ const CHROMIUM_RELS = [
  */
 export async function launchChromium(options: { headless: boolean; args: string[]; purpose: string }): Promise<Browser> {
   const { headless, args, purpose } = options;
+  sweepChromiumLeftovers();
   const errors: string[] = [];
   for (const channel of CHANNELS) {
     try {
