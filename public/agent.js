@@ -1052,11 +1052,12 @@
     }
   }
 
-  /** Hide or delete a workspace, from the ⋯ button next to it. */
+  /** Workspace actions, from the ⋯ button next to it. */
   function workspaceMenu(anchor, dir) {
     const hidden = hiddenWorkspaceKeys().has(dirKey(dir));
     openMenu(anchor, [
       { header: R.basename(dir) || dir },
+      { label: "Show stale worktrees", run: () => staleWorktrees.open(dir) },
       hidden
         ? { label: "Show workspace", detail: "Back in the thread list and the workspace menus", run: () => setWorkspaceHidden(dir, false) }
         : { label: "Hide workspace", detail: "Out of the thread list and the workspace menus. A search still finds its threads.", run: () => setWorkspaceHidden(dir, true) },
@@ -7207,7 +7208,7 @@
         const dir = S.filter === "workspaces" ? workspaceDir(first) : key.startsWith("ws:") ? activeTab()?.workspace : first.scope.kind === "workspace" ? first.scope.ref : null;
         if (dir) head.dataset.tooltip = dir;
         const acts = el("span", "ag-list-group-acts");
-        if (dir) acts.append(button(icon("more"), "ag-icon-btn small ag-list-group-new", (event) => workspaceMenu(event.currentTarget, dir), "Hide or delete this workspace"));
+        if (dir) acts.append(button(icon("more"), "ag-icon-btn small ag-list-group-new", (event) => workspaceMenu(event.currentTarget, dir), "Workspace actions"));
         if (S.filter !== "archived") {
           const add = button(icon("plus"), "ag-icon-btn small ag-list-group-new", () => {
             const draft = groupDraft(key);
@@ -8668,7 +8669,7 @@
         return null;
       }
     },
-    async open() {
+    async open(preferWorkspace = null) {
       toasts.hideStale();
       const { panel, close } = modal("ag-stale");
       const list = el("div", "ag-stale-list");
@@ -8685,7 +8686,9 @@
         if (!items.length) return list.append(el("p", "ag-stale-empty", "No stale worktrees."));
         const groups = new Map();
         for (const w of items) groups.set(w.home, [...(groups.get(w.home) || []), w]);
-        for (const [home, rows] of groups) {
+        const preferredKey = preferWorkspace ? dirKey(preferWorkspace) : null;
+        const ordered = [...groups].sort(([a], [b]) => Number(dirKey(b) === preferredKey) - Number(dirKey(a) === preferredKey));
+        for (const [home, rows] of ordered) {
           const group = el("section", "ag-stale-group");
           group.append(elWith("h3", "ag-stale-ws", el("span", null, home.split(/[\\/]/).filter(Boolean).pop() || home), el("span", "ag-stale-path", home)));
           for (const w of rows) {
