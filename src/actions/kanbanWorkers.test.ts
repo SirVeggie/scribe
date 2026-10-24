@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyStateOps } from "../stateOps.js";
-import { kanbanActions } from "./kanban.js";
+import { kanbanActions, STEP_LEASE_MS } from "./kanban.js";
 import type { DriveContext, DriveOutcome, PageRunInput, ThreadRunInfo } from "./types.js";
 
 type State = Record<string, unknown>;
@@ -58,6 +58,68 @@ test("workers skip future cards, wait across reloads and take them at their earl
   assert.equal(drive(reloaded, ctx({}, { now: 20_000 }).c)?.launch?.ref.card, 1);
   delete card(reloaded, 1).scheduledAt;
   assert.equal(drive(reloaded, ctx().c)?.launch?.ref.card, 1, "clearing makes it ready immediately");
+});
+
+test("ordinary dispatch rechecks current eligibility and releases its reservation without pausing the worker", () => {
+  const gates: Record<string, (state: State) => void> = {
+    assignee: (state) => { card(state, 1).assignee = "Someone"; },
+    archived: (state) => { card(state, 1).archived = true; },
+    column: (state) => { card(state, 1).col = "rev"; },
+    pause: (state) => { (state.columns as State[])[1].paused = true; },
+    dependency: (state) => { card(state, 1).blockedBy = ["c3"]; },
+    blocked: (state) => { card(state, 1).status = { kind: "blocked", text: "Needs input" }; },
+    claim: (state) => { card(state, 1).claim = { holder: "Other", thread: "other", at: 10_000 }; },
+    stop: (state) => { worker(state).stop = true; },
+    provider: (state) => {
+      ((state.settings as State).workers as State).w_other = { name: "Other", run: { since: 5 }, threadId: "other" };
+    },
+    total: (state) => {
+      Object.assign(state.settings as State, { maxWorkers: 1, maxWorkersPerProvider: 0 });
+      ((state.settings as State).workers as State).w_other = { name: "Other", run: { since: 5 }, threadId: "other" };
+    },
+  };
+  for (const [gate, change] of Object.entries(gates)) {
+    const state = board({ run: { since: 5 } });
+    const c = ctx().c;
+    const out = drive(state, c)!;
+    assert.equal(out.launch?.ref.card, 1, gate);
+    assert.equal(out.launch?.ref.continuation, undefined, gate);
+    assert.equal(out.launch?.ref.parallel, false, gate);
+    const reserved = apply(state, out);
+    assert.equal(kanbanActions.launchAllowed!(reserved, out.launch!, c.now), true, gate);
+    change(reserved);
+    assert.equal(kanbanActions.launchAllowed!(reserved, out.launch!, c.now), false, gate);
+    const retried = applyStateOps(reserved, kanbanActions.launched!(reserved, out.launch!, { error: "Worker conditions changed before dispatch" }, c.now)!.ops);
+    assert.equal(worker(retried).step, undefined, gate);
+    assert.ok(worker(retried).run, gate);
+    assert.equal(worker(retried).error, undefined, gate);
+    if (gate === "claim") assert.deepEqual(card(retried, 1).claim, { holder: "Other", thread: "other", at: 10_000 });
+    // Restore eligibility and verify that the worker can reserve work again.
+    const restored = board({ ...worker(retried) });
+    delete worker(restored).stop;
+    assert.equal(drive(restored, c)?.launch?.ref.card, 1, gate);
+  }
+});
+
+test("ordinary dispatch refuses expired or replaced leases without clearing another reservation", () => {
+  for (const gate of ["expired", "replaced", "missing"]) {
+    const state = board({ run: { since: 5 } });
+    const c = ctx().c;
+    const out = drive(state, c)!;
+    const reserved = apply(state, out);
+    const now = gate === "expired" ? c.now + STEP_LEASE_MS : c.now;
+    if (gate === "expired") assert.equal(kanbanActions.launchAllowed!(reserved, out.launch!, now - 1), true);
+    if (gate === "replaced") worker(reserved).step = { token: "replacement", at: now };
+    if (gate === "missing") delete worker(reserved).step;
+    const step = worker(reserved).step;
+    assert.equal(kanbanActions.launchAllowed!(reserved, out.launch!, now), false, gate);
+    const rejected = kanbanActions.launched!(reserved, out.launch!, { error: "Worker conditions changed before dispatch" }, now);
+    const retried = rejected ? applyStateOps(reserved, rejected.ops) : reserved;
+    assert.deepEqual(worker(retried).step, gate === "replaced" ? step : undefined, gate);
+    assert.ok(worker(retried).run, gate);
+    if (gate === "replaced") assert.equal(drive(retried, ctx({}, { now }).c), null);
+    if (gate !== "replaced") assert.equal(drive(retried, ctx({}, { now }).c)?.launch?.ref.card, 1, gate);
+  }
 });
 
 test("pending continuations wait for their schedule and schedule edits invalidate leased dispatches", () => {

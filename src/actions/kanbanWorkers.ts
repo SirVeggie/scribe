@@ -703,7 +703,7 @@ export function workerLaunchAllowed(state: BoardState, launch: PageLaunch, now: 
   const c = cards(state).find((c) => c.num === launch.ref.card);
   if (c && cardScheduled(c, now)) return false;
   const w = workerOf(state, str(launch.ref.worker));
-  return Boolean(w?.run && !w.stop && w.step?.token === launch.ref.token && c &&
+  return Boolean(w?.run && !w.stop && leased(w.step, now) && w.step?.token === launch.ref.token && c &&
     (!launch.ref.continuation || c.continuation?.id === launch.ref.continuation) && !c.archived &&
     workerCards(state, w).some((candidate) => candidate.id === c.id) &&
     cardTakeable(state, c, now) && !atLimit(state, str(launch.ref.worker), now, str(launch.ref.defaultProvider), launch.ref.parallel === true));
