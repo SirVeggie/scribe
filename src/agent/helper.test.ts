@@ -16,6 +16,7 @@ let host: InstanceType<typeof AgentHost>;
 /** What the stub provider's sessions were asked, and how the next turn ends. */
 const asked: Array<{ thread: Thread; input: TurnInput }> = [];
 let hanging = false;
+let failWithActivity = false;
 const helperWaits = new Map<string, () => void>();
 /** Messages steered into a running stub turn. */
 const steered: string[] = [];
@@ -51,6 +52,15 @@ before(() => {
       run: async (input: TurnInput, sink: RunSink): Promise<TurnResult> => {
         asked.push({ thread, input });
         sink.usage({ inputTokens: 20, cacheReadTokens: 10, outputTokens: 5 });
+        if (failWithActivity) {
+          failWithActivity = false;
+          sink.text("I have the wiring. Next I'll add tests.");
+          for (let i = 0; i < 7; i++) {
+            sink.toolStart({ toolId: `edit_${i}`, name: "edit", tool: "edit", title: `Edit file ${i}`, status: "running" });
+            if (i < 6) sink.toolUpdate(`edit_${i}`, { status: "done" });
+          }
+          return { status: "error", error: "Agent turn stopped after repeated resume attempts made no progress" };
+        }
         if (hanging) {
           await new Promise<void>((resolve) => { helperWaits.set(thread.id, resolve); });
           helperWaits.delete(thread.id);
@@ -131,6 +141,8 @@ test("a helper runs the brief on the named model with the caller's settings and 
   const result = await host.runHelper(id, { task: "rename foo to bar", title: "  Rename\n  symbol  ", provider: "pi", model: "qwen coder" });
   assert.equal(result.status, "done");
   assert.equal(result.reply, "did: rename foo to bar");
+  assert.equal(result.partialReply, undefined);
+  assert.equal(result.recentTools, undefined);
   assert.deepEqual(result.usage, { turns: 1, inputTokens: 20, cacheReadTokens: 10, outputTokens: 5, promptTokens: 30, costPartial: true });
   const helper = host.getThread(String(result.thread))!;
   assert.equal(helper.title, "Helper: Rename symbol");
@@ -157,6 +169,39 @@ test("a helper runs the brief on the named model with the caller's settings and 
     assert.equal(info.usage?.inputTokens, 60);
     assert.equal(info.usage?.helpers?.threads, 1);
     assert.equal(info.usage?.helpers?.turns, 2);
+  }
+});
+
+test("failed helpers report partial replies, changed files and bounded recent activity", async () => {
+  const id = parent();
+  failWithActivity = true;
+  const result = await host.runHelper(id, { task: "wire the feature", title: "Wire feature", provider: "pi" });
+  assert.equal(result.status, "error");
+  assert.equal(result.error, "Agent turn stopped after repeated resume attempts made no progress");
+  assert.doesNotMatch(String(result.note), /Cursor/);
+  assert.equal(result.partialReply, true);
+  assert.match(String(result.reply), /Next I'll add tests/);
+  assert.match(String(result.note), /stopped before completing its turn/);
+  assert.match(String(result.note), /do not prove the task is complete/);
+  const recent = result.recentTools as Array<{ name: string; title: string; status: string }>;
+  assert.equal(recent.length, 5);
+  assert.equal(recent[0].title, "Edit file 2");
+  assert.equal(recent[0].status, "done");
+  assert.equal(recent[4].status, "error"); // host settles unfinished tools on failure
+  const helperId = String(result.thread);
+  const turns = (host as unknown as Internals).turns.get(helperId)!;
+  Object.assign(turns.at(-1)!, { files: [{ status: "M", path: "feature.ts", added: 2, removed: 0 }] });
+  // Persisted Cursor failures use the same report, with the provider's checkpoint explanation.
+  const helper = host.getThread(helperId)!;
+  const provider = helper.provider;
+  try {
+    helper.provider = "cursor";
+    const report = await host.runHelper(id, { task: "", thread: helperId });
+    assert.deepEqual(report.files, ["M feature.ts"]);
+    assert.match(String(report.note), /Cursor's SDK.*checkpoint/);
+    assert.match(String(report.note), /File edits and tool activity can still have occurred/);
+  } finally {
+    helper.provider = provider;
   }
 });
 
@@ -337,7 +382,11 @@ test("stopping the caller stops its helper", async () => {
     const call = host.runHelper(id, { task: "long", title: "Inspect files", provider: "pi" });
     await new Promise((resolve) => setTimeout(resolve, 30));
     await host.cancel(id);
-    assert.equal((await call).status, "cancelled");
+    const report = await call;
+    assert.equal(report.status, "cancelled");
+    assert.equal(report.partialReply, true);
+    assert.deepEqual(report.recentTools, []);
+    assert.match(String(report.note), /stopped before completing its turn/);
   } finally {
     hanging = false;
   }

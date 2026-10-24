@@ -3504,9 +3504,18 @@ export class AgentHost {
     }
     const turn = this.loadTurns(helper.id).at(-1);
     if (!turn) throw new Error("The helper did not run.");
-    const { reply } = this.turnText(this.loadItems(helper.id), turn, false);
+    const items = this.loadItems(helper.id);
+    const { reply } = this.turnText(items, turn, false);
     const files = (turn.files ?? []).map((f) => `${f.status} ${f.path}`);
     const latest = this.threads.get(helper.id) ?? helper;
+    const incomplete = turn.status === "error" || turn.status === "cancelled";
+    // A failed helper can leave useful edits and a progress message, without having finished its brief.
+    // Keep this bounded and omit raw tool inputs/outputs: the parent needs activity, not another transcript.
+    const recentTools = incomplete ? items.filter((item): item is Item & { kind: "tool" } => item.kind === "tool" && item.turnId === turn.id && !item.parentToolId).slice(-5).map((item) => ({
+      name: item.name.slice(0, 200),
+      title: item.title.slice(0, 300),
+      status: item.status,
+    })) : [];
     return {
       thread: helper.id,
       provider: latest.provider,
@@ -3514,10 +3523,13 @@ export class AgentHost {
       status: turn.status,
       usage: this.threadUsage(helper.id),
       ...(turn.error ? { error: turn.error } : {}),
+      ...(incomplete ? { partialReply: true, recentTools } : {}),
       reply: reply || (turn.status === "done" ? "(The helper ended its turn without a final message. Check its changes yourself.)" : ""),
       ...(files.length ? { files } : {}),
       ...(turn.usage?.inputTokens !== undefined || turn.usage?.outputTokens !== undefined ? { tokens: { input: turn.usage.inputTokens ?? 0, output: turn.usage.outputTokens ?? 0 } } : {}),
-      note: "Check this work yourself before you rely on it. To send the same helper a follow-up, pass thread.",
+      note: (incomplete ? "The helper stopped before completing its turn. Its reply may be a progress message; any listed file changes remain in the shared workspace and do not prove the task is complete. " : "") +
+        (latest.provider === "cursor" && turn.error?.includes("repeated resume attempts made no progress") ? "Cursor's SDK stopped after repeated interrupted resumes without saving a checkpoint. File edits and tool activity can still have occurred. " : "") +
+        "Check this work yourself before you rely on it. To send the same helper a follow-up, pass thread.",
     };
   }
 
