@@ -66,7 +66,7 @@
     "@lezer/highlight": "^1.2.5",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@openai/codex-sdk": "^0.164.0",
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "esbuild": "^0.28.2",
     "express": "^4.21.2",
     "marked": "^18.0.14",
@@ -75,7 +75,7 @@
     "smol-toml": "^1.4.2",
     "ws": "^8.18.3",
     "yauzl": "^3.2.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.0",
@@ -85,5 +85,8 @@
     "@types/yauzl": "^2.10.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "undici": "^8.12.3"
   }
 }
