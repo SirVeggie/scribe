@@ -91,6 +91,8 @@ test("Claude account refresh survives busy turns and throttling with one retry t
     assert.equal(reads, 1);
     const pending = timers.filter(timer => timer.active);
     assert.deepEqual(pending.map(timer => timer.delay), [50_000]);
+    internal.commitLimits("codex", { at: now, source: "codex", availability: "available", windows: [] }, false);
+    assert.equal(pending[0].active, true, "another provider cannot cancel Claude's pending refresh");
     // Run the retained request at the end of its throttle window.
     internal.lastUsageFetchAt = now - 60_000;
     pending[0].callback();

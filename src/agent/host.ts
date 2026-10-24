@@ -896,7 +896,7 @@ export class AgentHost {
     this.db.setSetting("limits", this.planLimits);
     this.emit({ type: "agent_limits", limits: this.liveLimits() });
     if (fromTurn) this.applyPlanCost(provider, next);
-    this.scheduleClaudeUsageRefresh();
+    if (provider === "claude") this.scheduleClaudeUsageRefresh();
   }
 
   /** After a window resets, pull plan usage from Claude without sending a model message. */
