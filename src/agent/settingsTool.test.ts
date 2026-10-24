@@ -31,6 +31,92 @@ test("settings_find searches the window's list and settings_show takes only know
   assert.throws(() => parseShowInput({ ids: ["agent/chat/nope"] }), /Unknown setting id: agent\/chat\/nope/);
 });
 
+test("settings catalogs and inert cards exclude secrets while live controls keep drafts", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Settings secrets test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    const published: any[] = [];
+    await page.route("http://settings.test/**", async (route) => {
+      if (route.request().url().endsWith("/api/settings/index")) {
+        published.push(route.request().postDataJSON());
+        return route.fulfill({ json: { ok: true } });
+      }
+      return route.fulfill({ contentType: "text/html", body: `
+        <div hidden><div class="settings-panel" id="panel"><h2 class="settings-title" id="title">Settings</h2>
+          <section class="settings-section" id="secrets"><h3>Secrets</h3>
+            <div class="setting-row"><label>API key</label><input id="key" type="password" value="attribute-secret"></div>
+            <div class="setting-row"><label>Empty key</label><input type="password" placeholder="Saved (type to replace)"></div>
+            <form><label>Model source key<input id="nested" type="password" value="nested-secret"></label></form>
+            <input id="direct" aria-label="Direct key" type="password" value="direct-secret">
+            <div class="setting-row"><label>Endpoint</label><input type="text" value="https://example.test"></div>
+          </section>
+        </div></div><main id="chat"></main>` });
+    });
+    await page.goto("http://settings.test/");
+    await page.addScriptTag({ content: "window.__name = (fn) => fn; window.scribeMotion = { enabled: () => false };" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/settings-ui.js", import.meta.url), "utf8") });
+    const publication = page.waitForResponse("http://settings.test/api/settings/index");
+    await page.evaluate(() => {
+      const w = window as any;
+      (document.getElementById("key") as HTMLInputElement).value = "typed-secret";
+      w.view = w.scribeSettingsUI.mount(document.getElementById("panel"), [
+        { label: "Sources", sections: [document.getElementById("secrets")] },
+      ]);
+      w.view.open();
+      w.addCard = (id: string) => {
+        const root = document.createElement("div");
+        root.id = id;
+        document.getElementById("chat")!.append(root);
+        w.scribeSettingsUI.lend(root, ["general/secrets"]);
+      };
+      w.addCard("first"); // Built while the dialog is open: all copies.
+      window.dispatchEvent(new CustomEvent("scribe:connection", { detail: { connected: true } }));
+    });
+    const assertSafeCopies = async (id: string) => {
+      const fields = await page.locator(`#${id} input[type=password]`).evaluateAll((inputs) => inputs.map((el) => {
+        const input = el as HTMLInputElement;
+        return { value: input.value, defaultValue: input.defaultValue, attribute: input.getAttribute("value"), inert: !!input.closest("[inert]") };
+      }));
+      assert.equal(fields.length, 4);
+      assert.deepEqual(fields, Array.from({ length: 4 }, () => ({ value: "", defaultValue: "", attribute: null, inert: true })));
+    };
+    const assertSafeCatalog = (catalog: any[]) => {
+      assert.doesNotMatch(JSON.stringify(catalog), /(?:attribute|typed|nested|direct)-secret/);
+      assert.equal(catalog.find((e) => e.label === "API key")?.value, "Entered");
+      assert.equal(catalog.find((e) => e.label === "Empty key")?.value, "");
+      assert.equal(catalog.find((e) => e.label === "Endpoint")?.value, "https://example.test");
+    };
+    await assertSafeCopies("first");
+    assertSafeCatalog(await page.evaluate(() => (window as any).scribeSettingsUI.catalog()));
+    await publication;
+    assertSafeCatalog(published.at(-1).settings);
+    setSettingsCatalog(published.at(-1));
+    assert.doesNotMatch(findSettings(undefined), /(?:attribute|typed|nested|direct)-secret/);
+
+    await page.evaluate(() => (window as any).view.close());
+    await page.waitForSelector("#first #key");
+    assert.equal(await page.locator("#first #key").inputValue(), "typed-secret");
+    await page.evaluate(() => (window as any).addCard("second")); // Transfers the live nodes.
+    await assertSafeCopies("first");
+    assert.equal(await page.locator("#second #key").inputValue(), "typed-secret");
+    assertSafeCatalog(await page.evaluate(() => (window as any).scribeSettingsUI.catalog()));
+    await page.evaluate(() => (window as any).view.open()); // Returns them to the dialog.
+    await assertSafeCopies("second");
+    assert.equal(await page.locator("#panel #key").inputValue(), "typed-secret");
+    assert.equal(await page.locator("#panel #direct").inputValue(), "direct-secret");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("a chat card shows the dialogs' own rows under their headings and hands them back", async (t) => {
   let browser;
   try {

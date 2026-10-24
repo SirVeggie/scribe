@@ -273,7 +273,12 @@
   /** A still copy for a card that doesn't hold the node: same look, nothing to click or focus. */
   function standIn(node) {
     const copy = node.cloneNode(true);
-    for(const input of copy.querySelectorAll('input[type="password"]')){input.value="";input.removeAttribute("value");}
+    // A whole section can lend an input directly, as well as rows and forms containing one.
+    for (const input of [copy, ...copy.querySelectorAll('input[type="password"]')]) {
+      if (!input.matches('input[type="password"]')) continue;
+      input.value = "";
+      input.removeAttribute("value");
+    }
     copy.inert = true;
     for (const el of [copy, ...copy.querySelectorAll("[id]")]) el.removeAttribute("id");
     return copy;
