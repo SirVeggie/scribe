@@ -4060,6 +4060,8 @@ html.tight-small .agent-full {
 .dock-input .ag-composer,
 .dock-input .ag-composer:focus-within {
   flex: 1;
+  /* Center a single text line beside the 30px controls; taller composers still grow upward. */
+  align-self: center;
   min-width: 0;
   margin: 0;
   padding: 0;
