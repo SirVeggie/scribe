@@ -36,11 +36,6 @@
     context: null,
     skills: null,
     skillFolders: [],
-    memories: null,
-    memoryTargets: [],
-    /** The memory being edited, and the text typed for a new one, kept across renders. */
-    memEdit: null,
-    memDraft: { text: "", workspace: "" },
     config: null,
     threads: [],
     measure: null,
@@ -977,131 +972,15 @@
     setTimeout(() => name.focus(), 0);
   }
 
-  const memoryTargetKey = (value) => JSON.stringify([value.provider, value.source || ""]);
-  const memoryTargetLabel = (value) => S.memoryTargets.find((t) => t.provider === value.provider && (t.source || "") === (value.source || ""))?.label || `${PROVIDER_LABEL[value.provider] || value.provider}${value.source ? `: ${value.source}` : ""}`;
-
-  /** A text box and a scope picker. */
-  function memoryForm(value, submitLabel, submit, { cancel, onInput } = {}) {
-    const box = el("textarea", "ag-input ag-mem-input");
-    box.rows = 2;
-    box.value = value.text;
-    box.placeholder = "Add a memory, e.g. Run the tests with npm test, not pnpm.";
-    box.setAttribute("aria-label", "Memory");
-    const scope = el("select", "hx-select");
-    scope.setAttribute("aria-label", "Applies to");
-    const dirs = [...new Map([value.workspace, S.pick.cwd, ...(S.config?.prefs?.recentWorkspaces || []), ...(S.memories || []).map((m) => m.workspace)].filter(Boolean).map((dir) => [dirKey(dir), dir])).values()];
-    scope.append(new Option("Every chat", ""));
-    for (const dir of dirs) scope.append(new Option(dir, `workspace:${dir}`));
-    for (const target of S.memoryTargets) scope.append(new Option(`${target.label} only`, `provider:${memoryTargetKey(target)}`));
-    scope.value = value.scope === "provider" ? `provider:${memoryTargetKey(value)}` : value.workspace ? `workspace:${value.workspace}` : "";
-    const draft = () => {
-      if (scope.value.startsWith("provider:")) {
-        const [provider, source] = JSON.parse(scope.value.slice(9));
-        return { text: box.value, scope: "provider", provider, ...(source ? { source } : {}) };
-      }
-      return { text: box.value, workspace: scope.value.startsWith("workspace:") ? scope.value.slice(10) : null };
-    };
-    const changed = () => onInput?.(draft());
-    box.addEventListener("input", changed);
-    scope.addEventListener("change", changed);
-    const go = async () => {
-      if (!box.value.trim()) return box.focus();
-      try {
-        await submit(draft());
-      } catch (err) {
-        notice(err.message);
-      }
-    };
-    box.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        void go();
-      }
-    });
-    const row = el("div", "ag-mem-form-row");
-    row.append(scope, el("span", "ag-grow"));
-    if (cancel) row.append(button("Cancel", "ag-btn small", cancel));
-    row.append(button(submitLabel, "ag-btn small primary", () => void go()));
-    const wrap = el("div", "ag-mem-form");
-    wrap.append(box, row);
-    return wrap;
-  }
-
-  function memoryRow(memory) {
-    if (S.memEdit === memory.id) {
-      return memoryForm(
-        memory,
-        "Save",
-        async (body) => {
-          await api("PUT", `/memories/${memory.id}`, body);
-          S.memEdit = null;
-          await loadMemories();
-        },
-        {
-          cancel: () => {
-            S.memEdit = null;
-            render();
-          },
-        }
-      );
-    }
-    const row = el("div", "ag-mem");
-    const meta = el("div", "ag-mem-meta");
-    meta.append(
-      el("span", null, `Saved by ${memory.by === "user" ? "you" : PROVIDER_LABEL[memory.by] || memory.by}, ${new Date(memory.updatedAt).toLocaleDateString()}`),
-      el("span", "ag-grow"),
-      button("Edit", "ag-btn small", () => {
-        S.memEdit = memory.id;
-        render();
-        body.querySelector(".ag-perm-set .ag-mem-input")?.focus();
-      }),
-      button("Remove", "ag-btn small", async () => {
-        try {
-          await api("DELETE", `/memories/${memory.id}`);
-        } catch (err) {
-          notice(err.message);
-        }
-        await loadMemories();
-      })
-    );
-    row.append(el("div", "ag-mem-text", memory.text), meta);
-    return row;
-  }
-
+  /** public/memories.js draws the list and the popup that adds or edits one (#826), as in Agent settings. */
   function renderMemories() {
-    if (!S.memories) return [empty(S.error || "Loading…")];
-    const node = card(
-      "Shared memory",
-      "Global memories reach every chat; workspace memories reach that folder and below it. Provider memories reach only that provider, or that source in Native. Changes apply from the next message."
-    );
-    if (S.config?.prefs?.memory === false) node.append(el("p", "ag-source-error", "Memory is off in Agent settings: chats get none of these and cannot save any."));
+    const node = card("Shared memory");
+    const ui = window.scribeMemories;
     node.append(
-      memoryForm(
-        S.memDraft,
-        "Add",
-        async (body) => {
-          await api("POST", "/memories", body);
-          S.memDraft = { ...S.memDraft, text: "" };
-          await loadMemories();
-        },
-        { onInput: (draft) => (S.memDraft = draft) }
-      )
+      ui
+        ? ui.browser({ here: S.pick.cwd, workspaces: () => S.config?.prefs?.recentWorkspaces || [], off: () => S.config?.prefs?.memory === false })
+        : empty("Memories are not available here.")
     );
-    if (!S.memories.length) node.append(empty("Nothing saved yet."));
-    const groups = new Map();
-    for (const memory of [...S.memories].sort((a, b) => b.updatedAt - a.updatedAt)) {
-      const key = memory.scope === "provider" ? `provider:${memoryTargetKey(memory)}` : memory.workspace ? `workspace:${dirKey(memory.workspace)}` : "";
-      if (!groups.has(key)) groups.set(key, { title: memory.scope === "provider" ? `${memoryTargetLabel(memory)} only` : memory.workspace || "Every chat", items: [] });
-      groups.get(key).items.push(memory);
-    }
-    for (const key of [...groups.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))) {
-      const group = groups.get(key);
-      const box = el("div", "ag-perm-set");
-      const head = el("div", "ag-perm-head");
-      head.append(key ? el("span", "ag-perm-path", group.title) : el("strong", null, group.title));
-      box.append(head, ...group.items.map(memoryRow));
-      node.append(box);
-    }
     return [node];
   }
 
@@ -1246,17 +1125,10 @@
     }
   });
 
-  const loadMemories = () => load(async () => {
-    const result = await api("GET", "/memories");
-    S.memories = result.memories || [];
-    S.memoryTargets = result.targets || [];
-  });
-
   async function refresh() {
     S.probes.clear();
     await Promise.all([
       loadStats(),
-      loadMemories(),
       load(async () => {
         const [config, result] = await Promise.all([api("GET", "/config"), api("GET", "/threads")]);
         S.config = config;

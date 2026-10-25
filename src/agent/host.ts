@@ -3186,7 +3186,7 @@ export class AgentHost {
     const input = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const workspace = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : null;
     if (workspace && !path.isAbsolute(workspace)) throw new Error("The workspace must be an absolute folder path.");
-    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), text: typeof input.text === "string" ? input.text : "", scope: input.scope === "provider" ? "provider" : workspace ? "workspace" : "global", workspace, provider: typeof input.provider === "string" ? input.provider : undefined, source: typeof input.source === "string" ? input.source : undefined, by: "user" });
+    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), ...(typeof input.title === "string" ? { title: input.title } : {}), text: typeof input.text === "string" ? input.text : "", scope: input.scope === "provider" ? "provider" : workspace ? "workspace" : "global", workspace, provider: typeof input.provider === "string" ? input.provider : undefined, source: typeof input.source === "string" ? input.source : undefined, by: "user" });
     this.db.setSetting("memories", saved.memories);
     return saved.memory;
   }
@@ -3209,7 +3209,7 @@ export class AgentHost {
     const workspace = this.memoryWorkspace(thread);
     const owner = this.runs.get(threadId)?.memoryOwner ?? memoryOwner(thread);
     const all = this.memories();
-    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), ...(m.provider ? { provider: m.provider } : {}), ...(m.source ? { source: m.source } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
+    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), ...(m.provider ? { provider: m.provider } : {}), ...(m.source ? { source: m.source } : {}), ...(m.title ? { title: m.title } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
     const note = (text: string) => {
       const run = this.runs.get(threadId);
       if (run) this.closeBlocks(run);
@@ -3217,7 +3217,7 @@ export class AgentHost {
     };
     if (op === "list") {
       const words = queryWords(body.q);
-      const memories = memoriesFor(all, workspace, owner).filter((m) => words.every((w) => m.text.toLowerCase().includes(w)));
+      const memories = memoriesFor(all, workspace, owner).filter((m) => words.every((w) => `${m.title ?? ""} ${m.text}`.toLowerCase().includes(w)));
       return { ...(workspace ? { workspace } : {}), memories: memories.map(row) };
     }
     if (op === "save") {
@@ -3229,8 +3229,11 @@ export class AgentHost {
       if (scope === "workspace" && !workspace && !old) throw new Error("This thread has no workspace folder. Use global or provider scope.");
       // A change keeps the memory where it is (a parent workspace's stays the parent's) unless scope says otherwise.
       const keep = old && typeof body.scope !== "string" ? old : null;
+      const title = typeof body.title === "string" && body.title.trim() ? body.title : undefined;
+      if (!title && !old?.title) throw new Error("Give the memory a title: a few words naming it (the user's list shows only titles).");
       const saved = saveMemory(all, {
         ...(id ? { id } : {}),
+        ...(title ? { title } : {}),
         text: typeof body.text === "string" ? body.text : "",
         scope: keep ? keep.scope : scope,
         workspace: keep ? keep.workspace : workspace,
@@ -3241,7 +3244,7 @@ export class AgentHost {
         thread: threadId,
       });
       this.db.setSetting("memories", saved.memories);
-      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${saved.memory.scope === "provider" ? `only ${saved.memory.provider}${saved.memory.source ? `/${saved.memory.source}` : ""} chats` : saved.memory.scope === "global" ? "all chats" : `chats in ${saved.memory.workspace}`}): ${saved.memory.text}`);
+      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${saved.memory.scope === "provider" ? `only ${saved.memory.provider}${saved.memory.source ? `/${saved.memory.source}` : ""} chats` : saved.memory.scope === "global" ? "all chats" : `chats in ${saved.memory.workspace}`}): ${saved.memory.title ? `${saved.memory.title}. ` : ""}${saved.memory.text}`);
       return { saved: row(saved.memory), created: saved.created, note: "Chats get it in their instructions from their next message. The user can edit or remove it under Agent settings, Memories." };
     }
     if (op === "delete") {

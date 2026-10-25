@@ -126,7 +126,7 @@ test("harness keeps content while filters load and ignores superseded responses"
 const thread = (id: string, over: Partial<Thread> = {}): Thread =>
   ({ id, title: id, provider: "claude", model: "opus", mode: "code", scope: { kind: "global", ref: null }, ...over }) as Thread;
 
-test("memory editor preserves Native source on edit and keeps the chosen scope for new memories", async (t) => {
+test("memory popup preserves Native source on edit, asks for a title, and keeps the chosen scope for new memories", async (t) => {
   let browser;
   try { browser = await launchChromium({ headless: true, args: [], purpose: "Memory scope editor test" }); }
   catch (error) {
@@ -155,23 +155,28 @@ test("memory editor preserves Native source on edit and keeps the chosen scope f
       await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
     });
     await page.goto("http://memory.test/");
-    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    for (const file of ["memories.js", "harness.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${file}`, import.meta.url), "utf8") });
     await page.evaluate(() => (window as any).scribeHarness.open("memories"));
-    await page.getByText("Local source rule", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
-    const edit = page.locator(".ag-perm-set .ag-mem-form");
+    // The list shows one line per memory; an untitled one shows its text.
+    await page.getByRole("button", { name: /Local source rule/ }).click();
+    const edit = page.getByRole("dialog", { name: "Memory", exact: true });
     assert.equal(await edit.getByRole("combobox", { name: "Applies to" }).inputValue(), 'provider:["pi","src-local"]');
+    await edit.getByRole("textbox", { name: "Title", exact: true }).fill("Local rule");
     await edit.getByRole("textbox", { name: "Memory", exact: true }).fill("Updated local rule");
     await edit.getByRole("button", { name: "Save", exact: true }).click();
-    await page.getByText("Updated local rule", { exact: true }).waitFor();
-    assert.deepEqual(writes[0], { text: "Updated local rule", scope: "provider", provider: "pi", source: "src-local" });
-    const add = page.locator(".ag-mem-form");
+    await page.getByRole("button", { name: /^Local rule/ }).waitFor();
+    assert.deepEqual(writes[0], { title: "Local rule", text: "Updated local rule", scope: "provider", provider: "pi", source: "src-local" });
+    await page.getByRole("button", { name: "Add memory", exact: true }).click();
+    const add = page.getByRole("dialog", { name: "New memory", exact: true });
     await add.getByRole("combobox", { name: "Applies to" }).selectOption({ label: "Codex only" });
+    // No title yet: Add asks for one instead of saving.
     await add.getByRole("textbox", { name: "Memory", exact: true }).fill("Codex helper rule");
     await add.getByRole("button", { name: "Add", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".ag-mem-input")?.value === "");
-    assert.deepEqual(writes[1], { text: "Codex helper rule", scope: "provider", provider: "codex" });
-    assert.equal(await add.getByRole("combobox", { name: "Applies to" }).inputValue(), 'provider:["codex",""]');
+    assert.equal(writes.length, 1);
+    await add.getByRole("textbox", { name: "Title", exact: true }).fill("Codex helpers");
+    await add.getByRole("button", { name: "Add", exact: true }).click();
+    await add.waitFor({ state: "detached" });
+    assert.deepEqual(writes[1], { title: "Codex helpers", text: "Codex helper rule", scope: "provider", provider: "codex" });
   } finally { await browser.close(); }
 });
 const turn = (id: string, threadId: string, over: Partial<Turn> = {}): Turn => ({ id, threadId, seq: 1, status: "done", model: "opus", effort: null, mode: "code", startedAt: 1000, ...over });

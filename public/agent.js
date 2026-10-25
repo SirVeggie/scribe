@@ -9840,14 +9840,11 @@
     },
   };
 
-  /* ---------- memories: the notes every chat gets in its instructions (#104) ---------- */
+  /* ---------- memories: the notes every chat gets in its instructions (#104, #826) ---------- */
 
+  /** The Memories dialog (public/memories.js draws the list). It opens over Agent settings and returns there. */
   const memoryDialog = {
     root: null,
-    body: null,
-    list: [],
-    /** Id of the memory being edited. */
-    editing: null,
     mount() {
       const root = el("div", "settings ag-perm-dialog ag-mem-dialog");
       root.hidden = true;
@@ -9860,20 +9857,16 @@
       panel.setAttribute("role", "dialog");
       panel.setAttribute("aria-modal", "true");
       panel.setAttribute("aria-labelledby", "ag-mem-title");
-      const title = el("h2", "settings-title", "Memories");
-      title.id = "ag-mem-title";
-      const section = el("section", "settings-section");
-      this.adder = el("div", "ag-mem-form");
-      this.body = el("div", "ag-mem-list");
-      section.append(
-        helpHeading(
-          "Shared memory",
-          "Short notes that every chat gets in its instructions, whatever its provider: corrections you gave, mistakes to avoid, facts about a project. Agents save them as they work, and each save shows as a note in that chat. A workspace's memories reach chats in that folder and below it. Changes apply from a thread's next message."
-        ),
-        this.adder,
-        this.body
+      const head = el("div", "ag-mem-dialog-head");
+      const title = helpHeading(
+        "Memories",
+        "Short notes chats get in their instructions, whatever their provider: corrections you gave, mistakes to avoid, facts about a project. Agents save them as they work, and each save shows as a note in that chat. Changes apply from a thread's next message."
       );
-      panel.append(title, section);
+      title.classList.add("settings-title");
+      title.id = "ag-mem-title";
+      head.append(title);
+      this.body = el("div", "ag-mem-dialog-body");
+      panel.append(head, this.body);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -9882,142 +9875,25 @@
       return Boolean(this.root && !this.root.hidden);
     },
     open() {
-      if (!this.root) return;
-      this.editing = null;
-      this.here = targetView().settings().cwd || null;
+      if (!this.root || !window.scribeMemories) return;
+      this.opener = document.activeElement;
+      const here = targetView().settings().cwd || null;
+      this.body.replaceChildren(
+        window.scribeMemories.browser({ here, workspaces: () => prefs().recentWorkspaces || [], off: () => prefs().memory === false })
+      );
       this.root.hidden = false;
       this.releaseTrap?.();
-      this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"));
-      this.body.replaceChildren(el("div", "ag-muted", "Loading…"));
-      this.renderAdder();
-      // Not the heading's ?, which shows its tip when focused.
-      setTimeout(() => this.adder.querySelector("textarea")?.focus(), 0);
-      void this.load();
+      this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"), { initial: this.body.querySelector(".ag-memory-search") });
     },
     close() {
       if (!this.isOpen()) return false;
       this.releaseTrap?.();
       this.releaseTrap = null;
       this.root.hidden = true;
-      hideHoverTip();
-      return true;
-    },
-    async load() {
-      try {
-        this.list = (await api("GET", "/memories")).memories || [];
-        this.render();
-      } catch (err) {
-        this.body.replaceChildren(el("div", "ag-muted", err.message));
-      }
-    },
-    /** A text box and a scope picker; workspace "" is every chat. */
-    form(text, workspace, submitLabel, submit, cancel) {
-      const box = el("textarea", "ag-input ag-mem-input");
-      box.rows = 2;
-      box.value = text;
-      box.placeholder = "Add a memory, e.g. Run the tests with npm test, not pnpm.";
-      box.setAttribute("aria-label", "Memory");
-      const scope = el("select");
-      scope.setAttribute("aria-label", "Applies to");
-      const dirs = [...new Map([workspace, this.here, ...(prefs().recentWorkspaces || []), ...this.list.map((m) => m.workspace)].filter(Boolean).map((dir) => [dirKey(dir), dir])).values()];
-      scope.append(el("option", null, "Every chat"), ...dirs.map((dir) => el("option", null, dir)));
-      [...scope.options].forEach((option, i) => (option.value = i ? dirs[i - 1] : ""));
-      scope.value = workspace || "";
-      const go = async () => {
-        if (!box.value.trim()) return box.focus();
-        try {
-          await submit({ text: box.value, workspace: scope.value || null });
-        } catch (err) {
-          notice(err.message);
-        }
-      };
-      box.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-          event.preventDefault();
-          void go();
-        }
-      });
-      const row = el("div", "ag-mem-form-row");
-      row.append(scope, el("span", "ag-grow"));
-      if (cancel) row.append(button("Cancel", "ag-btn small", cancel));
-      row.append(button(submitLabel, "ag-btn small primary", () => void go()));
-      const wrap = el("div", "ag-mem-form");
-      wrap.append(box, row);
-      // The themed select wraps the element where it sits, so it has to be in the form first.
-      window.createSelect?.(scope);
-      return wrap;
-    },
-    renderAdder() {
-      const fresh = this.form("", this.here, "Add", async (body) => {
-        await api("POST", "/memories", body);
-        this.renderAdder();
-        await this.load();
-      });
-      this.adder.replaceWith(fresh);
-      this.adder = fresh;
-    },
-    render() {
       this.body.replaceChildren();
-      if (!this.list.length) {
-        this.body.append(el("div", "ag-muted", "Nothing saved yet."));
-        return;
-      }
-      const groups = new Map();
-      for (const memory of [...this.list].sort((a, b) => b.updatedAt - a.updatedAt)) {
-        const key = memory.workspace ? dirKey(memory.workspace) : "";
-        if (!groups.has(key)) groups.set(key, { title: memory.workspace || "Every chat", items: [] });
-        groups.get(key).items.push(memory);
-      }
-      const keys = [...groups.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)));
-      for (const key of keys) {
-        const group = groups.get(key);
-        const box = el("div", "ag-perm-set");
-        const head = el("div", "ag-perm-head");
-        head.append(key ? el("span", "ag-perm-path", group.title) : el("strong", null, group.title));
-        box.append(head);
-        for (const memory of group.items) box.append(this.renderMemory(memory));
-        this.body.append(box);
-      }
-    },
-    renderMemory(memory) {
-      if (this.editing === memory.id) {
-        return this.form(
-          memory.text,
-          memory.workspace || null,
-          "Save",
-          async (body) => {
-            await api("PUT", `/memories/${memory.id}`, body);
-            this.editing = null;
-            await this.load();
-          },
-          () => {
-            this.editing = null;
-            this.render();
-          }
-        );
-      }
-      const row = el("div", "ag-mem");
-      const by = memory.by === "user" ? "you" : PROVIDER_LABEL[memory.by] || memory.by;
-      const meta = el("div", "ag-mem-meta");
-      meta.append(
-        el("span", null, `Saved by ${by}, ${new Date(memory.updatedAt).toLocaleDateString()}`),
-        el("span", "ag-grow"),
-        button("Edit", "ag-btn small", () => {
-          this.editing = memory.id;
-          this.render();
-          this.body.querySelector(".ag-mem-input")?.focus();
-        }),
-        button("Remove", "ag-btn small", async () => {
-          try {
-            await api("DELETE", `/memories/${memory.id}`);
-            await this.load();
-          } catch (err) {
-            notice(err.message);
-          }
-        })
-      );
-      row.append(el("div", "ag-mem-text", memory.text), meta);
-      return row;
+      hideHoverTip();
+      if (this.opener?.isConnected) this.opener.focus({ preventScroll: true });
+      return true;
     },
   };
 
@@ -10712,18 +10588,16 @@
         }
       );
       const memoryActions = el("div", "settings-actions");
-      memoryActions.append(
-        button("Memories…", null, () => {
-          this.close();
-          memoryDialog.open();
-        })
-      );
+      memoryActions.append(button("Manage memories…", null, () => memoryDialog.open()));
+      // What is saved, at a glance (#828). Loaded again each time settings open.
+      this.memoryStats = window.scribeMemories?.stats({ load: false }) || el("div");
       memory.append(
         el("h3", null, "Memory"),
         settingRow("Agents share memories", memoryOn, {
           id: "ag-memory-label",
           hint: "Chats on every provider get the saved memories in their instructions and can save new ones: corrections you gave, mistakes to avoid, facts about a project. Each save shows as a note in that chat. Off, chats get none and cannot save any; the saved ones are kept. Applies from a thread's next message.",
         }),
+        this.memoryStats,
         memoryActions
       );
 
@@ -11180,6 +11054,7 @@
       void this.renderSources();
       void this.renderHooks();
       this.renderSummarizer();
+      void window.scribeMemories?.store.load();
       this.categories.open();
       this.renderUsage();
       void this.renderSdkUpdates();
@@ -12223,6 +12098,11 @@
   }
 
   function escape() {
+    // Small dialogs (a memory, a hook rule) open over the settings dialogs, so they close first.
+    if (modalStack.length && (allowlists.isOpen() || memoryDialog.isOpen() || agentSettings.isOpen())) {
+      modalStack[modalStack.length - 1]();
+      return true;
+    }
     if (allowlists.close()) return true;
     if (memoryDialog.close()) return true;
     if (agentSettings.close()) return true;

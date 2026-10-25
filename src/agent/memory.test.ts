@@ -73,13 +73,13 @@ test("a thread's instructions carry its memories, and nothing about memory when 
 test("memory tools: a chat saves to its workspace, another chat there gets it, a chat elsewhere does not", () => {
   fs.mkdirSync(repo, { recursive: true });
   const writer = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: repo } });
-  const saved = host.memoryOp(writer.id, "save", { text: "The dev server needs port 4400 free." }) as { saved: { id: string; scope: string }; created: boolean };
+  const saved = host.memoryOp(writer.id, "save", { title: "Dev server port", text: "The dev server needs port 4400 free." }) as { saved: { id: string; scope: string }; created: boolean };
   assert.equal(saved.saved.scope, "workspace");
-  host.memoryOp(writer.id, "save", { text: "Keep answers short.", scope: "global" });
+  host.memoryOp(writer.id, "save", { title: "Short answers", text: "Keep answers short.", scope: "global" });
   // The user sees every save in the chat.
   const notices = (host.threadDetail(writer.id)?.items ?? []).filter((it) => it.kind === "notice").map((it) => (it.kind === "notice" ? it.text : ""));
   assert.equal(notices.length, 2);
-  assert.match(notices[0], /Saved a memory \(chats in .*repo\): The dev server needs port 4400 free\./);
+  assert.match(notices[0], /Saved a memory \(chats in .*repo\): Dev server port\. The dev server needs port 4400 free\./);
 
   const peer = host.createThread({ provider: "codex", scope: { kind: "workspace", ref: repo } });
   const listed = host.memoryOp(peer.id, "list", { q: "port" }) as { memories: Array<{ id: string; by: string }> };
@@ -132,7 +132,7 @@ test("provider memories stay private through persistence, deduplication and scop
 
 test("memory tools enforce provider and Native source ownership, including guessed ids", () => {
   const writer = host.createThread({ provider: "codex", scope: { kind: "workspace", ref: repo } });
-  const saved = host.memoryOp(writer.id, "save", { text: "Only Codex helpers.", scope: "provider", provider: "claude" }) as { saved: Memory };
+  const saved = host.memoryOp(writer.id, "save", { title: "Codex helpers", text: "Only Codex helpers.", scope: "provider", provider: "claude" }) as { saved: Memory };
   assert.equal(saved.saved.provider, "codex");
   const peer = host.createThread({ provider: "codex", scope: { kind: "workspace", ref: other } });
   const outsider = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: repo } });
@@ -149,7 +149,7 @@ test("memory tools enforce provider and Native source ownership, including guess
   const sourceA = host.createThread({ provider: "pi", model: "src-one/model-a", scope: { kind: "workspace", ref: repo } });
   const sourcePeer = host.createThread({ provider: "pi", model: "src-one/model-b", scope: { kind: "workspace", ref: other } });
   const sourceB = host.createThread({ provider: "pi", model: "src-two/model-a", scope: { kind: "workspace", ref: repo } });
-  const native = host.memoryOp(sourceA.id, "save", { text: "Source one only.", scope: "provider", source: "src-two" }) as { saved: Memory };
+  const native = host.memoryOp(sourceA.id, "save", { title: "Source one", text: "Source one only.", scope: "provider", source: "src-two" }) as { saved: Memory };
   assert.equal(native.saved.source, "src-one");
   assert.equal((host.memoryOp(sourcePeer.id, "list", { q: "Source one" }) as { memories: Memory[] }).memories.length, 1);
   assert.deepEqual((host.memoryOp(sourceB.id, "list", { q: "Source one" }) as { memories: Memory[] }).memories, []);
@@ -167,4 +167,19 @@ test("user memory editor retains private ownership and lists Native source targe
   assert.throws(() => host.saveUserMemory(null, { text: "No broad Native scope.", scope: "provider", provider: "pi" }), /specific source/);
   assert.equal(host.saveUserMemory(made.id, { text: "Shared rule.", workspace: repo }).provider, undefined);
   host.deleteMemory(made.id);
+});
+
+test("titles: agents must name a new memory, edits keep the title, and the block shows it", () => {
+  const thread = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: repo } });
+  assert.throws(() => host.memoryOp(thread.id, "save", { text: "No title here." }), /title/);
+  const saved = host.memoryOp(thread.id, "save", { title: "  Port   rule ", text: "Port 4400." }) as { saved: Memory };
+  assert.equal(saved.saved.title, "Port rule");
+  const edited = host.memoryOp(thread.id, "save", { id: saved.saved.id, text: "Port 4401." }) as { saved: Memory };
+  assert.equal(edited.saved.title, "Port rule");
+  assert.equal((host.memoryOp(thread.id, "list", { q: "rule" }) as { memories: Memory[] }).memories.length, 1);
+  assert.match(memoryBlock(memoriesFor(host.memories(), repo)), /\(workspace\) Port rule: Port 4401\./);
+  // The user may leave an old memory untitled, or clear a title.
+  assert.equal(host.saveUserMemory(saved.saved.id, { title: "", text: "Port 4401.", workspace: repo }).title, undefined);
+  assert.throws(() => saveMemory([], { title: "x".repeat(101), text: "y", scope: "global", by: "user" }), /title/);
+  host.deleteMemory(saved.saved.id);
 });

@@ -545,14 +545,9 @@ body.agent-harness-open .settings {
   min-height: min(56vh, 520px);
 }
 
-.ag-field > .hx-select,
-.ag-mem-form-row > .hx-select {
+.ag-field > .hx-select {
   flex: none;
   max-width: 100%;
-}
-
-.ag-mem-form-row > .hx-select {
-  width: min(420px, 60%);
 }
 
 .agent-harness .ag-perm-set {

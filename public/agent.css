@@ -4641,47 +4641,129 @@ html.tight-small .agent-full {
   min-width: 160px;
 }
 
-/* Memories dialog */
-.ag-mem-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.ag-perm-set .ag-mem-form {
-  margin: 8px 0;
-}
-
+/* A text box sized for a paragraph (the skill editor's description). */
 .ag-mem-input {
   width: 100%;
   resize: vertical;
   min-height: 52px;
 }
 
-.ag-mem-form-row,
-.ag-mem-meta {
+/* Memories (#826): public/memories.js draws the list, the popup and the settings summary. */
+.ag-mem-dialog .settings-panel {
+  width: min(640px, 100%);
+}
+
+.ag-mem-dialog .settings-title {
+  margin-bottom: 14px;
+}
+
+.ag-memory {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ag-memory-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.ag-memory-search {
+  flex: 1;
   min-width: 0;
 }
 
-.ag-mem {
-  padding: 8px 0;
-  border-top: 1px solid var(--border);
+.ag-memory > .ag-source-error[hidden] {
+  display: none;
 }
 
-.ag-mem-text {
-  font-size: 13px;
-  white-space: pre-wrap;
+.ag-memory-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ag-memory-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 2px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ag-memory-group-head.path > span:first-child {
+  font: 11px var(--ag-mono);
   overflow-wrap: anywhere;
 }
 
-.ag-mem-meta {
-  margin-top: 4px;
+.ag-memory-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.ag-memory-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ag-memory-row:hover,
+.ag-memory-row:focus-visible {
+  background: rgba(var(--lift-rgb), 0.06);
+}
+
+.ag-memory-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-memory-name.untitled {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ag-memory-date {
+  flex: none;
   font-size: 11.5px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-memory-edit .ag-modal-panel {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.ag-memory-text-input {
+  min-height: 130px;
+  max-height: 50vh;
+  resize: vertical;
+}
+
+.ag-memory-stats {
+  margin: 2px 2px 12px;
+}
+
+.ag-memory-stat {
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 /* Agent settings: the key list. */

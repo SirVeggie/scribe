@@ -16,6 +16,8 @@ export type Memory = {
   /** Owning provider; Native (pi) also requires its model source. */
   provider?: string;
   source?: string;
+  /** A few words naming it, shown in the user's list (#826). Older memories may lack one. */
+  title?: string;
   text: string;
   /** "user", or the provider of the agent that saved it. */
   by: string;
@@ -26,6 +28,7 @@ export type Memory = {
 };
 
 export const MEMORY_MAX_CHARS = 1500;
+export const MEMORY_TITLE_MAX_CHARS = 100;
 export const MEMORY_MAX_COUNT = 300;
 /** Room the memories may take in a thread's instructions; older ones beyond it are only counted. */
 export const MEMORY_PROMPT_CHARS = 12_000;
@@ -60,6 +63,7 @@ export function cleanMemories(raw: unknown): Memory[] {
       scope: m.scope === "provider" ? "provider" : workspace ? "workspace" : "global",
       ...(m.scope === "provider" ? { provider: owner.provider, ...(owner.provider === "pi" ? { source: owner.source } : {}) } : {}),
       ...(workspace ? { workspace } : {}),
+      ...(typeof m.title === "string" && m.title.trim() ? { title: m.title.trim() } : {}),
       text: m.text,
       by: typeof m.by === "string" && m.by ? m.by : "user",
       ...(typeof m.thread === "string" ? { thread: m.thread } : {}),
@@ -85,7 +89,8 @@ export function memoriesFor(memories: Memory[], workspace: string | null, owner?
   return memories.filter((m) => memoryApplies(m, workspace, owner)).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export type MemoryInput = { id?: string; text: string; scope: Memory["scope"]; workspace?: string | null; provider?: string; source?: string; by: string; thread?: string };
+/** title: undefined keeps the saved one; "" clears it. */
+export type MemoryInput = { id?: string; title?: string; text: string; scope: Memory["scope"]; workspace?: string | null; provider?: string; source?: string; by: string; thread?: string };
 
 /**
  * Add a memory, or replace the text (and scope) of the one with input.id. Returns the new list and
@@ -95,6 +100,8 @@ export function saveMemory(memories: Memory[], input: MemoryInput, now = Date.no
   const text = input.text.replace(/\r\n/g, "\n").trim();
   if (!text) throw new Error("A memory needs text.");
   if (text.length > MEMORY_MAX_CHARS) throw new Error(`A memory is at most ${MEMORY_MAX_CHARS} characters (this one has ${text.length}). Keep it to one fact, or split it.`);
+  const title = input.title === undefined ? undefined : input.title.replace(/\s+/g, " ").trim();
+  if (title && title.length > MEMORY_TITLE_MAX_CHARS) throw new Error(`A memory's title is at most ${MEMORY_TITLE_MAX_CHARS} characters: a few words naming it.`);
   if (input.scope === "workspace" && !input.workspace) throw new Error("A workspace memory needs a workspace folder.");
   if (input.scope === "provider" && !validOwner({ provider: input.provider ?? "", source: input.source })) throw new Error("A provider memory needs a provider and, for Native, a specific source. Pick a Native model first.");
   const place = input.scope === "provider"
@@ -105,12 +112,13 @@ export function saveMemory(memories: Memory[], input: MemoryInput, now = Date.no
   if (input.id && !existing) throw new Error(`No memory ${input.id}.`);
   existing ??= memories.find((m) => samePlace(m) && m.text === text);
   if (existing) {
-    const { workspace: _old, provider: _provider, source: _source, ...rest } = existing;
-    const memory: Memory = { ...rest, ...place, text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), updatedAt: now };
+    const { workspace: _old, provider: _provider, source: _source, title: oldTitle, ...rest } = existing;
+    const kept = title === undefined ? oldTitle : title;
+    const memory: Memory = { ...rest, ...place, ...(kept ? { title: kept } : {}), text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), updatedAt: now };
     return { memories: memories.map((m) => (m.id === memory.id ? memory : m)), memory, created: false };
   }
   if (memories.length >= MEMORY_MAX_COUNT) throw new Error(`There are already ${MEMORY_MAX_COUNT} memories. Delete or merge some first.`);
-  const memory: Memory = { id: `m_${crypto.randomBytes(4).toString("hex")}`, ...place, text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), createdAt: now, updatedAt: now };
+  const memory: Memory = { id: `m_${crypto.randomBytes(4).toString("hex")}`, ...place, ...(title ? { title } : {}), text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), createdAt: now, updatedAt: now };
   return { memories: [...memories, memory], memory, created: true };
 }
 
@@ -120,7 +128,7 @@ export function memoryBlock(memories: Memory[], max = MEMORY_PROMPT_CHARS): stri
   let used = 0;
   let left = 0;
   for (const m of memories) {
-    const line = `- [${m.id}] (${m.scope === "provider" ? `provider: ${m.provider}${m.source ? `/${m.source}` : ""}` : m.scope}) ${m.text.replaceAll("</memories>", "</ memories>").replace(/\n+/g, "\n  ")}`;
+    const line = `- [${m.id}] (${m.scope === "provider" ? `provider: ${m.provider}${m.source ? `/${m.source}` : ""}` : m.scope}) ${m.title ? `${m.title.replaceAll("</memories>", "</ memories>")}: ` : ""}${m.text.replaceAll("</memories>", "</ memories>").replace(/\n+/g, "\n  ")}`;
     if (lines.length && used + line.length > max) {
       left += 1;
       continue;
