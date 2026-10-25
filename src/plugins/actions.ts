@@ -58,7 +58,7 @@ export class PluginActions {
     if(!this.binding(tab)?.t.hooks?.includes("runEvent"))return;
     await this.invoke(tab,"runEvent",t=>[t.state,event,Date.now()],undefined,false,true);
   }
-  async invoke(tab: Tab, hook: string, args: (tab: Tab)=>unknown[], caller: ActionCaller = {by:"user"}, readOnly=false,system=false): Promise<unknown> {
+  async invoke(tab: Tab, hook: string, args: (tab: Tab)=>unknown[], caller: ActionCaller = {by:"user"}, readOnly: boolean | string=false,system=false): Promise<unknown> {
     for(let attempt=0;attempt<3;attempt++) {
       const current=this.store.get(tab.id); if(!current) throw new Error("Page was removed");
       const binding=this.binding(current); if(!binding) throw new Error("Page has no plugin actions");
@@ -72,7 +72,7 @@ export class PluginActions {
       if(latest.stateRevision!==revision) continue;
       if(raw===null) return null;
       const outcome=outcomeSchema.parse(raw);
-      if(readOnly && (outcome.ops.length || outcome.events?.length || outcome.launch || outcome.deliver)) throw new Error("This action changes the page; Read-only chats cannot run it");
+      if(readOnly && (outcome.ops.length || outcome.events?.length || outcome.launch || outcome.deliver)) throw new Error(typeof readOnly==="string"?readOnly:"This action changes the page; Read-only chats cannot run it");
       const write=this.store.writeState(tab.id,{ops:outcome.ops,expectedRevision:revision,byUser:!system&&caller.by==="user"});
       if(!write.ok) continue;
       for(const event of outcome.events ?? []) this.store.logEvent(tab.id,{...event,by:system?"scribe":caller.by});
@@ -80,7 +80,7 @@ export class PluginActions {
     }
     throw new Error("Page changed during the plugin call three times; try again");
   }
-  async action(tab:Tab,name:string,args:Record<string,unknown>,caller:ActionCaller,thread?:ActionContext["thread"],readOnly=false) {
+  async action(tab:Tab,name:string,args:Record<string,unknown>,caller:ActionCaller,thread?:ActionContext["thread"],readOnly: boolean | string=false) {
     const binding=this.binding(tab); if(!binding?.t.actions || !Object.hasOwn(binding.t.actions,name)) throw new Error(`Unknown plugin action: ${name}`);
     const outcome=await this.invoke(tab,`action:${name}`,current=>[current.state,args,{caller,now:Date.now(),values:current.templateValues??{},thread}],caller,readOnly) as ActionOutcome;
     return {result:outcome?.result,stateRevision:this.store.get(tab.id)!.stateRevision};

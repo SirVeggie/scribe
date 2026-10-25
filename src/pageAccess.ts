@@ -1,4 +1,4 @@
-import { isPlainObject, type AccessLevel, type AccessTarget, type FolderAccess, type PageAccess } from "./types.js";
+import { isPlainObject, type AccessGrant, type AccessLevel, type AccessTarget, type FolderAccess, type PageAccess } from "./types.js";
 
 /**
  * Which pages a chat's agent may reach (#269). A chat reaches the pages in its Scribe scope, pages
@@ -17,8 +17,11 @@ import { isPlainObject, type AccessLevel, type AccessTarget, type FolderAccess, 
  */
 export type Reach = "allow" | "ask" | "request" | "hidden";
 
-/** A grant a chat holds for itself. mention: the user @mentioned it in the composer, which beats every level. */
-export type ThreadPageGrant = AccessTarget & { mention?: true };
+/**
+ * A grant a chat holds for itself. mention: the user @mentioned it in the composer, which beats every
+ * level. read: only for reading a Normal or Open page (a page key the user wrote in a message, #818).
+ */
+export type ThreadPageGrant = AccessGrant & { mention?: true };
 
 export type ReaderScope = { kind: "global" | "page" | "folder" | "workspace"; ref: string | null };
 
@@ -111,9 +114,9 @@ function placeInScope(place: AccessTarget, scope: ReaderScope, lookup: AccessLoo
 }
 
 /** Grants held by the chat's home: its page and that page's folders, or its folder and the folders above. */
-export function homeGrants(scope: ReaderScope, lookup: AccessLookup): AccessTarget[] {
+export function homeGrants(scope: ReaderScope, lookup: AccessLookup): AccessGrant[] {
   if (!scope.ref || (scope.kind !== "page" && scope.kind !== "folder")) return [];
-  const out: AccessTarget[] = [];
+  const out: AccessGrant[] = [];
   let folder: string | undefined = scope.ref;
   if (scope.kind === "page") {
     out.push(...(lookup.pageAccess(scope.ref)?.grants ?? []));
@@ -133,7 +136,10 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
   const scopes = [reader.scope, ...(reader.formerScopes ?? [])].filter((s) => s.kind !== "workspace");
   const ownPage = scopes.some((s) => s.kind === "page" && s.ref === page.id);
   if (level === "restricted") return ownPage ? "allow" : "hidden";
-  const threadGranted = reader.grants.some((g) => targetCovers(g, page, lookup));
+  // Read-only grants (#818) count for reads of Normal or Open pages only.
+  const reads = read && isOpenLevel(level);
+  const covers = (g: AccessGrant) => (!g.read || reads) && targetCovers(g, page, lookup);
+  const threadGranted = reader.grants.some(covers);
   // Untrusted: only the user's answer for this thread opens it, never its home's grants or origin.
   if (level === "trusted" && !reader.trusted) return threadGranted ? "allow" : "request";
   if (ownPage) return "allow";
@@ -144,9 +150,9 @@ export function pageReach(reader: PageReader, page: AccessPage, lookup: AccessLo
   for (const scope of scopes) {
     if (placeInScope({ kind: "page", id: page.id }, scope, lookup)) return "allow";
     if (origin && placeInScope(origin, scope, lookup)) return "allow";
-    if (homeGrants(scope, lookup).some((g) => targetCovers(g, page, lookup))) return "allow";
+    if (homeGrants(scope, lookup).some(covers)) return "allow";
   }
-  if (read && isOpenLevel(level) && reader.readLinks?.().includes(page.id)) return "allow";
+  if (reads && reader.readLinks?.().includes(page.id)) return "allow";
   return "ask";
 }
 
@@ -175,13 +181,18 @@ export function sameTarget(a: AccessTarget, b: AccessTarget): boolean {
   return a.kind === b.kind && a.id === b.id;
 }
 
+/** How much a grant opens: a mention beats a full grant, which beats a read-only one. */
+function grantRank(g: ThreadPageGrant): number {
+  return g.mention ? 2 : g.read ? 0 : 1;
+}
+
+/** Add targets; one already there is replaced only by a grant that opens more (never narrowed). */
 export function addTargets<T extends AccessTarget>(list: T[] | undefined, add: T[]): T[] {
   const out = [...(list ?? [])];
   for (const target of add) {
     const at = out.findIndex((t) => sameTarget(t, target));
     if (at < 0) out.push(target);
-    // A mention outranks a plain grant for the same target.
-    else if ((target as ThreadPageGrant).mention && !(out[at] as ThreadPageGrant).mention) out[at] = target;
+    else if (grantRank(target as ThreadPageGrant) > grantRank(out[at] as ThreadPageGrant)) out[at] = target;
   }
   return out;
 }
@@ -193,10 +204,20 @@ export function normalizeTarget(value: unknown): AccessTarget | undefined {
   return { kind: value.kind, id: value.id.trim().slice(0, 80) };
 }
 
-function normalizeTargets(value: unknown): AccessTarget[] | undefined {
+function normalizeGrant(value: unknown): AccessGrant | undefined {
+  const target = normalizeTarget(value);
+  return target && isPlainObject(value) && value.read === true ? { ...target, read: true } : target;
+}
+
+function normalizeTargets(value: unknown): AccessGrant[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const out = addTargets<AccessTarget>([], value.map(normalizeTarget).filter((t): t is AccessTarget => Boolean(t))).slice(0, 200);
+  const out = addTargets<AccessGrant>([], value.map(normalizeGrant).filter((t): t is AccessGrant => Boolean(t))).slice(0, 200);
   return out.length ? out : undefined;
+}
+
+/** Page keys (scribe:some-page) written anywhere in a text, lower case. */
+export function pageKeysInText(text: string): string[] {
+  return [...text.matchAll(/scribe:[a-z0-9._:-]+/gi)].map((m) => m[0].toLowerCase().replace(/[.:-]+$/, ""));
 }
 
 export function normalizePageAccess(value: unknown): PageAccess | undefined {
@@ -223,8 +244,11 @@ export function normalizeThreadPageGrants(value: unknown): ThreadPageGrant[] | u
   if (!Array.isArray(value)) return undefined;
   const out: ThreadPageGrant[] = [];
   for (const raw of value) {
-    const target = normalizeTarget(raw);
-    if (target) out.push(isPlainObject(raw) && raw.mention === true ? { ...target, mention: true } : target);
+    const target = normalizeGrant(raw);
+    if (!target) continue;
+    // A mention is never read-only.
+    if (isPlainObject(raw) && raw.mention === true) out.push({ kind: target.kind, id: target.id, mention: true });
+    else out.push(target);
   }
   return out.length ? addTargets<ThreadPageGrant>([], out) : undefined;
 }

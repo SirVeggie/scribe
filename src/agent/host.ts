@@ -12,7 +12,7 @@ import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
 import { isBlankPage, type AccessTarget, type PageEvent, type Tab } from "../types.js";
-import { addTargets, effectiveLevel, pageReach, sameTarget, type AccessPage, type PageReader, type Reach, type ThreadPageGrant } from "../pageAccess.js";
+import { addTargets, effectiveLevel, pageKeysInText, pageReach, sameTarget, type AccessPage, type PageReader, type Reach, type ThreadPageGrant } from "../pageAccess.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
@@ -2286,7 +2286,13 @@ export class AgentHost {
         chip.kind === "page" && typeof chip.id === "string" && store.get(chip.id) ? [{ kind: "page", id: store.get(chip.id)!.id, mention: true }]
         : chip.kind === "folder" && typeof chip.id === "string" && store.folderPath(chip.id) ? [{ kind: "folder", id: chip.id, mention: true }]
         : []);
-      this.grantPages(threadId, mentioned);
+      // A page key the user writes or pastes without @ lets the thread read it, not change it (#818).
+      // Only Normal or Open pages: pageReach ignores read grants for stricter ones.
+      const named = input.card ? [] : pageKeysInText(text).flatMap((key): ThreadPageGrant[] => {
+        const tab = store.get(key);
+        return tab ? [{ kind: "page", id: tab.id, read: true }] : [];
+      });
+      this.grantPages(threadId, [...mentioned, ...named]);
     }
     if (!input.from && thread.draft) {
       // The user sent what they had left in the composer.

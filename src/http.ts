@@ -749,7 +749,7 @@ export async function startHttp(): Promise<http.Server> {
   app.post("/api/tabs/:id/action", async (req, res) => {
     try {
       const tab=store.get(req.params.id);
-      const readOnly=req.body?.readOnly===true || (threadOf(req)?agentHost?.getThread(threadOf(req)!)?.approval==="readonly":false);
+      const readOnly: boolean | string = (res.locals.readOnlyReach as string | undefined) ?? (req.body?.readOnly===true || (threadOf(req)?agentHost?.getThread(threadOf(req)!)?.approval==="readonly":false));
       const { result, stateRevision } = tab && pluginActions?.binding(tab) ? await pluginActions.action(tab,String(req.body?.action??""),req.body?.args??{},callerOf(req),(id)=>agentHost?agentHost.runInfo(id):{exists:false},readOnly) : store.runAction(req.params.id, String(req.body?.action ?? ""), req.body?.args, callerOf(req), (id) =>
         agentHost ? agentHost.runInfo(id) : { exists: false }, readOnly
       );
@@ -3026,7 +3026,7 @@ function threadOf(req: express.Request): string | undefined {
  * (no Scribe chat, #682), a global untrusted chat's. A caller that proved neither reaches none. Null
  * for the board UI and page code (frameReach, #660).
  */
-function reachFor(req: express.Request): ((tab: Tab) => Reach) | null {
+function reachFor(req: express.Request, read = req.method === "GET"): ((tab: Tab) => Reach) | null {
   if (isContentHost(req) || viewerOf(req) !== "agent") return null;
   const { thread, external } = identify(req);
   const reader: PageReader | null | undefined = thread
@@ -3036,8 +3036,7 @@ function reachFor(req: express.Request): ((tab: Tab) => Reach) | null {
       : null;
   if (!reader) return () => "hidden";
   const lookup = store.accessLookup();
-  // Pages linked from a card the chat holds open for reading only (#762).
-  const read = req.method === "GET";
+  // Read-only access (#762, #818) opens only reads.
   return (tab) => pageReach(reader, agentHost ? agentHost.accessPage(tab) : { ...tab, createdBy: tab.provenance?.created?.thread }, lookup, read);
 }
 
@@ -3074,7 +3073,12 @@ function reachable(req: express.Request): ((tab: Tab) => boolean) | undefined {
 
 /** Open the way to a page for the request, or answer for it: out of reach is not found, or a pointer to page_access. */
 function checkReach(req: express.Request, res: express.Response, tab: Tab): boolean {
-  const reach = reachFor(req)?.(tab) ?? "allow";
+  let reach = reachFor(req)?.(tab) ?? "allow";
+  // A page the chat may only read still answers its actions, run read-only (#818): list and get work, changes are refused.
+  if (reach !== "allow" && req.method === "POST" && /^\/api\/tabs\/[^/]+\/action$/.test(req.path) && reachFor(req, true)?.(tab) === "allow") {
+    reach = "allow";
+    res.locals.readOnlyReach = `${tab.key} ("${tab.title}") is readable but outside this chat's Scribe access for changes, so this action, which changes it, was refused. Ask the user with page_access to change it.`;
+  }
   if (reach === "allow") {
     const thread = threadOf(req);
     if (thread && agentHost && viewerOf(req) === "agent" && !isContentHost(req)) agentHost.notePageReached(thread, tab);

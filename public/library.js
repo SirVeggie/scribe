@@ -2136,7 +2136,7 @@ window.createLibrary = function createLibrary(host) {
       items.push("sep", {
         label: "Chats here also reach",
         submenu: () => item.access.grants.map((grant) => ({
-          label: `Remove ${nameOf(grant)}`,
+          label: `Remove ${nameOf(grant)}${grant.read ? " (read only)" : ""}`,
           action: () => save({ removeGrants: [grant] }),
         })),
       });

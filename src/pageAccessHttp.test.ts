@@ -102,6 +102,19 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.deepEqual(listed.data.outside.map((t: { key: string }) => t.key), ["scribe:other-page"], "titles only, and never the Restricted or Trusted only page");
     assert.equal(listed.data.outside[0].snippet, undefined);
 
+    // A page key the user writes without @ lets the thread read that page, not change it (#818).
+    const board = (await call("POST", "/api/templates/kanban/open", { activate: false })).data.tab;
+    const reader = (await call("POST", "/api/agent/threads", { provider: "claude", mode: "board", scope: { kind: "page", ref: home.id } })).data.thread;
+    assert.equal((await call("POST", `/api/agent/threads/${reader.id}/messages`, { text: `look at scribe:other-page and ${board.key}` })).status, 200);
+    assert.equal((await call("GET", `/api/tabs/${other.id}/state`, undefined, reader.id)).status, 200);
+    assert.equal((await call("PUT", `/api/tabs/${other.id}/state`, { ops: [{ op: "set", path: "x", value: 1 }] }, reader.id)).status, 403);
+    assert.equal((await call("GET", `/api/tabs/${vault.id}`, undefined, reader.id)).status, 403, "only Normal or Open pages");
+    assert.equal((await call("POST", `/api/tabs/${board.id}/action`, { action: "list" }, reader.id)).status, 200, "actions run read-only");
+    const write = await call("POST", `/api/tabs/${board.id}/action`, { action: "create", args: { title: "x" } }, reader.id);
+    assert.equal(write.status, 400);
+    assert.match(write.data.error, /page_access/);
+    assert.equal((await call("POST", `/api/tabs/${board.id}/action`, { action: "list" }, thread.id)).status, 403, "another chat still asks");
+
     // Agents cannot change access; the user (board UI) can, and an MCP with no Scribe chat sees open pages only.
     assert.equal((await call("PUT", `/api/tabs/${other.id}/access`, { level: "open" }, thread.id)).status, 403);
     assert.equal((await call("GET", `/api/tabs/${other.id}`, undefined, "")).status, 200);

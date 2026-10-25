@@ -24,7 +24,18 @@ A chat reaches the pages in its Scribe scope plus anything it has been granted. 
 
 ## Grants from the user's edits
 
-A link to an Open page that the user adds on a page bound to a built-in template (a Kanban card) grants the target to that page once the link has stayed for a minute. Agent writes never create grants. Removing the link does not revoke the grant; grants are listed and removable in **Agent access…**.
+A link to a Normal or Open page that the user adds on a page bound to a built-in template (a Kanban card) grants that page read-only access to the target once the link has stayed for a minute (#818: before that the grant also opened writes; grants made then stay as they were). Agent writes never create grants. Removing the link does not revoke the grant; grants are listed and removable in **Agent access…**.
+
+## Read-only grants (#818)
+
+A grant can carry `read: true` (page and folder grants, and a thread's own). It counts only for reads (GET requests, and `page_action` run read-only) of Normal or Open pages; Ask always, Trusted only and Restricted ignore it. A full grant or @mention replaces a read-only one for the same target, never the reverse. **Agent access…** marks them "(read only)".
+
+- Card links the user adds (above) are read-only home grants.
+- A page key (`scribe:x`) the user writes or pastes in a message without @ gives that thread read-only access. Page, card, hook and agent messages grant nothing.
+- `page_access` still grants read and change; Always allow still grants its home read and change.
+- With read-only reach, `page_action` runs the action read-only, so `list` and `get` work and a change is refused with a pointer to `page_access`.
+
+Decided against: making out-of-scope Normal pages readable by every chat, and letting Full access answer `page_access`.
 
 ## Reading what a held card links (#762)
 

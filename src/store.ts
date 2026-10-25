@@ -41,8 +41,8 @@ import {
 } from "./pageAssets.js";
 import { checkPermission, normalizeFolders, isPermissionValue, permissionDef, type FolderGrant, type PermissionGrant, type PermissionNeed, type PermissionValue } from "./pagePermissions.js";
 import { normalizeSignalName } from "./signal.js";
-import { addTargets, effectiveLevel, inheritedFolderLevel, isOpenLevel, sameTarget, type AccessLookup } from "./pageAccess.js";
-import type { AccessLevel, AccessTarget } from "./types.js";
+import { addTargets, effectiveLevel, inheritedFolderLevel, isOpenLevel, pageKeysInText, sameTarget, type AccessLookup } from "./pageAccess.js";
+import type { AccessGrant, AccessLevel, AccessTarget } from "./types.js";
 import { normalizeLens } from "./lens.js";
 import { applyOps, deepEqual } from "./stateOps.js";
 import { jsonBytes } from "./stateSize.js";
@@ -128,7 +128,7 @@ const LINK_GRANT_DELAY_MS = 60_000;
 
 /** Page keys (scribe:some-page) mentioned anywhere in a page's state. */
 function pageKeysIn(state: unknown): string[] {
-  return [...JSON.stringify(state ?? {}).matchAll(/scribe:[a-z0-9._:-]+/gi)].map((m) => m[0].toLowerCase().replace(/[.:-]+$/, ""));
+  return pageKeysInText(JSON.stringify(state ?? {}));
 }
 
 type Located = { tab: Tab; where: "open" | "closed" };
@@ -452,7 +452,7 @@ export class BoardStore extends EventEmitter {
 
   /**
    * Links to pages the user adds by hand on a built-in template's page (a card on a board) grant the
-   * page they edited access to those pages (#269), when they are Open. Only once the link has stayed
+   * page they edited read-only access to those pages (#269, #818), when they are Normal or Open. Only once the link has stayed
    * for LINK_GRANT_DELAY_MS, so a wrong link removed right away grants nothing. A built-in's code
    * only writes what the user does, so an agent cannot launder its own links through it.
    */
@@ -467,7 +467,8 @@ export class BoardStore extends EventEmitter {
         const target = this.locate(key)?.tab;
         if (!page || !target || target.id === page.id || !pageKeysIn(page.state).includes(key)) return;
         if (!isOpenLevel(effectiveLevel({ ...target, createdBy: undefined }, this.accessLookup()))) return;
-        this.changeAccessGrants({ kind: "page", id: page.id }, { add: [{ kind: "page", id: target.id }] });
+        // A link says "look at this": chats on the page may read it, not change it (#818).
+        this.changeAccessGrants({ kind: "page", id: page.id }, { add: [{ kind: "page", id: target.id, read: true }] });
       }, LINK_GRANT_DELAY_MS);
       timer.unref?.();
     }
@@ -516,8 +517,8 @@ export class BoardStore extends EventEmitter {
    * Add or remove grants on a page or folder (#269): chats on it reach those targets without asking.
    * Returns false when nothing changed.
    */
-  changeAccessGrants(home: AccessTarget, change: { add?: AccessTarget[]; remove?: AccessTarget[] }): boolean {
-    const edit = (grants: AccessTarget[] | undefined): AccessTarget[] | undefined => {
+  changeAccessGrants(home: AccessTarget, change: { add?: AccessGrant[]; remove?: AccessTarget[] }): boolean {
+    const edit = (grants: AccessGrant[] | undefined): AccessGrant[] | undefined => {
       let out = addTargets(grants, (change.add ?? []).filter((t) => !sameTarget(t, home)));
       for (const r of change.remove ?? []) out = out.filter((t) => !sameTarget(t, r));
       return out.length ? out : undefined;
@@ -664,8 +665,8 @@ export class BoardStore extends EventEmitter {
     args: unknown,
     caller: ActionCaller,
     thread?: ActionContext["thread"],
-    /** A Read-only chat's call (#719): an action that would change the page is refused. */
-    readOnly = false
+    /** A Read-only chat's call (#719): an action that would change the page is refused. A string is the refusal to give (#818). */
+    readOnly: boolean | string = false
   ): { result: unknown; stateRevision: number; tab: Tab } {
     const located = this.locate(idOrKey);
     if (!located) {
@@ -690,6 +691,7 @@ export class BoardStore extends EventEmitter {
       ...(thread ? { thread } : {}),
     });
     if (readOnly && (outcome.ops.length || outcome.events?.length)) {
+      if (typeof readOnly === "string") throw new Error(readOnly);
       throw new Error(`"${name}" changes the page, and this thread is on the Read-only rung: it can read pages but not change them. Ask the user to move it to Board if it should.`);
     }
     if (outcome.ops.length) {

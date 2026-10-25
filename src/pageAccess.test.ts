@@ -133,3 +133,23 @@ test("a page's script reaches its own page and Open pages its page or folders we
   assert.equal(frameReach("board", strict, granted), false, "Ask always needs a chat's own grant");
   assert.equal(frameReach("board", { ...pages.report, agentHidden: true }, granted), false, "Restricted");
 });
+
+test("read-only grants open reads of Normal and Open pages, never writes or stricter pages (#818)", () => {
+  const home = lookup({ pages: { board: { grants: [{ kind: "page", id: "report", read: true }] } } });
+  assert.equal(pageReach(reader(), pages.report, home, true), "allow", "a card link lets board chats read");
+  assert.equal(pageReach(reader(), pages.report, home), "ask", "but not change");
+  const own = reader({ grants: [{ kind: "page", id: "report", read: true }] });
+  assert.equal(pageReach(own, pages.report, lookup(), true), "allow", "a pasted key lets the thread read");
+  assert.equal(pageReach(own, pages.report, lookup()), "ask");
+  const strict = { ...pages.report, access: { level: "ask" as const } };
+  assert.equal(pageReach(own, strict, lookup(), true), "ask", "Ask always still asks");
+  assert.equal(pageReach({ ...own, trusted: false }, { ...pages.report, access: { level: "trusted" as const } }, lookup(), true), "request", "Trusted only still asks");
+  assert.equal(frameReach("board", pages.report, home), true, "page scripts only read anyway");
+});
+
+test("a grant is widened, never narrowed (#818)", () => {
+  assert.deepEqual(normalizeThreadPageGrants([{ kind: "page", id: "a", read: true }, { kind: "page", id: "a" }]), [{ kind: "page", id: "a" }]);
+  assert.deepEqual(normalizeThreadPageGrants([{ kind: "page", id: "a" }, { kind: "page", id: "a", read: true }]), [{ kind: "page", id: "a" }]);
+  assert.deepEqual(normalizeThreadPageGrants([{ kind: "page", id: "a", read: true, mention: true }]), [{ kind: "page", id: "a", mention: true }]);
+  assert.deepEqual(normalizePageAccess({ grants: [{ kind: "page", id: "a", read: true }] }), { grants: [{ kind: "page", id: "a", read: true }] });
+});

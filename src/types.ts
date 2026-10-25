@@ -184,6 +184,9 @@ export type Folder = {
 /** A page or folder, as an access grant's target or a page's origin. */
 export type AccessTarget = { kind: "page" | "folder"; id: string };
 
+/** A grant on a page or folder. read: only for reading, and only Normal or Open pages (#818). */
+export type AccessGrant = AccessTarget & { read?: true };
+
 /**
  * How agents reach pages (#269). public ("Open" in the UI, #723): every chat, whatever its scope;
  * open ("Normal", the default): chats in scope, plus grants; ask: only a grant for the chat itself
@@ -199,7 +202,7 @@ export type AccessLevel = "public" | "open" | "ask" | "trusted" | "restricted";
  */
 export type FolderAccess = {
   level?: AccessLevel;
-  grants?: AccessTarget[];
+  grants?: AccessGrant[];
 };
 
 /**
@@ -211,7 +214,7 @@ export type PageAccess = {
   level?: "public" | "open" | "ask" | "trusted";
   /** The page or folder of the chat that created it; set once. Chats there reach it like their own. */
   origin?: AccessTarget;
-  grants?: AccessTarget[];
+  grants?: AccessGrant[];
 };
 
 export type Tab = {
