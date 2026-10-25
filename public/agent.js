@@ -109,7 +109,7 @@
     { id: "wrongThread", label: "Check a message that looks meant for another thread" },
     { id: "userSlip", label: "Point out a likely slip of yours before working around it", hint: "Such as a stale build you didn't restart or a forgotten step: the agent says so in a short line instead of adding code for it." },
     { id: "codeBlocks", label: "Name the language of code blocks" },
-    { id: "threadTitle", label: "Rename the thread when its subject changes" },
+    { id: "threadTitle", label: "Name the thread, and rename it when its subject changes" },
   ];
   /** The access ladder (#719), lowest first: APPROVALS in src/agent/types.ts. */
   const APPROVALS = [

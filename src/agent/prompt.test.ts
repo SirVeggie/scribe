@@ -78,6 +78,11 @@ test("optional app instructions are on by default and left out once turned off",
   for (const re of [/Wrong thread: /, /User slips: .*check with them in a short line before changing code/, /Code blocks: /, /rename it with thread_update \(title\)/]) assert.match(all, re);
   const none = threadInstructions(thread, { instructionsOff: ["wrongThread", "userSlip", "codeBlocks", "threadTitle"] });
   for (const re of [/Wrong thread: /, /User slips: /, /Code blocks: /, /rename it with thread_update/]) assert.doesNotMatch(none, re);
+  // A user thread names itself in its first turn; worker chats (locked title) and helpers do not (#831).
+  assert.match(all, /In your first turn, give it a short title/);
+  assert.doesNotMatch(none, /In your first turn/);
+  assert.doesNotMatch(threadInstructions({ ...thread, titleLocked: true } as Thread, {}), /In your first turn/);
+  assert.doesNotMatch(threadInstructions({ ...thread, helperOf: "th_x" } as Thread, {}), /In your first turn/);
   // The workspace move is not optional.
   assert.match(none, /This thread: When the work moves to a folder outside the workspace/);
   assert.doesNotMatch(threadInstructions({ ...thread, mode: "board", cwd: null } as Thread, { instructionsOff: ["threadTitle"] }), /This thread:/);

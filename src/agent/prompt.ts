@@ -166,7 +166,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       `MCP servers: this thread gets the servers in Scribe's own MCP list; Code chats also inherit Keeper from Claude Code when Scribe has no Keeper entry. Not available here, even where a skill says to use one: ${names}. Do not search for their tools. Do what you can without them, and say in your reply what you could not do or check because of it; the user can add a server under Agent settings, MCP servers.`
     );
   }
-  const rename = on("threadTitle") ? " when its subject has changed and the title no longer fits, rename it with thread_update (title)." : "";
+  // Scribe titles a new thread with the start of its first message (#831). Board workers and helpers get a locked title of their own.
+  const name = !thread.titleLocked && !thread.helperOf ? " In your first turn, give it a short title (a few words) with thread_update (title); do not overthink it. Later," : "";
+  const rename = on("threadTitle") ? `${name} when its subject has changed and the title no longer fits, rename it with thread_update (title).` : "";
   const move = thread.helperOf
     ? ""
     : thread.mode === "board"
