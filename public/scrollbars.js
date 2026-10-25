@@ -14,8 +14,13 @@
   const queueFull = () => { full = true; queue(); };
   const resize = new ResizeObserver(queueFull);
 
+  // Inline elements the app never makes scroll. A long chat adds thousands of them at once, and reading
+  // each one's computed style cost ~28 ms per thread switch (#362).
+  const INLINE = new Set(['SPAN', 'BUTTON', 'A', 'CODE', 'STRONG', 'EM', 'B', 'I', 'U', 'S', 'SMALL', 'KBD', 'MARK',
+    'SUB', 'SUP', 'ABBR', 'LABEL', 'IMG', 'BR', 'WBR', 'INPUT', 'OPTION']);
+
   function register(el) {
-    if (surfaces.has(el) || isOverlay(el) || !(el instanceof HTMLElement)) return false;
+    if (!(el instanceof HTMLElement) || INLINE.has(el.tagName) || surfaces.has(el) || isOverlay(el)) return false;
     const style = getComputedStyle(el);
     // Respect controls intentionally hiding their scrollbar (e.g. the tab strip).
     if (style.scrollbarWidth === 'none' || (!scrollable(style.overflowX) && !scrollable(style.overflowY))) return false;
@@ -185,8 +190,16 @@
     }
     const list = [...surfaces];
     let moving = false;
+    // A surface is nested when it holds another one: mark each surface's surface ancestors (a chat with
+    // hundreds of code blocks made the pairwise check quadratic).
+    for (const state of surfaces.values()) state.nested = false;
+    for (const el of surfaces.keys()) {
+      for (let up = el.parentElement; up; up = up.parentElement) {
+        const outer = surfaces.get(up);
+        if (outer) outer.nested = true;
+      }
+    }
     for (const [el, state] of list) {
-      state.nested = list.some(([other]) => other !== el && el.contains(other));
       if (measure(el, state)) moving = true;
     }
     list.forEach(([el, state]) => hitTest(el, state));
