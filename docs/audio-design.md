@@ -552,3 +552,7 @@ uploading one clip at the end, and (with **Show text while dictating**) shows th
   every 1.5 s and settles when it is cut. Leading silence is never sent. Pieces lose context across a
   cut, which can cost some accuracy compared with one clip.
 - If the stream fails, the shell still has the recording and sends it as one WAV clip.
+- Pages (#841): `scribe.audio.listen` streams the same way when the default source has live transcription on,
+  sends `ontext` with the text so far and reports `session.live`; `live: false` keeps one upload. The shell adds
+  `tab=` to the socket, and the daemon runs the page's `audio.transcribe` permission and rate limit before it
+  opens the stream, as for page uploads. Denied or rate-limited streams do not fall back to an upload.

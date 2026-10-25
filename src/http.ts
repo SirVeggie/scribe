@@ -247,8 +247,9 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
   const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [] });
-  const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok));
-  app.use("/api/audio", audioRouter(audioService, new PageAudio(id => store.pagePermissions(id))));
+  const pageAudio = new PageAudio(id => store.pagePermissions(id));
+  const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
+  app.use("/api/audio", audioRouter(audioService, pageAudio));
   app.use(noteAgentSession);
   app.use(express.static(publicDir));
   // pdf.js for PDF file pages: the library, its worker, and the fonts, CMaps and decoders it fetches.

@@ -1692,6 +1692,7 @@ ${POINTER_DRAG_JS}
     if (!session) return;
     if (data.level !== undefined && typeof session.onlevel === "function") { try { session.onlevel(data.level); } catch (_) {} }
     if (data.state && typeof session.onstate === "function") { try { session.onstate(data.state); } catch (_) {} }
+    if (typeof data.text === "string" && typeof session.ontext === "function") { try { session.ontext(data.text); } catch (_) {} }
   });
   function audioResult(result) {
     if (result && result.ok && result.buffer) {
@@ -1703,9 +1704,9 @@ ${POINTER_DRAG_JS}
   function startAudio(op, opts) {
     if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
     opts = opts || {};
-    return askBoard({ type: "scribe-audio", op: op, language: opts.language, prompt: opts.prompt, maxMs: opts.maxMs }, 120000).then(function (result) {
+    return askBoard({ type: "scribe-audio", op: op, language: opts.language, prompt: opts.prompt, maxMs: opts.maxMs, live: opts.live }, 120000).then(function (result) {
       if (!result.ok) return result;
-      var session = { ok: true, onlevel: null, onstate: null,
+      var session = { ok: true, live: !!result.live, onlevel: null, onstate: null, ontext: null,
         stop: function () { return askBoard({ type: "scribe-audio", op: "stop", sessionId: result.sessionId }, 90000).then(audioResult); },
         cancel: function () { return askBoard({ type: "scribe-audio", op: "cancel", sessionId: result.sessionId }, 30000); }
       };

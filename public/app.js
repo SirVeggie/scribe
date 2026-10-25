@@ -4856,6 +4856,9 @@
         controller: new AbortController(), cancelled: false, capture: null, ended: null };
       pageAudioSessions.set(id, session); pageAudioActive = session; paintPageAudio();
       const emit = payload => { if (!session.cancelled) event.source?.postMessage({ type: "scribe-audio-event", sessionId: session.id, ...payload }, event.origin); };
+      // Listen streams like dictation when the source's live transcription is on (#841); live: false opts out.
+      const streaming = data.op === "listen" && data.live !== false && Boolean(api.settings()?.streaming);
+      const maxMs = Number.isFinite(data.maxMs) ? Math.min(300000, Math.max(1, data.maxMs)) : 300000;
       try {
         if (data.op === "stream") {
           const channel = new MessageChannel(); session.port = channel.port1; session.pagePort = channel.port2;
@@ -4864,9 +4867,10 @@
           if (pageAudioSessions.get(id) === session) cancelPageAudio(id);
         }, Math.max(1, deadline - Date.now()));
         try {
-          session.capture = await api.capture({ owner: session.owner,
-            live: data.op === "stream", onFrame: buffer => session.port?.postMessage({ frame: buffer }, [buffer]),
-            maxMs: Number.isFinite(data.maxMs) ? Math.min(300000, Math.max(1, data.maxMs)) : 300000,
+          session.capture = streaming ? await api.stream({ ...opts, owner: session.owner, preview: true, maxMs,
+            onText: text => emit({ text }), onLevel: level => emit({ level }), onState: state => emit({ state }) })
+            : await api.capture({ owner: session.owner,
+            live: data.op === "stream", onFrame: buffer => session.port?.postMessage({ frame: buffer }, [buffer]), maxMs,
             onLevel: level => emit({ level }), onState: state => emit({ state }) });
         } finally { clearTimeout(pendingTimer); }
         if (session.cancelled || !pageAudioVisible(id)) {
@@ -4890,6 +4894,7 @@
           durationMs = Date.now() - started;
           if (pageAudioActive === session) pageAudioActive = null; paintPageAudio();
           if (session.cancelled) return { ok: false, error: "cancelled" };
+          if (streaming) return blob; // already the transcript: { ok, text } or a failure
           if (data.op === "record") return { ok: true, blob, durationMs };
           emit({ state: "transcribing" });
           return api.transcribe(blob, { ...opts, signal: session.controller.signal });
@@ -4897,7 +4902,7 @@
           if (pageAudioActive === session) pageAudioActive = null; paintPageAudio();
           emit({ state: result.ok ? "stopped" : "cancelled" }); return result;
         });
-        reply({ ok: true, sessionId: session.id });
+        reply({ ok: true, sessionId: session.id, ...(streaming ? { live: true } : {}) });
       } catch (err) {
         const cancelled = session.cancelled;
         session.pagePort?.close();

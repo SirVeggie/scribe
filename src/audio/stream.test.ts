@@ -140,3 +140,35 @@ test("the stream socket is for the board UI only and runs the default source's m
     ws.close();
   } finally { streams.close(); server.closeAllConnections(); server.close(); }
 });
+
+test("a page's live listen passes the page gate before the stream opens", async () => {
+  const service = new AudioService({ sources: () => [], store: memoryStore(),
+    engine: { async transcribe() { return { ok: true, text: "page" }; } } });
+  service.saveSource({ name: "Qwen", source: "__custom__", custom: { baseUrl: "http://127.0.0.1:9/v1" }, model: "q", streaming: "window" });
+  const tabs: string[] = [];
+  const streams = audioStreamServer(() => service.streamTarget(), () => {},
+    tab => { tabs.push(tab); return tab === "t_ok" ? { ok: true } : { ok: false, error: "rate_limited" }; });
+  const server = http.createServer();
+  server.on("upgrade", (req, socket, head) => { if (!streams.handle(req, socket, head)) socket.destroy(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const base = `ws://127.0.0.1:${(server.address() as AddressInfo).port}${STREAM_PATH}`;
+  const run = (query: string, audio = true) => new Promise<any>(resolve => {
+    const ws = new WebSocket(base + query, { origin: shellOrigins()[0] });
+    ws.on("message", raw => {
+      const m = JSON.parse(String(raw));
+      if (m.type === "ready" && audio) { ws.send(Buffer.from(tone(1500).buffer)); ws.send("stop"); }
+      if (m.type === "done") { ws.close(); resolve(m); }
+    });
+  });
+  try {
+    assert.deepEqual(await run("?tab=t_busy"), { type: "done", ok: false, error: "rate_limited" });
+    assert.deepEqual(await run("?tab=t_ok"), { type: "done", ok: true, text: "page" });
+    assert.deepEqual(tabs, ["t_busy", "t_ok"]);
+    const ungated = audioStreamServer(() => service.streamTarget(), () => {});
+    server.removeAllListeners("upgrade");
+    server.on("upgrade", (req, socket, head) => { if (!ungated.handle(req, socket, head)) socket.destroy(); });
+    const denied = await run("?tab=t_ok");
+    assert.equal(denied.error, "denied");
+    ungated.close();
+  } finally { streams.close(); server.closeAllConnections(); server.close(); }
+});

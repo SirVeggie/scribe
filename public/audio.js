@@ -198,7 +198,7 @@
       ws.send(joined.buffer); pending = []; pendingLength = 0;
     };
     try {
-      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/audio/stream?preview=${preview ? 1 : 0}`);
+      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/audio/stream?preview=${preview ? 1 : 0}${opts.tabId ? `&tab=${encodeURIComponent(opts.tabId)}` : ""}`);
       ws.binaryType = "arraybuffer";
       ws.onopen = sendPending;
       ws.onmessage = event => {
@@ -227,7 +227,7 @@
       let result = await Promise.race([reply, new Promise(resolve => setTimeout(() => resolve(failure("timeout", "Live transcription timed out.")), 60000))]);
       ws?.close();
       if (cancelled) return failure("cancelled", "Dictation cancelled.");
-      if (!result.ok && result.error !== "no_source" && chunks.length) {
+      if (!result.ok && !["no_source", "denied", "rate_limited"].includes(result.error) && chunks.length) {
         // The recording is still here: send it as one clip, as dictation without streaming does.
         const length = chunks.reduce((n, c) => n + c.length, 0), pcm = new Int16Array(length);
         let at = 0; chunks.forEach(c => { pcm.set(c, at); at += c.length; });
