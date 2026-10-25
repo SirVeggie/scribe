@@ -56,7 +56,7 @@ function fixture() {
     dock: { root: root("dock"), titleBtn: {}, view: {}, setShown: () => calls.push("dock") },
     sidebar: { pane: root("side"), view: {}, setOpen: () => calls.push("side") },
     full: { root: root("full"), view: {} },
-    allowlists: { close: () => false }, memoryDialog: { close: () => false },
+    allowlists: { close: () => false },
     agentSettings: { close: () => false }, modalStack: [],
     window: { addEventListener: (_: string, fn: any) => { onKey = fn; } },
   });

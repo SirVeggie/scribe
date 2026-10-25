@@ -1026,7 +1026,7 @@
     const ui = window.scribeMemories;
     node.append(
       ui
-        ? ui.browser({ here: S.pick.cwd, workspaces: () => S.config?.prefs?.recentWorkspaces || [], off: () => S.config?.prefs?.memory === false })
+        ? ui.browser({ workspaces: () => S.config?.prefs?.recentWorkspaces || [], off: () => S.config?.prefs?.memory === false })
         : empty("Memories are not available here.")
     );
     return [node];

@@ -4700,15 +4700,7 @@ html.tight-small .agent-full {
   min-height: 52px;
 }
 
-/* Memories (#826): public/memories.js draws the list, the popup and the settings summary. */
-.ag-mem-dialog .settings-panel {
-  width: min(640px, 100%);
-}
-
-.ag-mem-dialog .settings-title {
-  margin-bottom: 14px;
-}
-
+/* Memories (#826, #840): public/memories.js draws the list (in Agent settings and the harness) and the popup. */
 .ag-memory {
   display: flex;
   flex-direction: column;
@@ -4724,6 +4716,49 @@ html.tight-small .agent-full {
 .ag-memory-search {
   flex: 1;
   min-width: 0;
+}
+
+.ag-memory-filters,
+.ag-memory-place {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* Themed pickers here sit beside .ag-input fields, so they take the same box. */
+.ag-memory .select-button,
+.ag-memory-edit .select-button {
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--ag-sunken);
+  font-size: 13px;
+}
+
+.ag-memory .select-button:hover,
+.ag-memory-edit .select-button:hover {
+  background: var(--ag-sunken);
+  border-color: rgba(var(--lift-rgb), 0.2);
+}
+
+.ag-memory .select-button:focus-visible,
+.ag-memory .select-wrap.open .select-button,
+.ag-memory-edit .select-button:focus-visible,
+.ag-memory-edit .select-wrap.open .select-button {
+  border-color: var(--accent-ring);
+  box-shadow: none;
+}
+
+.ag-memory-total {
+  margin: 0;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-memory-total[hidden] {
+  display: none;
 }
 
 .ag-memory > .ag-source-error[hidden] {
@@ -4807,15 +4842,6 @@ html.tight-small .agent-full {
   min-height: 130px;
   max-height: 50vh;
   resize: vertical;
-}
-
-.ag-memory-stats {
-  margin: 2px 2px 12px;
-}
-
-.ag-memory-stat {
-  color: var(--text);
-  overflow-wrap: anywhere;
 }
 
 /* Agent settings: the key list. */

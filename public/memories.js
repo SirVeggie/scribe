@@ -1,7 +1,7 @@
 /**
- * Shared agent memory (#104, #826): the list of saved memories (titles only), the popup that adds,
- * shows and edits one, and the summary in Agent settings. Agent settings' Memories dialog and the
- * Agent harness' Memories tab both use it, so there is one design for both.
+ * Shared agent memory (#104, #826, #840): the list of saved memories (titles only) and the popup
+ * that adds, shows and edits one. Agent settings' Memory section and the Agent harness' Memories
+ * tab both use it, so there is one design for both.
  */
 (() => {
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
@@ -74,20 +74,53 @@
 
   /** Where a memory applies: a group key, its heading, and the order groups are shown in. */
   function placeOf(memory) {
-    if (memory.scope === "provider") return { key: `provider:${targetKey(memory)}`, label: `${targetLabel(memory)} only`, order: 2 };
+    const provider = memory.scope === "provider";
+    if (provider && memory.workspace) return { key: `both:${targetKey(memory)}:${dirKey(memory.workspace)}`, label: `${targetLabel(memory)} only, in ${memory.workspace}`, path: true, order: 3 };
+    if (provider) return { key: `provider:${targetKey(memory)}`, label: `${targetLabel(memory)} only`, order: 2 };
     if (memory.workspace) return { key: `workspace:${dirKey(memory.workspace)}`, label: memory.workspace, path: true, order: 1 };
     return { key: "", label: "Every chat", order: 0 };
   }
 
-  /** The value the "Applies to" picker uses for a memory or draft. */
-  const placeValue = (value) => (value.scope === "provider" ? `provider:${targetKey(value)}` : value.workspace ? `workspace:${value.workspace}` : "");
+  /** The provider picker's value for a memory: "" for every provider. */
+  const providerValue = (value) => (value.scope === "provider" ? targetKey(value) : "");
 
-  function placeBody(value) {
-    if (value.startsWith("provider:")) {
-      const [provider, source] = JSON.parse(value.slice(9));
-      return { scope: "provider", provider, ...(source ? { source } : {}) };
+  function providerBody(value) {
+    if (!value) return {};
+    const [provider, source] = JSON.parse(value);
+    return { scope: "provider", provider, ...(source ? { source } : {}) };
+  }
+
+  /** Whether a chat in `dir` (null: any) on `target` (a providerValue, "": any) gets the memory. */
+  function reaches(memory, dir, target) {
+    if (target && memory.scope === "provider" && targetKey(memory) !== target) return false;
+    if (dir && memory.workspace) {
+      const at = dirKey(dir);
+      const home = dirKey(memory.workspace);
+      if (at !== home && !at.startsWith(`${home}/`)) return false;
     }
-    return { workspace: value.startsWith("workspace:") ? value.slice(10) : null };
+    return true;
+  }
+
+  /** About what a memory costs in a chat's instructions: its line in the memory block, at 4 characters a token. */
+  const memoryTokens = (memory) => Math.ceil((40 + (memory.title || "").length + memory.text.length) / 4);
+
+  /** Workspace folders to offer: the caller's (recent ones) and those memories already use, without repeats. */
+  function folders(extra = []) {
+    return [
+      ...new Map(
+        [...extra, ...(store.list || []).map((m) => m.workspace)]
+          .filter(Boolean)
+          .map((dir) => [dirKey(dir), dir])
+      ).values(),
+    ];
+  }
+
+  /** Fill a select with options ([value, label]) and keep its value when it is still there. */
+  function fill(select, options, fallback = "") {
+    const value = select.value;
+    select.replaceChildren(...options.map(([v, label]) => new Option(label, v)));
+    select.value = options.some(([v]) => v === value) ? value : fallback;
+    select.parentElement?.syncSelect?.();
   }
 
   /** The agent chat's modal when it is there (it keeps Escape in order); a plain one otherwise. */
@@ -122,22 +155,17 @@
 
   /**
    * Add (memory null) or show and edit one memory in its own popup.
-   * opts.here is the workspace a new memory starts in; opts.workspaces() lists more folders to offer.
+   * A new one applies to every chat until the user picks a workspace or provider; opts.workspaces()
+   * lists the folders to offer besides those memories already use.
    */
   function edit(memory, opts = {}) {
     const { panel, close } = openModal("ag-source ag-memory-edit");
     panel.setAttribute("aria-label", memory ? "Memory" : "New memory");
     // The themed picker is a button beside a hidden select, so its field is not a <label>.
-    const field = (label, control, hint, tag = "label") => {
+    const field = (label, control, tag = "label") => {
       const wrap = el(tag, "ag-field");
-      const caption = el("span", "ag-field-label", label);
-      if (hint) {
-        caption.classList.add("ag-hinted");
-        caption.dataset.tooltip = hint;
-        caption.setAttribute("aria-description", hint);
-      }
       control.setAttribute("aria-label", label);
-      wrap.append(caption, control);
+      wrap.append(el("span", "ag-field-label", label), control);
       return wrap;
     };
 
@@ -151,18 +179,12 @@
     text.maxLength = TEXT_MAX;
     text.placeholder = "What a later chat should know, e.g. Run the tests with npm test, not pnpm: the lockfile is npm's.";
 
-    const scope = el("select", "hx-select");
-    const dirs = [
-      ...new Map(
-        [memory?.workspace, opts.here, ...(opts.workspaces?.() || []), ...(store.list || []).map((m) => m.workspace)]
-          .filter(Boolean)
-          .map((dir) => [dirKey(dir), dir])
-      ).values(),
-    ];
-    scope.append(new Option("Every chat", ""));
-    for (const dir of dirs) scope.append(new Option(dir, `workspace:${dir}`));
-    for (const target of store.targets) scope.append(new Option(`${target.label} only`, `provider:${targetKey(target)}`));
-    scope.value = memory ? placeValue(memory) : opts.here ? `workspace:${dirs.find((d) => dirKey(d) === dirKey(opts.here)) || opts.here}` : "";
+    const workspace = el("select");
+    fill(workspace, [["", "Every workspace"], ...folders([memory?.workspace, ...(opts.workspaces?.() || [])]).map((dir) => [dir, dir])]);
+    workspace.value = memory?.workspace || "";
+    const provider = el("select");
+    fill(provider, [["", "Every provider"], ...store.targets.map((t) => [targetKey(t), `${t.label} only`])]);
+    provider.value = memory ? providerValue(memory) : "";
 
     const error = el("p", "ag-source-error");
     error.hidden = true;
@@ -174,7 +196,7 @@
     const save = async () => {
       if (!title.value.trim()) return title.focus();
       if (!text.value.trim()) return text.focus();
-      const body = { title: title.value, text: text.value, ...placeBody(scope.value) };
+      const body = { title: title.value, text: text.value, workspace: workspace.value || null, ...providerBody(provider.value) };
       try {
         await api(memory ? "PUT" : "POST", memory ? `/memories/${memory.id}` : "/memories", body);
       } catch (err) {
@@ -215,14 +237,20 @@
 
     const head = [el("h2", "ag-modal-title", memory ? "Memory" : "New memory")];
     if (memory) head.push(el("p", "ag-modal-hint", `Saved by ${byLabel(memory.by)}, ${day(memory.updatedAt)}`));
-    const scopeField = field("Applies to", scope, "Every chat, chats in a workspace folder and below it, or only one provider's chats (Native: one model source).", "div");
-    panel.append(...head, field("Title", title), field("Memory", text), scopeField, error, actions);
+    const place = el("div", "ag-memory-place");
+    place.append(field("Workspace", workspace, "div"), field("Provider", provider, "div"));
+    panel.append(...head, field("Title", title), field("Memory", text), place, error, actions);
     // The themed select wraps the element where it sits, so it has to be in the panel first.
-    window.createSelect?.(scope);
+    window.createSelect?.(workspace);
+    window.createSelect?.(provider);
     (memory ? text : title).focus();
   }
 
-  /** The saved memories by where they apply, one line (the title) each; a click opens it. */
+  /**
+   * The saved memories by where they apply, one line (the title) each; a click opens it. The
+   * workspace and provider filters keep what a chat there gets, with its rough token cost.
+   * opts.keep keeps it subscribed while detached (Agent settings keeps one and shows it again).
+   */
   function browser(opts = {}) {
     const node = el("div", "ag-memory");
     const bar = el("div", "ag-memory-bar");
@@ -231,10 +259,20 @@
     search.placeholder = "Search memories";
     search.setAttribute("aria-label", "Search memories");
     search.addEventListener("input", () => render());
+    const workspace = el("select");
+    workspace.setAttribute("aria-label", "Workspace");
+    const provider = el("select");
+    provider.setAttribute("aria-label", "Provider");
+    for (const select of [workspace, provider]) select.addEventListener("change", () => render());
+    const filters = el("div", "ag-memory-filters");
+    filters.append(workspace, provider);
     bar.append(search, button("Add memory", "ag-btn primary", () => edit(null, opts)));
     const off = el("p", "ag-source-error");
+    const total = el("p", "ag-memory-total");
     const list = el("div", "ag-memory-groups");
-    node.append(bar, off, list);
+    node.append(bar, filters, off, total, list);
+    window.createSelect?.(workspace);
+    window.createSelect?.(provider);
 
     function row(memory) {
       const item = button("", "ag-memory-row", () => edit(memory, opts));
@@ -244,16 +282,24 @@
     }
 
     function render() {
-      if (!node.isConnected && node.dataset.shown) return false;
+      if (!opts.keep && !node.isConnected && node.dataset.shown) return false;
       off.textContent = opts.off?.() ? "Memory is off in Agent settings: chats get none of these and cannot save any." : "";
       off.hidden = !off.textContent;
+      fill(workspace, [["", "All workspaces"], ...folders(opts.workspaces?.() || []).map((dir) => [dir, dir])]);
+      fill(provider, [["", "All providers"], ...store.targets.map((t) => [targetKey(t), t.label])]);
       if (!store.list) {
+        total.hidden = true;
         list.replaceChildren(el("p", "ag-muted", store.error || "Loading…"));
         return true;
       }
       node.dataset.shown = "1";
       const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
-      const shown = store.list.filter((m) => words.every((w) => `${m.title || ""} ${m.text}`.toLowerCase().includes(w)));
+      const shown = store.list.filter(
+        (m) => reaches(m, workspace.value || null, provider.value) && words.every((w) => `${m.title || ""} ${m.text}`.toLowerCase().includes(w))
+      );
+      const tokens = shown.reduce((sum, m) => sum + memoryTokens(m), 0);
+      total.textContent = `${shown.length} ${shown.length === 1 ? "memory" : "memories"} · ≈ ${tokens.toLocaleString()} tokens`;
+      total.hidden = !shown.length;
       const groups = new Map();
       for (const memory of [...shown].sort((a, b) => b.updatedAt - a.updatedAt)) {
         const place = placeOf(memory);
@@ -280,48 +326,5 @@
     return node;
   }
 
-  /** What is saved, at a glance: counts by where memories apply and who saved them. */
-  function stats(opts = {}) {
-    const node = el("div", "ag-keys ag-memory-stats");
-    // Agent settings keeps one and shows it again, so it stays subscribed while detached.
-    const render = () => {
-      const list = store.list;
-      if (!list) {
-        node.replaceChildren(el("span", null, store.error || "Loading…"));
-        return true;
-      }
-      const rows = [];
-      const add = (label, value) => rows.push(el("span", null, label), el("span", "ag-memory-stat", value));
-      const count = (filter) => list.filter(filter).length;
-      const folders = new Set(list.filter((m) => m.workspace).map((m) => dirKey(m.workspace)));
-      const tally = (key) => {
-        const by = new Map();
-        for (const m of list) {
-          const name = key(m);
-          if (name) by.set(name, (by.get(name) || 0) + 1);
-        }
-        return [...by].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} ${n}`).join(", ");
-      };
-      add("Saved", list.length ? `${list.length} ${list.length === 1 ? "memory" : "memories"}` : "None yet");
-      if (list.length) {
-        add("Every chat", String(count((m) => m.scope === "global")));
-        const inFolders = count((m) => m.scope === "workspace");
-        add("Workspaces", inFolders ? `${inFolders} in ${folders.size} ${folders.size === 1 ? "folder" : "folders"}` : "0");
-        add("One provider", tally((m) => (m.scope === "provider" ? targetLabel(m) : "")) || "0");
-        add("Saved by", tally((m) => byLabel(m.by)));
-        const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        add("Last change", `${day(newest.updatedAt)}: ${newest.title || newest.text.split("\n")[0]}`);
-        const untitled = count((m) => !m.title);
-        if (untitled) add("Untitled", String(untitled));
-      }
-      node.replaceChildren(...rows);
-      return true;
-    };
-    store.views.add(render);
-    render();
-    if (opts.load !== false) void store.load();
-    return node;
-  }
-
-  window.scribeMemories = { store, browser, edit, stats };
+  window.scribeMemories = { store, browser, edit };
 })();

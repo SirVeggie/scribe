@@ -7871,7 +7871,7 @@
     /** Collapse the conversation when the pointer leaves the dock; keep the compact composer. */
     collapseOutside(target) {
       if (!S.dockShown || !S.dockExpanded || S.fullOpen) return;
-      if (modalStack.length || agentSettings.isOpen() || allowlists.isOpen() || memoryDialog.isOpen() || window.scribePreview?.isOpen?.()) return;
+      if (modalStack.length || agentSettings.isOpen() || allowlists.isOpen() || window.scribePreview?.isOpen?.()) return;
       if (this.owns(target)) return;
       this.setExpanded(false);
     },
@@ -10036,60 +10036,11 @@
 
   /* ---------- memories: the notes every chat gets in its instructions (#104, #826) ---------- */
 
-  /** The Memories dialog (public/memories.js draws the list). It opens over Agent settings and returns there. */
-  const memoryDialog = {
-    root: null,
-    mount() {
-      const root = el("div", "settings ag-perm-dialog ag-mem-dialog");
-      root.hidden = true;
-      const backdrop = el("div", "settings-backdrop");
-      backdrop.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        this.close();
-      });
-      const panel = el("div", "settings-panel");
-      panel.setAttribute("role", "dialog");
-      panel.setAttribute("aria-modal", "true");
-      panel.setAttribute("aria-labelledby", "ag-mem-title");
-      const head = el("div", "ag-mem-dialog-head");
-      const title = helpHeading(
-        "Memories",
-        "Short notes chats get in their instructions, whatever their provider: corrections you gave, mistakes to avoid, facts about a project. Agents save them as they work, and each save shows as a note in that chat. Changes apply from a thread's next message."
-      );
-      title.classList.add("settings-title");
-      title.id = "ag-mem-title";
-      head.append(title);
-      this.body = el("div", "ag-mem-dialog-body");
-      panel.append(head, this.body);
-      root.append(backdrop, panel);
-      document.body.append(root);
-      this.root = root;
-    },
-    isOpen() {
-      return Boolean(this.root && !this.root.hidden);
-    },
-    open() {
-      if (!this.root || !window.scribeMemories) return;
-      this.opener = document.activeElement;
-      const here = targetView().settings().cwd || null;
-      this.body.replaceChildren(
-        window.scribeMemories.browser({ here, workspaces: () => prefs().recentWorkspaces || [], off: () => prefs().memory === false })
-      );
-      this.root.hidden = false;
-      this.releaseTrap?.();
-      this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"), { initial: this.body.querySelector(".ag-memory-search") });
-    },
-    close() {
-      if (!this.isOpen()) return false;
-      this.releaseTrap?.();
-      this.releaseTrap = null;
-      this.root.hidden = true;
-      this.body.replaceChildren();
-      hideHoverTip();
-      if (this.opener?.isConnected) this.opener.focus({ preventScroll: true });
-      return true;
-    },
-  };
+  /** Folders the memory editor offers: the recent ones and those threads work in, as in the workspace picker. */
+  function memoryWorkspaces() {
+    const hidden = hiddenWorkspaceKeys();
+    return [...(prefs().recentWorkspaces || []), ...threadWorkspaces().map((w) => w.path)].filter((dir) => dir && !hidden.has(dirKey(dir)));
+  }
 
   /* ---------- MCP servers: Scribe's one list for every provider (data/agent/mcp.json) ---------- */
 
@@ -10714,18 +10665,15 @@
             });
         }
       );
-      const memoryActions = el("div", "settings-actions");
-      memoryActions.append(button("Manage memories…", null, () => memoryDialog.open()));
-      // What is saved, at a glance (#828). Loaded again each time settings open.
-      this.memoryStats = window.scribeMemories?.stats({ load: false }) || el("div");
+      // The list itself (#840), loaded again each time settings open.
+      const memoryList = window.scribeMemories?.browser({ keep: true, workspaces: memoryWorkspaces, off: () => prefs().memory === false }) || el("div");
       memory.append(
         el("h3", null, "Memory"),
         settingRow("Agents share memories", memoryOn, {
           id: "ag-memory-label",
           hint: "Chats on every provider get the saved memories in their instructions and can save new ones: corrections you gave, mistakes to avoid, facts about a project. Each save shows as a note in that chat. Off, chats get none and cannot save any; the saved ones are kept. Applies from a thread's next message.",
         }),
-        this.memoryStats,
-        memoryActions
+        memoryList
       );
 
       const instructions = el("section", "settings-section");
@@ -12157,12 +12105,11 @@
 
   function escape() {
     // Small dialogs (a memory, a hook rule) open over the settings dialogs, so they close first.
-    if (modalStack.length && (allowlists.isOpen() || memoryDialog.isOpen() || agentSettings.isOpen())) {
+    if (modalStack.length && (allowlists.isOpen() || agentSettings.isOpen())) {
       modalStack[modalStack.length - 1]();
       return true;
     }
     if (allowlists.close()) return true;
-    if (memoryDialog.close()) return true;
     if (agentSettings.close()) return true;
     if (openMenuEl) {
       const fromDock = openMenuAnchor === dock.titleBtn;
@@ -12405,7 +12352,6 @@
     dock.mount();
     agentSettings.mount();
     allowlists.mount();
-    memoryDialog.mount();
     applyButton();
     toasts.mount();
     staleWorktrees.start();
