@@ -201,18 +201,30 @@ body.agent-harness-open .tabs .tab.active::after {
   align-items: center;
 }
 
+/* A themed picker (select.js); the wrapper sizes it, the button takes the box. */
 .hx-select {
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-  height: var(--control-height);
   max-width: 420px;
   min-width: 0;
   flex: 1 1 200px;
+}
+
+.hx-select .select-button {
+  height: var(--control-height);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.hx-select .select-button:hover {
+  background: var(--panel);
+  border-color: rgba(var(--lift-rgb), 0.2);
+}
+
+.hx-select .select-button:focus-visible,
+.hx-select.open .select-button {
+  border-color: var(--accent-ring);
+  box-shadow: none;
 }
 
 /* ---------- stat tiles ---------- */

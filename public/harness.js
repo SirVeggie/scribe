@@ -102,7 +102,9 @@
 
   function field(label, input, hint) {
     const wrap = el("label", "ag-field");
-    wrap.append(el("span", "ag-field-label", label), input);
+    // A themed picker stands in for its hidden select.
+    const box = input.parentElement?.classList.contains("select-wrap") ? input.parentElement : input;
+    wrap.append(el("span", "ag-field-label", label), box);
     if (hint) wrap.append(el("span", "ag-muted ag-field-hint", hint));
     return wrap;
   }
@@ -113,10 +115,18 @@
   }
 
   function folderSelect(folders, label) {
-    const select = el("select", "hx-select");
+    const select = el("select");
     select.setAttribute("aria-label", label);
     for (const folder of folders) select.append(new Option(`${folderLabel(folder)} · ${folder.dir}`, folder.dir));
+    themed(select);
     return select;
+  }
+
+  /** Swaps a native select for the app's themed picker and returns the wrapper (call syncSelect on it after setting value). */
+  function themed(select) {
+    const wrap = window.createSelect ? window.createSelect(select) : select;
+    wrap.classList.add("hx-select");
+    return wrap;
   }
 
   function tokens(n) {
@@ -413,14 +423,14 @@
       track(PROVIDERS.map((id) => ({ id, label: PROVIDER_LABEL[id] })), S.pick.provider, (provider) => repick({ provider }), "Provider"),
       track(Object.entries(MODE_LABEL).map(([id, label]) => ({ id, label })), S.pick.mode, (mode) => repick({ mode }), "Mode")
     );
-    const select = el("select", "hx-select");
+    const select = el("select");
     select.setAttribute("aria-label", "Workspace");
     const folders = workspaceDirs();
     select.append(new Option("No workspace", ""));
     for (const folder of folders) select.append(new Option(folder, folder));
     select.value = S.pick.cwd || "";
     select.addEventListener("change", () => repick({ cwd: select.value || null }));
-    row.append(select);
+    row.append(themed(select));
     return row;
   }
 
@@ -991,7 +1001,10 @@
     description.placeholder = "What it is for and when an agent should use it.";
     const select = folderSelect(S.skillFolders, "Where");
     const mine = S.skillFolders.find((folder) => folder.providers.includes(S.pick.provider));
-    if (mine) select.value = mine.dir;
+    if (mine) {
+      select.value = mine.dir;
+      select.parentElement?.syncSelect?.();
+    }
     const error = el("p", "ag-source-error");
     error.hidden = true;
     const run = button("Create", "ag-btn primary", async () => {
