@@ -1,8 +1,9 @@
 /**
  * The agent harness view (#456): a full panel on what every chat is given at its start (Scribe's
  * instructions and tools, MCP servers, skills, memories) and how the stored threads used it. What
- * Scribe manages is changed here too (#495): MCP servers, skills, memories and instruction files.
- * The server dialogs are agent.js's own, opened over this panel.
+ * Scribe manages is changed here too (#495): MCP servers, skills, memories, hooks and instruction
+ * files. This is the one place for Scribe's MCP list (#823); its dialogs and the hook rules are
+ * agent.js's own, opened over or mounted in this panel.
  */
 (() => {
   const PROVIDERS = ["cursor", "claude", "codex", "pi"];
@@ -23,6 +24,7 @@
     { id: "mcp", label: "MCP servers" },
     { id: "skills", label: "Skills" },
     { id: "modes", label: "Modes" },
+    { id: "hooks", label: "Hooks" },
     { id: "memories", label: "Memories" },
     { id: "threads", label: "Heaviest threads" },
   ];
@@ -40,6 +42,10 @@
     threads: [],
     measure: null,
     probes: new Map(),
+    /** Scribe's MCP file ({ path, error?, file }) and servers found in Claude Code's config. */
+    mcp: null,
+    mcpFound: [],
+    mcpFoundError: "",
     error: "",
     loading: 0,
     contextLoading: 0,
@@ -50,7 +56,7 @@
     /* keep the defaults */
   }
 
-  let root, body, heading, controls, nav, renderedSection;
+  let root, body, heading, controls, nav, renderedSection, hooksNode;
 
   function el(tag, cls, text) {
     const node = document.createElement(tag);
@@ -424,6 +430,7 @@
       S.pick.cwd,
       ...(S.config?.prefs?.recentWorkspaces || []),
       ...Object.values(S.config?.prefs?.scopeWorkspaces || {}),
+      ...Object.values(S.mcp?.file?.workspaces || {}).map((layer) => layer.path),
       ...S.threads.map((thread) =>
         (thread.worktree && !thread.worktree.closed ? thread.worktree.home : null) ||
         thread.cwd || (thread.scope?.kind === "workspace" ? thread.scope.ref : null)
@@ -653,13 +660,23 @@
       for (const key of [...S.probes.keys()]) if (!name || key.startsWith(`${name}\n`)) S.probes.delete(key);
       void loadContext();
     };
+    const mcp = chat()?.mcp;
     const bar = el("div", "hx-actions");
-    bar.append(button("Add server…", "hx-btn", () => chat()?.editMcpServer?.("global", null, () => reload())));
-    if (cwd) bar.append(button("Add to this workspace…", "hx-btn", () => chat()?.editMcpServer?.(cwd, null, () => reload())));
-    const more = button("All servers…", "hx-btn", () => chat()?.openMcpServers?.({ onClose: () => reload() }));
-    more.dataset.tooltip = "Every workspace's list, import from Claude Code, Cursor, Pi and Codex, and the list as JSON";
-    bar.append(more, button("Saved permissions…", "hx-btn", () => chat()?.openMcpPermissions?.()));
+    bar.append(button("Add server…", "hx-btn", () => mcp?.edit("global", null, () => reload())));
+    if (cwd) bar.append(button("Add to this workspace…", "hx-btn", () => mcp?.edit(cwd, null, () => reload())));
+    const importAll = button("Import…", "hx-btn", () => mcp?.importDialog(workspaceDirs(), () => reload()));
+    importAll.dataset.tooltip = "From Claude Code, Cursor, Pi and Codex";
+    const json = button("Edit JSON…", "hx-btn", () => mcp?.editJson("global", () => reload()));
+    json.dataset.tooltip = "The servers that apply everywhere";
+    bar.append(importAll, json);
+    if (cwd) {
+      const local = button("Workspace JSON…", "hx-btn", () => mcp?.editJson(cwd, () => reload()));
+      local.dataset.tooltip = "This workspace's own servers and the ones it turns off";
+      bar.append(local);
+    }
+    bar.append(button("Saved permissions…", "hx-btn", () => mcp?.permissions()));
     servers.append(bar);
+    if (S.mcp?.error) servers.append(el("p", "ag-source-error", `${S.mcp.path} does not parse, so Scribe won't change it: ${S.mcp.error}`));
     const scribeUse = calls.get("scribe");
     const rows = [
       { name: "scribe", layer: "Built in", target: "Scribe's own page, browser, thread and memory tools", approve: "auto", active: true, builtin: true },
@@ -672,7 +689,7 @@
       const name = el("span", "hx-server-name");
       name.append(el("strong", null, server.name), el("span", `ag-tag${server.active ? " ok" : ""}`, server.active ? "Given to this thread" : server.why || "Not given"));
       head.append(name);
-      const meta = [server.layer === "global" ? "Everywhere" : server.layer, server.builtin ? null : server.approve === "auto" ? "runs without asking" : "asks before each call", use ? `${count(use.calls)} calls, ${pct(use.errors, use.calls)} failed` : "no calls in range"].filter(Boolean).join(" · ");
+      const meta = [server.layer === "global" ? "Everywhere" : server.layer, server.builtin ? null : server.approve === "auto" ? "runs without asking" : "asks before each call", toolCount(server.tools, "allow", "allowed"), toolCount(server.tools, "disable", "disabled"), use ? `${count(use.calls)} calls, ${pct(use.errors, use.calls)} failed` : "no calls in range"].filter(Boolean).join(" · ");
       head.append(el("span", "hx-muted", meta));
       if (server.editable) {
         const controls = el("span", "hx-server-controls");
@@ -685,7 +702,7 @@
           reload(server.name);
         });
         toggle.dataset.tooltip = !server.enabled ? "Turn on" : cwd && server.layer === "global" ? "Turn off in this workspace only" : server.layer === "global" ? "Turn off everywhere" : "Turn off";
-        controls.append(toggle, button("Edit", "hx-btn", () => chat()?.editMcpServer?.(server.layer, server.name, () => reload(server.name))));
+        controls.append(toggle, button("Edit", "hx-btn", () => mcp?.edit(server.layer, server.name, () => reload(server.name))));
         head.append(controls);
       }
       box.append(head, el("code", "hx-target", server.target));
@@ -726,12 +743,43 @@
       }
       servers.append(box);
     }
+    if (S.mcp?.path) servers.append(el("p", "hx-hint hx-path", S.mcp.path));
     out.push(servers);
+
+    const found = foundServers(cwd);
+    if (found.length || S.mcpFoundError) {
+      const box = card("Found in Claude Code", "Not in Scribe's list for Everywhere or this workspace. Import copies a server and leaves Claude Code's file unchanged. Imported servers ask before each call, including worker calls, unless the chat has full access; change this in the server's Edit dialog.");
+      if (S.mcpFoundError) box.append(empty(`Could not check Claude Code's servers: ${S.mcpFoundError}`));
+      for (const c of found) {
+        const row = el("div", "hx-server");
+        const head = el("div", "hx-server-head");
+        const name = el("span", "hx-server-name");
+        name.append(el("strong", null, c.name));
+        head.append(name, el("span", "hx-muted", `${c.scope === "global" ? "Everywhere" : c.scope} · ${c.file}`));
+        const take = button("Import", "hx-btn", async () => {
+          take.disabled = true;
+          try {
+            await mcp.importOne(c);
+            reload();
+          } catch (err) {
+            notice(err.message);
+            take.disabled = false;
+          }
+        });
+        take.setAttribute("aria-label", `Import ${c.name} from ${c.file}`);
+        const controls = el("span", "hx-server-controls");
+        controls.append(take);
+        head.append(controls);
+        row.append(head, el("code", "hx-target", c.server.url || [c.server.command, ...(c.server.args || [])].filter(Boolean).join(" ")));
+        box.append(row);
+      }
+      out.push(box);
+    }
 
     if (ctx.leftOut.length || ctx.duplicates.length) {
       const notes = card("Worth a look");
       const list = el("ul", "hx-list");
-      if (ctx.leftOut.length) list.append(el("li", null, `In your own Claude Code config but not given to Claude threads here: ${ctx.leftOut.join(", ")}. A skill written for one of them finds its tools missing. Import them with All servers.`));
+      if (ctx.leftOut.length) list.append(el("li", null, `In your own Claude Code config but not given to Claude threads here: ${ctx.leftOut.join(", ")}. A skill written for one of them finds its tools missing. Import them from Found in Claude Code or Import.`));
       if (ctx.duplicates.length) list.append(el("li", null, `Your Cursor config also loads Scribe as ${ctx.duplicates.join(", ")}, so a Cursor thread sees every page tool twice and pays for both sets of schemas. Remove it from ~/.cursor/mcp.json.`));
       notes.append(list);
       out.push(notes);
@@ -1014,7 +1062,32 @@
     return [node];
   }
 
-  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, memories: renderMemories, threads: renderThreads };
+  /** "2 tools allowed" from a server's per-tool settings (#824), or null. */
+  function toolCount(tools, policy, word) {
+    const n = Object.values(tools || {}).filter((p) => p === policy).length;
+    return n ? `${n} ${n === 1 ? "tool" : "tools"} ${word}` : null;
+  }
+
+  /** Claude Code servers for Everywhere or this workspace that Scribe's list does not have yet. */
+  function foundServers(cwd) {
+    const file = S.mcp?.file;
+    if (!file) return [];
+    const layer = (scope) => (scope === "global" ? file.mcpServers : Object.values(file.workspaces || {}).find((w) => dirKey(w.path) === dirKey(scope))?.mcpServers) || {};
+    return S.mcpFound.filter((c) => (c.scope === "global" || (cwd && dirKey(c.scope) === dirKey(cwd))) && !Object.hasOwn(layer(c.scope), c.name));
+  }
+
+  /** agent.js draws the rules and their dialogs; the node is kept so each render does not fetch them again. */
+  function renderHooks() {
+    const hooks = chat()?.hooks;
+    if (!hooks) return [empty("Hooks are not available here.")];
+    if (!hooksNode) {
+      hooksNode = card();
+      hooks.mount(hooksNode);
+    }
+    return [hooksNode];
+  }
+
+  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, hooks: renderHooks, memories: renderMemories, threads: renderThreads };
   /** Sections whose numbers depend on the range. */
   const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills"]);
 
@@ -1123,7 +1196,26 @@
     } finally {
       if (S.contextLoading === request) S.contextLoading = 0;
     }
+    void loadMcp(pick.cwd);
   });
+
+  /** Scribe's MCP file and what Claude Code has that it does not, for the MCP section. Never holds up the rest. */
+  let mcpRequest = 0;
+  async function loadMcp(cwd) {
+    const mcp = chat()?.mcp;
+    if (!mcp) return;
+    const request = ++mcpRequest;
+    try {
+      const [view, found] = await Promise.all([mcp.load(), mcp.findImports(cwd ? [cwd] : []).then((list) => ({ list }), (err) => ({ error: err.message }))]);
+      if (request !== mcpRequest) return;
+      S.mcp = view;
+      S.mcpFound = (found.list || []).filter((c) => c.source === "claude");
+      S.mcpFoundError = found.error || "";
+    } catch (err) {
+      if (request === mcpRequest) S.mcpFoundError = err.message;
+    }
+    if (S.section === "mcp") render();
+  }
 
   async function refresh() {
     S.probes.clear();
@@ -1208,6 +1300,7 @@
       document.body.classList.add("agent-harness-open");
       render();
       void refresh();
+      if (hooksNode) void chat()?.hooks?.render();
       nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
     },
     close() {

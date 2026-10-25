@@ -1439,6 +1439,8 @@ export class AgentHost {
       approve: server.approve ?? "ask",
       modes: serverModes(server),
       enabled: server.enabled !== false,
+      // Per-tool Allow / Disable (#824), counted on the harness row.
+      ...(server.tools ? { tools: server.tools } : {}),
       // In Scribe's own list, so the view can change it.
       editable: true,
       active: active.has(name),

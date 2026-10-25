@@ -2033,7 +2033,7 @@
     return data;
   }
 
-  /* ---------- Hook rules (Agent settings → Hooks) ---------- */
+  /* ---------- Hook rules (Agent harness → Hooks) ---------- */
 
   const HOOK_MATCH = { keyword: "contains", regex: "regex", tool: "tool name", question: "question" };
   const HOOK_EVENT = { any: "anything", prompt: "your message", text: "agent text", reasoning: "agent thinking", tool_call: "tool call", tool_result: "tool result", turn_end: "end of turn" };
@@ -2054,6 +2054,105 @@
     S.config.prefs = { ...prefs(), hookRules: view.rules };
     return view;
   }
+
+  /**
+   * The Hooks section of the harness page (harness.js mounts it): the user's rules, what each
+   * provider lets a rule hold, and whether Claude threads run Claude Code's own hooks.
+   */
+  const hookSettings = {
+    hookList: null,
+    hookCoverage: null,
+    claude: null,
+    mount(node) {
+      this.hookList = el("div", "ag-hook-rules");
+      const hookActions = el("div", "settings-actions");
+      hookActions.append(button("Add rule", "ag-btn", () => editHookRule(null)));
+      this.hookCoverage = el("div", "ag-hook-coverage");
+      this.claude = el("div");
+      node.append(
+        helpHeading(
+          "Rules",
+          "A rule watches every chat: your messages, the agent's text and thinking, its tool calls and their results. When it matches it can mark the item, tell the agent something, have you approve the tool call, or block it. A rule only ever tightens what a thread may do. Turn them off for one thread from its menu."
+        ),
+        this.hookList,
+        hookActions,
+        helpHeading(
+          "What a hook can hold",
+          "Ask and Block act before a tool call runs only where the provider lets Scribe hold the call. A call that is only seen is already running: Block then stops the turn, and Ask can only mark the call."
+        ),
+        this.hookCoverage,
+        helpHeading(
+          "Claude Code's own hooks",
+          "Hooks from your Claude Code settings files and plugins are written for your own terminal sessions. One that fails closed, such as a plugin that checks each tool call with a local service, can deny every tool in Scribe without saying why. Off by default; Scribe's own checks run either way. Applies from a thread's next message."
+        ),
+        this.claude
+      );
+      void this.render();
+    },
+    async render() {
+      this.renderClaude();
+      let view;
+      try {
+        view = await api("GET", "/hooks");
+      } catch (err) {
+        this.hookList.replaceChildren(el("div", "ag-muted", err.message));
+        return;
+      }
+      S.config.prefs = { ...prefs(), hookRules: view.rules };
+      this.hookList.replaceChildren();
+      if (!view.rules.length) this.hookList.append(el("div", "ag-muted", "None yet."));
+      for (const rule of view.rules) {
+        const row = el("div", "setting-row ag-hook-rule");
+        const label = el("span", "ag-hook-text");
+        const needsClassifier = rule.match === "question" && !view.classifier;
+        label.append(
+          el("strong", null, rule.pattern),
+          el("span", "ag-muted", ` · ${HOOK_MATCH[rule.match]} · ${HOOK_EVENT[rule.event]} · ${HOOK_ACTION[rule.action].label}${needsClassifier ? " · needs a classifier (General settings)" : ""}`)
+        );
+        const on = switchControl(
+          () => rule.enabled,
+          () => {
+            rule.enabled = !rule.enabled;
+            void saveHookRules(view.rules).catch((err) => {
+              notice(err.message);
+              void this.render();
+            });
+          }
+        );
+        on.setAttribute("aria-label", `Rule ${rule.pattern}`);
+        row.append(label, on, button("Edit", "ag-btn small", () => editHookRule(rule, view.rules)));
+        this.hookList.append(row);
+      }
+      const table = el("table", "ag-hook-table");
+      const head = el("tr");
+      head.append(el("th", null, "Provider"), el("th", null, "Held before it runs"), el("th", null, "Only seen"));
+      table.append(head);
+      for (const row of view.coverage) {
+        const tr = el("tr");
+        tr.append(el("th", null, row.label), el("td", null, row.held), el("td", row.observed ? null : "ag-muted", row.observed || "Nothing"));
+        table.append(tr);
+      }
+      this.hookCoverage.replaceChildren(table);
+    },
+    /** Whether Claude threads run the hooks from Claude Code's settings files and plugins (prefs). */
+    renderClaude() {
+      if (!this.claude) return;
+      const toggle = switchControl(
+        () => Boolean(prefs().claudeHooks),
+        async () => {
+          try {
+            S.config.prefs = await api("PUT", "/prefs", { claudeHooks: !prefs().claudeHooks });
+          } catch (err) {
+            notice(err.message);
+          }
+          this.renderClaude();
+        }
+      );
+      this.claude.replaceChildren(
+        settingRow("Run Claude Code hooks in Claude threads", toggle, { id: "ag-claude-hooks-label" })
+      );
+    },
+  };
 
   /** Add (rule null) or edit one of the user's hook rules. `rules` is the list it is in. */
   function editHookRule(rule, rules = hookRules()) {
@@ -2135,7 +2234,7 @@
         return;
       }
       close();
-      void agentSettings.renderHooks();
+      void hookSettings.render();
     };
     const save = () => {
       const edited = {
@@ -9724,7 +9823,6 @@
       const title = el("h2", "settings-title", "Allowlists");
       title.id = "ag-perm-title";
       this.web = el("section", "settings-section ag-web-allow");
-      this.hooks = el("section", "settings-section");
       this.scribeCommands = el("section", "settings-section");
       const commands = el("section", "settings-section");
       const pick = el("div", "setting-row");
@@ -9745,7 +9843,7 @@
         pick
       );
       this.body = el("div", "ag-perm-body");
-      panel.append(title, this.web, this.scribeCommands, this.hooks, commands, this.body);
+      panel.append(title, this.web, this.scribeCommands, commands, this.body);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -9765,7 +9863,6 @@
       this.pickerWrap?.syncSelect?.();
       this.renderWeb();
       this.renderCommands();
-      this.renderHooks();
       this.root.hidden = false;
       this.releaseTrap?.();
       this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"));
@@ -9853,29 +9950,6 @@
       } catch (err) {
         notice(err.message);
       }
-    },
-    /** Whether Claude threads run the hooks from Claude Code's settings files and plugins (prefs). */
-    renderHooks() {
-      const label = el("label", "ag-check");
-      const box = el("input");
-      box.type = "checkbox";
-      box.checked = Boolean(prefs().claudeHooks);
-      box.addEventListener("change", async () => {
-        try {
-          S.config.prefs = await api("PUT", "/prefs", { claudeHooks: box.checked });
-        } catch (err) {
-          box.checked = !box.checked;
-          notice(err.message);
-        }
-      });
-      label.append(box, el("span", null, "Run Claude Code hooks in Claude threads"));
-      this.hooks.replaceChildren(
-        helpHeading(
-          "Hooks",
-          "Hooks from your Claude Code settings files and plugins are written for your own terminal sessions. One that fails closed, such as a plugin that checks each tool call with a local service, can deny every tool in Scribe without saying why. Off by default; Scribe's own checks run either way. Applies from a thread's next message."
-        ),
-        label
-      );
     },
     async saveWeb(list) {
       try {
@@ -10032,52 +10106,59 @@
     return MODES.filter((m) => ids.includes(m.id)).map((m) => m.label).join(", ") || "no modes";
   }
 
+  /**
+   * The dialogs for Scribe's MCP list. The list itself is the harness page's MCP section
+   * (harness.js), which opens these over itself through window.scribeChat.mcp.
+   */
   const mcpServers = {
     view: null,
     scope: "global",
-    panel: null,
-    candidates: [],
-    discoveryError: null,
-    close: () => {},
-    /** Told after each saved change, when the harness page opened a dialog here. */
+    /** Told after each saved change. */
     changed: null,
-    async open({ onClose } = {}) {
-      const { panel, close } = modal("ag-mcp", onClose);
-      this.panel = panel;
-      this.close = close;
-      this.changed = null;
-      this.current = targetView().settings().cwd || null;
-      this.scope = "global";
-      this.candidates = [];
-      this.discoveryError = null;
-      panel.append(el("h2", "ag-modal-title", "MCP servers"), el("div", "ag-muted", "Loading…"));
-      try {
-        this.view = await api("GET", "/mcp");
-      } catch (err) {
-        panel.replaceChildren(el("h2", "ag-modal-title", "MCP servers"), el("p", "ag-source-error", err.message));
-        return;
-      }
-      this.render();
-      try {
-        this.candidates = (await this.findImports()).filter((c) => c.source === "claude");
-      } catch (err) {
-        this.discoveryError = err.message;
-      }
-      this.render();
+    async load() {
+      this.view = await api("GET", "/mcp");
+      return this.view;
     },
-    /** One server's dialog on its own, for the harness page. scope is "global" or a workspace folder; no name adds a server. */
+    /** Sets the layer the dialogs work on. scope is "global" or a workspace folder. */
+    async use(scope, changed) {
+      await this.load();
+      this.scope = scope || "global";
+      this.changed = changed || null;
+    },
+    /** One server's dialog. No name adds a server. */
     async editFrom(scope, name, changed) {
       try {
-        this.view = await api("GET", "/mcp");
+        await this.use(scope, changed);
       } catch (err) {
         notice(err.message);
         return;
       }
-      this.panel = null;
-      this.scope = scope || "global";
-      this.changed = changed;
       if (name && !this.layer()[name]) return notice(`${name} is no longer in Scribe's list.`);
       this.edit(name || null);
+    },
+    async jsonFrom(scope, changed) {
+      try {
+        await this.use(scope, changed);
+      } catch (err) {
+        notice(err.message);
+        return;
+      }
+      this.editJson();
+    },
+    async importFrom(dirs, changed) {
+      try {
+        await this.use("global", changed);
+      } catch (err) {
+        notice(err.message);
+        return;
+      }
+      void this.importDialog(dirs);
+    },
+    /** Copies one discovered server into Scribe's list, asking before each call. */
+    async importOne(candidate) {
+      this.view = await api("POST", "/mcp/import", { items: [{ scope: candidate.scope, name: candidate.name, server: { ...candidate.server, approve: "ask" } }] });
+      notice(`Imported ${candidate.name}. It asks before each call unless the chat has full access.`);
+      return this.view;
     },
     async permissionsDialog() {
       const { panel } = modal("ag-mcp");
@@ -10109,22 +10190,10 @@
       try { render((await api("GET", "/mcp/permissions")).grants); }
       catch (err) { panel.replaceChildren(heading(), el("p", "ag-source-error", err.message)); }
     },
-    async findImports() {
-      const query = this.workspaces().map((d) => `cwd=${encodeURIComponent(d)}`).join("&");
+    /** Servers in other apps' config files, for the global list and these workspaces. */
+    async findImports(dirs = []) {
+      const query = dirs.filter(Boolean).map((d) => `cwd=${encodeURIComponent(d)}`).join("&");
       return (await api("GET", `/mcp/import${query ? `?${query}` : ""}`)).candidates || [];
-    },
-    /** Workspaces to choose from: the current one, recent ones, and any with servers of their own. */
-    workspaces() {
-      const layers = Object.values(this.view.file.workspaces).map((w) => w.path);
-      const discovered = this.candidates.filter((c) => c.scope !== "global").map((c) => c.scope);
-      const dirs = [this.current, ...(prefs().recentWorkspaces || []), ...layers, ...discovered].filter(Boolean);
-      const seen = new Set();
-      return dirs.filter((dir) => {
-        const key = dirKey(dir);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
     },
     layer() {
       if (this.scope === "global") return this.view.file.mcpServers;
@@ -10134,128 +10203,12 @@
     async save(servers) {
       try {
         this.view = await api("PUT", "/mcp/layer", { scope: this.scope, servers });
-        this.render();
         this.changed?.();
         return true;
       } catch (err) {
         notice(err.message);
         return false;
       }
-    },
-    render() {
-      if (!this.panel?.isConnected) return;
-      const view = this.view;
-      const picker = el("select");
-      picker.setAttribute("aria-label", "Where the servers apply");
-      const dirs = this.workspaces();
-      picker.append(el("option", null, "Everywhere"), ...dirs.map((dir) => el("option", null, dir)));
-      [...picker.options].forEach((option, i) => (option.value = i ? dirs[i - 1] : "global"));
-      picker.value = this.scope;
-      picker.addEventListener("change", () => {
-        this.scope = picker.value;
-        this.render();
-      });
-      const pick = el("div", "setting-row");
-      pick.append(el("span", null, "Applies"), picker);
-
-      const own = this.layer();
-      const ownNames = Object.keys(own).filter((name) => own[name].command || own[name].url);
-      const list = el("div", "ag-mcp-list");
-      if (view.error) list.append(el("p", "ag-source-error", `${view.path} does not parse, so Scribe won't change it: ${view.error}`));
-      if (!ownNames.length) list.append(el("div", "ag-muted", this.scope === "global" ? "No servers yet." : "No servers of this workspace's own."));
-      for (const name of ownNames) list.append(this.row(name, own[name], own));
-
-      const body = [
-        helpHeading(
-          "Servers",
-          "One list for Claude, Cursor and Native threads, in place of each app's own MCP config. Code chats also inherit Keeper from Claude Code when Scribe has no Keeper entry; Cursor threads still load ~/.cursor/mcp.json as well. A workspace's servers apply in that folder and its subfolders, and replace a server of the same name from Everywhere. Changes apply from a thread's next session."
-        ),
-        pick,
-        list,
-      ];
-
-      if (this.scope !== "global") {
-        const box = el("div", "ag-mcp-list");
-        for (const [name, server] of Object.entries(view.file.mcpServers)) {
-          if (ownNames.includes(name)) continue;
-          const off = own[name]?.enabled === false;
-          const row = el("div", "setting-row ag-mcp-row");
-          const label = el("span", "ag-mcp-label");
-          label.append(el("strong", null, name), el("span", "ag-muted", ` · ${server.enabled === false ? "off everywhere" : mcpModes(server, view.defaultModes)}`));
-          const toggle = switchControl(
-            () => !off,
-            () => {
-              const next = { ...own };
-              if (off) delete next[name];
-              else next[name] = { enabled: false };
-              void this.save(next);
-            }
-          );
-          toggle.setAttribute("aria-label", `Use ${name} in this workspace`);
-          row.append(label, toggle);
-          box.append(row);
-        }
-        if (box.children.length) body.push(helpHeading("From Everywhere", "Turn a server off for this workspace only. It stays on everywhere else."), box);
-      }
-
-      const available = this.candidates.filter((c) =>
-        dirKey(c.scope) === dirKey(this.scope) && !Object.hasOwn(own, c.name));
-      if (available.length || this.discoveryError) {
-        const box = el("div", "ag-mcp-list");
-        if (this.discoveryError) box.append(el("p", "ag-source-error", `Could not check Claude Code's servers: ${this.discoveryError}`));
-        for (const c of available) {
-          const row = el("div", "setting-row ag-mcp-row");
-          const label = el("span", "ag-mcp-label");
-          label.append(el("strong", null, c.name), el("code", "ag-mcp-target", c.file), el("code", "ag-mcp-target", mcpTarget(c.server)));
-          const importButton = button("Import", "ag-btn small", async () => {
-            importButton.disabled = true;
-            try {
-              this.view = await api("POST", "/mcp/import", { items: [{ scope: c.scope, name: c.name, server: { ...c.server, approve: "ask" } }] });
-              this.render();
-              notice(`Imported ${c.name}. It asks before each call unless the chat has full access.`);
-            } catch (err) {
-              notice(err.message);
-              importButton.disabled = false;
-            }
-          });
-          importButton.setAttribute("aria-label", `Import ${c.name} from ${c.file}`);
-          row.append(label, importButton);
-          box.append(row);
-        }
-        body.push(helpHeading("Found in Claude Code", "These servers are not in Scribe's list for this scope. Import copies a server here and leaves Claude Code's file unchanged. Imported servers ask before each call, including worker calls, unless the chat has full access; change this in the server's Edit dialog."), box);
-      }
-
-      const actions = el("div", "ag-modal-actions");
-      actions.append(
-        button("Add server…", "ag-btn", () => this.edit(null)),
-        button("Import…", "ag-btn", () => void this.importDialog()),
-        button("Edit JSON…", "ag-btn ghost", () => this.editJson()),
-        button("Saved permissions…", "ag-btn ghost", () => void this.permissionsDialog()),
-        el("span", "ag-grow"),
-        button("Done", "ag-btn primary", () => this.close())
-      );
-      this.panel.replaceChildren(el("h2", "ag-modal-title", "MCP servers"), ...body, el("p", "ag-modal-hint ag-mcp-path", view.path), actions);
-      window.createSelect?.(picker);
-    },
-    row(name, server, layer) {
-      const row = el("div", "setting-row ag-mcp-row");
-      const label = el("span", "ag-mcp-label");
-      const policies = Object.values(server.tools || {});
-      const counted = (policy, word) => {
-        const n = policies.filter((p) => p === policy).length;
-        return n ? `${n} ${n === 1 ? "tool" : "tools"} ${word}` : null;
-      };
-      const meta = [mcpModes(server, this.view.defaultModes), server.approve === "auto" ? "runs without asking" : null, counted("allow", "allowed"), counted("disable", "disabled")].filter(Boolean).join(" · ");
-      label.append(el("strong", null, name), el("span", "ag-muted", ` · ${meta}`), el("code", "ag-mcp-target", mcpTarget(server)));
-      const toggle = switchControl(
-        () => server.enabled !== false,
-        () => void this.save({ ...layer, [name]: { ...server, enabled: server.enabled === false } })
-      );
-      toggle.setAttribute("aria-label", `Use ${name}`);
-      const controls = el("span", "ag-mcp-controls");
-      controls.append(toggle, button("Edit", "ag-btn small", () => this.edit(name)));
-      row.append(label, controls);
-      return row;
     },
     /** Add or change one server in the chosen layer. */
     edit(name) {
@@ -10528,13 +10481,13 @@
       );
     },
     /** Pick servers from other apps to copy into Scribe's list. */
-    async importDialog() {
+    async importDialog(dirs) {
       const { panel, close } = modal("ag-source ag-mcp-import");
       const title = () => el("h2", "ag-modal-title", "Import MCP servers");
       panel.append(title(), el("div", "ag-muted", "Looking…"));
       let candidates = [];
       try {
-        candidates = await this.findImports();
+        candidates = await this.findImports(dirs);
       } catch (err) {
         panel.replaceChildren(title(), el("p", "ag-source-error", err.message));
         return;
@@ -10605,7 +10558,7 @@
           return;
         }
         close();
-        this.render();
+        this.changed?.();
         notice(`Imported ${picked.size} server${picked.size === 1 ? "" : "s"}.`);
         const cursor = [...picked].filter((c) => c.source === "cursor");
         if (cursor.length) this.cursorCleanupDialog(cursor);
@@ -10659,10 +10612,11 @@
           allowlists.open();
         })
       );
+      // MCP servers, skills, hooks and the rest live on the harness page (harness.js).
       actions.append(
-        button("MCP servers…", null, () => {
+        button("Advanced settings…", null, () => {
           this.close();
-          void mcpServers.open();
+          window.scribeHarness?.open();
         })
       );
       providers.append(
@@ -10918,28 +10872,6 @@
         )
       );
 
-      const hooks = el("section", "settings-section");
-      this.hookList = el("div", "ag-hook-rules");
-      const hookActions = el("div", "settings-actions");
-      hookActions.append(button("Add rule", "ag-btn", () => editHookRule(null)));
-      hooks.append(
-        helpHeading(
-          "Hooks",
-          "A rule watches every chat: your messages, the agent's text and thinking, its tool calls and their results. When it matches it can mark the item, tell the agent something, have you approve the tool call, or block it. A rule only ever tightens what a thread may do. Turn them off for one thread from its menu."
-        ),
-        this.hookList,
-        hookActions
-      );
-      const coverage = el("section", "settings-section");
-      this.hookCoverage = el("div", "ag-hook-coverage");
-      coverage.append(
-        helpHeading(
-          "What a hook can hold",
-          "Ask and Block act before a tool call runs only where the provider lets Scribe hold the call. A call that is only seen is already running: Block then stops the turn, and Ask can only mark the call."
-        ),
-        this.hookCoverage
-      );
-
       const keys = el("section", "settings-section");
       const modeTrack = el("div", "button-track text-track");
       modeTrack.setAttribute("role", "group");
@@ -10958,14 +10890,13 @@
       for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
       keys.append(el("h3", null, "Keys"), list);
 
-      panel.append(title, providers, sdks, cursor, helpers, forkSummaries, memory, instructions, hooks, coverage, sources, usage, chat, keys);
+      panel.append(title, providers, sdks, cursor, helpers, forkSummaries, memory, instructions, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
         { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Instructions", sections: [instructions] },
         { label: "Memory", sections: [memory] },
         { label: "Helpers & utilities", sections: [helpers, utilities, forkSummaries] },
-        { label: "Hooks", sections: [hooks, coverage] },
         { label: "Keys", sections: [keys] },
       ], {
         close: () => this.close(),
@@ -10977,51 +10908,6 @@
         } },
       });
 
-    },
-    /** The Hooks category: the user's rules, and what each provider lets a rule hold. */
-    async renderHooks() {
-      let view;
-      try {
-        view = await api("GET", "/hooks");
-      } catch (err) {
-        this.hookList.replaceChildren(el("div", "ag-muted", err.message));
-        return;
-      }
-      S.config.prefs = { ...prefs(), hookRules: view.rules };
-      this.hookList.replaceChildren();
-      if (!view.rules.length) this.hookList.append(el("div", "ag-muted", "None yet."));
-      for (const rule of view.rules) {
-        const row = el("div", "setting-row ag-hook-rule");
-        const label = el("span", "ag-hook-text");
-        const needsClassifier = rule.match === "question" && !view.classifier;
-        label.append(
-          el("strong", null, rule.pattern),
-          el("span", "ag-muted", ` · ${HOOK_MATCH[rule.match]} · ${HOOK_EVENT[rule.event]} · ${HOOK_ACTION[rule.action].label}${needsClassifier ? " · needs a classifier (General settings)" : ""}`)
-        );
-        const on = switchControl(
-          () => rule.enabled,
-          () => {
-            rule.enabled = !rule.enabled;
-            void saveHookRules(view.rules).catch((err) => {
-              notice(err.message);
-              void this.renderHooks();
-            });
-          }
-        );
-        on.setAttribute("aria-label", `Rule ${rule.pattern}`);
-        row.append(label, on, button("Edit", "ag-btn small", () => editHookRule(rule, view.rules)));
-        this.hookList.append(row);
-      }
-      const table = el("table", "ag-hook-table");
-      const head = el("tr");
-      head.append(el("th", null, "Provider"), el("th", null, "Held before it runs"), el("th", null, "Only seen"));
-      table.append(head);
-      for (const row of view.coverage) {
-        const tr = el("tr");
-        tr.append(el("th", null, row.label), el("td", null, row.held), el("td", row.observed ? null : "ag-muted", row.observed || "Nothing"));
-        table.append(tr);
-      }
-      this.hookCoverage.replaceChildren(table);
     },
     renderCycleModes() {
       for (const [id, control] of this.modeButtons || []) {
@@ -11225,7 +11111,6 @@
       this.renderStatus();
       this.renderCycleModes();
       void this.renderSources();
-      void this.renderHooks();
       this.renderSummarizer();
       void window.scribeMemories?.store.load();
       this.categories.open();
@@ -12510,7 +12395,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

@@ -5,7 +5,8 @@ import test from "node:test";
 import { chromium } from "playwright-core";
 import { launchChromium } from "../chromium.js";
 
-test("MCP dialog discovers Claude servers and imports one with its scope and ask approval", async (t) => {
+/** The harness page's MCP section is the one place for Scribe's MCP list (#823); its dialogs are agent.js's. */
+test("harness MCP section imports Claude servers, edits, imports from other apps and revokes permissions", async (t) => {
   let browser;
   try {
     browser = process.env.SCRIBE_TEST_CHROMIUM
@@ -17,9 +18,10 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
   }
   try {
     const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const view = { path: "scribe/mcp.json", defaultModes: ["code", "plan", "ask"], file: { mcpServers: {} as Record<string, unknown>, workspaces: {} as Record<string, any> } };
+    const view = { path: "scribe/mcp.json", defaultModes: ["code", "plan", "ask"], file: { mcpServers: {} as Record<string, any>, workspaces: {} as Record<string, any> } };
     const candidate = (name: string, scope = "global", source = "claude") => ({ source, name, scope, file: scope === "global" ? "home/.claude.json" : `${scope}/.mcp.json`, server: { command: name, approve: "auto" } });
     const candidates = [candidate("keeper"), candidate("shared", "/project"), candidate("cursor-only", "global", "cursor"), candidate("codex-only", "global", "codex")];
     const imported: any[] = [];
@@ -30,13 +32,19 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     const revoked: any[] = [];
     const layerSaves: any[] = [];
     let fail = false;
+    const rows = (cwd: string | null) => {
+      const layers: [string, Record<string, any>][] = [["global", view.file.mcpServers]];
+      const local = Object.values(view.file.workspaces).find((w: any) => w.path === cwd);
+      if (local) layers.push([local.path, local.mcpServers]);
+      return layers.flatMap(([layer, servers]) => Object.entries(servers).map(([name, server]) => ({ name, layer, target: server.command, approve: server.approve, enabled: true, editable: true, active: true })));
+    };
     await page.route("http://mcp.test/**", async (route) => {
       const url = new URL(route.request().url());
       if (!url.pathname.startsWith("/api/agent/")) return route.fulfill({ contentType: "text/html", body: "<main></main>" });
       if (url.pathname.includes("/harness/") || url.pathname.endsWith("/config") || url.pathname.endsWith("/threads")) {
         const data = url.pathname.endsWith("/context")
-          ? { thread: route.request().postDataJSON(), own: { mcpDelivery: "" }, servers: [], leftOut: [], duplicates: [] }
-          : { prefs: {}, threads: [], totals: {}, toolKinds: [], tools: [], mcp: [], skills: [], folders: [], memories: [] };
+          ? { thread: route.request().postDataJSON(), own: { mcpDelivery: "" }, servers: rows(route.request().postDataJSON().cwd), leftOut: [], duplicates: [] }
+          : { prefs: { recentWorkspaces: ["/project"] }, threads: [], totals: {}, toolKinds: [], tools: [], mcp: [], skills: [], folders: [], memories: [] };
         return route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
       }
       if (url.pathname.endsWith("/mcp/permissions")) {
@@ -76,41 +84,45 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
 
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
     await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.mcpTest = mcpServers;"));
-    await page.evaluate(() => (window as any).mcpTest.open());
-    assert.equal(await page.getByRole("button", { name: "Import keeper from home/.claude.json" }).count(), 1);
-    assert.equal(await page.getByText("cursor-only", { exact: true }).count(), 0);
-    await page.getByRole("button", { name: "Import keeper from home/.claude.json" }).click();
-    await page.getByRole("button", { name: "Edit", exact: true }).waitFor();
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("mcp"));
+    const harness = page.locator(".agent-harness");
+    const importKeeper = harness.getByRole("button", { name: "Import keeper from home/.claude.json" });
+    await importKeeper.waitFor();
+    assert.equal(await harness.getByText("cursor-only", { exact: true }).count(), 0);
+    assert.match(await harness.innerText(), /scribe\/mcp\.json/);
+    await importKeeper.click();
+    await importKeeper.waitFor({ state: "detached" });
     assert.deepEqual(imported[0], { name: "keeper", scope: "global", server: { command: "keeper", approve: "ask" } });
-    assert.equal(await page.getByRole("button", { name: "Import keeper from home/.claude.json" }).count(), 0);
     // The working folder is editable and cleared when emptied. Wait for the editor to focus Command first.
     const editor = page.locator(".ag-mcp-edit");
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    const edit = harness.getByRole("button", { name: "Edit", exact: true });
+    await edit.click();
     await page.waitForFunction(() => (document.activeElement as HTMLInputElement | null)?.placeholder === "e.g. npx");
     await editor.getByLabel("Working folder").fill("C:\\keeper");
     await editor.getByRole("button", { name: "Save", exact: true }).click();
     await editor.waitFor({ state: "detached" });
     assert.equal(layerSaves[0].servers.keeper.cwd, "C:\\keeper");
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await edit.click();
     await page.waitForFunction(() => (document.activeElement as HTMLInputElement | null)?.placeholder === "e.g. npx");
     assert.equal(await editor.getByLabel("Working folder").inputValue(), "C:\\keeper");
     await editor.getByLabel("Working folder").fill("");
     await editor.getByRole("button", { name: "Save", exact: true }).click();
     await editor.waitFor({ state: "detached" });
     assert.equal("cwd" in layerSaves[1].servers.keeper, false);
-    // The discovered workspace is selectable even when Scribe has no entries there yet.
-    await page.getByRole("combobox", { name: "Where the servers apply" }).selectOption("/project");
-    const shared = page.getByRole("button", { name: "Import shared from /project/.mcp.json" });
+    // A workspace's own Claude Code servers show once it is picked.
+    await harness.getByRole("combobox", { name: "Workspace" }).selectOption("/project");
+    const shared = harness.getByRole("button", { name: "Import shared from /project/.mcp.json" });
     fail = true;
     await shared.click();
     await page.getByText("write failed", { exact: true }).waitFor();
     assert.equal(await shared.isEnabled(), true);
     fail = false;
     await shared.click();
-    await page.getByRole("button", { name: "Edit", exact: true }).waitFor();
+    await shared.waitFor({ state: "detached" });
     assert.equal(imported[1].scope, "/project");
     assert.equal(imported[1].server.approve, "ask");
-    await page.getByRole("button", { name: "Import…", exact: true }).click();
+    await harness.getByRole("button", { name: "Import…", exact: true }).click();
     const importer = page.locator(".ag-mcp-import");
     await importer.getByRole("checkbox", { name: "Codex", exact: true }).waitFor();
     assert.match(await importer.innerText(), /codex-only/);
@@ -119,7 +131,12 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await importer.waitFor({ state: "detached" });
     assert.equal(imported[2].name, "codex-only");
     assert.equal(imported[2].scope, "global");
-    await page.getByRole("button", { name: "Saved permissions…", exact: true }).click();
+    await harness.getByRole("button", { name: "Edit JSON…", exact: true }).click();
+    const json = page.locator(".ag-mcp-json");
+    assert.match(await json.locator("textarea").inputValue(), /codex-only/);
+    await json.getByRole("button", { name: "Cancel", exact: true }).click();
+    await json.waitFor({ state: "detached" });
+    await harness.getByRole("button", { name: "Saved permissions…", exact: true }).click();
     const permissions = page.locator(".ag-mcp").last();
     await permissions.getByText("Tool: read · All threads", { exact: true }).waitFor();
     assert.match(await permissions.innerText(), /All tools · Thread: My project/);
@@ -135,14 +152,6 @@ test("MCP dialog discovers Claude servers and imports one with its scope and ask
     await permissions.getByRole("button", { name: /Revoke Unavailable server/ }).click();
     await permissions.getByText("No saved permissions.", { exact: true }).waitFor();
     assert.deepEqual(revoked[1], { key: "b".repeat(64), thread: "thread-a" });
-    // app.js routes Escape to scribeChat.escape(); this fixture has no app.js.
-    await page.evaluate(() => (window as any).scribeChat.escape());
-    await page.evaluate(() => (window as any).mcpTest.close());
-    assert.equal(await page.locator(".ag-mcp").count(), 0);
-    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
-    await page.evaluate(() => (window as any).scribeHarness.open("mcp"));
-    await page.getByRole("button", { name: "Saved permissions…", exact: true }).click();
-    await page.locator(".ag-mcp").getByText("No saved permissions.", { exact: true }).waitFor();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

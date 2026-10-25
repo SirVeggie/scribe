@@ -481,7 +481,7 @@ export function ownContext(thread: Pick<Thread, "provider" | "mode" | "cwd">, op
         loads: [
           "Claude Code's system prompt and its built-in tools" + (pages ? (ws ? " (Pages mode: Read, Grep, Glob, web, Skill and TodoWrite)" : " (Pages mode: web, Skill and TodoWrite only)") : ""),
           pages && !ws ? "User settings only (~/.claude): CLAUDE.md, skills, permissions" : "User, project and local settings: CLAUDE.md files, skills, agents, permissions",
-          opts.claudeHooks ? "Hooks from settings files and plugins" : "No hooks from settings files or plugins (off in Agent settings)",
+          opts.claudeHooks ? "Hooks from settings files and plugins" : "No hooks from settings files or plugins (off in Agent harness → Hooks)",
         ],
         files: [...instructionFile(path.join(home, ".claude", "CLAUDE.md")), ...(ws ? [...instructionFile(path.join(ws, "CLAUDE.md")), ...instructionFile(path.join(ws, "CLAUDE.local.md")), ...instructionFile(path.join(ws, ".claude", "CLAUDE.md"))] : [])],
       };

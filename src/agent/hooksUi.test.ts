@@ -59,13 +59,11 @@ async function openHooks(t: TestContext) {
   await page.goto("http://hooks.test/");
 
   const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-  await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.hooksTest = { agentSettings, editHookRule, hookFlags, S };"));
+  await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.hooksTest = { hookSettings, editHookRule, hookFlags, S };"));
   await page.evaluate(async () => {
-    const { agentSettings } = (window as any).hooksTest;
-    agentSettings.hookList = document.createElement("div");
-    agentSettings.hookCoverage = document.createElement("div");
-    document.querySelector("main")!.append(agentSettings.hookList, agentSettings.hookCoverage);
-    await agentSettings.renderHooks();
+    const { hookSettings } = (window as any).hooksTest;
+    hookSettings.mount(document.querySelector("main")!);
+    await hookSettings.render();
   });
   return { browser, page, state, puts };
 }
