@@ -31,7 +31,7 @@ async function chatPage() {
   `);
   assert.notEqual(exposed, agent, "boot() is replaced");
   await loadShellScripts(page, {
-    scripts: [...chatScripts, "/vendor/marked.js", "/vendor/purify.js", "/vendor/highlight.js", "agent.js"],
+    scripts: [...chatScripts, "/vendor/marked.js", "/vendor/purify.js", "/vendor/highlight.js", "/vendor/scribe-md.js", "agent.js"],
     transform: (name, source) => (name === "agent.js" ? exposed : source),
   });
   return { browser, page, errors };
