@@ -5303,7 +5303,8 @@ html.tight-small .agent-full {
   color: var(--muted);
 }
 
-.ag-ws-remember input[type="checkbox"] {
+.ag-ws-remember input[type="checkbox"],
+.ag-check input[type="checkbox"] {
   appearance: none;
   flex: none;
   width: 14px;
@@ -5318,12 +5319,14 @@ html.tight-small .agent-full {
   transition: box-shadow var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 
-.ag-ws-remember input[type="checkbox"]:checked {
+.ag-ws-remember input[type="checkbox"]:checked,
+.ag-check input[type="checkbox"]:checked {
   background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat;
   box-shadow: none;
 }
 
-.ag-ws-remember input[type="checkbox"]:focus-visible {
+.ag-ws-remember input[type="checkbox"]:focus-visible,
+.ag-check input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -6040,6 +6043,9 @@ html.tight-small .agent-full {
   flex-direction: column;
   max-height: 32vh;
   overflow-y: auto;
+  /* Room for the scrollbar beside the dropdowns. */
+  padding-right: 12px;
+  scrollbar-gutter: stable;
 }
 
 .ag-mcp-tool {
