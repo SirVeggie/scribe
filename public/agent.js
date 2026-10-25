@@ -7347,7 +7347,15 @@
     if (found) main.append(el("span", "ag-row-found", found));
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
-    row.dataset.tooltip = name;
+    // Measure the live title: rows are patched in place and the pane can be resized.
+    const titleTip = (event) => {
+      const row = event.currentTarget;
+      const title = row.querySelector(".ag-row-title");
+      if (title && title.scrollWidth > title.clientWidth + 1) row.dataset.tooltip = title.textContent;
+      else row.removeAttribute("data-tooltip");
+    };
+    row.addEventListener("pointerover", titleTip);
+    row.addEventListener("focusin", titleTip);
     const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
     wrap.dataset.key = t.id;
     // The row stays in the list and is patched as the thread changes, so its handlers read the thread as it is now.
