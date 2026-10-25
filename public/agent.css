@@ -709,10 +709,11 @@ html.tight-small .agent-pane {
   box-shadow: none;
 }
 
-.ag-queued-act .ag-ico,
-.ag-queued-act .ag-ico svg {
+.ag-queued-act .ag-ico {
   width: 12px;
   height: 12px;
+  --agi-w: 12px;
+  --agi-h: 12px;
 }
 
 @media (hover: hover) {
@@ -2052,9 +2053,9 @@ textarea.ag-q-input {
   color: var(--accent);
 }
 
-.ag-qform-ico svg {
-  width: 17px;
-  height: 17px;
+.ag-qform-ico {
+  --agi-w: 17px;
+  --agi-h: 17px;
 }
 
 .ag-qform-body {
@@ -2764,9 +2765,9 @@ textarea.ag-q-input {
   white-space: nowrap;
 }
 
-.ag-row-branch svg {
-  width: 11px;
-  height: 11px;
+.ag-row-branch .agi {
+  --agi-w: 11px;
+  --agi-h: 11px;
   flex: none;
 }
 
@@ -3546,10 +3547,9 @@ html.fx-off .ag-slash { transition: none; }
   color: var(--muted);
 }
 
-.ag-row-pen svg {
-  width: 14px;
-  height: 14px;
-  display: block;
+.ag-row-pen {
+  --agi-w: 14px;
+  --agi-h: 14px;
 }
 
 .ag-row.on .ag-row-pen {

@@ -81,10 +81,40 @@
     return node;
   }
 
+  /*
+   * An icon is one span whose ::before is painted through the icon's SVG as a CSS mask, in currentColor.
+   * A long transcript shows thousands of icons: inline SVG cost 2-4 nodes and an HTML parse each (#362).
+   * Each icon gets a class with its mask and size, at zero specificity so callers' CSS can resize it with
+   * --agi-w / --agi-h.
+   */
+  let iconSheet = null;
+  function iconClass(name) {
+    const key = ICONS[name] ? name : "other";
+    if (!iconSheet) {
+      iconSheet = new CSSStyleSheet();
+      iconSheet.insertRule(
+        `.agi::before { content: ""; display: block; flex: none; width: var(--agi-w); height: var(--agi-h); background: currentColor;` +
+          ` -webkit-mask: var(--agi) center / contain no-repeat; mask: var(--agi) center / contain no-repeat; forced-color-adjust: none; }`
+      );
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, iconSheet];
+      iconSheet.done = new Set();
+    }
+    if (!iconSheet.done.has(key)) {
+      iconSheet.done.add(key);
+      const svg = ICONS[key].replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+      const tag = svg.slice(0, svg.indexOf(">"));
+      const w = /\swidth="([\d.]+)"/.exec(tag)?.[1] || 13;
+      const h = /\sheight="([\d.]+)"/.exec(tag)?.[1] || w;
+      iconSheet.insertRule(
+        `:where(.agi-${key}) { --agi: url("data:image/svg+xml,${encodeURIComponent(svg)}"); --agi-w: ${w}px; --agi-h: ${h}px; }`,
+        iconSheet.cssRules.length
+      );
+    }
+    return `agi agi-${key}`;
+  }
+
   function icon(name, cls = "ag-ico") {
-    const span = el("span", cls);
-    span.innerHTML = ICONS[name] || ICONS.other;
-    return span;
+    return el("span", `${cls} ${iconClass(name)}`);
   }
 
   function button(label, cls, onClick, title, tooltip = true) {
