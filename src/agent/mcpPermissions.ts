@@ -6,9 +6,9 @@ import { serversKey, type ResolvedMcpServer } from "./mcpConfig.js";
 import type { ApprovalOption } from "./types.js";
 
 export const mcpApprovalOptions: ApprovalOption[] = [
-  { id: "whitelist", label: "Whitelist tool", description: "Always allow this tool for this MCP server, across threads.", kind: "allow_always" },
-  { id: "mcp", label: "Allow MCP", description: "Allow every tool from this MCP server for this thread.", kind: "allow_always" },
-  { id: "allow", label: "Allow", kind: "allow_once" },
+  { id: "allow", label: "Allow once", kind: "allow_once" },
+  { id: "mcp", label: "Allow this server for this thread", description: "Every tool from this MCP server.", kind: "allow_always" },
+  { id: "whitelist", label: "Always allow this tool", description: "In every thread, for this MCP server.", kind: "allow_always" },
   { id: "reject", label: "Deny", kind: "reject_once" },
 ];
 

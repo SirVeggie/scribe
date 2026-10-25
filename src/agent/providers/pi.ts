@@ -740,11 +740,12 @@ class PiSession implements ProviderSession {
         toolId: event.toolCallId,
         // Outside the workspace it is not a plain edit: "edits" does not cover it.
         tool: within ? "edit" : "other",
+        access: "write",
         paths: [target],
         title: within ? `${name === "write" ? "Write" : "Edit"} ${rel}` : `${name === "write" ? "Write" : "Edit"} outside the workspace: ${target}`,
         options: [
-          { id: "allow", label: "Allow", kind: "allow_once" },
-          { id: "reject", label: "Reject", kind: "reject_once" },
+          { id: "allow", label: "Allow once", kind: "allow_once" },
+          { id: "reject", label: "Deny", kind: "reject_once" },
         ],
       };
     } else {
@@ -754,8 +755,9 @@ class PiSession implements ProviderSession {
         tool: "execute",
         title: "Run command",
         detail: command,
+        command,
         options: [
-          { id: "allow", label: "Allow", kind: "allow_once" },
+          { id: "allow", label: "Allow once", kind: "allow_once" },
           { id: "reject", label: "Deny", kind: "reject_once" },
         ],
       };

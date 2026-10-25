@@ -64,6 +64,10 @@ export type ApprovalRequest = {
   detail?: string;
   /** All file targets of an edit, delete or move; relative paths use the thread's cwd. */
   paths?: string[];
+  /** What the ask does to its paths, when its tool kind does not say (an edit outside the workspace is "other"). */
+  access?: "read" | "write";
+  /** The command an execute ask runs, for Scribe's command grants (toolGrants.ts). */
+  command?: string;
   options: ApprovalOption[];
 };
 

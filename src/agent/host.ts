@@ -73,6 +73,7 @@ import { sumThreadUsage, sumUsageTree } from "./usage.js";
 import { likePatterns, matchMessages, searchWords, type ThreadMessageHit } from "./threadSearch.js";
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
+import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, withGrantOptions } from "./toolGrants.js";
 import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, saveMemory, type Memory } from "./memory.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
@@ -332,39 +333,14 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
   return recap + origin + pageEdits + contextBlock(msg.context) + guides + files + text;
 }
 
-/** Resolve new file targets through their nearest existing parent, including junctions. */
-function writeRealPath(target: string): string {
-  try {
-    return fs.realpathSync.native(target);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    // A dangling link is not a new file: its destination is unknown, so ask the user.
-    try { fs.lstatSync(target); throw new Error("Unresolved file link"); }
-    catch (statErr) { if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") throw statErr; }
-    const parent = path.dirname(target);
-    if (parent === target) throw err;
-    return path.join(writeRealPath(parent), path.basename(target));
-  }
-}
-
 function editsInsideWorkspace(t: Thread, paths: string[] | undefined): boolean {
-  const cwd = openWorktree(t)?.path ?? t.cwd;
+  const cwd = threadCwd(t);
   if (!cwd || !paths?.length) return false;
   try {
     const root = fs.realpathSync.native(cwd);
     return paths.every((file) => {
-      if (typeof file !== "string" || !file.trim() || file.includes("\0")) return false;
-      // Drive-relative Windows paths depend on process state, not the thread's cwd.
-      if (process.platform === "win32" && /^[a-z]:($|[^\\/])/i.test(file)) return false;
-      const inputRoot = path.parse(file).root;
-      let target = inputRoot ? fs.realpathSync.native(path.resolve(cwd, inputRoot)) : root;
-      // Resolve each link before processing '..'; lexical normalization could hide an escape.
-      for (const part of file.slice(inputRoot.length).split(process.platform === "win32" ? /[\\/]/ : /\//)) {
-        if (!part || part === ".") continue;
-        target = part === ".." ? path.dirname(target) : writeRealPath(path.join(target, part));
-      }
-      const rel = path.relative(root, target);
-      return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+      const target = realTarget(cwd, file);
+      return target !== null && pathInside(root, target);
     });
   } catch {
     // Missing roots, permissions errors and unresolvable links must never grant an edit.
@@ -1061,6 +1037,7 @@ export class AgentHost {
       // Older prefs kept web as a boolean.
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
+      commandAllowlist: cleanCommandAllowlist(saved.commandAllowlist),
       searxngUrl: cleanSearxngUrl(saved.searxngUrl),
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
@@ -1098,6 +1075,7 @@ export class AgentHost {
       if (patch.searxngUrl && !next.searxngUrl) throw new Error("The SearXNG address must be an http(s) URL.");
     }
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
+    if (patch.commandAllowlist !== undefined) next.commandAllowlist = cleanCommandAllowlist(patch.commandAllowlist);
     this.db.setSetting("prefs", next);
     if (patch.usageWindowStarts !== undefined) this.usageWindowStarts.settingsChanged();
     if (patch.customModes !== undefined) this.refreshCustomModes(next);
@@ -1763,6 +1741,22 @@ export class AgentHost {
     return true;
   }
 
+  /** Keep what one of Scribe's lasting tool options granted (#743): on the thread, or on the command allowlist. */
+  recordToolGrant(threadId: string, req: ApprovalRequest, optionId: string): void {
+    const thread = this.threads.get(threadId);
+    if (!thread) return;
+    const grant = grantFor(thread, req, optionId);
+    if (!grant) return;
+    if ("allowlist" in grant) {
+      const list = this.prefs().commandAllowlist;
+      if (!list.includes(grant.allowlist)) this.setPrefs({ commandAllowlist: [...list, grant.allowlist] });
+      return;
+    }
+    thread.toolGrants = addToolGrants(thread.toolGrants, grant.grants);
+    this.db.saveThread(thread);
+    this.emitThread(threadId);
+  }
+
   /** Take back a permission the user granted the thread (a web domain, any website, a readable thread scope, or starting helpers unasked). key comes from the view's grants. */
   revokeGrant(id: string, key: string): ThreadView {
     const thread = this.requireThread(id);
@@ -1772,6 +1766,7 @@ export class AgentHost {
     thread.threadGrants = next.threadGrants;
     if (next.pageGrants) thread.pageGrants = next.pageGrants;
     if(next.pluginGrants)thread.pluginGrants=next.pluginGrants;
+    if (next.toolGrants) thread.toolGrants = next.toolGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
     this.db.saveThread(thread);
     this.sessions.get(id)?.update(this.sessionThread(thread));
@@ -2549,8 +2544,11 @@ export class AgentHost {
    * those, nobody is there to answer, so it is refused with a note the agent can act on.
    */
   private approveBetweenTurns(threadId: string, req: ApprovalRequest): Promise<ApprovalDecision> {
-    const auto = autoApproval(this.threads.get(threadId), req);
+    const t = this.threads.get(threadId);
+    const auto = autoApproval(t, req);
     if (auto) return auto;
+    const allow = req.options.find((o) => o.kind === "allow_once");
+    if (t && allow && grantAllows(t, req, this.prefs().commandAllowlist)) return Promise.resolve({ optionId: allow.id });
     const reject = req.options.find((o) => o.kind === "reject_once") ?? req.options.find((o) => o.kind === "reject_always");
     const note = "The user was not asked: this ran in the background after the turn ended. Leave it out, and mention it in your result.";
     return reject ? Promise.resolve({ optionId: reject.id, note }) : Promise.reject(new Error(note));
@@ -2583,8 +2581,8 @@ export class AgentHost {
       .join("\n");
     const options: ApprovalOption[] = [
       { id: "once", label: "Allow once", kind: "allow_once" },
-      ...(domains.length ? [{ id: "domain", label: domains.length === 1 ? `Allow ${domains[0]}` : "Allow these domains", kind: "allow_always" as const }] : []),
-      { id: "session", label: "Allow for this thread", kind: "allow_always" },
+      ...(domains.length ? [{ id: "domain", label: domains.length === 1 ? `Allow ${domains[0]} for this thread` : "Allow these domains for this thread", kind: "allow_always" as const }] : []),
+      { id: "session", label: "Allow all websites for this thread", kind: "allow_always" },
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
@@ -2743,7 +2741,7 @@ export class AgentHost {
     if (allowThread && plugin && grants.includes(plugin)) return {allowed:true};
     this.closeBlocks(run);
     const options: ApprovalOption[] = [
-      {id:"allow",label:"Allow",kind:"allow_once"},
+      {id:"allow",label:"Allow once",kind:"allow_once"},
       ...(allowThread ? [{id:"thread",label:"Allow for this thread",kind:"allow_always" as const}] : []),
       {id:"deny",label:"Deny",kind:"reject_once"},
     ];
@@ -3316,7 +3314,7 @@ export class AgentHost {
     const run = this.runs.get(parent.id);
     if (!run) throw new Error("With no turn running the user cannot be asked to allow a helper.");
     const options: ApprovalOption[] = [
-      { id: "once", label: "Allow", kind: "allow_once" },
+      { id: "once", label: "Allow once", kind: "allow_once" },
       { id: "thread", label: "Allow for this thread", kind: "allow_always" },
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
@@ -3348,7 +3346,7 @@ export class AgentHost {
     const run = this.runs.get(parent.id);
     if (!run) throw new Error("This thread has read Trusted only content, and with no turn running the user cannot be asked to share it with an untrusted helper. Do the work yourself.");
     const options: ApprovalOption[] = [
-      { id: "allow", label: "Allow", kind: "allow_once" },
+      { id: "allow", label: "Allow once", kind: "allow_once" },
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
@@ -4353,6 +4351,8 @@ export class AgentHost {
             // The user approved this very call a moment ago, when the hook asked.
             if (allow) return Promise.resolve({ optionId: allow.id });
           }
+          // A file, folder or command the user already allowed for this thread, or a command on their allowlist (#743).
+          if (t && allow && grantAllows(t, req, host.prefs().commandAllowlist)) return { optionId: allow.id };
           if (t?.provider === "pi" && t.approval === "auto" && req.tool === "execute" && !req.humanOnly && allow) {
             const workspace = t.worktree?.path ?? t.cwd;
             const review = await reviewNativeCommand(
@@ -4367,6 +4367,7 @@ export class AgentHost {
             }
             req = { ...req, detail: [req.detail, review.reason].filter(Boolean).join("\n\n") };
           }
+          const extra = t && allow ? grantOptions(t, req) : [];
           const item = host.addItem(threadId, turnId, {
             kind: "approval",
             requestId: "",
@@ -4374,10 +4375,16 @@ export class AgentHost {
             tool: req.tool,
             title: req.title,
             ...(req.detail ? { detail: req.detail } : {}),
-            options: req.options,
+            options: withGrantOptions(req.options, extra),
             status: "pending",
           });
-          return waitFor<ApprovalDecision>("approval", item.id, wait);
+          const decision = await waitFor<ApprovalDecision>("approval", item.id, wait);
+          // One of Scribe's lasting options: keep the grant, and answer the provider with its own allow.
+          if (allow && extra.some((o) => o.id === decision.optionId)) {
+            host.recordToolGrant(threadId, req, decision.optionId);
+            return { optionId: allow.id };
+          }
+          return decision;
         };
         /** Ask, refused with `timeout` once `waitMs` passes unanswered (null: wait for the user). */
         const decideBy = (asked: ApprovalRequest, reason: string | undefined, waitMs: number | null, timeout: string): Promise<ApprovalDecision> => {

@@ -529,6 +529,14 @@ export function permissionModeFor(thread: Pick<Thread, "mode" | "approval">): Pe
   }
 }
 
+/**
+ * The label for applying Claude's suggested permission rules: they last for the session when every
+ * one is kept in the session, and otherwise go into a settings file.
+ */
+export function suggestionsLabel(suggestions: unknown[]): string {
+  return suggestions.every((s) => isPlainRecord(s) && s.destination === "session") ? "Allow for this session" : "Always allow";
+}
+
 function toolKind(name: string): ToolKind {
   if (name.startsWith("mcp__")) return "mcp";
   switch (name) {
@@ -1292,8 +1300,8 @@ class ClaudeSession implements ProviderSession {
     const permissions = new McpPermissions();
     if (mcpServer && mcpTool && permissions.allows(mcpServer, mcpTool, this.thread.id)) return { behavior: "allow", updatedInput: input };
     const options = mcpServer ? mcpApprovalOptions : [
-      { id: "allow", label: "Allow", kind: "allow_once" as const },
-      ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: "Always allow", kind: "allow_always" as const }] : []),
+      { id: "allow", label: "Allow once", kind: "allow_once" as const },
+      ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: suggestionsLabel(opts.suggestions), kind: "allow_always" as const }] : []),
       { id: "deny", label: "Deny", kind: "reject_once" as const },
     ];
     const detail = [described.detail ?? (name === "Edit" || name === "Write" ? undefined : summarizeInput(input)), opts.decisionReason, opts.blockedPath ? `Path: ${opts.blockedPath}` : undefined]
@@ -1306,7 +1314,8 @@ class ClaudeSession implements ProviderSession {
           tool: toolKind(name),
           title: opts.title || described.title,
           detail: detail || undefined,
-          paths: described.paths,
+          // Searches name their folder, and a call outside the allowed folders its blocked path: Scribe's folder grants need them (#743).
+          paths: described.paths ?? (str(input.path) ? [str(input.path)!] : opts.blockedPath ? [opts.blockedPath] : undefined),
           options,
           // Only the in-process registration counts, not a same-named server from the user's config.
           boardTool: name.startsWith(`mcp__${BOARD_SERVER}__`) && (opts as { mcpServer?: { source?: string } }).mcpServer?.source === "sdk",

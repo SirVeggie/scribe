@@ -12,7 +12,7 @@ test("MCP grants persist with the requested tool and thread scopes", () => {
     const file = path.join(dir, "permissions.json");
     const permissions = new McpPermissions(file);
     const server = resolveServer("echo", "global", { command: "node", args: ["echo.js"] })!;
-    assert.deepEqual(mcpApprovalOptions.map((o) => o.label), ["Whitelist tool", "Allow MCP", "Allow", "Deny"]);
+    assert.deepEqual(mcpApprovalOptions.map((o) => o.label), ["Allow once", "Allow this server for this thread", "Always allow this tool", "Deny"]);
     assert.equal(permissions.grant(server, "read", "a", "allow"), true);
     assert.equal(permissions.allows(server, "read", "a"), false);
     assert.equal(permissions.grant(server, "read", "a", "reject"), false);

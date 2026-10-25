@@ -32,6 +32,8 @@ export type Prefs = {
   web: WebAccess;
   /** Domains a thread with limited web access may search and fetch (subdomains included). */
   webAllowlist: string[];
+  /** Commands (their first words) Scribe runs without asking in every thread: Native's and Cursor's host shell (#743). */
+  commandAllowlist: string[];
   /** A SearXNG instance (base URL) that gives Pi threads, and Cursor threads without full web, a web_search tool. "" for none. */
   searxngUrl: string;
   /**
@@ -90,6 +92,7 @@ export const DEFAULT_PREFS: Prefs = {
   approvals: {},
   web: "on",
   webAllowlist: DEFAULT_WEB_ALLOWLIST,
+  commandAllowlist: [],
   searxngUrl: "",
   claudeHooks: false,
   cursorHostShell: false,

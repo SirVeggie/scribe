@@ -15,7 +15,7 @@ Unstructured `guardianWarning` explanations stay in diagnostics because they als
 repeat the allowed/denied decisions shown by structured review notifications.
 Completed denials offer a human-only approval prompt with the action, directory,
 risk and rationale. Approve one retry records the native denial override and
-starts a new turn to retry the approved action through Auto-review. Keep denied,
+starts a new turn to retry the approved action through Auto-review. Deny,
 cancellation, disconnection or an override error cannot start a retry. Pending
 human decisions survive native turn completion or failure. Full and Edits do not
 automatically grant these overrides; Pages retains its tool refusals.

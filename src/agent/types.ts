@@ -180,6 +180,8 @@ export type Thread = {
   pageGrants?: ThreadPageGrant[];
   /** Plugin Ask methods the user allowed for this thread; revocable from its permissions menu. */
   pluginGrants?: string[];
+  /** Files, folders and commands the user allowed for the rest of the thread from a tool ask (toolGrants.ts, #743). */
+  toolGrants?: ToolGrant[];
   /** Scopes the thread had before it followed a page it showed: they keep counting for page access (#269). */
   formerScopes?: ThreadScope[];
   /**
@@ -462,6 +464,14 @@ export type Turn = {
 };
 
 export type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "fetch" | "think" | "mcp" | "task" | "todo" | "other";
+
+/**
+ * A lasting answer to a tool ask (#743). Paths are real paths. A file or folder grant with write
+ * access covers reads too; a command grant's key is the command's first words ("" for any command).
+ */
+export type ToolGrant =
+  | { kind: "file" | "folder"; path: string; access: "read" | "write" }
+  | { kind: "command"; key: string };
 
 export type ToolStatus = "pending" | "running" | "done" | "error";
 

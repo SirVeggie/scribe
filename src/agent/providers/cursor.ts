@@ -1103,8 +1103,9 @@ class CursorSession implements ProviderSession {
           tool: "execute",
           title: "Run command",
           detail: dir ? `${command}\nin ${cwd}` : command,
+          command,
           options: [
-            { id: "allow", label: "Allow", kind: "allow_once" },
+            { id: "allow", label: "Allow once", kind: "allow_once" },
             { id: "deny", label: "Deny", kind: "reject_once" },
           ],
         },

@@ -1,13 +1,14 @@
 import { allowedGrants, scopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
+import { toolGrantKey, toolGrantLabel } from "./toolGrants.js";
 import type { Thread } from "./types.js";
 
 /**
  * What the user granted a thread while it ran (web requests, thread access), as rows the chat
  * can list and take back one by one. key names the grant for a revoke.
  */
-export type GrantRow = { kind: "web" | "threads" | "helpers" | "pages" | "plugins"; key: string; label: string };
+export type GrantRow = { kind: "web" | "threads" | "helpers" | "pages" | "plugins" | "tools"; key: string; label: string };
 
-type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants" | "pluginGrants">;
+type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants" | "pluginGrants" | "toolGrants">;
 
 /** Names for page grants: a page's title, a folder's path. */
 export type PageNames = { page(id: string): string | null; folder(id: string): string | null };
@@ -32,13 +33,19 @@ export function grantRows(thread: GrantThread, lookup?: ScopeLookup, names?: Pag
     const label = grant.kind === "page" ? `Page "${name ?? grant.id}"` : `Folder "${name ?? grant.id}"`;
     rows.push({ kind: "pages", key: `pages:${grant.kind}:${grant.id}`, label: grant.mention ? `${label} (mentioned)` : label });
   }
+  for (const grant of thread.toolGrants ?? []) rows.push({ kind: "tools", key: toolGrantKey(grant), label: toolGrantLabel(grant) });
   if (thread.helpersAllowed) rows.push({ kind: "helpers", key: "helpers", label: "Start helpers without asking" });
   for(const id of thread.pluginGrants??[])rows.push({kind:"plugins",key:`plugins:${id}`,label:id});
   return rows;
 }
 
 /** The thread's grant fields without the one key names; null when nothing matches. */
-export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants" | "pluginGrants"> | null {
+export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants" | "pluginGrants" | "toolGrants"> | null {
+  if (key.startsWith("tools:")) {
+    const grants = thread.toolGrants ?? [];
+    const kept = grants.filter((g) => toolGrantKey(g) !== key);
+    return kept.length === grants.length ? null : { webGrants: thread.webGrants, threadGrants: thread.threadGrants, toolGrants: kept };
+  }
   if(key.startsWith("plugins:")){
     const grants=thread.pluginGrants??[],kept=grants.filter(id=>`plugins:${id}`!==key);
     return kept.length===grants.length?null:{webGrants:thread.webGrants,threadGrants:thread.threadGrants,pluginGrants:kept};

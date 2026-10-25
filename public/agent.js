@@ -3423,7 +3423,7 @@
       const row = (g) => ({
         label: g.label,
         detail: "Remove",
-        icon: g.kind === "web" ? "globe" : g.kind === "helpers" ? "task" : g.kind === "pages" ? "page" : "shield",
+        icon: g.kind === "web" ? "globe" : g.kind === "helpers" ? "task" : g.kind === "pages" ? "page" : g.kind === "tools" ? "folder" : "shield",
         run: () =>
           api("PATCH", `/threads/${encodeURIComponent(t.id)}`, { revokeGrant: g.key })
             .then(() => notice(`Removed: ${g.label}`))
@@ -3434,9 +3434,11 @@
       const helpers = t.grants.filter((g) => g.kind === "helpers");
       const pages = t.grants.filter((g) => g.kind === "pages");
       const plugins=t.grants.filter(g=>g.kind==="plugins");
+      const tools = t.grants.filter((g) => g.kind === "tools");
       openMenu(
         anchor,
         [
+          ...(tools.length ? [{ header: "Files and commands" }, ...tools.map(row)] : []),
           ...(web.length ? [{ header: "Web access" }, ...web.map(row)] : []),
           ...(threads.length ? [{ header: "Can read other threads" }, ...threads.map(row)] : []),
           ...(pages.length ? [{ header: "Pages outside its Scribe access" }, ...pages.map(row)] : []),
@@ -9545,6 +9547,7 @@
       title.id = "ag-perm-title";
       this.web = el("section", "settings-section ag-web-allow");
       this.hooks = el("section", "settings-section");
+      this.scribeCommands = el("section", "settings-section");
       const commands = el("section", "settings-section");
       const pick = el("div", "setting-row");
       const label = el("span", null, "Workspace");
@@ -9564,7 +9567,7 @@
         pick
       );
       this.body = el("div", "ag-perm-body");
-      panel.append(title, this.web, this.hooks, commands, this.body);
+      panel.append(title, this.web, this.scribeCommands, this.hooks, commands, this.body);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -9583,6 +9586,7 @@
       this.picker.value = this.cwd || "";
       this.pickerWrap?.syncSelect?.();
       this.renderWeb();
+      this.renderCommands();
       this.renderHooks();
       this.root.hidden = false;
       this.releaseTrap?.();
@@ -9637,6 +9641,40 @@
           hint: "Your SearXNG instance's address. Native threads, and Cursor threads with web Limited or Off, get a web_search tool through it, gated by the thread's web setting. The instance must allow JSON results (search.formats in its settings.yml). Leave empty for no search. Applies to new sessions.",
         })
       );
+    },
+    /** Commands Native and Cursor's host shell run without asking (prefs.commandAllowlist, #743). The same for every workspace. */
+    renderCommands() {
+      const list = prefs().commandAllowlist || [];
+      const rows = el("div", "ag-perm-rules");
+      for (const command of list) {
+        const row = el("span", "ag-perm-rule");
+        row.append(el("code", null, command), button(icon("close"), "ag-chip-x", () => this.saveCommands(list.filter((c) => c !== command)), `Remove ${command}`));
+        rows.append(row);
+      }
+      const input = el("input", "ag-input small ag-perm-add");
+      input.placeholder = "Add a command, e.g. git status";
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !input.value.trim()) return;
+        event.preventDefault();
+        void this.saveCommands([...list, input.value.trim()]);
+      });
+      rows.append(input);
+      this.scribeCommands.replaceChildren(
+        helpHeading(
+          "Native and Cursor shell",
+          "Commands these threads run without asking, in every thread. A rule matches a command's first words, so git status also covers git status --short. Chained, piped or redirected commands always ask. Always allow on a command ask adds one here."
+        ),
+        rows
+      );
+    },
+    async saveCommands(list) {
+      try {
+        S.config.prefs = await api("PUT", "/prefs", { commandAllowlist: list });
+        this.renderCommands();
+        this.scribeCommands.querySelector(".ag-perm-add")?.focus();
+      } catch (err) {
+        notice(err.message);
+      }
     },
     /** Whether Claude threads run the hooks from Claude Code's settings files and plugins (prefs). */
     renderHooks() {

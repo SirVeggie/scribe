@@ -1479,7 +1479,7 @@ export class CodexSession implements ProviderSession {
           typeof review.rationale === "string" ? review.rationale : "",
           "Approve one retry? Codex will review it again and may still deny it."].filter(Boolean).join("\n"),
         options: [{ id: "approveRetry", label: "Approve one retry", kind: "allow_once" },
-          { id: "keepDenied", label: "Keep denied", kind: "reject_once" }],
+          { id: "keepDenied", label: "Deny", kind: "reject_once" }],
       }, signal);
       if (signal.aborted || this.cancelled || this.rpc !== rpc || this.nativeId !== threadId) return;
       if (decision.optionId !== "approveRetry") {
@@ -1520,7 +1520,7 @@ export class CodexSession implements ProviderSession {
         detail: [p.command, p.reason, p.cwd].filter((value) => typeof value === "string").join("\n"),
         options: [{ id: "accept", label: "Allow once", kind: "allow_once" },
           { id: "acceptForSession", label: "Allow for this session", kind: "allow_always" },
-          { id: "decline", label: "Decline", kind: "reject_once" }],
+          { id: "decline", label: "Deny", kind: "reject_once" }],
       }, signal).catch(() => ({ optionId: "cancel" }));
       rpc.reply(id, { decision: ["accept", "acceptForSession", "decline"].includes(decision.optionId) ? decision.optionId : "cancel" });
       return;
@@ -1577,7 +1577,7 @@ export class CodexSession implements ProviderSession {
           .filter((value) => typeof value === "string" && value).join("\n"),
         options: [{ id: "accept", label: "Allow once", kind: "allow_once" },
           ...(session ? [{ id: "acceptForSession", label: "Allow for this session", kind: "allow_always" as const }] : []),
-          { id: "decline", label: "Decline", kind: "reject_once" }],
+          { id: "decline", label: "Deny", kind: "reject_once" }],
       }, signal).catch(() => ({ optionId: "cancel" }));
       rpc.reply(id, decision.optionId === "accept" || decision.optionId === "acceptForSession"
         ? { action: "accept", content: {}, _meta: decision.optionId === "acceptForSession" ? { persist: "session" } : null }
