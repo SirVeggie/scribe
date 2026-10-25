@@ -74,7 +74,7 @@ import { likePatterns, matchMessages, searchWords, type ThreadMessageHit } from 
 import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
 import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, withGrantOptions } from "./toolGrants.js";
-import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, saveMemory, type Memory } from "./memory.js";
+import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, memoryPlace, saveMemory, type Memory } from "./memory.js";
 import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -3238,7 +3238,8 @@ export class AgentHost {
         ...(title ? { title } : {}),
         text: typeof body.text === "string" ? body.text : "",
         scope: keep ? keep.scope : scope,
-        workspace: keep ? keep.workspace : workspace,
+        // An agent's provider memory covers its provider everywhere; only the user ties one to a workspace too.
+        workspace: keep ? keep.workspace : scope === "workspace" ? workspace : null,
         // Ownership comes from the authenticated thread, never tool arguments.
         provider: owner.provider,
         source: owner.source,
@@ -3246,7 +3247,7 @@ export class AgentHost {
         thread: threadId,
       });
       this.db.setSetting("memories", saved.memories);
-      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${saved.memory.scope === "provider" ? `only ${saved.memory.provider}${saved.memory.source ? `/${saved.memory.source}` : ""} chats` : saved.memory.scope === "global" ? "all chats" : `chats in ${saved.memory.workspace}`}): ${saved.memory.title ? `${saved.memory.title}. ` : ""}${saved.memory.text}`);
+      note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${memoryPlace(saved.memory)}): ${saved.memory.title ? `${saved.memory.title}. ` : ""}${saved.memory.text}`);
       return { saved: row(saved.memory), created: saved.created, note: "Chats get it in their instructions from their next message. The user can edit or remove it under Agent settings, Memories." };
     }
     if (op === "delete") {

@@ -169,6 +169,23 @@ test("user memory editor retains private ownership and lists Native source targe
   host.deleteMemory(made.id);
 });
 
+test("a memory can belong to a provider and a workspace at once (#840)", () => {
+  const both = host.saveUserMemory(null, { title: "Both", text: "Codex in repo only.", scope: "provider", provider: "codex", workspace: repo });
+  assert.equal(both.workspace, repo);
+  const list = host.memories();
+  assert.ok(memoriesFor(list, path.join(repo, "sub"), { provider: "codex" }).some((m) => m.id === both.id));
+  assert.ok(!memoriesFor(list, other, { provider: "codex" }).some((m) => m.id === both.id));
+  assert.ok(!memoriesFor(list, repo, { provider: "claude" }).some((m) => m.id === both.id));
+  // The same text for the provider everywhere is another memory, not this one.
+  assert.notEqual(saveMemory(list, { text: "Codex in repo only.", scope: "provider", provider: "codex", by: "user" }).memory.id, both.id);
+  // An agent's provider memory still covers its provider in every workspace.
+  const thread = host.createThread({ provider: "codex", scope: { kind: "workspace", ref: repo } });
+  const saved = host.memoryOp(thread.id, "save", { title: "Everywhere", text: "Codex everywhere.", scope: "provider" }) as { saved: Memory };
+  assert.equal(saved.saved.workspace, undefined);
+  host.deleteMemory(both.id);
+  host.deleteMemory(saved.saved.id);
+});
+
 test("titles: agents must name a new memory, edits keep the title, and the block shows it", () => {
   const thread = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: repo } });
   assert.throws(() => host.memoryOp(thread.id, "save", { text: "No title here." }), /title/);
