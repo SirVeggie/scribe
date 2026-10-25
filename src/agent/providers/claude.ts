@@ -11,7 +11,7 @@ import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { APPROVAL_LABEL, isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
-import { claudeServerConfig, serversKey, type ResolvedMcpServer } from "../mcpConfig.js";
+import { claudeServerConfig, serversKey, toolPolicy, type ResolvedMcpServer } from "../mcpConfig.js";
 import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
@@ -802,6 +802,10 @@ class ClaudeSession implements ProviderSession {
     const userServers = this.userServers();
     // Servers set to run without asking; the rest go through canUseTool like any tool.
     const autoServers = userServers.filter((s) => s.approve === "auto").map((s) => `mcp__${s.name}__*`);
+    // Tools set to Allow run without asking; Disable takes them out of the model's tool list.
+    const toolsWith = (policy: string) => userServers.flatMap((s) => Object.entries(s.tools ?? {}).filter(([, p]) => p === policy).map(([tool]) => `mcp__${s.name}__${tool}`));
+    autoServers.push(...toolsWith("allow"));
+    const disabledTools = toolsWith("disable");
     const options: Options = {
       cwd: this.cwd(),
       model: thread.model === "default" ? undefined : thread.model,
@@ -879,6 +883,10 @@ class ClaudeSession implements ProviderSession {
       // Scribe makes worktrees itself; a session moving into its own would slip past turn snapshots.
       // Plans are Scribe's plan turns (#721), so Claude's own plan mode stays off.
       options.disallowedTools = ["EnterWorktree", "ExitWorktree", "EnterPlanMode", "ExitPlanMode"];
+    }
+    if (disabledTools.length) {
+      options.allowedTools = options.allowedTools?.filter((name) => !disabledTools.includes(name));
+      options.disallowedTools = [...(options.disallowedTools ?? []), ...disabledTools];
     }
     // A custom mode's tool groups: gone from the model's tool list, whatever the approval level.
     const off = claudeToolsOff(thread);
@@ -1332,6 +1340,8 @@ class ClaudeSession implements ProviderSession {
     const mcpServer = this.userServers().find((server) => name.startsWith(`mcp__${server.name}__`));
     const mcpTool = mcpServer ? name.slice(`mcp__${mcpServer.name}__`.length) : undefined;
     const permissions = new McpPermissions();
+    if (mcpServer && mcpTool && toolPolicy(mcpServer, mcpTool) === "disable") return { behavior: "deny", message: "This tool is disabled in Scribe's MCP settings." };
+    if (mcpServer && mcpTool && toolPolicy(mcpServer, mcpTool) === "allow") return { behavior: "allow", updatedInput: input };
     if (mcpServer && mcpTool && permissions.allows(mcpServer, mcpTool, this.thread.id)) return { behavior: "allow", updatedInput: input };
     const options = mcpServer ? mcpApprovalOptions : [
       { id: "allow", label: "Allow once", kind: "allow_once" as const },

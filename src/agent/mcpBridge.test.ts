@@ -70,6 +70,36 @@ test("bridged tools call the server, and ask first unless allowed", async () => 
   }
 });
 
+test("per-tool settings: Disable hides a tool, Allow runs it without asking", async () => {
+  const file = echoServer();
+  const asked: string[] = [];
+  const open = async (tools: Record<string, "allow" | "disable">) => {
+    const bridge = new McpBridge(
+      [resolveServer("echo-srv", "global", { command: process.execPath, args: [file], tools })!],
+      os.tmpdir(),
+      () => ({ approval: "edits", id: "test-thread" }),
+      () => async (req) => {
+        asked.push(req.title);
+        return { optionId: "reject" };
+      },
+      undefined,
+      new McpPermissions(path.join(path.dirname(file), "permissions.json"))
+    );
+    try {
+      return await (async () => {
+        const list = await bridge.tools();
+        return { names: list.map((t) => t.name), result: list[0] ? await list[0].call({}, {}) : null };
+      })();
+    } finally {
+      bridge.close();
+    }
+  };
+  assert.deepEqual((await open({ echo: "disable" })).names, []);
+  const allowed = await open({ echo: "allow" });
+  assert.equal(allowed.result?.isError, false);
+  assert.deepEqual(asked, []);
+});
+
 test("a server that does not start is skipped and reported", async () => {
   const errors: string[] = [];
   const bridge = new McpBridge(

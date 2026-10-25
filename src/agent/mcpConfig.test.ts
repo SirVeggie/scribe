@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { bridgeAsks } from "./mcpBridge.js";
-import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, resolveServer, serversForThread, setServerEnabled, writeMcpFile } from "./mcpConfig.js";
+import { applyImport, removeCursorImports, bridgedToolName, claudeOwnServers, cleanFile, cleanServer, expandEnv, importCandidates, readMcpFile, resolveServer, serversForThread, serversKey, setServerEnabled, writeMcpFile } from "./mcpConfig.js";
 
 const thread = (mode: "code" | "board", cwd: string | null = null) => ({ mode, cwd, worktree: null });
 
@@ -151,6 +151,18 @@ test("approval: ask unless full access or the server runs without asking", () =>
   assert.equal(bridgeAsks({ approval: "auto" }, { approve: "ask" }), true);
   assert.equal(bridgeAsks({ approval: "full" }, { approve: "ask" }), false);
   assert.equal(bridgeAsks({ approval: "edits" }, { approve: "auto" }), false);
+});
+
+test("per-tool settings: Allow skips asking, unknown values are dropped, and keys stay stable without them", () => {
+  const clean = cleanServer({ command: "x", tools: { read: "allow", drop: "disable", odd: "maybe" } })!;
+  assert.deepEqual(clean.tools, { read: "allow", drop: "disable" });
+  assert.equal(cleanServer({ command: "x", tools: { odd: "maybe" } })!.tools, undefined);
+  const server = resolveServer("s", "global", clean)!;
+  assert.equal(bridgeAsks({ approval: "edits" }, server, "read"), false);
+  assert.equal(bridgeAsks({ approval: "edits" }, server, "write"), true);
+  const plain = resolveServer("s", "global", { command: "x" })!;
+  assert.equal(serversKey([plain]), serversKey([{ ...plain, tools: {} }]));
+  assert.notEqual(serversKey([plain]), serversKey([server]));
 });
 
 test("import lists other apps' servers and applies the picked ones", () => {

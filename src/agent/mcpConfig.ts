@@ -18,12 +18,15 @@ import { isPlainRecord } from "./types.js";
  *
  * A workspace entry replaces the global server of the same name; { "enabled": false } alone turns a
  * global one off there. Scribe's own fields on a server: enabled, modes (which thread modes get it;
- * Code, Plan and Ask unless set) and approve ("ask" each call, the default, or "auto").
+ * Code, Plan and Ask unless set), approve ("ask" each call, the default, or "auto") and tools (per-tool
+ * "allow", which runs without asking, or "disable", which hides it from agents).
  * Code threads also inherit Keeper from Claude Code when Scribe has no Keeper entry, so the
  * user's Keeper skill can supervise test servers. An explicit Scribe entry takes precedence.
  */
 
 export type McpApprove = "ask" | "auto";
+/** One tool's own setting: allow runs it without asking, disable hides it from agents. Ask (the server's setting) when unset. */
+export type McpToolPolicy = "allow" | "disable";
 
 export type McpServer = {
   /** stdio */
@@ -38,6 +41,7 @@ export type McpServer = {
   enabled?: boolean;
   modes?: ThreadMode[];
   approve?: McpApprove;
+  tools?: Record<string, McpToolPolicy>;
   description?: string;
   timeout?: number;
 };
@@ -58,8 +62,15 @@ export type ResolvedMcpServer = {
   url?: string;
   headers: Record<string, string>;
   approve: McpApprove;
+  /** Per-tool settings; tools not listed follow approve. */
+  tools?: Record<string, McpToolPolicy>;
   timeout?: number;
 };
+
+/** A tool's setting on a resolved server: "ask" when it has none of its own. */
+export function toolPolicy(server: Pick<ResolvedMcpServer, "tools">, tool: string): McpToolPolicy | "ask" {
+  return server.tools && Object.hasOwn(server.tools, tool) ? server.tools[tool] : "ask";
+}
 
 export const DEFAULT_MODES: ThreadMode[] = ["code"];
 const MODES: ThreadMode[] = ["code", "board"];
@@ -106,6 +117,11 @@ export function cleanServer(value: unknown): McpServer | null {
   const modes = strings(value.modes)?.map((m) => (m === "ask" ? "board" : m)).filter((m): m is ThreadMode => MODES.includes(m as ThreadMode));
   if (modes) out.modes = [...new Set(modes)];
   if (value.approve === "auto" || value.approve === "ask") out.approve = value.approve;
+  if (isPlainRecord(value.tools)) {
+    const tools: Record<string, McpToolPolicy> = {};
+    for (const [name, policy] of Object.entries(value.tools)) if (name && (policy === "allow" || policy === "disable")) tools[name] = policy;
+    if (Object.keys(tools).length) out.tools = tools;
+  }
   if (typeof value.description === "string" && value.description) out.description = value.description;
   if (typeof value.timeout === "number" && value.timeout > 0) out.timeout = value.timeout;
   // An override with only { enabled: false } is a server too: it turns a global one off in a workspace.
@@ -263,6 +279,7 @@ export function resolveServer(name: string, layer: string, server: McpServer): R
     ...(server.url ? { url: expandEnv(server.url) } : {}),
     headers: expandMap(server.headers),
     approve: server.approve ?? "ask",
+    ...(server.tools ? { tools: { ...server.tools } } : {}),
     ...(server.timeout ? { timeout: server.timeout } : {}),
   };
 }
@@ -283,7 +300,9 @@ export function serversForThread(thread: Pick<Thread, "cwd" | "worktree" | "mode
 
 /** A stable key for a server list, so a session restarts when the servers it was given change. */
 export function serversKey(servers: ResolvedMcpServer[]): string {
-  return JSON.stringify(servers.map((s) => [s.name, s.transport, s.command, s.args, s.env, s.cwd, s.url, s.headers, s.approve, s.timeout]));
+  // Tool settings only when there are some, so keys made before they existed stay the same.
+  return JSON.stringify(servers.map((s) => [s.name, s.transport, s.command, s.args, s.env, s.cwd, s.url, s.headers, s.approve, s.timeout,
+    ...(s.tools && Object.keys(s.tools).length ? [s.tools] : [])]));
 }
 
 /** Claude Agent SDK shape. */

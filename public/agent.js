@@ -10240,7 +10240,12 @@
     row(name, server, layer) {
       const row = el("div", "setting-row ag-mcp-row");
       const label = el("span", "ag-mcp-label");
-      const meta = [mcpModes(server, this.view.defaultModes), server.approve === "auto" ? "runs without asking" : null].filter(Boolean).join(" · ");
+      const policies = Object.values(server.tools || {});
+      const counted = (policy, word) => {
+        const n = policies.filter((p) => p === policy).length;
+        return n ? `${n} ${n === 1 ? "tool" : "tools"} ${word}` : null;
+      };
+      const meta = [mcpModes(server, this.view.defaultModes), server.approve === "auto" ? "runs without asking" : null, counted("allow", "allowed"), counted("disable", "disabled")].filter(Boolean).join(" · ");
       label.append(el("strong", null, name), el("span", "ag-muted", ` · ${meta}`), el("code", "ag-mcp-target", mcpTarget(server)));
       const toggle = switchControl(
         () => server.enabled !== false,
@@ -10338,6 +10343,51 @@
       autoBox.checked = server.approve === "auto";
       const auto = el("label", "ag-check");
       auto.append(autoBox, el("span", null, "Run its tools without asking"));
+      // Per-tool settings: Ask follows the server's setting, Allow runs without asking, Disable hides the tool.
+      const policies = { ...(server.tools || {}) };
+      const toolList = el("div", "ag-mcp-tools");
+      const toolRow = (tool) => {
+        const row = el("div", "setting-row ag-mcp-tool");
+        const select = el("select");
+        for (const [id, text] of [["ask", "Ask"], ["allow", "Allow"], ["disable", "Disable"]]) {
+          const option = el("option", null, text);
+          option.value = id;
+          select.append(option);
+        }
+        select.value = policies[tool] || "ask";
+        select.setAttribute("aria-label", `${tool}: permission`);
+        select.addEventListener("change", () => {
+          if (select.value === "ask") delete policies[tool];
+          else policies[tool] = select.value;
+        });
+        row.append(el("code", "ag-mcp-tool-name", tool), window.createSelect ? window.createSelect(select) : select);
+        return row;
+      };
+      const showTools = (names) => toolList.replaceChildren(...[...new Set(names)].sort().map(toolRow));
+      showTools(Object.keys(policies));
+      const tools = el("div", "ag-field");
+      tools.append(el("span", "ag-field-label", "Tools"), toolList);
+      if (name) {
+        const status = el("span", "ag-muted");
+        const load = button("List tools", "ag-btn small", async () => {
+          load.disabled = true;
+          status.textContent = "Starting the server…";
+          try {
+            const probe = await api("POST", "/harness/mcp/probe", { name, cwd: this.scope === "global" ? null : this.scope });
+            if (probe.error) throw new Error(probe.error);
+            showTools([...probe.tools.map((tool) => tool.name), ...Object.keys(policies)]);
+            status.textContent = probe.tools.length ? "" : "It has no tools.";
+            load.hidden = true;
+          } catch (err) {
+            status.textContent = `Could not list its tools: ${err.message}`;
+            load.disabled = false;
+          }
+        });
+        const bar = el("div", "ag-mcp-tools-bar");
+        bar.append(load, status);
+        tools.append(bar);
+      }
+      tools.append(el("span", "ag-muted ag-field-hint", name ? "Allow runs a tool without asking; Disable hides it from agents." : "Save the server to set its tools."));
       const error = el("p", "ag-source-error");
       error.hidden = true;
       const save = async () => {
@@ -10371,6 +10421,8 @@
         next.modes = modeBoxes.filter((b) => b.checked).map((b) => b.value);
         if (autoBox.checked) next.approve = "auto";
         else delete next.approve;
+        if (Object.keys(policies).length) next.tools = { ...policies };
+        else delete next.tools;
         const servers = { ...layer };
         if (name && name !== id) delete servers[name];
         servers[id] = next;
@@ -10397,6 +10449,7 @@
         urlFields,
         field("Modes", modes, "Threads in these modes get its tools. Pages covers board workers and page chats."),
         auto,
+        tools,
         error,
         actions
       );
@@ -10426,7 +10479,7 @@
       actions.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), button("Save", "ag-btn primary", save));
       panel.append(
         el("h2", "ag-modal-title", this.scope === "global" ? "Servers everywhere" : `Servers in ${this.scope}`),
-        el("p", "ag-modal-hint", 'The usual mcpServers shape, so you can paste from another app\'s mcp.json. Scribe\'s own fields: enabled, modes (code, plan, ask, board) and approve ("ask" or "auto"). Unknown fields are dropped.'),
+        el("p", "ag-modal-hint", 'The usual mcpServers shape, so you can paste from another app\'s mcp.json. Scribe\'s own fields: enabled, modes (code, plan, ask, board) and approve ("ask" or "auto"), and tools ({ "tool": "allow" or "disable" }). Unknown fields are dropped.'),
         text,
         error,
         actions

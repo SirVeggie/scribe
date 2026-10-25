@@ -4,7 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { log } from "../log.js";
-import { bridgedToolName, type ResolvedMcpServer } from "./mcpConfig.js";
+import { bridgedToolName, toolPolicy, type ResolvedMcpServer } from "./mcpConfig.js";
 import type { ApprovalDecision, ApprovalRequest } from "./providers/provider.js";
 import type { Thread } from "./types.js";
 import { isPlainRecord } from "./types.js";
@@ -48,9 +48,9 @@ function transportFor(server: ResolvedMcpServer, cwd: string): Transport {
   return server.transport === "sse" ? new SSEClientTransport(url, { requestInit }) : new StreamableHTTPClientTransport(url, { requestInit });
 }
 
-/** Whether a call to this server waits for the user: never with full access or a server set to run without asking. */
-export function bridgeAsks(thread: Pick<Thread, "approval">, server: Pick<ResolvedMcpServer, "approve">): boolean {
-  return thread.approval !== "full" && server.approve !== "auto";
+/** Whether a call to this server's tool waits for the user: never with full access, a server set to run without asking, or a tool set to Allow. */
+export function bridgeAsks(thread: Pick<Thread, "approval">, server: Pick<ResolvedMcpServer, "approve" | "tools">, tool?: string): boolean {
+  return thread.approval !== "full" && server.approve !== "auto" && !(tool && toolPolicy(server, tool) === "allow");
 }
 
 function summarizeArgs(args: Record<string, unknown>): string {
@@ -96,7 +96,8 @@ export class McpBridge {
       await client.connect(transportFor(server, this.cwd), { timeout: CONNECT_TIMEOUT_MS });
       this.clients.push(client);
       const { tools } = await client.listTools(undefined, { timeout: CONNECT_TIMEOUT_MS });
-      return tools.map((tool) => ({
+      // Disabled tools are left out, so agents never see them.
+      return tools.filter((tool) => toolPolicy(server, tool.name) !== "disable").map((tool) => ({
         name: bridgedToolName(server.name, tool.name),
         server: server.name,
         tool: tool.name,
@@ -122,7 +123,8 @@ export class McpBridge {
     opts: { toolCallId?: string; signal?: AbortSignal }
   ): Promise<{ content: unknown[]; isError: boolean }> {
     const fail = (text: string) => ({ content: [{ type: "text", text }], isError: true });
-    if (bridgeAsks(this.thread(), server) && !this.permissions.allows(server, tool, this.thread().id)) {
+    if (toolPolicy(server, tool) === "disable") return fail("This tool is disabled in Scribe's MCP settings.");
+    if (bridgeAsks(this.thread(), server, tool) && !this.permissions.allows(server, tool, this.thread().id)) {
       const ask = this.ask();
       if (!ask) return fail("No active turn: nobody is there to approve this tool call.");
       try {

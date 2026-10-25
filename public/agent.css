@@ -6009,6 +6009,32 @@ html.tight-small .agent-full {
   gap: 6px 16px;
 }
 
+.ag-mcp-tools {
+  display: flex;
+  flex-direction: column;
+  max-height: 32vh;
+  overflow-y: auto;
+}
+
+.ag-mcp-tool {
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.ag-mcp-tool-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-mcp-tools-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .ag-mcp-json-text {
   min-height: 300px;
 }

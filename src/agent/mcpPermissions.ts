@@ -31,7 +31,7 @@ export class McpPermissions {
   }
 
   private key(server: ResolvedMcpServer): string {
-    return createHash("sha256").update(serversKey([{ ...server, approve: "ask" }])).digest("hex");
+    return createHash("sha256").update(serversKey([{ ...server, approve: "ask", tools: undefined }])).digest("hex");
   }
 
   private write(grants: Grants): void {
