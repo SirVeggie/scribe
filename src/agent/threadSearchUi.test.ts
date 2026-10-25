@@ -115,7 +115,7 @@ test("empty and cached queries cancel obsolete requests; cache hits become the f
   assert.equal(c.requests.length, 1);
 });
 
-test("unloaded message additions, deltas and deletions invalidate cached and in-flight hits", async () => {
+test("unloaded message additions, deltas and deletions mark cached hits stale and drop in-flight ones", async () => {
   for (const event of [
     { type: "agent_item", item: { id: "item", threadId: "unloaded", kind: "text", text: "edited" } },
     { type: "agent_delta", threadId: "unloaded", itemId: "item", append: "new text" },
@@ -127,10 +127,11 @@ test("unloaded message additions, deltas and deletions invalidate cached and in-
     await c.tick();
     c.run(`onEvent(${JSON.stringify(event)})`);
     assert.equal(await old, false);
-    assert.equal(c.run('messageSearch.cache.size + messageSearch.last.size'), 0);
+    // The old hits stay shown until a refreshed search replaces them (#835).
+    assert.deepEqual(c.json('[messageSearch.cache.get("cached").at, [...messageSearch.last.keys()]]'), [0, ["deleted"]]);
     c.pending[0]({ hits: [{ id: "obsolete" }] });
     await Promise.resolve();
-    assert.equal(c.run('messageSearch.cache.size + messageSearch.last.size'), 0);
+    assert.deepEqual(c.json('[...messageSearch.cache.keys(), ...messageSearch.last.keys()]'), ["cached", "deleted"]);
     const fresh = c.run('searchMessages("cached")');
     await c.tick();
     c.pending[1]({ hits: [{ id: "updated", words: ["cached"] }] });
@@ -143,12 +144,12 @@ test("text edits and eligibility changes invalidate hits, while metadata-only it
   const c = client({ manualTimers: true });
   for (const update of [{ text: "after" }, { dropped: true }, { dropped: false, parentToolId: "tool" }]) {
     c.run('{ const item = { id: "i", threadId: "t", seq: 1, kind: "user", text: "before" }; S.details.set("t", { byId: new Map([["i", item]]), items: [item] }); }');
-    c.run('messageSearch.cache.set("before", { hits: new Map() })');
+    c.run('messageSearch.cache.set("before", { at: Date.now(), hits: new Map() })');
     c.run(`onEvent({ type: "agent_item", item: { ...S.details.get("t").byId.get("i"), ${Object.entries(update).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(",")} } })`);
-    assert.equal(c.run('messageSearch.cache.size'), 0);
+    assert.equal(c.run('messageSearch.cache.get("before").at'), 0);
   }
-  c.run('messageSearch.cache.set("cached", { hits: new Map() }); onEvent({ type: "agent_item", item: { ...S.details.get("t").byId.get("i"), editing: true } })');
-  assert.equal(c.run('messageSearch.cache.size'), 1);
+  c.run('messageSearch.cache.set("cached", { at: 1, hits: new Map() }); onEvent({ type: "agent_item", item: { ...S.details.get("t").byId.get("i"), editing: true } })');
+  assert.equal(c.run('messageSearch.cache.get("cached").at'), 1);
 });
 
 test("streaming invalidations coalesce and refresh an active thread-list query", async () => {
@@ -162,4 +163,17 @@ test("streaming invalidations coalesce and refresh an active thread-list query",
   c.pending[0]({ hits: [] });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(c.notifications, ["lists", "invalidated", "lists"]);
+});
+
+test("a refresh after invalidation keeps content hits until fresh ones arrive (#835)", async () => {
+  const c = client({ deferred: true, manualTimers: true });
+  c.add("title", "current work");
+  c.add("body", "Unrelated");
+  c.run('messageSearch.cache.set("current", { at: Date.now(), hits: new Map([["body", { words: ["current"], snippet: "current" }]]) })');
+  c.run('S.search = "current"; invalidateMessageSearch()');
+  assert.deepEqual(c.json('searchThreads("current").map(t => t.id)'), ["title", "body"]);
+  await c.tick();
+  await c.tick();
+  assert.deepEqual(c.requests, ["/thread-search?q=current"]);
+  assert.deepEqual(c.json('searchThreads("current").map(t => t.id)'), ["title", "body"]);
 });

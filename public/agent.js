@@ -1171,8 +1171,9 @@
 
   function invalidateMessageSearch() {
     cancelMessageSearch();
-    messageSearch.cache.clear();
-    messageSearch.last = new Map();
+    // Mark the hits stale rather than dropping them: the list keeps showing them until the
+    // refreshed search replaces them, so content matches don't blink out as a thread streams (#835).
+    for (const entry of messageSearch.cache.values()) entry.at = 0;
     // Coalesce streaming changes; refresh visible searches after the burst settles.
     clearTimeout(messageSearch.refreshTimer);
     messageSearch.refreshTimer = setTimeout(() => {
