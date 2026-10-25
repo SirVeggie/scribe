@@ -4601,13 +4601,22 @@
             for (const x of actions.querySelectorAll("button")) x.disabled = false;
           }
         });
-        if (opt.description) {
-          b.dataset.tooltip = opt.description;
-          b.setAttribute("aria-description", opt.description);
-        }
+        if (opt.description) b.setAttribute("aria-description", opt.description);
+        // What a lasting grant covers is spelled out under the buttons; other options keep a tooltip.
+        if (opt.description && opt.kind !== "allow_always") b.dataset.tooltip = opt.description;
         actions.append(b);
       }
       node.append(note, actions);
+      const lasting = it.options.filter((o) => o.kind === "allow_always" && o.description);
+      if (lasting.length) {
+        const foot = el("div", "ag-approval-foot");
+        for (const opt of lasting) {
+          const line = el("div");
+          line.append(el("b", "", `${opt.label}:`), document.createTextNode(` ${opt.description}`));
+          foot.append(line);
+        }
+        node.append(foot);
+      }
       return node;
     }
 

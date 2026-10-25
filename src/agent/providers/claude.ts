@@ -537,6 +537,40 @@ export function suggestionsLabel(suggestions: unknown[]): string {
   return suggestions.every((s) => isPlainRecord(s) && s.destination === "session") ? "Allow for this session" : "Always allow";
 }
 
+const SUGGESTION_PLACE: Record<string, string> = {
+  session: "for this session",
+  cliArg: "for this session",
+  localSettings: "in this project's local settings",
+  projectSettings: "in this project's shared settings",
+  userSettings: "in your user settings (every project)",
+};
+
+/** What applying Claude's suggested permission rules does, in one line per change: the rules and where they go. */
+export function suggestionsDescription(suggestions: unknown[]): string {
+  const rule = (r: unknown) => {
+    if (!isPlainRecord(r) || typeof r.toolName !== "string") return "";
+    return typeof r.ruleContent === "string" && r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName;
+  };
+  const lines: string[] = [];
+  for (const s of suggestions) {
+    if (!isPlainRecord(s)) continue;
+    const place = SUGGESTION_PLACE[String(s.destination)] ?? "";
+    const rules = Array.isArray(s.rules) ? s.rules.map(rule).filter(Boolean).join(", ") : "";
+    const dirs = Array.isArray(s.directories) ? s.directories.filter((d) => typeof d === "string").join(", ") : "";
+    // Allow rules go under an "Always allow" label, so they need no verb of their own.
+    const verb = s.behavior === "deny" ? "Deny " : s.behavior === "ask" ? "Ask for " : "";
+    let line = "";
+    if (s.type === "addRules" && rules) line = `${verb}${rules}`;
+    else if (s.type === "replaceRules" && rules) line = `${verb || "Allow "}only ${rules}`;
+    else if (s.type === "removeRules" && rules) line = `Remove ${rules}`;
+    else if (s.type === "addDirectories" && dirs) line = `Allow access to ${dirs}`;
+    else if (s.type === "removeDirectories" && dirs) line = `Remove access to ${dirs}`;
+    else if (s.type === "setMode" && typeof s.mode === "string") line = `Switch to ${s.mode} mode`;
+    if (line) lines.push(place ? `${line} ${place}` : line);
+  }
+  return lines.join("\n");
+}
+
 function toolKind(name: string): ToolKind {
   if (name.startsWith("mcp__")) return "mcp";
   switch (name) {
@@ -1301,7 +1335,7 @@ class ClaudeSession implements ProviderSession {
     if (mcpServer && mcpTool && permissions.allows(mcpServer, mcpTool, this.thread.id)) return { behavior: "allow", updatedInput: input };
     const options = mcpServer ? mcpApprovalOptions : [
       { id: "allow", label: "Allow once", kind: "allow_once" as const },
-      ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: suggestionsLabel(opts.suggestions), kind: "allow_always" as const }] : []),
+      ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: suggestionsLabel(opts.suggestions), description: suggestionsDescription(opts.suggestions) || undefined, kind: "allow_always" as const }] : []),
       { id: "deny", label: "Deny", kind: "reject_once" as const },
     ];
     const detail = [described.detail ?? (name === "Edit" || name === "Write" ? undefined : summarizeInput(input)), opts.decisionReason, opts.blockedPath ? `Path: ${opts.blockedPath}` : undefined]

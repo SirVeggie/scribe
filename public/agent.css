@@ -1780,6 +1780,18 @@ html[data-theme="cream"] .ag-md {
   gap: 6px;
 }
 
+.ag-approval-foot {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.ag-approval-foot b {
+  font-weight: 600;
+  color: var(--text);
+}
+
 .ag-input {
   font: inherit;
   font-size: 13px;
