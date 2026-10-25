@@ -1388,7 +1388,7 @@
    * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
    * Opening again from the anchor whose menu is already open closes it instead.
    */
-  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null } = {}) {
+  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null, tools = null } = {}) {
     // A re-render can swap the menu's button for a new one of the same kind while the menu stays open.
     if (openMenuEl && (openMenuAnchor === anchor || (!openMenuAnchor?.isConnected && openMenuAnchor?.className === anchor.className))) {
       closeMenu();
@@ -1416,7 +1416,7 @@
       list.replaceChildren();
       const q = filter.trim().toLowerCase();
       // searchOnly: a row left out of the plain list that a search still finds.
-      const matches = items.filter((item) => item.header || item.separator || (!q ? !item.searchOnly :
+      const matches = items.filter((item) => item.header || item.separator || (!q ? !(typeof item.searchOnly === "function" ? item.searchOnly() : item.searchOnly) :
         `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q)));
       let count = 0;
       const visible = matches.filter((item) => item.header || item.separator || item.fixed || ++count <= visibleLimit);
@@ -1536,6 +1536,7 @@
       menu.append(input);
       setTimeout(() => input.focus(), 0);
     }
+    if (tools) menu.append(tools(renderItems));
     menu.append(list);
     renderItems();
     // Inside a modal dialog the menu must sit in its top layer, or the dialog covers it and makes it inert.
@@ -7022,6 +7023,20 @@
     return { scope, settings };
   }
 
+  function showWorkersToggle(changed) {
+    const workers = button("", "ag-switch-btn", (event) => {
+      S.hidePageThreads = !S.hidePageThreads;
+      localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
+      event.currentTarget.setAttribute("aria-checked", String(!S.hidePageThreads));
+      renderLists();
+      changed?.();
+    }, "Running workers and workers waiting for input always show. This also shows inactive threads started by a page (board workers).");
+    workers.setAttribute("role", "switch");
+    workers.setAttribute("aria-checked", String(!S.hidePageThreads));
+    workers.append(el("span", "ag-switch"), el("span", null, "Show workers"));
+    return workers;
+  }
+
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
@@ -7092,15 +7107,7 @@
     newBtn.append(icon("plus"), el("span", null, "New"));
     // Toolbox row above the threads: list toggles that change which rows show, or how.
     const tools = el("div", "ag-list-tools");
-    const workers = button("", "ag-switch-btn", (event) => {
-      S.hidePageThreads = !S.hidePageThreads;
-      localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
-      event.currentTarget.setAttribute("aria-checked", String(!S.hidePageThreads));
-      container.agFill();
-    }, "Running workers and workers waiting for input always show. This also shows inactive threads started by a page (board workers).");
-    workers.setAttribute("role", "switch");
-    workers.setAttribute("aria-checked", String(!S.hidePageThreads));
-    workers.append(el("span", "ag-switch"), el("span", null, "Show workers"));
+    const workers = showWorkersToggle();
     const compact = button("", "ag-switch-btn", () => {
       localStorage.setItem(LS.compact, compactThreads() ? "0" : "1");
       renderLists();
@@ -7872,13 +7879,15 @@
       const currentId = this.view.threadId;
       const hiddenDirs = hiddenWorkspaceKeys();
       const add = (t, detail) => {
-        items.push({ label: t.title, detail, checked: t.id === currentId, searchOnly: t.id !== currentId && inHiddenWorkspace(t, hiddenDirs), run: () => this.pick(t.id) });
         const helpers = helpersOf(t.id).filter((h) => !h.archived);
+        const searchOnly = () => t.id !== currentId && !helpers.some((h) => h.id === currentId) &&
+          (inHiddenWorkspace(t, hiddenDirs) || (S.hidePageThreads && t.fromPage && t.status !== "running" && t.status !== "waiting" && !t.pinned));
+        items.push({ label: t.title, detail, checked: t.id === currentId, searchOnly, run: () => this.pick(t.id) });
         // Working ones and the open one always show; of the rest, the latest two. A search finds them all.
         const must = (h) => h.status !== "idle" || h.id === currentId;
         const latest = helpers.filter((h) => !must(h)).slice(-2);
         for (const h of helpers) {
-          items.push({ label: helperName(h), detail: `Helper · ${threadWhenText(h)}`, search: t.title, sub: true, searchOnly: !must(h) && !latest.includes(h), checked: h.id === currentId, run: () => this.pick(h.id) });
+          items.push({ label: helperName(h), detail: `Helper · ${threadWhenText(h)}`, search: t.title, sub: true, searchOnly: () => searchOnly() || (!must(h) && !latest.includes(h)), checked: h.id === currentId, run: () => this.pick(h.id) });
         }
       };
       items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) setDockPick(tab.id, null); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }, {}, true); this.renderTitle(); } });
@@ -7886,7 +7895,11 @@
       for (const t of pageThreads) add(t, threadWhenText(t));
       if (others.length) items.push({ header: "Recent" });
       for (const t of others) add(t, `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`);
-      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10 });
+      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10, tools: (refresh) => {
+        const tools = el("div", "ag-list-tools ag-menu-tools");
+        tools.append(showWorkersToggle(refresh));
+        return tools;
+      } });
     },
     pick(id) {
       this.remember(id);

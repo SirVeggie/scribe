@@ -3283,6 +3283,10 @@ html.fx-off .ag-slash { transition: none; }
   gap: 4px;
 }
 
+.ag-menu-tools {
+  padding: 0 4px 4px;
+}
+
 /* A list toggle: label and a small on/off pill; the button itself stays plain. */
 .ag-switch-btn {
   display: inline-flex;

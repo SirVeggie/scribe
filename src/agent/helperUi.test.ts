@@ -100,6 +100,55 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     // A search matches its words one by one, in any order.
     assert.deepEqual(picked.words, [["parent", "Main task", "Thread", ""]]);
     assert.equal(picked.none, 0);
+    // Both lists share the worker preference; toggling the picker keeps it open and searchable.
+    const workers = await page.evaluate(() => {
+      const { S, dock, renderThreadList } = (window as any).helperTest;
+      (window as any).scribeChat.closeMenu();
+      const base = S.threads.get("parent");
+      const previous = { hide: S.hidePageThreads, current: dock.view.threadId, stored: localStorage.getItem("scribe.agent.hidePageThreads") };
+      for (const [id, extra] of [
+        ["inactive-worker", {}], ["running-worker", { status: "running" }],
+        ["waiting-worker", { status: "waiting" }], ["pinned-worker", { pinned: true }],
+        ["selected-worker", {}],
+      ] as const) S.threads.set(id, { ...base, id, title: id, fromPage: true, ...extra });
+      S.hidePageThreads = true;
+      dock.view.threadId = "selected-worker";
+      const anchor = document.createElement("button");
+      document.body.append(anchor);
+      dock.threadMenu(anchor);
+      const menu = document.querySelector(".ag-menu")!;
+      const toggle = menu.querySelector<HTMLButtonElement>('[role="switch"]')!;
+      const labels = () => [...menu.querySelectorAll(".ag-menu-label")].map(node => node.textContent);
+      const initial = labels();
+      const off = toggle.getAttribute("aria-checked");
+      toggle.click();
+      const shown = labels().includes("inactive-worker");
+      const saved = localStorage.getItem("scribe.agent.hidePageThreads");
+      const sidebarList = document.createElement("div");
+      renderThreadList(sidebarList, { currentId: null, onPick() {}, onNew() {}, onNewIn() {} });
+      const sidebarOn = sidebarList.querySelector('[role="switch"]')!.getAttribute("aria-checked");
+      toggle.click();
+      const hidden = !labels().includes("inactive-worker");
+      const search = menu.querySelector<HTMLInputElement>("input")!;
+      search.value = "inactive-worker";
+      search.dispatchEvent(new Event("input"));
+      const found = labels();
+      const stayedOpen = menu.isConnected;
+      (window as any).scribeChat.closeMenu();
+      anchor.remove();
+      for (const id of ["inactive-worker", "running-worker", "waiting-worker", "pinned-worker", "selected-worker"]) S.threads.delete(id);
+      S.hidePageThreads = previous.hide;
+      dock.view.threadId = previous.current;
+      if (previous.stored === null) localStorage.removeItem("scribe.agent.hidePageThreads");
+      else localStorage.setItem("scribe.agent.hidePageThreads", previous.stored);
+      return { initial, off, shown, saved, sidebarOn, hidden, found, stayedOpen };
+    });
+    assert.equal(workers.initial.includes("inactive-worker"), false);
+    for (const id of ["running-worker", "waiting-worker", "pinned-worker", "selected-worker"]) assert.ok(workers.initial.includes(id), id);
+    assert.deepEqual({ ...workers, initial: undefined }, {
+      initial: undefined, off: "false", shown: true, saved: "0", sidebarOn: "true",
+      hidden: true, found: ["inactive-worker"], stayedOpen: true,
+    });
     // Words the title lacks may come from what was said in the thread, which the daemon searches.
     const said = await page.evaluate(async () => {
       const { searchThreads, searchMessages } = (window as any).helperTest;
