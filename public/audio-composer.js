@@ -13,11 +13,16 @@
       button.style.setProperty("--mic-level", level);
       button.querySelector(".ag-mic-status").textContent = state === "recording" ? `${Math.floor((Date.now() - started) / 1000)}s` : state === "transcribing" ? "…" : "";
     };
+    // Text so far while a streaming source transcribes (#832); replaced by the final text on stop.
+    const live = text => {
+      const box = view.dictationLive; if (!box) return;
+      box.textContent = text || ""; box.hidden = !text;
+    };
     const keyup = event => { if (held && (event.code === "Space" || event.key === "Control" || event.key === "Shift")) { held = false; stop(); } };
     const escape = event => { if (event.key === "Escape" && state !== "idle") { event.preventDefault(); event.stopImmediatePropagation(); cancel(); view.focus(); } };
     const blur = () => { if (held) cancel(); };
     const clear = () => {
-      clearInterval(timer); timer = null; session = null; owner = null; state = "idle"; level = 0; held = false; releasePending = false;
+      clearInterval(timer); timer = null; session = null; live(""); owner = null; state = "idle"; level = 0; held = false; releasePending = false;
       window.removeEventListener("keyup", keyup, true); window.removeEventListener("keydown", escape, true); window.removeEventListener("blur", blur);
       paint();
     };
@@ -34,7 +39,9 @@
         if (current !== epoch) return;
         if (!settings.available) { clear(); window.scribeApp?.openSettings?.("Audio"); return; }
         started = Date.now();
-        const next = await window.scribeAudio.dictate({ owner,
+        const streaming = Boolean(settings.streaming), preview = streaming && settings.input.livePreview !== false;
+        const next = await window.scribeAudio[streaming ? "stream" : "dictate"]({ owner, preview,
+          onText: text => { if (current === epoch && preview) live(text); },
           onLevel: v => { level = v; },
           onState: nextState => { if (current !== epoch) return; if (nextState === "recording" || nextState === "transcribing") { state = nextState; paint(); } },
         });

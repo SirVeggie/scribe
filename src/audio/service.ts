@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { openAiEngine } from "./engine.js";
 import { fileStore, normalizeSettings, type AudioStore } from "./settings.js";
 import type { AudioResult, SttEngine, SttSource, AudioSettings } from "./types.js";
+import type { StreamTarget } from "./stream.js";
 
 const wavKey = (source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -25,7 +26,7 @@ export class AudioService {
       ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) }));
     return { stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },
       input: settings.input, profiles, defaultSource: settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined),
-      sources, available: Boolean(source), wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
+      sources, available: Boolean(source), streaming: source ? (selected as Partial<SttSource>).streaming : undefined, wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
   }
   private profiles(settings: AudioSettings): SttSource[] {
     return [...(settings.stt.source ? [{ ...settings.stt, id: "__legacy__", name: "Speech-to-text" }] : []), ...settings.sources];
@@ -87,6 +88,18 @@ export class AudioService {
     if (next.stt.source && next.stt.source !== "__custom__" && !this.sources().some(s => s.id === next.stt.source)) throw new Error("Choose an existing OpenAI source.");
     this.store.write(next); return this.view();
   }
+  /** Where a live recording goes (#832): the default source's own stream, or a sliding window over its upload endpoint. */
+  streamTarget(): StreamTarget | AudioResult {
+    const settings = this.store.read(), selected = this.selected(settings) as SttSource, source = this.source(selected);
+    if (!source) return { ok: false, error: "no_source", message: "Choose a speech-to-text source in Settings → Audio." };
+    if (selected.streaming === "native") return { mode: "native", source };
+    if (selected.streaming === "window") return { mode: "window", transcribe: wav => this.transcribe(wav, { sourceId: selected.id }) };
+    return { ok: false, error: "engine", message: "Live transcription is off for this source." };
+  }
+  recordUsage(bytes: number, ok: boolean) {
+    const usage = this.usage(); usage.calls++; usage.bytes += bytes; if (!ok) usage.failed++;
+    this.store.writeUsage(usage);
+  }
   usage() {
     const day = new Date().toISOString().slice(0, 10), saved = this.store.readUsage();
     return saved?.day === day ? saved : { day, calls: 0, failed: 0, bytes: 0 };
@@ -117,8 +130,7 @@ export class AudioService {
       catch { result = { ok: false, error: controller.signal.aborted ? "timeout" : "network", message: controller.signal.aborted ? "Speech-to-text timed out." : "Cannot reach the speech-to-text source." }; }
       finally { clearTimeout(timer); }
       if (!result.ok && result.error === "format") this.wavOnly.add(wavKey(source, selected!.model));
-      const usage = this.usage(); usage.calls++; usage.bytes += audio.size; if (!result.ok) usage.failed++;
-      this.store.writeUsage(usage);
+      this.recordUsage(audio.size, result.ok);
       return result;
     } catch { return { ok: false, error: "engine", message: "Speech-to-text is unavailable." }; }
   }

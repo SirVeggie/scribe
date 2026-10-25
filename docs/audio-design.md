@@ -531,3 +531,24 @@ permissions and the indicator. C adds the mixer. D adds `speak`. R reuses all of
 3. Dictation inserts text and does not send it, unless the user turns "Send after dictation" on.
 4. Record-then-transcribe first; live partial transcripts come with phase R's streaming work.
 5. Notification sounds are off until the user turns them on.
+
+## Live transcription (#832, experimental)
+
+Each speech-to-text source has a **Live transcription** setting: Off (default), **Server stream**, or
+**Sliding window**. With it on, the composer streams the recording while the user speaks instead of
+uploading one clip at the end, and (with **Show text while dictating**) shows the text so far above the input.
+
+- The shell resamples the microphone to 16 kHz mono 16-bit PCM and sends it in 100 ms messages over
+  `WS /api/audio/stream?preview=0|1` (board origin only). The daemon answers `ready`, `text` (the whole
+  text so far) and `done` (`{ ok, text }` or a typed failure). Keys stay in the daemon.
+- **Server stream** proxies to the source's own stream, `{baseUrl}/stream?rate=16000` (Moonshine's
+  protocol: lines with partial and final text, `stop`, `done`). Line ids are 64-bit, so they are read
+  from the raw JSON text. Measured on the Moonshine server: the same transcript as an upload, about 30 ms
+  after stop instead of about 2 s for an 11 s clip.
+- **Sliding window** is for upload-only sources (Qwen3-ASR on llama.cpp, Whisper servers). The daemon cuts
+  the recording at pauses (≥ 500 ms after ≥ 1.5 s of audio, or at the quietest point near 25 s), so no word
+  straddles a cut and pieces need no overlap. Finished pieces are transcribed while the user goes on
+  speaking; on stop only the last piece is left. With the preview on, the open piece is re-transcribed
+  every 1.5 s and settles when it is cut. Leading silence is never sent. Pieces lose context across a
+  cut, which can cost some accuracy compared with one clip.
+- If the stream fails, the shell still has the recording and sends it as one WAV clip.

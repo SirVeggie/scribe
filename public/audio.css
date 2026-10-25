@@ -17,3 +17,10 @@
 .page-audio-stop { color: var(--text); white-space: nowrap; }
 .page-audio-stop[hidden] { display: none; }
 html.popout:not(.desktop).page-audio-recording .chrome { display: flex !important; }
+/* Live dictation text (#832): what a streaming source heard so far, above the input. */
+.ag-dictation-live {
+  padding: 6px 12px 0; color: var(--muted); font-size: 12px; line-height: 1.4;
+  max-height: 4.2em; overflow: hidden; display: flex; flex-direction: column-reverse;
+}
+.ag-dictation-live[hidden] { display: none; }
+.audio-settings > .setting-row[hidden] { display: none; }

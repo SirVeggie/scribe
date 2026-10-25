@@ -66,6 +66,7 @@ import { mlRouter } from "./ml/routes.js";
 import { audioRouter } from "./audio/routes.js";
 import { PageAudio } from "./audio/page.js";
 import { AudioService } from "./audio/service.js";
+import { audioStreamServer } from "./audio/stream.js";
 import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
@@ -245,7 +246,9 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
-  app.use("/api/audio", audioRouter(new AudioService({ sources: () => agentHost?.modelSources() ?? [] }), new PageAudio(id => store.pagePermissions(id))));
+  const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [] });
+  const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok));
+  app.use("/api/audio", audioRouter(audioService, new PageAudio(id => store.pagePermissions(id))));
   app.use(noteAgentSession);
   app.use(express.static(publicDir));
   // pdf.js for PDF file pages: the library, its worker, and the fonts, CMaps and decoders it fetches.
@@ -2398,7 +2401,13 @@ export async function startHttp(): Promise<http.Server> {
   server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
   const contentServer = http.createServer(app);
   // A page's script or a website must not read every page off the board's socket (#660).
-  const wss = new WebSocketServer({ server, path: "/ws", verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers) });
+  const wss = new WebSocketServer({ noServer: true, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers) });
+  // Two servers attached to one HTTP server abort each other's upgrades, so upgrades are routed by path.
+  server.on("upgrade", (req, socket, head) => {
+    if (audioStream.handle(req, socket, head)) return;
+    if (new URL(req.url || "/", "http://x").pathname !== "/ws") { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
+    wss.handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
+  });
 
   wss.on("connection", (socket) => {
     sockets.add(socket);

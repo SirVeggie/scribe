@@ -54,6 +54,7 @@
   }
   const model = row("Model", "model", "text", form); model.placeholder = "whisper-1";
   const language = row("Language", "language", "text", form); language.placeholder = "Auto";
+  const streaming = row("Live transcription (experimental)", "streaming", "select", form);
   function button(label, run) {
     const node = document.createElement("button"); node.type = "button"; node.textContent = label;
     node.addEventListener("click", run); return node;
@@ -67,7 +68,9 @@
   addActions.className = "settings-actions"; addActions.append(add); section.append(addActions);
   function edit(profile) {
     editing = profile; name.value = profile?.name || ""; model.value = profile?.model || "whisper-1";
-    language.value = profile?.language || ""; customUrl = profile?.custom?.baseUrl || ""; key.value = "";
+    language.value = profile?.language || "";
+    streaming.replaceChildren(); option(streaming, "", "Off"); option(streaming, "native", "Server stream (Moonshine)"); option(streaming, "window", "Sliding window");
+    streaming.value = profile?.streaming || ""; streaming.parentElement.syncSelect(); customUrl = profile?.custom?.baseUrl || ""; key.value = "";
     key.placeholder = profile?.custom?.hasKey ? "Saved (type to replace)" : "Optional";
     clearKey.hidden = !profile?.custom?.hasKey;
     source.replaceChildren(); option(source, "__custom__", "Custom");
@@ -85,7 +88,7 @@
   }
   form.onsubmit = async event => {
     event.preventDefault(); submit.disabled = true;
-    const body = { name: name.value, source: source.value, model: model.value, language: language.value };
+    const body = { name: name.value, source: source.value, model: model.value, language: language.value, streaming: streaming.value };
     if (source.value === "__custom__") body.custom = { baseUrl: url.value, ...(key.value.trim() ? { apiKey: key.value.trim() } : {}) };
     if (await change(editing ? "sources/" + encodeURIComponent(editing.id) : "sources", editing ? "PUT" : "POST", body)) {
       form.hidden = true; add.hidden = false;
@@ -106,7 +109,7 @@
       const detail = document.createElement("span"); detail.className = "ml-source-detail";
       let host = view.sources.find(s => s.id === profile.source)?.name || "Unavailable";
       if (profile.custom?.baseUrl) { try { host = new URL(profile.custom.baseUrl).host; } catch { host = profile.custom.baseUrl; } }
-      detail.textContent = " " + profile.model + " · " + host; text.append(title, detail);
+      detail.textContent = " " + profile.model + " · " + host + (profile.streaming ? " · live" : ""); text.append(title, detail);
       const testSource = button("Test", async () => {
         testSource.disabled = true; status.textContent = "Testing…";
         try { const result = await request("test", "POST", { sourceId: profile.id }); status.textContent = result.ok ? "Transcript: " + (result.text || "(empty)") : result.message || result.error; }
@@ -122,6 +125,7 @@
   let confirmRemove = async () => true;
   const send = row("Send after dictation", "send", "switch");
   const push = row("Push-to-talk (Ctrl+Shift+Space)", "push", "switch");
+  const livePreview = row("Show text while dictating", "live", "switch");
   const mic = row("Microphone", "mic", "select");
   const sourcesLink = document.createElement("button"); sourcesLink.type = "button";
   sourcesLink.className = "audio-sources-link"; sourcesLink.textContent = "Model sources →";
@@ -144,13 +148,16 @@
       renderSources();
       send.setAttribute("aria-checked", String(view.input.sendAfterDictation));
       push.setAttribute("aria-checked", String(view.input.pushToTalk));
+      livePreview.setAttribute("aria-checked", String(view.input.livePreview !== false));
+      livePreview.closest(".setting-row").hidden = !view.profiles.some(p => p.streaming);
       status.textContent = "";
       await devices();
     } catch (err) { status.textContent = err.message; }
   }
   let saving = Promise.resolve();
   function save() {
-    const body = { input: { sendAfterDictation: send.getAttribute("aria-checked") === "true", pushToTalk: push.getAttribute("aria-checked") === "true" } };
+    const body = { input: { sendAfterDictation: send.getAttribute("aria-checked") === "true", pushToTalk: push.getAttribute("aria-checked") === "true",
+      livePreview: livePreview.getAttribute("aria-checked") === "true" } };
     saving = saving.then(async () => {
       const res = await fetch("/api/audio/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const result = await res.json(); if (!res.ok) throw new Error(result.error);
@@ -158,7 +165,7 @@
     }).catch(err => { status.textContent = err.message; });
     return saving;
   }
-  [send, push].forEach(input => input.addEventListener("change", save));
+  [send, push, livePreview].forEach(input => input.addEventListener("change", save));
   mic.addEventListener("change", () => window.scribeAudio.setDevice(mic.value));
   navigator.mediaDevices?.addEventListener("devicechange", devices);
   section.append(status);

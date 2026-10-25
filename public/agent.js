@@ -5235,7 +5235,10 @@
       this.helperDock.hidden = true;
       this.helperApprovals = el("div", "ag-helper-approvals");
       this.helperApprovals.hidden = true;
-      box.append(this.slash, this.helperApprovals, this.helperDock, this.forkNote, this.ctxRow);
+      this.dictationLive = el("div", "ag-dictation-live");
+      this.dictationLive.hidden = true;
+      this.dictationLive.setAttribute("aria-live", "polite");
+      box.append(this.slash, this.helperApprovals, this.helperDock, this.forkNote, this.dictationLive, this.ctxRow);
       if (this.floating) {
         box.append(this.inputWrap);
       } else {
