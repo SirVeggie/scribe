@@ -7423,7 +7423,7 @@
       if (open) {
         this.ensureThread();
         setTimeout(() => this.view.focus(), 50);
-      }
+      } else focusBack.restore();
     },
     apply() {
       if (!this.pane) return;
@@ -7690,7 +7690,10 @@
       if (shown) {
         this.bindFeed();
         setTimeout(() => this.view.focus(), 60);
-      } else this.view.input.blur();
+      } else {
+        this.view.input.blur();
+        focusBack.restore();
+      }
     },
     setExpanded(expanded) {
       if (!expanded) this.view.closeHelper();
@@ -11921,6 +11924,32 @@
         return { ok: false, error: "unknown_op" };
     }
   }
+
+  /* ---------- focus return ---------- */
+
+  /**
+   * Where the focus was before a chat took it (#829). Closing the floating chat or the sidebar puts it back,
+   * into a page's own field too: the page frame refocuses what it had (http.ts, scribe-refocus).
+   */
+  const focusBack = {
+    target: null,
+    owns(node) {
+      return dock.owns(node) || Boolean(sidebar.pane?.contains(node)) || Boolean(full.root?.contains(node));
+    },
+    note(node) {
+      if (node instanceof Element && node !== document.body && !this.owns(node)) this.target = node;
+    },
+    restore() {
+      const target = this.target;
+      const at = document.activeElement;
+      // The user has moved on to something outside the chats: leave the focus there.
+      if (at && at !== document.body && !this.owns(at)) return;
+      if (!target?.isConnected || target.closest("[inert]") || target.checkVisibility?.() === false) return;
+      target.focus({ preventScroll: true });
+      if (target.tagName === "IFRAME") target.contentWindow?.postMessage({ type: "scribe-refocus" }, "*");
+    },
+  };
+  document.addEventListener("focusin", (event) => focusBack.note(event.target), true);
 
   /* ---------- keys ---------- */
 

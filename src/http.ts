@@ -2873,8 +2873,17 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
   window.addEventListener("wheel", closeMenu, { capture: true, passive: true });
   // Choosing an item, or clicking anywhere else in the board, takes focus from the page and closes the menu.
   window.addEventListener("blur", function () { menuOpen = false; });
+  // The board gives the focus back after its chat closes (#829): return it to the field the page had.
+  var lastFocus = null;
+  document.addEventListener("focusin", function (event) { lastFocus = event.target; }, true);
   window.addEventListener("message", function (event) {
     if (event.source !== parent || !event.data) return;
+    if (event.data.type === "scribe-refocus") {
+      if (lastFocus && lastFocus.isConnected && lastFocus !== document.body && lastFocus.focus) {
+        try { lastFocus.focus({ preventScroll: true }); } catch (err) {}
+      }
+      return;
+    }
     if (event.data.type === "scribe-select-all") {
       var sel = window.getSelection();
       if (sel && document.body) sel.selectAllChildren(document.body);
