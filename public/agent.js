@@ -2708,6 +2708,8 @@
       this.mdTimers = new Map();
       /** Built transcript steps by item id: { sig, node }. A step whose sig is unchanged is kept as it is (#431). */
       this.itemNodes = new Map();
+      // Closed explore groups: key -> fill(body), run the first time the group opens.
+      this.groupFills = new Map();
       /** Files waiting in the composer: { name, mimeType, size, data (base64), url (blob: for previews) }. */
       this.attachments = [];
       /** The page tab the floating chat's draft belongs to (it follows the active page). */
@@ -3516,6 +3518,7 @@
       const keepPlace = this.transcriptThreadId === id && this.transcriptHadContent && !this.stick;
       const savedTop = keepPlace ? this.scroll.scrollTop : 0;
       this.itemNodes.clear();
+      this.groupFills.clear();
       this.transcript.replaceChildren();
       this.queueList.replaceChildren();
       this.queueShown = true;
@@ -4099,7 +4102,17 @@
       if (searches) parts.push(`${searches} search${searches === 1 ? "" : "es"}`);
       if (other) parts.push(`${other} step${other === 1 ? "" : "s"}`);
       node.dataset.key = key;
-      const head = button("", "ag-group-head", (event) => this.toggle(key, event.currentTarget.closest(".ag-group")));
+      // dom-sync patches the group in the page from each new copy, so the handler finds the live node and
+      // the latest fill by key rather than closing over this copy.
+      const head = button("", "ag-group-head", (event) => {
+        const live = event.currentTarget.closest(".ag-group");
+        this.toggle(key, live);
+        const fill = this.groupFills.get(key);
+        if (fill && live.classList.contains("open")) {
+          this.groupFills.delete(key);
+          fill(live.querySelector(".ag-group-body"));
+        }
+      });
       head.dataset.key = key;
       head.append(
         running ? el("span", "ag-spin") : icon("search"),
@@ -4108,7 +4121,14 @@
         icon("chevron", "ag-ico ag-chev")
       );
       const body = el("div", "ag-group-body");
-      for (const it of items) body.append(this.itemNode(it, byParent, groupKey, () => this.renderTool(it, byParent)));
+      // A closed group's steps are drawn the first time it opens.
+      const fill = (target) => {
+        for (const it of items) target.append(this.itemNode(it, byParent, groupKey, () => this.renderTool(it, byParent)));
+      };
+      if (node.classList.contains("open")) {
+        this.groupFills.delete(key);
+        fill(body);
+      } else this.groupFills.set(key, fill);
       node.append(head, body);
       return node;
     }
