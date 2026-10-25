@@ -121,6 +121,7 @@ test("/clear opens a page-default draft in each chat layout without inheriting t
       const calls: string[] = [];
       const context = vm.createContext({
         activeTab: () => tab,
+        app: () => null,
         setDockPick: (id: string, thread: string | null) => {
           assert.equal(thread, null);
           calls.push(`clear:${id}`);

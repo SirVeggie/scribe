@@ -5136,6 +5136,8 @@
       this.input.addEventListener("keydown", (event) => this.onKey(event));
       this.input.addEventListener("keyup", (event) => {
         if (!/^(Arrow(Left|Right|Up|Down)|Home|End|Page(Up|Down))$/.test(event.key)) return;
+        // Up/down already moved the picker highlight on keydown; refreshing would reset it.
+        if (!this.slash.hidden && (event.key === "ArrowUp" || event.key === "ArrowDown")) return;
         this.snapSelection(event.key === "ArrowLeft" || event.key === "ArrowUp" || event.key === "Home" || event.key === "PageUp" ? -1 : 1);
         this.updatePicker();
       });
