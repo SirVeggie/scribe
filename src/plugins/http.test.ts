@@ -63,9 +63,18 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
     const bundledRow=page.locator('.plugin-entry[data-plugin="git-history"]');
     assert.match(await bundledRow.textContent()??"",/1\.1\.0/);assert.equal((await call("/api/plugins/git-history")).data.configuredEnabled,false);
     await bundledRow.getByRole("button",{name:/Review update/}).click();
-    await page.locator('dialog[open] summary').filter({hasText:"View diff"}).click();
+    // The update opens on its diff; Source switches the same view.
+    await page.locator('dialog[open] .plugin-code .ag-dl').first().waitFor();
     assert.match(await page.locator('dialog[open]').textContent()??"",/1\.1\.0/);
-    assert.equal(await page.getByRole("button",{name:"Merge with an agent",exact:true}).count(),1);
+    if(process.env.PLUGIN_SHOT)await page.locator('dialog[open]').screenshot({path:process.env.PLUGIN_SHOT});
+    await page.locator('dialog[open] .ag-seg-btn').filter({hasText:"Source"}).click();
+    assert.equal(await page.locator('dialog[open] .plugin-code-text').count()>0,true);
+    // Merge asks which model to use, in a menu over the dialog; Escape closes only the menu.
+    await page.getByRole("button",{name:"Merge with an agent…",exact:true}).click();
+    await page.locator('dialog[open] .ag-menu').waitFor();
+    if(process.env.PLUGIN_SHOT)await page.screenshot({path:process.env.PLUGIN_SHOT.replace(/\.png$/,"-menu.png")});
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator('.ag-menu').count(),0);assert.equal(await page.locator('dialog[open]').count(),1);
     await page.getByRole("button",{name:"Keep mine",exact:true}).click();
     assert.equal((await call("/api/plugins/git-history/files?path=local.txt")).data.files,"Keep this local edit");
     await bundledRow.getByRole("button",{name:/Review update/}).click();await page.getByRole("button",{name:"Take theirs",exact:true}).click();

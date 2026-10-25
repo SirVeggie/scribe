@@ -45,38 +45,73 @@
   }
   const base64=async file=>{const bytes=new Uint8Array(await file.arrayBuffer());let text="";for(let i=0;i<bytes.length;i+=32768)text+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(text);};
 
+  // Changes (diff) and Source, switched in place rather than hidden in collapsed sections.
+  function codeView(preview,m){
+    const wrap=el("div","plugin-code"),bar=el("div","plugin-code-bar"),seg=el("div","ag-seg"),view=el("div","plugin-code-view");
+    const render=window.AgentRender,files=preview.diff&&render?render.parsePatch(preview.diff):[];
+    const sources=Object.entries(preview.source??{"plugin.json":JSON.stringify(m,null,2)});
+    const fileHead=(path,extra)=>{const line=el("div","plugin-code-file");line.append(el("span","plugin-code-path",path));if(extra)line.append(extra);return line;};
+    const tabs={
+      changes:()=>{
+        if(!files.length){view.append(preview.diff?el("pre","plugin-source",preview.diff):el("p","plugin-code-empty","No file changes."));return;}
+        for(const file of files){const sum=el("span","plugin-code-sum");sum.append(el("span","plugin-code-add",`+${file.added}`),el("span","plugin-code-del",`−${file.removed}`));view.append(fileHead(file.path,sum),render.renderDiffFile(file,{collapsedAfter:300}));}
+      },
+      source:()=>{
+        for(const [path,text] of sources)view.append(fileHead(path),el("pre","plugin-code-text",text));
+        if(preview.sourceTruncated)view.append(el("p","plugin-code-empty","Source preview is limited; inspect the original archive for the complete source."));
+      },
+    };
+    const show=key=>{for(const b of seg.children)b.classList.toggle("on",b.dataset.tab===key);view.replaceChildren();view.scrollTop=0;tabs[key]();};
+    const tab=(key,label)=>{const b=el("button","ag-seg-btn",label);b.type="button";b.dataset.tab=key;b.addEventListener("click",()=>show(key));seg.append(b);};
+    if(preview.previous)tab("changes",files.length?`Changes · ${files.length} ${files.length===1?"file":"files"}`:"Changes");
+    tab("source",`Source · ${sources.length} ${sources.length===1?"file":"files"}`);
+    bar.append(seg);wrap.append(bar,view);show(preview.previous?"changes":"source");return wrap;
+  }
+
   async function reviewPackage(preview,archive,{allowOlder=false}={}) {
     if(preview.same&&!preview.parts?.settings&&!preview.parts?.state&&!preview.parts?.data)return false;
     if(preview.versionStatus==="older"&&!allowOlder)return false;
     const m=preview.manifest,dialog=el("dialog","confirm plugin-consent"),form=el("form");form.method="dialog";
     let approvePaths=!(preview.parts?.paths?.length);
-    form.append(el("h2","",`${preview.versionStatus==="older"?"Downgrade":preview.previous?"Update":"Install"} ${m.name} ${m.version}?`),el("p","",m.summary));
-    if(m.backend)form.append(el("p","permission-ask-what","Runs code on this PC as you."));
-    if(preview.previous?.author!==m.author && preview.previous)form.append(el("p","settings-hint","The author differs from the installed package."));
+    const head=el("header","plugin-consent-head"),body=el("div","plugin-consent-body");
+    head.append(el("h2","",`${preview.versionStatus==="older"?"Downgrade":preview.previous?"Update":"Install"} ${m.name}?`));
+    const version=el("p","plugin-consent-version");version.append(preview.previous?`${preview.previous.version} → `:"",el("strong","",m.version));head.append(version);
+    if(m.summary)head.append(el("p","plugin-consent-summary",m.summary));
+    form.append(head,body);
+    if(m.backend)body.append(el("p","plugin-consent-warn","Runs code on this PC as you."));
+    if(preview.previous?.author!==m.author && preview.previous)body.append(el("p","plugin-consent-note","The author differs from the installed package."));
     const customized=preview.previous?.edited||preview.previous?.customized;
-    if(customized)form.append(el("p","settings-hint","This plugin may contain local source changes. Keep mine preserves them; Take theirs replaces them. Merge with an agent to combine both versions."));
-    const access=el("ul");for(const folder of m.access.files)access.append(el("li","",`Files: ${folder}`));for(const host of m.access.network)access.append(el("li","",`Network: ${host}`));
-    form.append(access,el("p","",`${m.templates.length} templates · ${Object.keys(m.methods).length} methods · ${m.risky?"resets page grants after agent edits":"keeps page grants after agent edits"}`));
-    if(preview.changes){const changes=el("ul");for(const key of ["methods","settings","templates","components"])if(preview.changes[key]?.length)changes.append(el("li","",`${key}: ${preview.changes[key].join(", ")}`));if(preview.changes.access)changes.append(el("li","","Declared file or network access changed."));if(preview.changes.risky)changes.append(el("li","","Page grant reset behavior changed."));form.append(changes);}
-    const source=el("details"),summary=el("summary","","View source"),code=el("pre","plugin-source");
-    code.textContent=Object.entries(preview.source??{"plugin.json":JSON.stringify(m,null,2)}).map(([path,text])=>`${path}\n${text}`).join("\n\n");source.append(summary,code);form.append(source);
-    if(preview.sourceTruncated)source.append(el("p","settings-hint","Source preview is limited; inspect the original archive for the complete source."));
-    if(preview.diff){const diff=el("details"),label=el("summary","","View diff");diff.append(label,el("pre","plugin-source",preview.diff));form.append(diff);}
-    if(preview.parts?.settings)form.append(el("h4","","Imported settings"),el("pre","plugin-source",JSON.stringify(preview.parts.settings,null,2)));
-    if(preview.parts?.state)form.append(el("p","",`Replace shared state with ${preview.parts.stateKeys.length} imported keys.`));
-    if(preview.parts?.data)form.append(el("p","",`Replace the data folder with ${preview.parts.dataFiles.length} imported files.`));
+    if(customized)body.append(el("p","plugin-consent-note","This plugin may have local source changes. Keep mine leaves them as they are, Take theirs replaces them, and Merge with an agent combines both."));
+    // Facts: one labeled row each, so the dialog reads as a list rather than loose paragraphs.
+    const facts=el("dl","plugin-consent-facts"),fact=(label,lines)=>{if(!lines.length)return;const dd=el("dd");for(const line of lines)dd.append(el("div","",line));facts.append(el("dt","",label),dd);};
+    fact("Access",[...m.access.files.map(folder=>`Files: ${folder}`),...m.access.network.map(host=>`Network: ${host}`)].concat(m.access.files.length||m.access.network.length?[]:["None declared"]));
+    const count=(n,word)=>`${n} ${word}${n===1?"":"s"}`;
+    fact("Contents",[`${count(m.templates.length,"template")} · ${count(Object.keys(m.methods).length,"method")}`,m.risky?"Resets page grants after agent edits":"Keeps page grants after agent edits"]);
+    if(preview.changes){const lines=[];for(const key of ["methods","settings","templates","components"])if(preview.changes[key]?.length)lines.push(`${key[0].toUpperCase()}${key.slice(1)}: ${preview.changes[key].join(", ")}`);if(preview.changes.access)lines.push("Declared file or network access changed");if(preview.changes.risky)lines.push("Page grant reset behavior changed");fact("Changed",lines);}
+    if(preview.parts?.state)fact("State",[`Replaces shared state with ${count(preview.parts.stateKeys.length,"imported key")}`]);
+    if(preview.parts?.data)fact("Data",[`Replaces the data folder with ${count(preview.parts.dataFiles.length,"imported file")}`]);
+    body.append(facts);
+    if(preview.parts?.settings)body.append(el("h4","","Imported settings"),el("pre","plugin-source",JSON.stringify(preview.parts.settings,null,2)));
+    body.append(codeView(preview,m));
     const controls=el("div","confirm-actions");
     const cancel=el("button","",preview.previous?"Keep mine":"Cancel");cancel.value="cancel";
     const install=el("button","primary",preview.previous?"Take theirs":"Install");install.value="install";
     install.disabled=!approvePaths;
-    if(!approvePaths){const paths=el("ul");for(const item of preview.parts.paths)for(const folder of item.paths)paths.append(el("li","",`${item.label}: ${folder}`));form.append(paths);const allow=button("",()=>{approvePaths=!approvePaths;allow.setAttribute("aria-checked",String(approvePaths));install.disabled=!approvePaths;});allow.className="pill-toggle";allow.setAttribute("role","switch");allow.setAttribute("aria-checked","false");row(form,"Allow imported folders",allow);}
+    if(!approvePaths){const paths=el("ul","plugin-consent-paths");for(const item of preview.parts.paths)for(const folder of item.paths)paths.append(el("li","",`${item.label}: ${folder}`));body.append(paths);const allow=button("",()=>{approvePaths=!approvePaths;allow.setAttribute("aria-checked",String(approvePaths));install.disabled=!approvePaths;});allow.className="pill-toggle";allow.setAttribute("role","switch");allow.setAttribute("aria-checked","false");row(body,"Allow imported folders",allow);}
     controls.append(cancel);
-    if(customized){const merge=el("button","","Merge with an agent");merge.value="merge";controls.append(merge);}
+    let mergeWith=null;
+    if(customized&&window.scribeChat?.pickModel){
+      // Pick the merge agent's model from the chat's model menu; the pick closes the dialog.
+      const merge=el("button","","Merge with an agent…");merge.type="button";
+      merge.addEventListener("click",async()=>{const choice=await window.scribeChat.pickModel(merge,{placeholder:"Model for the merge"});if(choice){mergeWith=choice;dialog.close("merge");}});
+      controls.append(merge);
+    }
+    dialog.addEventListener("cancel",event=>{if(window.scribeChat?.closeMenu?.())event.preventDefault();});
     let copyId;
-    if(preview.previous&&preview.previous.author!==m.author){copyId=el("input","ag-input");copyId.value=`${m.id.slice(0,58)}-copy`;row(form,"Copy id",copyId);const copy=el("button","","Install as a renamed copy");copy.value="copy";controls.append(copy);}
+    if(preview.previous&&preview.previous.author!==m.author){copyId=el("input","ag-input");copyId.value=`${m.id.slice(0,58)}-copy`;row(body,"Copy id",copyId);const copy=el("button","","Install as a renamed copy");copy.value="copy";controls.append(copy);}
     controls.append(install);form.append(controls);dialog.append(form);document.body.append(dialog);dialog.showModal();
     const choice=await new Promise(resolve=>dialog.addEventListener("close",()=>resolve(dialog.returnValue),{once:true}));dialog.remove();
-    if(choice==="merge"){const result=await request("/merge","POST",{archive,id:m.id});if(result.thread)window.scribeChat?.openThread(result.thread);return false;}
+    if(choice==="merge"&&mergeWith){const result=await request("/merge","POST",{archive,id:m.id,...mergeWith});if(result.thread)window.scribeChat?.openThread(result.thread);return false;}
     if(choice==="copy"){const result=await request("/copy","POST",{archive,id:copyId.value});return reviewPackage(result.preview,result.archive);}
     if(choice!=="install")return false;
     await request("/install","POST",{archive,hash:preview.hash,replace:!!preview.previous,approvePaths});return true;

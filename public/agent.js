@@ -1538,7 +1538,8 @@
     }
     menu.append(list);
     renderItems();
-    document.body.append(menu);
+    // Inside a modal dialog the menu must sit in its top layer, or the dialog covers it and makes it inert.
+    (anchor.closest("dialog[open]") || document.body).append(menu);
     function positionMenu() {
       menu.style.maxHeight = `${window.innerHeight - 24}px`;
       const rect = anchor.isConnected ? anchor.getBoundingClientRect() : anchorRect;
@@ -1555,6 +1556,29 @@
     openMenuOnClose = onClose;
     setTimeout(() => document.addEventListener("mousedown", onMenuOutside, true), 0);
     return menu;
+  }
+
+  /** A model menu for other parts of the app (the plugin merge): resolves { provider, model }, or null when closed. */
+  function pickModel(anchor, { placeholder = "Search models" } = {}) {
+    return new Promise((resolve) => {
+      const p = prefs();
+      const current = providerAvailable(p.provider) ? { provider: p.provider, model: p.models?.[p.provider] || "default" } : null;
+      let picked = null;
+      const items = [];
+      for (const provider of PROVIDERS) {
+        if (!providerAvailable(provider)) continue;
+        items.push(...modelMenuItems(provider, modelsOf(provider), (m) => ({
+          label: m.label,
+          detail: m.id !== m.label ? m.id : m.description,
+          search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
+          checked: current?.provider === provider && current.model === m.id,
+          run: () => { picked = { provider, model: m.id }; },
+        })));
+      }
+      if (!items.length) items.push({ label: "No agent provider is available", disabled: true });
+      // closeMenu calls onClose before the row's run, so read the pick a tick later.
+      if (!openMenu(anchor, items, { search: true, width: 300, placeholder, onClose: () => queueMicrotask(() => resolve(picked)) })) resolve(null);
+    });
   }
 
   /* ---------- modal helper ---------- */
@@ -12402,7 +12426,7 @@
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), openMcpServers: (opts) => void mcpServers.open(opts), openMcpPermissions: () => void mcpServers.permissionsDialog(), editMcpServer: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

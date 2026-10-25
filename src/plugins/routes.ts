@@ -57,9 +57,13 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
   router.post("/merge",wrap(async req=>{
     user(req);const files=await unzip(Buffer.from(String(req.body?.archive),"base64")),preview=service.preview(files),id=String(req.body?.id);
     if(preview.manifest.id!==id)throw new Error("Plugin id mismatch");
-    const folders=service.prepareMerge(id,files),providers=await host.providerStatus(),provider=providers.find(p=>p.available)?.id;
-    if(!provider)throw new Error("No agent provider is available for the merge");
-    const thread=host.createThread({provider,model:"default",mode:"code",approval:"edits",cwd:folders.source,title:`Merge ${preview.manifest.name} update`,scope:{kind:"global",ref:null}},{remember:false});
+    const providers=await host.providerStatus(),asked=req.body?.provider===undefined?undefined:String(req.body.provider);
+    // The dialog's model menu names the provider and model; without one, the first available provider's default.
+    const provider=asked===undefined?providers.find(p=>p.available)?.id:providers.find(p=>p.id===asked&&p.available)?.id;
+    if(!provider)throw new Error(asked===undefined?"No agent provider is available for the merge":`${asked} is not available for the merge`);
+    const model=typeof req.body?.model==="string"&&req.body.model.trim()?req.body.model.trim():"default";
+    const folders=service.prepareMerge(id,files);
+    const thread=host.createThread({provider,model,mode:"code",approval:"edits",cwd:folders.source,title:`Merge ${preview.manifest.name} update`,scope:{kind:"global",ref:null}},{remember:false});
     host.send(thread.id,{text:`Merge an imported update of plugin ${id} into the source in this workspace. The user's local source is in the workspace root; incoming files are at ${folders.incoming}; the exported base (or installed version as reference when no base was provided) is at ${folders.base}. ${Object.keys(files).some(name=>name.startsWith("scribe/base/"))?"An exported common base is provided.":"No common ancestor is known. The installed reference may itself contain local customizations: inspect and preserve them rather than treating it as an unchanged common base."} Preserve both sides' intended changes, update plugin.json's semver, run plugin_reload to validate and bundle, then plugin_install with replace:true to ask for activation. Do not edit .scribe-merge or .git. Plugin methods, settings, actions and permission changes need to remain visible in the install preview.`,from:"scribe"});
     return {ok:true,thread:thread.id};
   }));
