@@ -100,17 +100,18 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     // A search matches its words one by one, in any order.
     assert.deepEqual(picked.words, [["parent", "Main task", "Thread", ""]]);
     assert.equal(picked.none, 0);
-    // Both lists share the worker preference; toggling the picker keeps it open and searchable.
+    // The picker keeps its own worker and compact switches; toggling them keeps it open and searchable.
     const workers = await page.evaluate(() => {
       const { S, dock, renderThreadList } = (window as any).helperTest;
       (window as any).scribeChat.closeMenu();
       const base = S.threads.get("parent");
-      const previous = { hide: S.hidePageThreads, current: dock.view.threadId, stored: localStorage.getItem("scribe.agent.hidePageThreads") };
+      const previous = { hide: S.dockHidePageThreads, side: S.hidePageThreads, current: dock.view.threadId, stored: localStorage.getItem("scribe.agent.dockHidePageThreads"), compact: localStorage.getItem("scribe.agent.dockCompactThreads") };
       for (const [id, extra] of [
         ["inactive-worker", {}], ["running-worker", { status: "running" }],
         ["waiting-worker", { status: "waiting" }], ["pinned-worker", { pinned: true }],
         ["selected-worker", {}],
       ] as const) S.threads.set(id, { ...base, id, title: id, fromPage: true, ...extra });
+      S.dockHidePageThreads = true;
       S.hidePageThreads = true;
       dock.view.threadId = "selected-worker";
       const anchor = document.createElement("button");
@@ -123,10 +124,14 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       const off = toggle.getAttribute("aria-checked");
       toggle.click();
       const shown = labels().includes("inactive-worker");
-      const saved = localStorage.getItem("scribe.agent.hidePageThreads");
+      const saved = localStorage.getItem("scribe.agent.dockHidePageThreads");
       const sidebarList = document.createElement("div");
       renderThreadList(sidebarList, { currentId: null, onPick() {}, onNew() {}, onNewIn() {} });
       const sidebarOn = sidebarList.querySelector('[role="switch"]')!.getAttribute("aria-checked");
+      const compactSwitch = menu.querySelectorAll<HTMLButtonElement>('[role="switch"]')[1]!;
+      const compactBefore = menu.classList.contains("compact");
+      compactSwitch.click();
+      const compact = [compactBefore, menu.classList.contains("compact"), compactSwitch.getAttribute("aria-checked"), localStorage.getItem("scribe.agent.dockCompactThreads"), menu.querySelector(".ag-menu-item .ag-prov") !== null];
       toggle.click();
       const hidden = !labels().includes("inactive-worker");
       const search = menu.querySelector<HTMLInputElement>("input")!;
@@ -137,16 +142,20 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
       (window as any).scribeChat.closeMenu();
       anchor.remove();
       for (const id of ["inactive-worker", "running-worker", "waiting-worker", "pinned-worker", "selected-worker"]) S.threads.delete(id);
-      S.hidePageThreads = previous.hide;
+      S.dockHidePageThreads = previous.hide;
+      S.hidePageThreads = previous.side;
       dock.view.threadId = previous.current;
-      if (previous.stored === null) localStorage.removeItem("scribe.agent.hidePageThreads");
-      else localStorage.setItem("scribe.agent.hidePageThreads", previous.stored);
-      return { initial, off, shown, saved, sidebarOn, hidden, found, stayedOpen };
+      for (const [key, value] of [["scribe.agent.dockHidePageThreads", previous.stored], ["scribe.agent.dockCompactThreads", previous.compact]] as const) {
+        if (value === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      }
+      return { initial, off, shown, saved, sidebarOn, compact, hidden, found, stayedOpen };
     });
     assert.equal(workers.initial.includes("inactive-worker"), false);
     for (const id of ["running-worker", "waiting-worker", "pinned-worker", "selected-worker"]) assert.ok(workers.initial.includes(id), id);
     assert.deepEqual({ ...workers, initial: undefined }, {
-      initial: undefined, off: "false", shown: true, saved: "0", sidebarOn: "true",
+      initial: undefined, off: "false", shown: true, saved: "0", sidebarOn: "false",
+      compact: [false, true, "true", "1", true],
       hidden: true, found: ["inactive-worker"], stayedOpen: true,
     });
     // Words the title lacks may come from what was said in the thread, which the daemon searches.

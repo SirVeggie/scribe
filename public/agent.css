@@ -3047,6 +3047,23 @@ html.fx-off .ag-slash { transition: none; }
   color: var(--heading);
 }
 
+/* The floating chat's thread picker: provider marks, and a compact mode with titles only. */
+.ag-thread-menu .ag-menu-item > .ag-prov {
+  width: 13px;
+  height: 13px;
+}
+
+.ag-thread-menu.compact .ag-menu-detail {
+  display: none;
+}
+
+.ag-thread-menu.compact .ag-menu-item {
+  min-height: 24px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 12.5px;
+}
+
 /* A helper under the thread that started it. */
 .ag-menu-item.sub {
   width: calc(100% - 14px);
@@ -3523,6 +3540,37 @@ html.fx-off .ag-slash { transition: none; }
 .ag-list.compact .ag-row-title {
   font-size: 12px;
   line-height: 1.3;
+}
+
+/* Compact rows: the provider mark beside the title, and the changes at the row's end. */
+.ag-row-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ag-row-line .ag-prov {
+  width: 12px;
+  height: 12px;
+}
+
+/* The changes fill the archive and delete buttons' room, and give way to them on hover. */
+.ag-list.compact .ag-row-wrap > .ag-row:has(.ag-row-counts) {
+  padding-right: 4px;
+}
+
+.ag-row-counts {
+  min-width: 46px;
+  justify-content: flex-end;
+  font-size: 10.5px;
+}
+
+@media (hover: hover) {
+  .ag-row-wrap:hover .ag-row-counts,
+  .ag-row-wrap:focus-within .ag-row-counts {
+    visibility: hidden;
+  }
 }
 
 .ag-list.compact .ag-dot {

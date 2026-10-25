@@ -266,7 +266,7 @@ test("the floating thread menu explicitly moves the composer", () => {
   const menu = source.slice(source.lastIndexOf("    threadMenu(anchor) {"), source.indexOf("    pick(id) {", source.lastIndexOf("    threadMenu(anchor) {")));
   const dock = vm.runInNewContext(`({${menu}})`, {
     S: { threads: new Map() }, activeTab: () => ({ id: "page" }),
-    hiddenWorkspaceKeys: () => new Set(), setDockPick() {},
+    hiddenWorkspaceKeys: () => new Set(), setDockPick() {}, spaceFilterId: () => null, dockCompact: () => false,
     openMenu: (_anchor: any, entries: any[]) => { items = entries; },
   });
   dock.view = { startDraft: (...values: any[]) => { args = values; } };

@@ -19,6 +19,9 @@
     presets: "scribe.agent.showPresets",
     hidePage: "scribe.agent.hidePageThreads",
     compact: "scribe.agent.compactThreads",
+    dockCompact: "scribe.agent.dockCompactThreads",
+    dockHidePage: "scribe.agent.dockHidePageThreads",
+    spaceLists: "scribe.agent.spaceLists",
     collapsed: "scribe.agent.collapsedGroups",
     fullSide: "scribe.agent.fullSideWidth",
   };
@@ -34,9 +37,58 @@
     { id: "mod", label: "Ctrl+Enter" },
   ];
 
-  /** The thread list shows only each thread's title and status dot (Agent settings). */
+  /** The thread list shows each thread on one line: status, provider, title and changes (Agent settings). */
   function compactThreads() {
     return localStorage.getItem(LS.compact) === "1";
+  }
+
+  /** The floating chat's thread picker has its own Compact switch. */
+  function dockCompact() {
+    return localStorage.getItem(LS.dockCompact) === "1";
+  }
+
+  const LIST_FILTERS = ["here", "workspaces", "all", "archived"];
+
+  /** Per space id: { filter, space } for the thread list, so each space keeps its own (#838). */
+  function spaceLists() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS.spaceLists) || "{}");
+      return saved && typeof saved === "object" ? saved : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Load the active space's thread list filter and Space switch when the space changed.
+   * Without a space, the one saved filter applies. The old Space filter becomes All with the switch on.
+   */
+  function syncSpaceList() {
+    const id = app()?.space?.()?.id || null;
+    if (S.listSpace === id) return;
+    S.listSpace = id;
+    const saved = id ? spaceLists()[id] : null;
+    const plain = localStorage.getItem(LS.filter);
+    const filter = saved ? saved.filter : plain === "space" ? "all" : plain;
+    S.filter = LIST_FILTERS.includes(filter) ? filter : "here";
+    S.spaceOnly = Boolean(id && (saved ? saved.space : plain === "space"));
+  }
+
+  function saveSpaceList() {
+    const id = S.listSpace;
+    if (!id) {
+      localStorage.setItem(LS.filter, S.filter);
+      return;
+    }
+    const all = spaceLists();
+    all[id] = { filter: S.filter, space: S.spaceOnly };
+    localStorage.setItem(LS.spaceLists, JSON.stringify(all));
+  }
+
+  /** The active space's id while the Space switch is on: both thread lists then show only threads started there. */
+  function spaceFilterId() {
+    syncSpaceList();
+    return S.spaceOnly ? S.listSpace : null;
   }
 
   function emptyEnter() {
@@ -220,9 +272,14 @@
      * chips are saved on the thread too (thread.draft); attached files only live here.
      */
     composers: new Map(),
-    filter: ["here", "space", "workspaces", "all", "archived"].includes(localStorage.getItem(LS.filter)) ? localStorage.getItem(LS.filter) : "here",
+    /** Thread list filter and Space switch, loaded per space by syncSpaceList. */
+    filter: "here",
+    spaceOnly: false,
+    listSpace: undefined,
     search: "",
     hidePageThreads: localStorage.getItem(LS.hidePage) !== "0",
+    /** The floating chat's picker keeps its own Show workers switch, starting from the sidebar's. */
+    dockHidePageThreads: (localStorage.getItem(LS.dockHidePage) ?? localStorage.getItem(LS.hidePage)) !== "0",
     /** Extra rows revealed per grouping key via "Show 10 more". */
     groupExtra: new Map(),
     /** Grouping keys of the thread list groups the user folded shut. */
@@ -1389,7 +1446,7 @@
    * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
    * Opening again from the anchor whose menu is already open closes it instead.
    */
-  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null, tools = null } = {}) {
+  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null, tools = null, className = "" } = {}) {
     // A re-render can swap the menu's button for a new one of the same kind while the menu stays open.
     if (openMenuEl && (openMenuAnchor === anchor || (!openMenuAnchor?.isConnected && openMenuAnchor?.className === anchor.className))) {
       closeMenu();
@@ -1398,7 +1455,7 @@
     closeMenu();
     // Keep the opening position when a selection re-renders and detaches the anchor.
     const anchorRect = anchor.getBoundingClientRect();
-    const menu = el("div", `ag-menu${search ? " ag-menu-keyed" : ""}`);
+    const menu = el("div", `ag-menu${search ? " ag-menu-keyed" : ""}${className ? ` ${className}` : ""}`);
     menu.style.width = `${width}px`;
     const list = el("div", "ag-menu-list");
     let filter = "";
@@ -1450,6 +1507,8 @@
         row.disabled = Boolean(item.disabled);
         if (search) row.tabIndex = -1;
         if (item.icon) row.append(icon(item.icon));
+        // lead: a node of its own before the label, such as a thread's provider mark.
+        if (item.lead) row.append(item.lead());
         const text = el("span", "ag-menu-text");
         const labelEl = el("span", "ag-menu-label", item.label);
         text.append(labelEl);
@@ -7024,18 +7083,29 @@
     return { scope, settings };
   }
 
-  function showWorkersToggle(changed) {
-    const workers = button("", "ag-switch-btn", (event) => {
-      S.hidePageThreads = !S.hidePageThreads;
-      localStorage.setItem(LS.hidePage, S.hidePageThreads ? "1" : "0");
-      event.currentTarget.setAttribute("aria-checked", String(!S.hidePageThreads));
-      renderLists();
+  /** A switch in a thread list's toolbox row. flip toggles the setting and returns its new value. */
+  function listSwitch(label, on, flip, tip) {
+    const sw = button("", "ag-switch-btn", (event) => {
+      event.currentTarget.setAttribute("aria-checked", String(flip()));
+    }, tip);
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(on));
+    sw.append(el("span", "ag-switch"), el("span", null, label));
+    return sw;
+  }
+
+  const WORKERS_TIP = "Running workers and workers waiting for input always show. This also shows inactive threads started by a page (board workers).";
+
+  /** Show workers for the sidebar and full-window list, or (dock) the floating chat's picker. */
+  function showWorkersToggle(changed, dock = false) {
+    const key = dock ? "dockHidePageThreads" : "hidePageThreads";
+    return listSwitch("Show workers", !S[key], () => {
+      S[key] = !S[key];
+      localStorage.setItem(dock ? LS.dockHidePage : LS.hidePage, S[key] ? "1" : "0");
+      if (!dock) renderLists();
       changed?.();
-    }, "Running workers and workers waiting for input always show. This also shows inactive threads started by a page (board workers).");
-    workers.setAttribute("role", "switch");
-    workers.setAttribute("aria-checked", String(!S.hidePageThreads));
-    workers.append(el("span", "ag-switch"), el("span", null, "Show workers"));
-    return workers;
+      return !S[key];
+    }, WORKERS_TIP);
   }
 
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
@@ -7087,11 +7157,10 @@
         (items.find((row) => row.classList.contains("ag-row-active")) || items[0])?.click();
       }
     };
+    syncSpaceList();
     const seg = el("div", "ag-seg small");
     for (const [id, label] of [
       ["here", "Here"],
-      // Threads started in the active space (#260), once the user has spaces.
-      ...(app()?.space?.() ? [["space", "Space"]] : []),
       ["workspaces", "Workspaces"],
       ["all", "All"],
       ["archived", "Archived"],
@@ -7099,7 +7168,7 @@
       seg.append(
         button(label, `ag-seg-btn${S.filter === id ? " on" : ""}`, () => {
           S.filter = id;
-          localStorage.setItem(LS.filter, id);
+          saveSpaceList();
           renderLists();
         })
       );
@@ -7108,15 +7177,21 @@
     newBtn.append(icon("plus"), el("span", null, "New"));
     // Toolbox row above the threads: list toggles that change which rows show, or how.
     const tools = el("div", "ag-list-tools");
-    const workers = showWorkersToggle();
-    const compact = button("", "ag-switch-btn", () => {
+    // Threads started in the active space (#260), once the user has spaces. The floating chat follows it too.
+    if (S.listSpace) {
+      tools.append(listSwitch("Space", S.spaceOnly, () => {
+        S.spaceOnly = !S.spaceOnly;
+        saveSpaceList();
+        renderLists();
+        return S.spaceOnly;
+      }, "Only threads started in this space, here and in the floating chat"));
+    }
+    const compact = listSwitch("Compact", compactThreads(), () => {
       localStorage.setItem(LS.compact, compactThreads() ? "0" : "1");
       renderLists();
-    }, "Each thread shows only its title and status, in a smaller font with less spacing");
-    compact.setAttribute("role", "switch");
-    compact.setAttribute("aria-checked", String(compactThreads()));
-    compact.append(el("span", "ag-switch"), el("span", null, "Compact"));
-    tools.append(workers, compact);
+      return compactThreads();
+    }, "Each thread shows only its title, provider, status and changes, in a smaller font with less spacing");
+    tools.append(showWorkersToggle(), compact);
     const oldTools = top.querySelector(".ag-list-tools");
     if (oldTools) window.scribeSyncChildren(oldTools, [...tools.childNodes]);
     window.scribeSyncChildren(top, [search, seg, newBtn, oldTools || tools, ...movedBanners()]);
@@ -7139,7 +7214,7 @@
       const q = S.search.trim().toLowerCase();
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
-      const spaceId = S.filter === "space" ? app()?.space?.()?.id : null;
+      const spaceId = spaceFilterId();
       if (spaceId) threads = threads.filter((t) => t.space === spaceId);
       // Threads with no scope at all group here too, under No workspace.
       if (S.filter === "workspaces") threads = threads.filter((t) => workspaceDir(t) || t.scope.kind === "workspace");
@@ -7349,12 +7424,22 @@
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
     const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : label || t.title;
     const title = el("span", "ag-row-title", name);
-    if (compactThreads()) main.append(title);
-    else main.append(title, threadRowMeta(t));
+    const compact = compactThreads();
+    if (compact) {
+      const line = el("span", "ag-row-line");
+      line.append(providerIcon(t.provider), title);
+      main.append(line);
+    } else main.append(title, threadRowMeta(t));
     const found = threadMatchSnippet(t, S.search);
     if (found) main.append(el("span", "ag-row-found", found));
     row.append(dot, main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
+    // Compact rows keep the changes, at the row's end.
+    if (compact && t.stats.files) {
+      const changes = R.counts(t.stats.added, t.stats.removed);
+      changes.classList.add("ag-row-counts");
+      row.append(changes);
+    }
     // Measure the live title: rows are patched in place and the pane can be resized.
     const titleTip = (event) => {
       const row = event.currentTarget;
@@ -7873,22 +7958,25 @@
     threadMenu(anchor) {
       const tab = activeTab();
       // A helper sits under the thread that started it, as in the thread list.
-      const threads = [...S.threads.values()].filter((t) => !t.archived && !nestsUnder(t)).sort((a, b) => threadRank(b) - threadRank(a));
+      // The sidebar's Space switch applies here too (#838).
+      const spaceId = spaceFilterId();
+      const threads = [...S.threads.values()].filter((t) => !t.archived && !nestsUnder(t) && (!spaceId || t.space === spaceId || t.id === this.view.threadId)).sort((a, b) => threadRank(b) - threadRank(a));
       const pageThreads = tab ? threads.filter((t) => t.scope.kind === "page" && t.scope.ref === tab.id) : [];
       const others = threads.filter((t) => !pageThreads.includes(t));
       const items = [];
       const currentId = this.view.threadId;
       const hiddenDirs = hiddenWorkspaceKeys();
-      const add = (t, detail) => {
+      const lead = (t) => () => providerIcon(t.provider);
+      const add = (t, where) => {
         const helpers = helpersOf(t.id).filter((h) => !h.archived);
         const searchOnly = () => t.id !== currentId && !helpers.some((h) => h.id === currentId) &&
-          (inHiddenWorkspace(t, hiddenDirs) || (S.hidePageThreads && t.fromPage && t.status !== "running" && t.status !== "waiting" && !t.pinned));
-        items.push({ label: t.title, detail, checked: t.id === currentId, searchOnly, run: () => this.pick(t.id) });
+          (inHiddenWorkspace(t, hiddenDirs) || (S.dockHidePageThreads && t.fromPage && t.status !== "running" && t.status !== "waiting" && !t.pinned));
+        items.push({ label: t.title, detail: `${modelLabel(t.provider, t.model)} · ${where}`, lead: lead(t), checked: t.id === currentId, searchOnly, run: () => this.pick(t.id) });
         // Working ones and the open one always show; of the rest, the latest two. A search finds them all.
         const must = (h) => h.status !== "idle" || h.id === currentId;
         const latest = helpers.filter((h) => !must(h)).slice(-2);
         for (const h of helpers) {
-          items.push({ label: helperName(h), detail: `Helper · ${threadWhenText(h)}`, search: t.title, sub: true, searchOnly: () => searchOnly() || (!must(h) && !latest.includes(h)), checked: h.id === currentId, run: () => this.pick(h.id) });
+          items.push({ label: helperName(h), detail: `Helper · ${modelLabel(h.provider, h.model)} · ${threadWhenText(h)}`, search: t.title, lead: lead(h), sub: true, searchOnly: () => searchOnly() || (!must(h) && !latest.includes(h)), checked: h.id === currentId, run: () => this.pick(h.id) });
         }
       };
       items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) setDockPick(tab.id, null); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }, {}, true); this.renderTitle(); } });
@@ -7896,9 +7984,16 @@
       for (const t of pageThreads) add(t, threadWhenText(t));
       if (others.length) items.push({ header: "Recent" });
       for (const t of others) add(t, `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`);
-      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10, tools: (refresh) => {
+      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10, className: `ag-thread-menu${dockCompact() ? " compact" : ""}`, tools: (refresh) => {
         const tools = el("div", "ag-list-tools ag-menu-tools");
-        tools.append(showWorkersToggle(refresh));
+        // Its own Compact switch: titles and provider marks only. A search still matches the hidden details.
+        const compact = listSwitch("Compact", dockCompact(), () => {
+          const on = !dockCompact();
+          localStorage.setItem(LS.dockCompact, on ? "1" : "0");
+          compact.closest(".ag-menu")?.classList.toggle("compact", on);
+          return on;
+        }, "Each thread shows only its title and provider");
+        tools.append(showWorkersToggle(refresh, true), compact);
         return tools;
       } });
     },
@@ -10730,7 +10825,7 @@
               renderLists();
             }
           ),
-          { id: "ag-compact-label", hint: "Each thread shows only its title and status dot, in a smaller font with less spacing." }
+          { id: "ag-compact-label", hint: "Each thread shows only its title, provider, status and changes, in a smaller font with less spacing." }
         ),
         settingRow(
           "Show reasoning expanded",
