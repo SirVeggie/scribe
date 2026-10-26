@@ -7353,6 +7353,159 @@
     }, WORKERS_TIP);
   }
 
+  /**
+   * The working glow of thread rows (#836): one WebGL canvas over each thread list, its shader painting light
+   * along the bottom and left edges of the working rows only, so many working threads cost one draw call.
+   * It runs at ~30 fps while a working row shows, stops otherwise, and falls back to static CSS without
+   * WebGL or with reduced motion.
+   */
+  const rowGlow = (() => {
+    const MAX = 16;
+    const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+    const FS = `precision mediump float;
+uniform float t;uniform vec4 rects[${MAX}];uniform int n;uniform float dpr;uniform vec3 acc;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}
+float fbm(vec2 p){float s=0.,a=.5;for(int i=0;i<4;i++){s+=a*vn(p);p*=2.03;a*=.5;}return s;}
+float sdr(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return length(max(q,0.))+min(max(q.x,q.y),0.)-r;}
+void main(){vec2 p=gl_FragCoord.xy;vec4 o=vec4(0.);
+for(int i=0;i<${MAX};i++){if(i>=n)break;vec4 r=rects[i];
+float m=clamp(.5-sdr(p-(r.xy+r.zw*.5),r.zw*.5,8.*dpr),0.,1.);if(m<=0.)continue;
+float ly=(p.y-r.y)/r.w;float f=fbm(vec2((p.x-r.x)/(64.*dpr)-t*.8,t*.2));
+float g=exp(-ly*7.)*(.3+.9*f);float l=exp(-(p.x-r.x)/(5.*dpr));
+vec3 col=mix(acc,vec3(.6,.95,.85),f);float a=(.5*g+.35*l*(.6+.4*sin(t*2.5)))*m;
+o.rgb+=col*a;o.a+=a;}
+gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
+    const hosts = new Map();
+    let raf = 0;
+    let last = 0;
+    let broken = false;
+    const still = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function setup(host) {
+      const cv = el("canvas", "ag-glow");
+      cv.dataset.key = "glow";
+      const gl = cv.getContext("webgl", { premultipliedAlpha: true, alpha: true, antialias: false });
+      if (!gl) return null;
+      const shader = (type, src) => {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        return s;
+      };
+      const pr = gl.createProgram();
+      gl.attachShader(pr, shader(gl.VERTEX_SHADER, VS));
+      gl.attachShader(pr, shader(gl.FRAGMENT_SHADER, FS));
+      gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) return null;
+      gl.useProgram(pr);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      const u = (name) => gl.getUniformLocation(pr, name);
+      // A lost context (GPU reset) drops to the CSS look for good rather than retrying every frame.
+      cv.addEventListener("webglcontextlost", () => {
+        broken = true;
+        for (const [h, g] of hosts) {
+          h.classList.remove("ag-glow-gl");
+          g.cv.remove();
+        }
+        hosts.clear();
+      });
+      if (getComputedStyle(host).position === "static") host.style.position = "relative";
+      return { cv, gl, u: { t: u("t"), rects: u("rects[0]"), n: u("n"), dpr: u("dpr"), acc: u("acc") }, list: null };
+    }
+
+    function accent() {
+      const rgb = getComputedStyle(document.documentElement).getPropertyValue("--accent-rgb").split(",").map(Number);
+      return rgb.length === 3 && rgb.every((v) => v >= 0) ? rgb.map((v) => v / 255) : [0.54, 0.71, 1];
+    }
+
+    function draw(g, ms) {
+      const { cv, gl, u, list } = g;
+      const dpr = window.devicePixelRatio || 1;
+      const w = list.clientWidth;
+      const hgt = list.clientHeight;
+      // Over the list's visible box, so rows scrolled out of it are cut off with it.
+      cv.style.left = `${list.offsetLeft + list.clientLeft}px`;
+      cv.style.top = `${list.offsetTop + list.clientTop}px`;
+      cv.style.width = `${w}px`;
+      cv.style.height = `${hgt}px`;
+      const cw = Math.round(w * dpr);
+      const ch = Math.round(hgt * dpr);
+      if (cv.width !== cw || cv.height !== ch) {
+        cv.width = cw;
+        cv.height = ch;
+        gl.viewport(0, 0, cw, ch);
+      }
+      const box = list.getBoundingClientRect();
+      const x0 = box.left + list.clientLeft;
+      const y0 = box.top + list.clientTop;
+      const rects = new Float32Array(MAX * 4);
+      let n = 0;
+      for (const row of list.querySelectorAll(".ag-row.s-running")) {
+        const r = row.getBoundingClientRect();
+        if (n === MAX || r.bottom < y0 || r.top > y0 + hgt || !r.height) continue;
+        rects.set([(r.left - x0) * dpr, (y0 + hgt - r.bottom) * dpr, r.width * dpr, r.height * dpr], n * 4);
+        n++;
+      }
+      gl.uniform4fv(u.rects, rects);
+      gl.uniform1i(u.n, n);
+      gl.uniform1f(u.dpr, dpr);
+      gl.uniform1f(u.t, ms / 1000);
+      gl.uniform3fv(u.acc, accent());
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      if (n) gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    function frame(ms) {
+      raf = 0;
+      let busy = false;
+      const due = ms - last >= 33;
+      if (due) last = ms;
+      for (const [host, g] of hosts) {
+        if (!host.isConnected) {
+          hosts.delete(host);
+          continue;
+        }
+        const on = Boolean(g.list?.isConnected && g.list.offsetParent && g.list.querySelector(".ag-row.s-running"));
+        g.cv.hidden = !on;
+        if (!on) continue;
+        busy = true;
+        if (due) draw(g, ms);
+      }
+      if (busy) raf = requestAnimationFrame(frame);
+    }
+
+    return {
+      /** The canvas to keep among the host's children, once the host has one. */
+      nodes(host) {
+        const g = hosts.get(host);
+        return g ? [g.cv] : [];
+      },
+      /** After a render: draw the host's working rows, starting the loop if it stopped. */
+      watch(host, list) {
+        if (broken || still()) return;
+        let g = hosts.get(host);
+        if (!g) {
+          g = setup(host);
+          if (!g) {
+            broken = true;
+            return;
+          }
+          hosts.set(host, g);
+          g.cv.hidden = true;
+          host.append(g.cv);
+          host.classList.add("ag-glow-gl");
+        }
+        g.list = list;
+        if (!raf) raf = requestAnimationFrame(frame);
+      },
+    };
+  })();
+
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
@@ -7443,7 +7596,7 @@
     // The list and its unchanged rows stay in the page: a rebuilt row loses its hover and blinks (#407).
     const list = container.querySelector(":scope > .ag-list") || el("div", "ag-list");
     list.className = `ag-list${compactThreads() ? " compact" : ""}`;
-    window.scribeSyncChildren(container, [top, list]);
+    window.scribeSyncChildren(container, [top, list, ...rowGlow.nodes(container)]);
     const fill = () => {
       for (const row of list.querySelectorAll(".ag-row-active")) row.classList.remove("ag-row-active");
       const out = [];
@@ -7452,6 +7605,7 @@
       window.scribeSyncChildren(list, out, { patch: true });
       const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
       highlight(Math.max(0, at), false);
+      rowGlow.watch(container, list);
     };
     // A kept row's button outlives this render, so it fills through the latest one.
     container.agFill = fill;
@@ -7660,11 +7814,10 @@
 
   /** label: the title to show instead of the thread's own (a helper under its thread drops the "Helper:"). */
   function threadRow(t, current, onPick, label) {
-    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}`, () => onPick(t.id));
+    // Working rows glow (rowGlow), waiting and unread ones get a gradient from the right: no status column.
+    const state = t.status === "running" || (t.status === "idle" && t.background) ? " s-running" : t.status === "waiting" ? " s-waiting" : "";
+    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}${state}`, () => onPick(t.id));
     row.dataset.id = t.id;
-    const quiet = t.status === "idle" && !t.background && !(t.unread && !t.fromPage);
-    const dot = quiet && hasDraft(t) ? icon("pen", "ag-row-pen") : el("span", `ag-dot s-${t.status === "idle" && t.background ? "running" : t.status}`);
-    if (t.background) dot.dataset.tooltip = `${t.background} background ${t.background === 1 ? "task" : "tasks"} running`;
     const main = el("span", "ag-row-main");
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
     const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : label || t.title;
@@ -7677,7 +7830,8 @@
     } else main.append(title, threadRowMeta(t));
     const found = threadMatchSnippet(t, S.search);
     if (found) main.append(el("span", "ag-row-found", found));
-    row.append(dot, main);
+    if (hasDraft(t)) row.append(icon("pen", "ag-row-pen"));
+    row.append(main);
     if (t.pinned) row.append(el("span", "ag-pin", "•"));
     // Compact rows keep the changes, at the row's end.
     if (compact && t.stats.files) {

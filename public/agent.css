@@ -3612,7 +3612,7 @@ html.fx-off .ag-slash { transition: none; }
 
 /* Helpers under the thread that started them: indented, on a rail, in smaller rows. */
 .ag-row-helpers {
-  margin: 0 0 3px 30px;
+  margin: 0 0 3px 14px;
   padding-left: 10px;
   border-left: 1px solid rgba(var(--lift-rgb), 0.12);
 }
@@ -3645,7 +3645,7 @@ html.fx-off .ag-slash { transition: none; }
   padding-bottom: 1px;
 }
 
-/* Compact thread list (Agent settings): title and status dot only. */
+/* Compact thread list (Agent settings): title and status only. */
 .ag-list.compact .ag-list-group {
   padding: 6px 6px 2px;
 }
@@ -3697,11 +3697,6 @@ html.fx-off .ag-slash { transition: none; }
   }
 }
 
-.ag-list.compact .ag-dot {
-  width: 6px;
-  height: 6px;
-}
-
 .ag-list.compact .ag-row-actions .ag-icon-btn {
   width: 22px;
   height: 22px;
@@ -3720,11 +3715,40 @@ html.fx-off .ag-slash { transition: none; }
   background: transparent;
 }
 
-.ag-row.unread .ag-dot {
-  background: var(--accent);
+/* Working rows: the shader glow (rowGlow in agent.js) drawn by one canvas over the whole list. */
+.ag-glow {
+  position: absolute;
+  pointer-events: none;
+  z-index: var(--z-base);
+  mix-blend-mode: screen;
 }
 
-/* Draft marker in the status-dot column: sized for the title, not the 8px / 6px dots. */
+.ag-glow[hidden] {
+  display: none;
+}
+
+/* Screen would wash out on the light theme. */
+html[data-theme="cream"] .ag-glow {
+  mix-blend-mode: normal;
+}
+
+/* Without WebGL or with reduced motion: the same edges, still. */
+:not(.ag-glow-gl) > .ag-list .ag-row.s-running {
+  box-shadow: inset 2px 0 0 rgba(var(--accent-rgb), 0.6), inset 0 -1px 0 rgba(var(--accent-rgb), 0.45);
+}
+
+/* Waiting and unread: a tint from the row's right end that fades out toward the left. */
+.ag-row.unread,
+.ag-row.unread:hover {
+  background-image: linear-gradient(to left, rgba(var(--accent-rgb), 0.16), transparent 75%);
+}
+
+.ag-row.s-waiting,
+.ag-row.s-waiting:hover {
+  background-image: linear-gradient(to left, rgba(232, 196, 122, 0.2), transparent 75%);
+}
+
+/* Draft marker at the row's start, sized for the title. */
 .ag-row-pen {
   width: 14px;
   height: 14px;
