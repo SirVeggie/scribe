@@ -10,6 +10,7 @@
   border-right-color: transparent; border-radius: 50%; animation: audio-spin 1s linear infinite;
 }
 .ag-mic-status:empty { display: none; }
+.ag-mic-cancel[hidden] { display: none; }
 @keyframes audio-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ag-mic[data-state="transcribing"]::before { animation: none; } }
 /* The shell owns this marker and stop control, outside the page's frame. */

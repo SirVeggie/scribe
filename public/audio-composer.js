@@ -11,6 +11,7 @@
       button.setAttribute("aria-pressed", String(state === "recording"));
       button.disabled = state === "starting" || state === "transcribing";
       button.style.setProperty("--mic-level", level);
+      const cancelButton = view.bar.querySelector(".ag-mic-cancel"); if (cancelButton) cancelButton.hidden = state === "idle";
       button.querySelector(".ag-mic-status").textContent = state === "recording" ? `${Math.floor((Date.now() - started) / 1000)}s` : state === "transcribing" ? "…" : "";
     };
     // Text so far while a streaming source transcribes (#832); replaced by the final text on stop.

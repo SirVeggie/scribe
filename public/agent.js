@@ -5851,7 +5851,10 @@
       const mic = button("", "ag-pill ag-mic", () => this.audioComposer.toggle(), "Dictate (Ctrl+Shift+Space)", false);
       mic.append(icon("mic"), el("span", "ag-mic-status"));
       mic.setAttribute("aria-label", "Dictate (Ctrl+Shift+Space)");
-      bar.append(mic);
+      // Shown only while dictating (#844), the click twin of Esc.
+      const micCancel = button(icon("close"), "ag-pill ag-mic-cancel", () => { this.audioComposer.cancel(); this.focus(); }, "Cancel dictation (Esc)");
+      micCancel.hidden = true;
+      bar.append(mic, micCancel);
       if (meter) bar.append(meter);
       this.ctxMeter = contextMeter(this);
       bar.append(this.ctxMeter);
