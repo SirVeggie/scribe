@@ -1,62 +1,76 @@
 # Native in-app skills — #239
-Updated 2026-10-11. Repository snapshot: 15f9f13. Design only; no skill manager implemented.
+Updated 2026-10-27 against 6618ef5 (previous version: 2026-10-11, 15f9f13). Design only; nothing implemented.
 
-## Recommendation
-Store reusable skills as ordinary SKILL.md folders owned by Scribe. Manage them in Agent settings, select them per thread or worker, and expose one consistent catalog across Claude, Cursor, Codex and Native.
-Start with read-only MCP delivery plus a compact name/description index for all providers. Add native provider adapters where verified. Keep one canonical copy; do not write app skills into project repositories.
+## Decisions (from the user, 2026-10)
+- Storage: skill folders on disk plus database metadata.
+- Delivery: one shared catalog over Scribe's MCP server first; native provider adapters later.
+- Scope in v1: global skills plus picks per thread and per worker. Workspace assignments later.
+- External (provider/project) skills: read-only from the Scribe-skill side, with Copy to Scribe.
+- Scribe's own skill: a versioned, read-only built-in that can be copied for customizing.
 
-## Current state (verified in source)
-| Provider | Existing integration | Composer commands |
-|---|---|---|
-| Claude | User/project/local settings in ordinary threads; user only in Pages mode. Skill tool available. Scribe has no app-skill plugin or skill filter wired. Hooks from settings/plugins are off by default; MCP servers come from Scribe's resolved list. | Provider command list supported. |
-| Cursor | User/project settings in ordinary threads; no setting sources in Pages mode. No app skill path wired. | commands() returns []. |
-| Codex | Runs with Scribe-owned CODEX_HOME: dataDir/agent/codex. Login is synchronized separately; this is not synchronization of the user's skill folders. No app-skill adapter wired. | commands() returns []. |
-| Native (Pi) | DefaultResourceLoader uses workspace cwd and dataDir/agent/pi/agent. Extensions disabled; no additionalSkillPaths or skillsOverride wired. | Loaded skills exposed as /skill:name. |
+## What changed since the 11 Oct snapshot
+The app now has much of the groundwork, so this plan builds on it instead of adding a second skill manager.
+- **Agent harness page (#456, #495)** has a Skills tab (`public/harness.js` renderSkills, openSkill, newSkill, copySkill). It lists skills from every provider folder (`skillFolders`, `discoverSkills` in `src/agent/harness.ts`), shows each skill's index token cost and Claude's Skill-tool use counts, and can create, edit, copy between folders and remove (moved to `dataDir/agent/removed-skills`). Backend: `src/agent/harnessFiles.ts`, routes `/harness/skills*`.
+- **Scoped file reads (a8c1c80)**: the scribe MCP `read_file` / `list_files` / `grep_files` read the thread's provider skill folders even outside the workspace (`src/agent/readFile.ts` readRoots), and every prompt says so (`src/agent/prompt.ts`). Pages threads without a workspace still get no file reads.
+- **No-tools threads (#729)**: Claude runs with `settingSources: []` and no tools, so no skills at all.
+- **Codex** runs with Scribe's own CODEX_HOME; `dataDir/agent/codex/skills` is the folder it reads. `skill_search`, plugins and hooks are switched off.
+- **Native (Pi)** reads `dataDir/agent/pi/agent/skills` plus workspace `.agents/skills` and `.pi/skills`; its skills appear as `/skill:name` in the composer.
+- **Claude SDK 0.3.310** still has `plugins: [{ type: "local", path }]` and `skills: string[] | 'all'`. Pi still has `additionalSkillPaths`, `skillsOverride`, `noSkills`. Cursor still has only `dirs` (which also loads rules), so it stays MCP-only.
+- The scribe skill lives in this repo at `.cursor/skills/scribe` (`SKILL_DIR` in `src/skillDocs.ts`) and is served by `scribe_docs`. Users get it as a provider skill only if they installed it themselves.
 
-Pages mode is the internal mode "board". A Kanban worker can run Code mode: being a worker is not itself what disables project setting sources.
-The bundled scribe documentation is served by scribe_docs; it is not a general catalog. src/mcp.ts has no skill_list/skill_read management API.
+## Design
 
-## First version: user experience
-- Agent settings → Skills: searchable list with name, trigger description, source, enabled state, and availability in the current provider/mode.
-- New, edit, duplicate, import folder, export folder, and trash/restore for app-owned skills.
-- Editor: trigger description, Markdown instructions and preview, supporting files. Validate frontmatter and show import contents before saving.
-- External skills: view source and Copy to Scribe; initially no editing provider or repository files in place.
-- Thread picker and worker picker use stable skill IDs. Show why a skill is unavailable (disabled, scope, provider or mode).
-- Recommended first version scopes: explicitly enabled global skills, thread selections and worker selections. Add workspace assignments next; resolve workspace identity from the original checkout, not each temporary worktree path.
-- Built-in Scribe documentation stays versioned with the app; offer a copy for customization while keeping current page/API rules discoverable.
-- Defer ZIP import, agent writes, rich version history and sharing until basic folder support works.
+### Where it lives in the UI
+Extend the harness page's Skills tab rather than adding an Agent settings section. Add a **Scribe** source next to the provider folders:
+- Rows show source (Scribe, Built-in, or the provider folder), enabled-globally switch, and which providers/modes get it.
+- Scribe skills: New, Edit (existing file editor), Duplicate, Import folder, Export folder, Remove (to trash, restorable).
+- Built-in (scribe): view only, plus Copy to Scribe.
+- Provider and workspace skills gain **Copy to Scribe** in the existing Copy to… menu.
 
-## Storage and delivery
-Canonical proposal: dataDir/skills/<id>/SKILL.md plus supporting files. DB metadata: stable id, display name, enabled flag, assignments, source/provenance and revision. Names can change without breaking worker selections.
-Compute the effective catalog in one resolver. Deduplicate by ID; explicitly handle same-name external skills. Scope controls automatic discovery, not file access permissions.
-MCP fallback (proposed, absent today): skill_list and skill_read(id, relativeFile?). Provide descriptions in the prompt and fetch bodies only when used. Enforce the thread's effective catalog and support-file boundary. Pages/Ask modes receive approved text/reference content through this API; scripts still require Code tools and the thread's permissions.
-Native adapters:
-- Claude: installed SDK types expose local plugins and skills filtering. Generate a skill-only plugin with selected folders; do not accidentally hide unrelated external skills with a global allowlist. Test namespacing, settings sources, resume and hook isolation.
-- Pi: installed types expose additionalSkillPaths and skillsOverride. Supply selected folders while preserving existing workspace discovery according to the product choice.
-- Cursor: installed local options expose dirs, which also load rules and other context. No dedicated local skill path found. Prefer MCP fallback initially; do not add an extra workspace root merely to transport skills.
-- Codex: Scribe-owned CODEX_HOME gives a candidate materialization location, but no exact load/filter/reload contract is verified in this investigation. Probe the shipped app-server's discovery and session behavior before enabling native delivery. Keep MCP fallback available.
+### Storage
+- `dataDir/skills/<id>/SKILL.md` plus supporting files. `<id>` is a stable generated id, not the name, so renames do not break picks.
+- Database table: id, name, description (cached from frontmatter), enabled (global), provenance (new / copied from path / imported), revision, created/updated. Frontmatter stays the source of truth for name and description; the table refreshes from it on save and on startup scan.
+- Built-in entries are virtual rows pointing at `SKILL_DIR`; they are never written.
 
-## Implementation checks before shipping
-1. Catalog persistence, CRUD and atomic folder writes. Import validation, traversal and symlink containment; trash/restore and supporting file round trips.
-2. One scope resolver for UI, prompt index, MCP reads and adapters. Disabled IDs remain meaningful in saved worker configurations.
-3. Read-only MCP delivery with catalog-revision tracking. Freeze a revision per turn; apply edits on the next turn. Verify reconnect/resume without promising it preserves sessions yet.
-4. Merge app entries into the existing composer menu independently of provider commands. Selecting a skill explicitly invokes it; enabling a skill only makes it discoverable.
-5. Native adapter probes for discovery, collision handling, selection, resume, Pages/Ask/Code modes, and Code workers using worktrees.
-6. A skill may refer to an MCP server absent from the thread. Show required capabilities in the editor; do not auto-connect servers or expand permissions.
+### Selection
+- One resolver `effectiveSkills(thread)` = enabled global skills + the thread's picks + (for worker chats) the worker's picks. Used by the prompt index, the MCP tools, the harness view and the composer.
+- Thread picks: stored on the thread; edited from a Skills chip in the composer settings row (same dropdown pattern as MCP servers).
+- Worker picks: `settings.workers[id].skills: string[]` on the board, set in the worker dialog, copied to the thread like `customMode` in `src/actions/kanbanWorkers.ts`.
+- No-tools threads get none. Missing or removed ids stay in saved picks and show as unavailable.
 
-## Decisions for the user
-The linked Scribe page includes a persistent form and freeform notes:
-- Storage: folder + metadata (recommended), database, or Library pages.
-- Delivery: consistent MCP fallback first (recommended), or native adapters first.
-- Initial scope: global + thread/worker selection (recommended), global only, or all scopes including workspace.
-- External skills: read-only + Copy to Scribe (recommended), edit in place, or hide.
-- Built-in: versioned/read-only and copyable (recommended), or keep current arrangement.
+### Delivery (MCP first)
+- Prompt index: one short block listing each effective skill's name and description, and "read it with skill_read before using it". Counted in the harness context view like other Scribe context.
+- New scribe MCP tools: `skill_read(name, file?)` returns SKILL.md or a supporting file, limited to the thread's effective set and the skill's folder (traversal and symlink checks as in readFile.ts). A separate `skill_list` is not needed while the index is in the prompt.
+- `skill_read` works in every mode, including Pages threads without a workspace where `read_file` is unavailable. Scripts in a skill still need Code mode and the thread's own approvals.
+- Edits apply from the next turn; the index is rebuilt per turn.
+- Composer: Scribe skills appear in the `/` menu next to provider commands; picking one sends the message with an instruction to read and follow that skill.
+
+### Names
+- A Scribe skill with the same name as a provider skill: the index labels it as Scribe's, and the harness view flags the clash. Native adapters later must namespace (Claude plugin skills are already plugin-prefixed).
+
+### Later: native adapters
+- Claude: a generated local plugin folder with the selected skills (`plugins` option); avoid the global `skills` allowlist, which would hide the user's own skills.
+- Pi: `additionalSkillPaths` with the selected folders.
+- Codex: materialize into the Scribe CODEX_HOME skills folder only after probing how the app-server picks up changes; keep MCP for it until then.
+- Cursor: MCP only.
+
+## Open questions
+1. The harness already edits provider and workspace skills in place (#495). Does "external: read-only" mean only that Scribe skills never write back into those folders (recommended), or should the harness's in-place editing be removed?
+2. Should the built-in scribe skill be in every thread's index by default, replacing the prompt's "follow the scribe skill when it is available, else scribe_docs" line? Recommended: yes, as a built-in that can be disabled.
+3. Default for a new Scribe skill: enabled globally, or off until picked? Recommended: off, since each enabled skill adds to every chat's prompt.
+
+## Build order
+1. Storage, table, scan, CRUD routes, trash/restore, import/export with containment checks.
+2. Harness Skills tab: Scribe and Built-in sources, enable switch, Copy to Scribe.
+3. Resolver, prompt index, `skill_read`, harness context accounting.
+4. Thread picks (composer) and worker picks (board worker dialog).
+5. Composer `/` entries.
+6. Later: Claude plugin and Pi adapters, Codex probe.
 
 ## Evidence
-- src/agent/providers/claude.ts:646–717; sdk.d.ts:2027–2033 and 2255–2273.
-- src/agent/providers/cursor.ts:565–566 and 660–674; @cursor/sdk/dist/esm/options.d.ts:158–162.
-- src/agent/providers/codex.ts:68–74, 139–145 and 889–895.
-- src/agent/providers/pi.ts:55–60, 511–517 and 798–810; Pi dist/core/resource-loader.d.ts:76,88.
-- src/agent/providers/provider.ts:142; public/agent.js:4420; src/mcp.ts:656–662.
-Local installed SDK declarations were inspected. Native delivery paths are proposals, not end-to-end validated support. No runtime adapter tests were run for this design-only change.
-
+- `src/agent/harness.ts:141–240` (skillFolders, discoverSkills), `:482–509` (what each provider loads).
+- `src/agent/harnessFiles.ts:38–135`; `public/harness.js:825–1030`.
+- `src/agent/readFile.ts:36–40`; `src/agent/prompt.ts:141`, `:163–166`.
+- `src/agent/providers/claude.ts:827`, `:878`, `:898–906`; `codex.ts:519`, `:693–722`; `pi.ts:62–63`, `:518`; `cursor.ts:687`.
+- `src/skillDocs.ts:12`; `src/actions/kanbanWorkers.ts:252–258`; `public/agent.js:6142`.
+- SDK declarations: claude-agent-sdk 0.3.310 `sdk.d.ts:2073`, `:2339`, `:5852`; Pi `resource-loader.d.ts:76–90`; Cursor `options.d.ts:158–170`.
