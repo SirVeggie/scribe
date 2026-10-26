@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureBrowserColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
 import { normalizeFolderAccess, normalizePageAccess } from "./pageAccess.js";
 import { normalizeEvents } from "./events.js";
@@ -123,6 +123,7 @@ type TabRow = {
   reply_to: string | null;
   workspace: string | null;
   file: string | null;
+  browser: string | null;
   temp: number;
   access: string | null;
   made_in: string | null;
@@ -178,12 +179,12 @@ INSERT INTO tabs (
   id, key, title, html, state, pinned, status, strip_seq,
   created_at, updated_at, closed_at, deleted_at,
   revision, state_revision, state_updated_at, event_seq, events, assets, agent_hidden,
-  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to, workspace, file, temp, access, made_in
+  folder_instructions, folder_id, lib_pos, deleted_batch, user_title_at, provenance, reply_to, workspace, file, temp, access, made_in, browser
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
   key = excluded.key,
@@ -215,7 +216,8 @@ ON CONFLICT(id) DO UPDATE SET
   file = excluded.file,
   temp = excluded.temp,
   access = excluded.access,
-  made_in = excluded.made_in
+  made_in = excluded.made_in,
+  browser = excluded.browser
 `;
 
 const INSERT_FOLDER_SQL = `
@@ -310,6 +312,7 @@ export class BoardDb {
       ensureWorkspaceColumn(db);
       ensureFileColumn(db);
       ensureTempColumn(db);
+      ensureBrowserColumn(db);
       ensureAccessColumns(db);
       ensureMadeInColumn(db);
       ensureFolderDiskColumn(db);
@@ -674,6 +677,7 @@ export class BoardDb {
       ensureWorkspaceColumn(db);
       ensureFileColumn(db);
       ensureTempColumn(db);
+      ensureBrowserColumn(db);
       ensureAccessColumns(db);
       ensureMadeInColumn(db);
       ensureFolderDiskColumn(db);
@@ -772,6 +776,7 @@ function storedToParams(row: StoredTab): SQLInputValue[] {
     tab.temp ? 1 : 0,
     tab.access ? JSON.stringify(tab.access) : null,
     tab.madeIn ?? null,
+    tab.browser ? JSON.stringify(tab.browser) : null,
   ];
 }
 
@@ -912,6 +917,12 @@ function rowToStored(row: TabRow): StoredTab {
     } catch {
       /* ignore */
     }
+  }
+  if (row.browser) {
+    try {
+      const binding = JSON.parse(row.browser);
+      if (typeof binding?.threadId === "string" && binding.threadId) tab.browser = { threadId: binding.threadId };
+    } catch { /* invalid saved binding */ }
   }
   if (row.file) {
     try {

@@ -16,6 +16,20 @@ const {
   allowedBrowserUrl,
   blockedBoardRequest,
   browserAct,
+  browserControl,
+  browserAgentResult,
+  browserTurnEnded,
+  browserUserMessage,
+  browserNavigate,
+  browserUserTabs,
+  browserFit,
+  ensureBrowserView,
+  agentControlRule,
+  userControlRule,
+  releaseAgentControl,
+  setBrowserControl,
+  addActivity,
+  activitySummary,
   browserConsole,
   browserEval,
   browserHttpStatus,
@@ -343,14 +357,18 @@ test("the live view streams frames and follows tabs, and the user's input reache
   const box = JSON.parse(
     (await browserEval("thr_live", { script: "const r = document.getElementById('inc').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }" })).result
   );
+  await browserControl("thr_live", "user");
   await browserInput("thr_live", { kind: "down", ...box });
   await browserInput("thr_live", { kind: "up", ...box });
+  await browserControl("thr_live", "agent");
   assert.equal((await browserEval("thr_live", { script: "document.getElementById('count').textContent" })).result, '"1"');
   await browserAct("thr_live", { action: "click", selector: "#name", snapshot: false });
+  await browserControl("thr_live", "user");
   await browserInput("thr_live", { kind: "text", text: "Ad" });
   await browserInput("thr_live", { kind: "key", key: "a" });
   await browserInput("thr_live", { kind: "key", key: "Backspace" });
   await browserInput("thr_live", { kind: "key", key: "A" });
+  await browserControl("thr_live", "agent");
   assert.equal((await browserEval("thr_live", { script: "document.getElementById('name').value" })).result, '"AdA"');
 
   await browserOpen("thr_live", { url: `${base}/drag`, newTab: true, snapshot: false });
@@ -390,4 +408,73 @@ test("blockedBoardRequest keeps the agent browser off the board's file-opening r
   ]) {
     assert.equal(blockedBoardRequest(url, 4747), false, url);
   }
+});
+
+test("browser turn-taking rules distinguish reads, mutations and user input", () => {
+  const state = { control: "user" as "free" | "agent" | "user", controlSince: 0, userActivity: [{ kind: "event" as const, text: "Navigated to https://example.com/" }] };
+  assert.throws(() => agentControlRule(state, true), /The user is controlling.*\nNavigated/);
+  agentControlRule(state, false);
+  assert.equal(state.control, "user");
+  releaseAgentControl(state);
+  assert.equal(state.control, "user");
+  setBrowserControl(state, "free");
+  agentControlRule(state, true);
+  assert.equal(state.control, "agent");
+  assert.throws(() => userControlRule(state), /agent_driving/);
+  releaseAgentControl(state);
+  assert.equal(state.control, "free");
+  userControlRule(state);
+  assert.equal(state.control, "user");
+  assert.equal(browserHttpStatus("agent_driving"), 409);
+  assert.equal(browserHttpStatus("The user is controlling the browser."), 409);
+});
+
+test("activity coalesces typing, masks password fields and caps history", () => {
+  const log: Parameters<typeof addActivity>[0] = [];
+  addActivity(log, { kind: "text", field: "Name", count: 2 });
+  addActivity(log, { kind: "text", field: "Name", count: 3 });
+  addActivity(log, { kind: "text", field: "Password", count: 99, password: true });
+  assert.deepEqual(activitySummary(log), ["Typed 5 characters into Name", "Typed into a password field"]);
+  for (let i = 0; i < 70; i++) addActivity(log, { kind: "event", text: `Selected tab b${i}` });
+  assert.equal(log.length, 60);
+  assert.equal(activitySummary(log)[0], "Selected tab b10");
+});
+
+test("navigation grants permit only the origins the user opened", () => {
+  const origins = new Set(["https://example.com", "http://192.168.1.2:8080"]);
+  assert.equal(allowedBrowserUrl("https://example.com/path", origins), true);
+  assert.equal(allowedBrowserUrl("http://example.com/", origins), false);
+  assert.equal(allowedBrowserUrl("https://sub.example.com/", origins), false);
+  assert.equal(allowedBrowserUrl("http://192.168.1.2:8080/a", origins), true);
+  assert.equal(allowedBrowserUrl("file:///tmp/a", new Set(["null"])), false);
+  assert.equal(blockedBoardRequest("http://localhost:4747/api/agent/threads/t1/browser/control", 4747), true);
+  assert.equal(blockedBoardRequest("http://localhost:4747/api/agent/browsers", 4747), true);
+});
+
+test("browser view operations enforce ownership and report user activity once", async () => {
+  await ensureBrowserView("thr_control");
+  await browserOpen("thr_control", { url: base, snapshot: false });
+  assert.equal((await browserViews()).find(v => v.threadId === "thr_control")?.control, "agent");
+  await assert.rejects(browserInput("thr_control", { kind: "text", text: "secret" }), /agent_driving/);
+  browserTurnEnded("thr_control");
+  await browserInput("thr_control", { kind: "text", text: "secret" });
+  await assert.rejects(browserOpen("thr_control", { url: base }), /The user is controlling/);
+  await assert.rejects(browserTabs("thr_control", { closeAll: true }), /The user is controlling/);
+  await browserSnapshot("thr_control", {});
+  assert.equal((await browserViews()).find(v => v.threadId === "thr_control")?.control, "user");
+  const activity = browserAgentResult("thr_control");
+  assert.deepEqual(activity.userActivity, ["Typed 6 characters into field"]);
+  assert.equal(JSON.stringify(activity).includes("secret"), false);
+  assert.deepEqual(browserAgentResult("thr_control"), {});
+  browserUserMessage("thr_control");
+  assert.equal((await browserViews()).find(v => v.threadId === "thr_control")?.control, "free");
+  await browserNavigate("thr_control", { url: base });
+  await browserUserTabs("thr_control", { newTab: true });
+  await browserFit("thr_control", { width: 500, height: 450 });
+  const view = (await browserViews()).find(v => v.threadId === "thr_control")!;
+  assert.deepEqual(view.viewport, { width: 500, height: 450 });
+  assert.equal(view.fit, true);
+  await browserFit("thr_control", { fit: false });
+  assert.deepEqual((await browserViews()).find(v => v.threadId === "thr_control")?.viewport, { width: 1280, height: 800 });
+  await closeThreadBrowser("thr_control");
 });

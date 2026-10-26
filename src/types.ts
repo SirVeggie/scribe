@@ -274,6 +274,8 @@ export type Tab = {
    * not its state, so the page's own code cannot point it at another file.
    */
   file?: FileBinding;
+  /** A temporary browser view bound to one chat thread. */
+  browser?: { threadId: string };
   /**
    * A temporary page (#655): opened from a file or website link to have a look. It is not in the
    * Library, can't be pinned, and is gone once its tab (or the peek showing it) closes. Keep in
@@ -563,6 +565,7 @@ export function toMeta(tab: Tab): TabMeta {
     ...(tab.replyTo ? { replyTo: tab.replyTo } : {}),
     ...(tab.workspace ? { workspace: tab.workspace } : {}),
     ...(tab.file ? { file: tab.file } : {}),
+    ...(tab.browser ? { browser: tab.browser } : {}),
     ...(tab.temp ? { temp: true } : {}),
     ...(tab.madeIn ? { madeIn: tab.madeIn } : {}),
     ...(embedUrl ? { embedUrl } : {}),

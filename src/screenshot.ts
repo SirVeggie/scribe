@@ -90,7 +90,7 @@ export async function probeComponent(item: import("./agent/componentTool.js").Co
 
 /** A short-lived capture-mode view, sharing the screenshot browser without taking user focus. */
 export async function probeTab(id: string, signal: AbortSignal): Promise<void> {
-  if (signal.aborted || diagnosticViews >= 2) return;
+  if (signal.aborted || diagnosticViews >= 2 || store.get(id)?.browser) return;
   diagnosticViews += 1;
   try {
     await withBrowser(async opened => {
@@ -122,6 +122,7 @@ export async function captureTab(input: ScreenshotRequest): Promise<ScreenshotRe
     throw new Error(`tab not found: ${input.idOrKey}`);
   }
   // The file viewer reads its file through the board (scribe.file), which a headless capture has not.
+  if (tab.browser) throw new Error("Browser views cannot be captured; use browser_screenshot");
   if (tab.file) {
     throw new Error("file pages cannot be captured; page_read returns a text file's text or an image file's image");
   }

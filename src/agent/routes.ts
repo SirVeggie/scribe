@@ -5,7 +5,9 @@ import { listPermissions, setRules } from "./permissions.js";
 import { McpPermissions } from "./mcpPermissions.js";
 import type { AgentHost } from "./host.js";
 import { shellOrigins } from "../config.js";
-import { browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
+import { identify } from "../callers.js";
+import { toMeta } from "../types.js";
+import { browserHttpStatus, ensureBrowserView, browserControl, browserNavigate, browserUserTabs, browserFit, browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
@@ -89,8 +91,10 @@ export function agentRouter(host: AgentHost): express.Router {
         })
         .catch((err: Error) => {
           if (res.headersSent) return;
-          const status = /not found/.test(err.message) ? 404 : 400;
-          res.status(status).json({ error: err.message });
+          const browserRoute = /\/browser(?:\/|$)/.test(req.path);
+          const status = /not found/.test(err.message) ? 404 : browserRoute ? browserHttpStatus(err.message) : 400;
+          // Playwright errors carry a call log after the first line; the browser view shows only the message.
+          res.status(status).json({ error: browserRoute ? err.message.split("\n")[0].replace(/^page\.\w+: /, "") : err.message });
         });
     };
 
@@ -629,6 +633,28 @@ export function agentRouter(host: AgentHost): express.Router {
   router.post("/threads/:id/run", wrap((req) => ({ thread: host.watchPageThread(req.params.id, req.body ?? {}) })));
   router.delete("/threads/:id/run", wrap((req) => ({ thread: host.releasePageThread(req.params.id) })));
 
+  // Browser view routes belong to the board; agents use /api/browser tools.
+  router.use(["/threads/:id/browser", "/browsers"], (req, res, next) => {
+    if (identify(req).viewer === "agent") { res.status(403).json({ error: "Only the board controls browser views" }); return; }
+    next();
+  });
+  router.post("/threads/:id/browser/view", wrap(async req => {
+    const thread = host.getThread(req.params.id);
+    if (!thread) throw new Error("Thread not found");
+    await ensureBrowserView(thread.id);
+    return { tab: toMeta(store.openBrowserPage(thread.id, thread.title, { activate: false }).tab) };
+  }));
+  router.post("/threads/:id/browser/control", wrap(async req => {
+    const action = req.body?.action;
+    if (action !== "take" && action !== "handBack") throw new Error("action must be take or handBack");
+    await browserControl(req.params.id, action === "take" ? "user" : "free");
+    if (action === "handBack") host.handBackBrowser(req.params.id);
+    return { ok: true };
+  }));
+  router.post("/threads/:id/browser/navigate", wrap(req => browserNavigate(req.params.id, req.body ?? {})));
+  router.post("/threads/:id/browser/tabs", wrap(req => browserUserTabs(req.params.id, req.body ?? {})));
+  router.post("/threads/:id/browser/fit", wrap(req => browserFit(req.params.id, req.body ?? {})));
+
   // The thread's agent browser, watched and driven from the chat (the agent drives it over MCP).
   router.get("/browsers", wrap(async () => ({ browsers: await browserViews() })));
   router.get("/threads/:id/browser/live", (req, res) => {
@@ -637,7 +663,8 @@ export function agentRouter(host: AgentHost): express.Router {
     const stop = watchBrowser(
       req.params.id,
       (frame) => send("frame", frame),
-      (view) => send("view", view)
+      (view) => send("view", view),
+      { maxWidth: req.query.w === undefined ? undefined : Number(req.query.w), everyNthFrame: req.query.n === undefined ? undefined : Number(req.query.n) }
     );
     const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
     req.on("close", () => {

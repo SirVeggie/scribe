@@ -28,6 +28,7 @@ CREATE TABLE tabs (
   reply_to TEXT,
   workspace TEXT,
   file TEXT,
+  browser TEXT,
   temp INTEGER NOT NULL DEFAULT 0,
   access TEXT,
   made_in TEXT

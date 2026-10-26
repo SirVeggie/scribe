@@ -288,7 +288,7 @@
     ready: false,
     /** Forks whose offer to archive the thread they came from was answered or dismissed. */
     forkArchiveSeen: new Set(),
-    /** threadId -> the thread's open agent browser: { threadId, tabs: [{ tab, url, title, current }] }. */
+    /** threadId -> BrowserView: { threadId, tabs, control, agentAt, handoff, key, ... }. */
     browsers: new Map(),
     /** Workspace folders that are gone: [{ path, threads, found, dismissed }]. found is where a renamed one went. */
     missing: [],
@@ -818,6 +818,7 @@
       case "agent_browser": {
         if (msg.view) S.browsers.set(msg.threadId, msg.view);
         else S.browsers.delete(msg.threadId);
+        scheduleBrowserGlow();
         for (const view of views()) {
           if (view.threadId === msg.threadId) view.renderHeader();
         }
@@ -2557,144 +2558,148 @@
     } catch {
       return;
     }
+    scheduleBrowserGlow();
     for (const view of views()) view.renderHeader();
   }
 
-  /** A KeyboardEvent as a Playwright key, or null for a lone modifier. */
-  function browserKey(event) {
-    if (["Shift", "Control", "Alt", "Meta", "Dead", "Unidentified", "Process"].includes(event.key)) return null;
-    const printable = event.key.length === 1;
-    const mods = [];
-    if (event.ctrlKey) mods.push("Control");
-    if (event.altKey) mods.push("Alt");
-    if (event.metaKey) mods.push("Meta");
-    // A printable key already carries Shift ("A", "!"); named keys need it spelled out.
-    if (event.shiftKey && (!printable || mods.length)) mods.push("Shift");
-    return [...mods, printable && mods.length ? event.key.toLowerCase() : event.key].join("+");
+  /** Open the thread's browser page in a split. Creates the session and page if needed. */
+  async function openBrowserView(threadId) {
+    try {
+      const { tab } = await api("POST", `/threads/${encodeURIComponent(threadId)}/browser/view`);
+      const key = tab?.key;
+      if (!key) throw new Error("No browser view");
+      app()?.openLink(key, null, { mode: "split" });
+    } catch (err) {
+      notice(err.message);
+    }
   }
 
-  /**
-   * The thread's headless agent browser, live: screencast frames of its current tab, with the
-   * user's clicks, scrolls, and keys sent back to it. The agent keeps driving it meanwhile.
-   */
-  function openBrowser(threadId) {
-    const base = `/threads/${encodeURIComponent(threadId)}/browser`;
-    const source = new EventSource(`/api/agent${base}/live`);
-    const { panel, close } = modal("ag-browserview", () => source.close());
-    const thread = S.threads.get(threadId);
-    const title = el("h2", "ag-modal-title", thread ? `Browser · ${thread.title}` : "Agent browser");
-    const address = el("span", "ag-browser-url");
-    const head = el("div", "ag-browser-head");
-    head.append(
-      title,
-      address,
-      el("span", "ag-grow"),
-      button("Close browser", "ag-btn ghost", () => api("POST", `${base}/close`).catch((err) => notice(err.message)), "Close the agent's browser and its tabs"),
-      button(icon("close"), "ag-icon-btn", () => close(), "Close this view (Esc)", false)
-    );
-    const stage = el("div", "ag-browser-stage");
-    const screen = el("img", "ag-browser-screen");
-    screen.alt = "";
-    screen.tabIndex = 0;
-    screen.draggable = false;
-    screen.hidden = true;
-    const empty = el("div", "ag-muted ag-pad", "Waiting for the page…");
-    stage.append(screen, empty);
-    panel.append(head, stage, el("div", "ag-modal-hint", "Click, scroll, and type to use the page; Ctrl+V pastes into it. The agent drives it too. Esc closes this view."));
+  /** Header highlight: ember while the agent drives it (or did, for 10 s); sky while the user has it. */
+  function browserBtnState(view) {
+    if (!view) return "";
+    if (view.control === "user") return "user";
+    if (view.control === "agent") return "agent";
+    const at = Number(view.agentAt) || 0;
+    if (at && Date.now() - at < 10000) return "agent";
+    return "";
+  }
 
-    let frame = null;
-    source.addEventListener("frame", (event) => {
-      frame = JSON.parse(event.data);
-      screen.src = `data:image/jpeg;base64,${frame.data}`;
-      screen.hidden = false;
-      empty.hidden = true;
-    });
-    source.addEventListener("view", (event) => {
-      const view = JSON.parse(event.data);
-      const tab = view?.tabs.find((t) => t.current);
-      address.textContent = tab ? tab.url : "";
-      address.dataset.tooltip = tab ? `${tab.title}\n${tab.url}` : "";
-      if (!tab) {
-        frame = null;
-        screen.hidden = true;
-        empty.hidden = false;
-        empty.textContent = "The agent has no browser open. It shows here when the agent opens a page.";
-      }
-    });
+  let browserGlowTimer = 0;
+  function scheduleBrowserGlow() {
+    clearTimeout(browserGlowTimer);
+    let next = Infinity;
+    const now = Date.now();
+    for (const view of S.browsers.values()) {
+      if (view.control === "user" || view.control === "agent") continue;
+      const at = Number(view.agentAt) || 0;
+      if (!at) continue;
+      const until = at + 10000;
+      if (until > now && until < next) next = until;
+    }
+    if (next < Infinity) {
+      browserGlowTimer = setTimeout(() => {
+        for (const v of views()) if (v.threadId) v.renderHeader();
+      }, Math.min(Math.max(16, next - Date.now()), 10000));
+    }
+  }
 
-    // Inputs go one at a time, in order; a mouse move is dropped while another is on its way.
-    let queue = Promise.resolve();
-    let movePending = false;
-    const send = (input) => {
-      if (!frame) return;
-      if (input.kind === "move") {
-        if (movePending) return;
-        movePending = true;
-      }
-      const body = { tab: frame.tab, ...input };
-      queue = queue
-        .then(() => api("POST", `${base}/input`, body))
-        .catch(() => undefined)
-        .finally(() => {
-          if (input.kind === "move") movePending = false;
-        });
-    };
-    const at = (event) => {
-      const rect = screen.getBoundingClientRect();
-      const x = Math.min(rect.right, Math.max(rect.left, event.clientX));
-      const y = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
-      return {
-        x: Math.round(((x - rect.left) * frame.width) / rect.width),
-        y: Math.round(((y - rect.top) * frame.height) / rect.height),
-      };
-    };
-    const BUTTONS = ["left", "middle", "right"];
-    let pressed = false;
-    screen.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-      screen.focus();
-      if (!frame) return;
-      pressed = true;
-      send({ kind: "down", ...at(event), button: BUTTONS[event.button] || "left", clickCount: event.detail || 1 });
+  function browserLiveUrl(threadId) {
+    return `/api/agent/threads/${encodeURIComponent(threadId)}/browser/live?w=480&n=2`;
+  }
+
+  /** One live SSE per thread, shared by the header hover and the latest on-screen widget. */
+  const liveWatchers = new Map();
+
+  function watchLive(img, threadId) {
+    if (img._browserWatch === threadId) return;
+    unwatchLive(img);
+    let watch = liveWatchers.get(threadId);
+    if (!watch) {
+      const source = new EventSource(browserLiveUrl(threadId));
+      watch = { source, imgs: new Set() };
+      source.addEventListener("frame", (event) => {
+        for (const node of [...watch.imgs]) if (!node.isConnected) unwatchLive(node);
+        if (!watch.imgs.size) return;
+        try {
+          const frame = JSON.parse(event.data);
+          if (!frame?.data) return;
+          const src = `data:image/jpeg;base64,${frame.data}`;
+          for (const node of watch.imgs) node.src = src;
+        } catch {
+          /* drop a bad frame */
+        }
+      });
+      liveWatchers.set(threadId, watch);
+    }
+    watch.imgs.add(img);
+    img._browserWatch = threadId;
+  }
+
+  function unwatchLive(img) {
+    const threadId = img?._browserWatch;
+    if (!threadId) return;
+    img._browserWatch = null;
+    const watch = liveWatchers.get(threadId);
+    if (!watch) return;
+    watch.imgs.delete(img);
+    if (!watch.imgs.size) {
+      watch.source.close();
+      liveWatchers.delete(threadId);
+    }
+  }
+
+  const liveThumbs = new Set();
+  let thumbObserver = null;
+
+  function pruneLiveThumb(img) {
+    unwatchLive(img);
+    liveThumbs.delete(img);
+    thumbObserver?.unobserve(img);
+  }
+
+  function thumbOnScreen(img) {
+    const r = img.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
+  }
+
+  function syncThumbStream(img, intersecting) {
+    if (!img.isConnected) {
+      pruneLiveThumb(img);
+      return;
+    }
+    const show = document.visibilityState === "visible" && (intersecting ?? thumbOnScreen(img));
+    if (show) watchLive(img, img.dataset.threadId);
+    else unwatchLive(img);
+  }
+
+  function ensureThumbObserver() {
+    if (thumbObserver) return thumbObserver;
+    thumbObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) syncThumbStream(entry.target, entry.isIntersecting);
     });
-    screen.addEventListener("mousemove", (event) => {
-      if (frame) send({ kind: "move", ...at(event) });
+    document.addEventListener("visibilitychange", () => {
+      for (const img of [...liveThumbs]) syncThumbStream(img);
     });
-    const onUp = (event) => {
-      if (!screen.isConnected) {
-        window.removeEventListener("mouseup", onUp);
-        return;
-      }
-      if (!pressed || !frame) return;
-      pressed = false;
-      send({ kind: "up", ...at(event), button: BUTTONS[event.button] || "left", clickCount: event.detail || 1 });
-    };
-    window.addEventListener("mouseup", onUp);
-    screen.addEventListener("contextmenu", (event) => event.preventDefault());
-    screen.addEventListener(
-      "wheel",
-      (event) => {
-        event.preventDefault();
-        if (!frame) return;
-        const scale = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
-        send({ kind: "wheel", ...at(event), dx: event.deltaX * scale, dy: event.deltaY * scale });
-      },
-      { passive: false }
-    );
-    screen.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") return;
-      // Ctrl+V: the paste event brings the text across, since the headless page can't read our clipboard.
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") return;
-      event.preventDefault();
-      event.stopPropagation();
-      const key = browserKey(event);
-      if (key) send({ kind: "key", key });
-    });
-    screen.addEventListener("paste", (event) => {
-      event.preventDefault();
-      const text = event.clipboardData?.getData("text/plain");
-      if (text) send({ kind: "text", text });
-    });
+    return thumbObserver;
+  }
+
+  function observeBrowserThumb(img, threadId) {
+    img.dataset.threadId = threadId;
+    liveThumbs.add(img);
+    ensureThumbObserver().observe(img);
+    syncThumbStream(img);
+  }
+
+  function browserPreviewTip(threadId) {
+    const tip = el("div", "ag-usage-tip ag-browser-tip");
+    const stage = el("div", "ag-browser-tip-stage");
+    const img = el("img", "ag-browser-tip-img");
+    img.alt = "";
+    stage.append(img);
+    tip.append(stage);
+    watchLive(img, threadId);
+    tip._onHide = () => unwatchLive(img);
+    return tip;
   }
 
   /** Merge, leave or discard a thread's worktree after asking; true once it is done. */
@@ -3371,7 +3376,13 @@
         const onBranch = openWorktree(t);
         acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, ...(onBranch ? {} : { cwd: s.cwd }) }), onBranch ? `Changes on ${onBranch.branch}` : "Git working tree changes"));
       }
-      if (t && S.browsers.has(t.id)) acts.append(button(icon("browser"), "ag-icon-btn", () => openBrowser(t.id), "Agent browser: watch it, click and type into it"));
+      if (t) {
+        const use = browserBtnState(S.browsers.get(t.id));
+        const brow = button(icon("browser"), `ag-icon-btn${use ? ` ag-browser-${use}` : ""}`, () => void openBrowserView(t.id), "Browser view");
+        acts.append(brow);
+        if (S.browsers.has(t.id)) bindHoverTip(brow, () => browserPreviewTip(t.id), { width: 320 });
+        scheduleBrowserGlow();
+      }
       if (t) acts.append(button(icon("more"), "ag-icon-btn", (event) => this.threadMenu(event.currentTarget), "Thread actions"));
       if (!helper) {
         const settingsButton = button(icon("gear"), "ag-icon-btn", () => agentSettings.open(), "Agent settings (Ctrl+Shift+,)");
@@ -4172,6 +4183,8 @@
           return this.renderApproval(it);
         case "question":
           return this.renderQuestion(it);
+        case "browser_handoff":
+          return this.renderBrowserHandoff(it);
         case "plan":
           return this.renderPlan(it);
         case "settings":
@@ -4344,12 +4357,20 @@
       head.append(status);
       const label = el("span", "ag-tool-label");
       const page = pageTool(it);
+      const browser = browserOpenInfo(it);
       const fileSummary = fileToolSummary(it);
       if (helper) {
         const action = helper.input.stop === true ? "Stop helper" : typeof helper.input.task === "string" && helper.input.task.trim() ? "Follow up helper" : "Wait for helper";
         label.append(el("span", "ag-tool-verb", action), el("span", "ag-tool-title", helper.thread ? helperName(helper.thread) : helper.id));
       } else if (page) {
         label.append(...this.pageToolLabel(page));
+      } else if (browser) {
+        const verb = it.status === "error" ? "Open" : it.status === "done" ? "Opened" : "Opening";
+        const title = el("span", "ag-tool-title", browser.title);
+        const tip = browser.url || browser.key || browser.title;
+        title.dataset.tooltip = tip;
+        title.setAttribute("aria-description", tip);
+        label.append(el("span", "ag-tool-verb", verb), title);
       } else if (fileSummary) {
         const title = el("span", "ag-tool-title", fileSummary);
         title.dataset.tooltip = fileSummary;
@@ -4381,6 +4402,7 @@
       head.append(icon("chevron", "ag-ico ag-chev"));
       node.append(head);
       if (task) node.append(this.renderTaskLine(it));
+      if (browser) node.append(this.browserToolWidget(it, browser, latestBrowserOpenId(it.threadId) === it.id));
       const children = byParent.get(it.toolId);
       const steps = children ? children.filter((c) => c.kind === "tool").length : 0;
       if (steps) label.append(el("span", "ag-muted", ` · ${steps} ${steps === 1 ? "step" : "steps"}`));
@@ -4410,11 +4432,11 @@
           R.renderMarkdown(md, it.input.prompt, mdCtx);
           brief.append(md);
           body.append(brief);
-        } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task")) {
+        } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task") && !browser) {
           body.append(el("pre", "ag-pre small", jsonText(it.input)));
         }
         // A background task's tool result is only the launch receipt; its outcome is on the task line.
-        if (it.output && it.tool !== "read" && !task?.background && !page) {
+        if (it.output && it.tool !== "read" && !task?.background && !page && !browser) {
           const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
           body.append(out);
         }
@@ -4718,6 +4740,37 @@
       body.append(raw);
     }
 
+    /** Below a browser_open row: globe, title + URL, and a live thumb on the thread's latest call. */
+    browserToolWidget(it, info, live) {
+      const widget = el("div", `ag-browser-widget${live ? " live" : ""}`);
+      const top = el("div", "ag-browser-widget-head");
+      top.append(icon("globe"));
+      const copy = el("div", "ag-browser-copy");
+      copy.append(el("div", "ag-browser-name", info.title));
+      const href = info.url || info.key;
+      if (href && href !== info.title) copy.append(el("div", "ag-browser-href", href));
+      top.append(copy, button("Open view", "ag-btn tiny", (event) => {
+        event.stopPropagation();
+        void openBrowserView(it.threadId);
+      }));
+      widget.append(top);
+      if (live) {
+        const stage = el("div", "ag-browser-thumb");
+        const img = el("img");
+        img.alt = "";
+        img.draggable = false;
+        stage.append(img);
+        stage.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void openBrowserView(it.threadId);
+        });
+        widget.append(stage);
+        observeBrowserThumb(img, it.threadId);
+      }
+      if (it.status === "error" && it.output) widget.append(el("pre", "ag-pre ag-out", it.output.slice(0, 2000)));
+      return widget;
+    }
+
     /** Under a task's head, always visible: what it is doing now (or how it ended), its usage, and its controls. */
     renderTaskLine(it) {
       const task = it.task;
@@ -4867,6 +4920,57 @@
       return node;
     }
 
+    renderBrowserHandoff(it) {
+      const node = el("div", `ag-card ag-browser-handoff s-${it.status}`);
+      node.dataset.itemId = it.id;
+      const activity = Array.isArray(it.activity) ? it.activity.filter((line) => typeof line === "string" && line.trim()) : [];
+      if (it.status !== "pending") {
+        const done = it.status === "done";
+        const label = done ? "Handed back" : "Cancelled";
+        if (!activity.length) {
+          node.classList.add("done");
+          node.append(icon(done ? "check" : "cross", `ag-ico ${done ? "ag-st-ok" : "ag-st-err"}`), el("span", "ag-card-line", label));
+          return node;
+        }
+        const head = el("div", "ag-card-head");
+        head.append(icon(done ? "check" : "cross", `ag-ico ${done ? "ag-st-ok" : "ag-st-err"}`), el("span", "ag-card-title", label));
+        node.append(head);
+        const key = `bh:${it.id}`;
+        const block = el("div", `ag-page-raw${this.expanded.has(key) ? " open" : ""}`);
+        const toggle = button(`${activity.length} ${activity.length === 1 ? "action" : "actions"}`, "ag-btn tiny ag-page-raw-toggle", (event) => {
+          event.stopPropagation();
+          this.toggle(key, block);
+        });
+        const list = el("div", "ag-page-raw-body ag-browser-activity");
+        for (const line of activity) list.append(el("div", null, line));
+        block.append(toggle, list);
+        node.append(block);
+        return node;
+      }
+      const head = el("div", "ag-card-head");
+      head.append(icon("globe"), el("span", "ag-card-title", it.message || "The agent needs the browser"));
+      node.append(head);
+      const actions = el("div", "ag-card-actions");
+      actions.append(
+        button("Open browser", "ag-btn small", (event) => {
+          event.stopPropagation();
+          void openBrowserView(it.threadId);
+        }),
+        button("Hand back", "ag-btn small primary", async (event) => {
+          event.stopPropagation();
+          for (const x of actions.querySelectorAll("button")) x.disabled = true;
+          try {
+            await api("POST", `/threads/${encodeURIComponent(it.threadId)}/browser/control`, { action: "handBack" });
+          } catch (err) {
+            notice(err.message);
+            for (const x of actions.querySelectorAll("button")) x.disabled = false;
+          }
+        })
+      );
+      node.append(actions);
+      return node;
+    }
+
     /** settings_show: the settings dialogs' own rows, lent to the chat (settings-ui.js), so they work here too. */
     renderSettings(it) {
       const node = el("div", "ag-card ag-settings-card");
@@ -4971,7 +5075,7 @@
     renderTurnFooter(turn, items) {
       const foot = el("div", `ag-turn-foot s-${turn.status}`);
       if (turn.status === "running") {
-        const waiting = items.some((it) => (it.kind === "approval" || it.kind === "question" || it.kind === "plan" || it.kind === "component") && it.status === "pending");
+        const waiting = items.some((it) => (it.kind === "approval" || it.kind === "question" || it.kind === "plan" || it.kind === "component" || it.kind === "browser_handoff") && it.status === "pending");
         foot.append(el("span", "ag-spin"), el("span", "ag-foot-label", waiting ? "Waiting for you" : "Working"), elapsed(turn.startedAt));
         foot.append(button(icon("stop"), "ag-btn tiny", () => this.stop(), "Stop", false));
         return foot;
@@ -6714,6 +6818,7 @@
     if (item.kind === "notice") return { kind: item.level, text: item.text };
     if (item.kind === "reasoning") return { kind: "reason", text: lastLine(item.text) || "Thinking…" };
     if (item.kind === "text") return { kind: "text", text: lastLine(item.text) };
+    if (item.kind === "browser_handoff") return { kind: "question", text: item.message || "Waiting for the browser" };
     return null;
   }
 
@@ -6770,6 +6875,35 @@
       page.summary = ops.length === 1 ? opLine(ops[0]) : ops.length ? `${ops.length} changes` : "";
     } else page.summary = actionSummary(typeof input.action === "string" ? input.action : "", isRecord(input.args) ? input.args : {}, result?.result, done);
     return page;
+  }
+
+  /**
+   * A browser_open call, read for the chat widget: { title, url, key }.
+   * Claude names it mcp__scribe__browser_open; Cursor and Pi title it "Scribe: browser_open".
+   */
+  function browserOpenInfo(it) {
+    if (!it || it.kind !== "tool") return null;
+    if (!/(?:^|__)browser_open$/.test(it.name || "") && !/(?:^|:\s*)browser_open\b/.test(it.title || "")) return null;
+    const input = isRecord(it.input) ? it.input : {};
+    const result = parseToolJson(it.output);
+    const tab = isRecord(result?.tab) ? result.tab : null;
+    const url = [result?.url, tab?.url, input.url].find((v) => typeof v === "string" && v.trim()) || "";
+    const key = [result?.key, input.key].find((v) => typeof v === "string" && v.trim()) || "";
+    const title =
+      [result?.title, tab?.title, input.title].find((v) => typeof v === "string" && v.trim()) ||
+      (url ? url.replace(/^https?:\/\//, "").split("/")[0] : "") ||
+      key.replace(/^scribe:/, "") ||
+      "Page";
+    return { title, url, key };
+  }
+
+  function latestBrowserOpenId(threadId) {
+    const items = S.details.get(threadId)?.items;
+    if (!items) return "";
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (browserOpenInfo(items[i])) return items[i].id;
+    }
+    return "";
   }
 
   /** Keep the target and search terms visible without opening a file tool's JSON. */
@@ -7069,6 +7203,7 @@
 
   /** Whether a tool step that is not a page write has a body to open: the same tests renderTool's body makes. */
   function toolHasBody(it, children) {
+    if (browserOpenInfo(it) && !it.diff && !children?.length) return false;
     const brief = it.tool === "task" && typeof it.input?.prompt === "string";
     if (it.detail && !brief) return true;
     if (it.diff || brief || children?.length) return true;
@@ -7086,7 +7221,8 @@
     if (it.kind === "component") return JSON.stringify([it.id, it.html, it.title, it.status]);
     const children = it.kind === "tool" && it.toolId ? byParent.get(it.toolId) : null;
     const page = it.kind === "tool" ? pageTool(it) : null;
-    return JSON.stringify([it, page?.title, children?.map((child) => itemSig(child, byParent))]);
+    const browser = it.kind === "tool" ? browserOpenInfo(it) : null;
+    return JSON.stringify([it, page?.title, browser && latestBrowserOpenId(it.threadId) === it.id, children?.map((child) => itemSig(child, byParent))]);
   }
 
   /** Text typed into a waiting card (an approval's or a page ask's note, a plan's change request), kept across re-renders. */
@@ -8289,7 +8425,7 @@
         else if (intent?.announced && item.threadId === intent.threadId && shownPageCall(item)) this.setPageIntent(null);
       }
       if (item.threadId !== this.view.threadId) return;
-      if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan" || item.kind === "component") && item.status === "pending") {
+      if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan" || item.kind === "component" || item.kind === "browser_handoff") && item.status === "pending") {
         if (!S.dockShown) this.setShown(true);
         this.setExpanded(true);
         return;
@@ -8397,7 +8533,7 @@
 
   /** Questions, approvals and plans the user still has to answer, newest thread first, for the palette. */
   function pendingAsks() {
-    const label = { approval: "Approval", question: "Question", plan: "Plan" };
+    const label = { approval: "Approval", question: "Question", plan: "Plan", browser_handoff: "Browser" };
     return [...S.threads.values()]
       .filter((t) => t.status === "waiting" && !t.archived)
       .sort((a, b) => threadRank(b) - threadRank(a))
@@ -9336,6 +9472,7 @@
 
   function hideHoverTip() {
     clearTimeout(hoverTipTimer);
+    hoverTipEl?._onHide?.();
     hoverTipEl?.remove();
     hoverTipEl = null;
   }
@@ -9356,14 +9493,14 @@
     hoverTipEl = tip;
   }
 
-  function bindHoverTip(anchor, build, { delay = 320, start = false } = {}) {
+  function bindHoverTip(anchor, build, { delay = 320, start = false, width = 280 } = {}) {
     anchor.dataset.richTooltip = "";
     anchor.addEventListener("pointerenter", (event) => {
       if (event.pointerType !== "mouse") return;
       clearTimeout(hoverTipTimer);
       hoverTipTimer = setTimeout(() => {
         const node = build();
-        if (node) placeHoverTip(anchor, node, 280, start);
+        if (node) placeHoverTip(anchor, node, width, start);
       }, delay);
     });
     anchor.addEventListener("pointerleave", () => {

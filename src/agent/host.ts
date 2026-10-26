@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PORT, dataDir } from "../config.js";
-import { closeThreadBrowser } from "../browser.js";
+import { browserControl, browserActivity, browserTurnEnded, browserUserMessage, closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
 import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
@@ -213,6 +213,7 @@ function workspaceFolderError(thread: Thread): string | null {
 }
 
 type Pending =
+  | { kind: "browser_handoff"; threadId: string; itemId: string; resolve: (a: string[]) => void; reject: (err: Error) => void }
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
   | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
   | { kind: "component"; threadId: string; itemId: string; resolve: (a: ComponentAnswer) => void; reject: (err: Error) => void };
@@ -496,6 +497,7 @@ export class AgentHost {
   private seq = new Map<string, number>();
   private dirty = new Map<string, Item>();
   private pending = new Map<string, Pending>();
+  private browserHandoffs = new Set<string>();
   private componentWrites = new Map<string, { at: number; count: number }>();
   /** "Allow once" answers to web_request, per thread, until a web call uses them. */
   private webPasses = new Map<string, Array<{ call: WebCall; at: number }>>();
@@ -1702,6 +1704,8 @@ export class AgentHost {
     // A thread without tools keeps none, whatever the pickers asked for (#729).
     settleNoTools(next);
     // An archived thread is done with its agent browser.
+    const browserPage = store.browserPage(id);
+    if (browserPage && next.title !== thread.title) store.update(browserPage.id, { title: next.title, activate: false });
     if (next.archived && !thread.archived) void closeThreadBrowser(id);
     if (next.provider !== thread.provider || next.mode !== thread.mode || next.custom !== thread.custom || next.approval !== thread.approval || next.cwd !== thread.cwd || next.web !== thread.web || JSON.stringify(next.scope) !== JSON.stringify(thread.scope)) this.effectivePermissions.delete(id);
     next.updatedAt = Date.now();
@@ -1962,6 +1966,7 @@ export class AgentHost {
       if (pending.threadId !== threadId) continue;
       const item = this.loadItems(threadId).find((it) => it.id === pending.itemId);
       if (!item) continue;
+      if (item.kind === "browser_handoff") return { kind: "question", itemId: item.id, title: item.message };
       if (item.kind === "component") return { kind: "question", itemId: item.id, title: item.title || "Component" };
       if (item.kind === "approval") {
         return { kind: "approval", itemId: item.id, title: item.title, ...(item.detail ? { detail: item.detail } : {}), options: item.options };
@@ -1979,7 +1984,11 @@ export class AgentHost {
 
   private emitThread(id: string): void {
     const thread = this.threads.get(id);
-    if (thread) this.emit({ type: "agent_thread", thread: this.view(thread) });
+    if (thread) {
+      const page = store.browserPage(id);
+      if (page && page.title !== thread.title) store.update(page.id, { title: thread.title, activate: false });
+      this.emit({ type: "agent_thread", thread: this.view(thread) });
+    }
     this.scheduleUnusedPageCleanup();
   }
 
@@ -1998,6 +2007,9 @@ export class AgentHost {
       const expired = items.filter((item): item is ComponentItem => item.kind === "component" && item.status === "pending");
       for (const item of expired) item.status = "expired";
       if (expired.length) this.db.saveItems(expired);
+      const handoffs = items.filter(item => item.kind === "browser_handoff" && item.status === "pending");
+      for (const item of handoffs) if (item.kind === "browser_handoff") item.status = "cancelled";
+      if (handoffs.length) this.db.saveItems(handoffs);
     }
     return items;
   }
@@ -2238,6 +2250,7 @@ export class AgentHost {
     const slash = /^\/plan(?:\s+|$)/.exec(text);
     if (slash) text = text.slice(slash[0].length).trim();
     if (!text && !input.images?.length && !input.files?.length) throw new Error("Empty message");
+    if (!input.from) { browserUserMessage(threadId); this.handBackBrowser(threadId); }
     // A thread started in the old plan mode plans on its first message; Scribe's own notes and hooks don't use that up.
     const ownNote = input.from === "scribe" || input.from === "hook";
     const plan = slash ? true : input.plan ?? (ownNote ? false : Boolean(thread.planNext));
@@ -3839,6 +3852,7 @@ export class AgentHost {
     this.closeBlocks(run);
     for (const waiting of run.hooks.waiting.values()) clearTimeout(waiting.timer);
     run.hooks.waiting.clear();
+    browserTurnEnded(threadId);
     this.observe(threadId, run, "turn_end", () => ({
       text: clipChunk(this.loadItems(threadId).filter((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId).map((it) => (it as { text: string }).text).join("\n\n")),
     }));
@@ -3981,6 +3995,7 @@ export class AgentHost {
   private expireInteraction(pending: Pending): void {
     const item = this.loadItems(pending.threadId).find((it) => it.id === pending.itemId);
     if (!item) return;
+    if (item.kind === "browser_handoff" && item.status === "pending") { item.status = "cancelled"; this.touch(item); }
     if ((item.kind === "approval" || item.kind === "question" || item.kind === "component") && item.status === "pending") {
       item.status = "expired";
       this.touch(item);
@@ -4064,6 +4079,38 @@ export class AgentHost {
       return { cancelled: true, page: { id: tab.id, key: tab.key } };
     } finally {
       stop.abort();
+    }
+  }
+
+  /** Give the user the browser and keep the turn waiting until they hand it back. */
+  async handoffBrowser(threadId: string, message: string, signal: AbortSignal): Promise<string[]> {
+    const run = this.runs.get(threadId);
+    if (!run) throw new Error("browser_control handoff needs a running turn.");
+    if (!message.trim()) throw new Error("handoff requires message");
+    if (this.browserHandoffs.has(threadId)) throw new Error("A browser handoff is already pending");
+    this.browserHandoffs.add(threadId);
+    let item: Item | undefined;
+    try {
+      this.closeBlocks(run);
+      await browserControl(threadId, "user", message);
+      if (signal.aborted || this.runs.get(threadId) !== run) throw new Error("aborted");
+      item = this.addItem(threadId, run.turn.id, { kind: "browser_handoff", message, status: "pending" });
+      return await this.waitPending<string[]>(threadId, run, "browser_handoff", item.id, signal);
+    } finally {
+      this.browserHandoffs.delete(threadId);
+      if (item?.kind === "browser_handoff" && item.status === "pending") { item.status = "cancelled"; this.touch(item); }
+      if (!item || (item.kind === "browser_handoff" && item.status === "cancelled")) browserUserMessage(threadId);
+    }
+  }
+
+  handBackBrowser(threadId: string): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.threadId !== threadId || pending.kind !== "browser_handoff") continue;
+      const activity = browserActivity(threadId);
+      const item = this.loadItems(threadId).find(it => it.id === pending.itemId);
+      if (item?.kind === "browser_handoff") { item.status = "done"; item.activity = activity; this.touch(item); }
+      this.pending.delete(id);
+      pending.resolve(activity);
     }
   }
 

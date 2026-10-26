@@ -18,6 +18,8 @@
   /* Live work (the agent is running): the floating chat's dots, sweep and your-turn arrow. */
   --ag-live: #d0a578;
   --ag-live-rgb: 208, 165, 120;
+  --ag-sky: #7eb8d4;
+  --ag-sky-rgb: 126, 184, 212;
   --ag-bar-bg: rgba(0, 0, 0, 0.14);
 }
 
@@ -33,6 +35,8 @@ html[data-theme="cream"] {
   --ag-well: inset 0 1px 3px rgba(70, 50, 20, 0.14), inset 0 -1px 0 rgba(255, 255, 255, 0.6);
   --ag-live: #b0662c;
   --ag-live-rgb: 176, 102, 44;
+  --ag-sky: #3d7ea6;
+  --ag-sky-rgb: 61, 126, 166;
   --ag-bar-bg: rgba(70, 50, 20, 0.04);
 }
 
@@ -275,6 +279,42 @@ html.tight-small .agent-pane {
 .ag-icon-btn.on {
   color: var(--heading);
   background: rgba(var(--lift-rgb), 0.08);
+}
+
+.ag-icon-btn.ag-browser-agent,
+.ag-icon-btn.ag-browser-user {
+  position: relative;
+}
+
+.ag-icon-btn.ag-browser-agent {
+  color: var(--ag-live);
+  background: rgba(var(--ag-live-rgb), 0.14);
+}
+
+.ag-icon-btn.ag-browser-user {
+  color: var(--ag-sky);
+  background: rgba(var(--ag-sky-rgb), 0.14);
+}
+
+.ag-icon-btn.ag-browser-agent::after,
+.ag-icon-btn.ag-browser-user::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.ag-icon-btn.ag-browser-agent::after {
+  background: var(--ag-live);
+  box-shadow: 0 0 7px var(--ag-live);
+}
+
+.ag-icon-btn.ag-browser-user::after {
+  background: var(--ag-sky);
+  box-shadow: 0 0 7px var(--ag-sky);
 }
 
 .ag-ico {
@@ -1647,6 +1687,90 @@ html[data-theme="cream"] .ag-md {
 .ag-page-tool-actions {
   display: flex;
   gap: 4px;
+}
+
+.ag-browser-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px 4px;
+  padding: 8px;
+  max-width: 320px;
+  background: var(--ag-card);
+  box-shadow: inset 0 0 0 1px var(--ag-card-border);
+  border-radius: 8px;
+}
+
+.ag-browser-widget-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ag-browser-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.ag-browser-name {
+  font-size: 12.5px;
+  color: var(--heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-browser-href {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-browser-widget-head .ag-btn {
+  flex-shrink: 0;
+}
+
+.ag-browser-thumb {
+  aspect-ratio: 16 / 10;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ag-sunken);
+}
+
+.ag-browser-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ag-browser-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ag-browser-tip {
+  padding: 6px;
+}
+
+.ag-browser-tip-stage {
+  aspect-ratio: 16 / 10;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--ag-sunken);
+}
+
+.ag-browser-tip-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .ag-page-ops {
@@ -5443,63 +5567,6 @@ html.tight-small .agent-full {
   padding: 12px;
 }
 
-/* agent browser live view */
-
-.ag-browserview .ag-modal-panel {
-  width: min(1400px, calc(100vw - 40px));
-  height: calc(100vh - 60px);
-  padding: 14px 16px;
-}
-
-.ag-browser-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  min-width: 0;
-}
-
-.ag-browser-head .ag-modal-title {
-  flex-shrink: 0;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ag-browser-url {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.ag-browser-stage {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 10px;
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.ag-browser-screen {
-  max-width: 100%;
-  max-height: 100%;
-  display: block;
-  user-select: none;
-  outline: none;
-}
-
-.ag-browser-screen:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
 /* diff viewer */
 
 .ag-diffview .ag-modal-panel {
@@ -6399,3 +6466,5 @@ html.tight-small .agent-full {
 .ag-component-body iframe { display: block; width: 100%; border: 0; background: var(--bg); }
 .ag-component-fallback { padding: 12px; max-height: 480px; overflow: auto; }
 .ag-component .ag-card-head .ag-btn { margin-left: auto; }
+
+.ag-browser-thumb { cursor: pointer; }

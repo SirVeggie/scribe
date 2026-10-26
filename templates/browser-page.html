@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser</title>
+<!-- Browser view (#845): Scribe serves this page for every tab bound to a thread's agent browser.
+     It shows the headless browser live and lets the user drive it, taking turns with the agent. -->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1a1a1d;
+    --panel: #202024;
+    --well: #131315;
+    --text: #e8e8ea;
+    --muted: #8e8e96;
+    --border: rgba(255, 255, 255, 0.08);
+    --accent: #c9c9d0;
+    --ember: #d0a578;
+    --sky: #8fb3d9;
+    --danger: #ff8a8a;
+    --btn-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.35);
+    --mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 Inter, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  [hidden] { display: none !important; }
+  svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ---------- toolbar ---------- */
+  .bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 40px;
+    padding: 0 8px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+  .icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    flex: none;
+    transition: background-color 0.12s, color 0.12s;
+  }
+  .icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+  .icon-btn.on { color: var(--text); background: rgba(255, 255, 255, 0.1); }
+  .icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; color: var(--muted); }
+  .icon-btn:focus-visible, .btn:focus-visible, .tab:focus-visible { outline: none; box-shadow: 0 0 0 1px var(--accent); }
+
+  .address {
+    flex: 1 1 auto;
+    min-width: 80px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    margin: 0 4px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    color: var(--muted);
+    transition: border-color 0.12s;
+  }
+  .address:focus-within { border-color: rgba(255, 255, 255, 0.22); color: var(--text); }
+  .address input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font: 12px var(--mono);
+  }
+  .address input::placeholder { color: var(--muted); }
+  .address .loading { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, 0.15); border-top-color: var(--accent); animation: spin 0.8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .control { display: flex; align-items: center; gap: 6px; flex: none; margin-left: 2px; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+  .status.agent .dot { background: var(--ember); box-shadow: 0 0 6px rgba(208, 165, 120, 0.6); animation: pulse 1.6s ease-in-out infinite; }
+  .status.user .dot { background: var(--sky); box-shadow: 0 0 6px rgba(143, 179, 217, 0.55); }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  .status.nudge { animation: nudge 0.5s ease; }
+  @keyframes nudge { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+  .btn {
+    font: inherit;
+    font-size: 12px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: var(--btn-shadow);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.12s;
+  }
+  .btn:hover { background: rgba(255, 255, 255, 0.1); }
+  .btn.primary { background: var(--accent); border-color: transparent; color: #18181b; font-weight: 600; box-shadow: 0 0 14px rgba(201, 201, 208, 0.18); }
+  .btn.primary:hover { background: #dcdce2; }
+  .sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; flex: none; }
+
+  /* ---------- tabs ---------- */
+  .tabs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 32px;
+    padding: 0 8px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 200px;
+    min-width: 0;
+    height: 24px;
+    padding: 0 4px 0 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    flex: none;
+  }
+  .tab:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+  .tab.current { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+  .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab .x { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; opacity: 0; }
+  .tab .x svg { width: 10px; height: 10px; }
+  .tab:hover .x, .tab.current .x { opacity: 1; }
+  .tab .x:hover { background: rgba(255, 255, 255, 0.12); }
+  .tabs .icon-btn { width: 24px; height: 24px; }
+
+  /* ---------- handoff ---------- */
+  .handoff {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px 8px 12px;
+    background: rgba(143, 179, 217, 0.08);
+    border-bottom: 1px solid rgba(143, 179, 217, 0.22);
+  }
+  .handoff svg { color: var(--sky); }
+  .handoff .msg { flex: 1; min-width: 0; font-size: 12.5px; }
+  .handoff .who { color: var(--muted); margin-right: 4px; }
+
+  .notice {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--danger);
+    background: rgba(255, 138, 138, 0.08);
+    border-bottom: 1px solid rgba(255, 138, 138, 0.18);
+  }
+  .notice .grow { flex: 1; }
+  .notice .icon-btn { width: 22px; height: 22px; }
+
+  /* ---------- stage ---------- */
+  .stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: var(--well);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+  }
+  .screen {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+    cursor: default;
+    outline: none;
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 10px 40px rgba(0, 0, 0, 0.45);
+  }
+  .stage.scaled .screen { border-radius: 4px; }
+  .stage.focused .screen { box-shadow: 0 0 0 1px rgba(201, 201, 208, 0.45), 0 10px 40px rgba(0, 0, 0, 0.45); }
+  .stage.agent .screen { cursor: not-allowed; }
+  .sink { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--muted); text-align: center; padding: 24px; }
+  .empty svg { width: 28px; height: 28px; stroke-width: 1.1; opacity: 0.6; margin-bottom: 4px; }
+  .empty b { color: var(--text); font-weight: 600; }
+  .size {
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    font: 11px var(--mono);
+    color: var(--muted);
+    background: rgba(19, 19, 21, 0.75);
+    padding: 1px 6px;
+    border-radius: 5px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .stage:hover .size { opacity: 1; }
+
+  /* ---------- menu ---------- */
+  .menu {
+    position: fixed;
+    z-index: 10;
+    min-width: 200px;
+    padding: 5px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(32, 32, 36, 0.96);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    animation: pop 0.12s ease-out;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(-4px); } }
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    height: 28px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .menu button:hover { background: rgba(255, 255, 255, 0.08); }
+  .menu button svg { color: var(--muted); }
+  .menu button.danger { color: var(--danger); }
+  .menu button.danger svg { color: var(--danger); }
+  .menu button.armed { background: rgba(255, 138, 138, 0.12); }
+  .menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    border-radius: 9px;
+    background: rgba(32, 32, 36, 0.96);
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    font-size: 12px;
+    pointer-events: none;
+    animation: pop 0.12s ease-out;
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button class="icon-btn" id="back" aria-label="Back" data-tooltip="Back"><svg viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg></button>
+  <button class="icon-btn" id="forward" aria-label="Forward" data-tooltip="Forward"><svg viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
+  <button class="icon-btn" id="reload" aria-label="Reload" data-tooltip="Reload"><svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.8h-2.8"/></svg></button>
+  <label class="address">
+    <svg viewBox="0 0 16 16" id="globe"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg>
+    <span class="loading" id="loading" hidden></span>
+    <input id="url" type="text" spellcheck="false" autocomplete="off" placeholder="Type an address" aria-label="Address">
+  </label>
+  <div class="control" id="control" hidden>
+    <span class="status" id="status"><span class="dot"></span><span id="statusText"></span></span>
+    <button class="btn" id="controlBtn"></button>
+  </div>
+  <span class="sep"></span>
+  <button class="icon-btn" id="fit" aria-label="Fit page to view" data-tooltip="Fit page to view"><svg viewBox="0 0 16 16"><path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10"/></svg></button>
+  <button class="icon-btn" id="more" aria-label="More" aria-haspopup="menu"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></svg></button>
+</div>
+<div class="tabs" id="tabs" hidden></div>
+<div class="handoff" id="handoff" hidden>
+  <svg viewBox="0 0 16 16"><path d="M8 14.5A6.5 6.5 0 1 0 8 1.5a6.5 6.5 0 0 0 0 13zM8 7.2v3.8M8 4.9v.2"/></svg>
+  <div class="msg"><span class="who">Agent:</span><span id="handoffText"></span></div>
+  <button class="btn primary" id="handoffBtn">Hand back</button>
+</div>
+<div class="notice" id="notice" hidden><span class="grow" id="noticeText"></span><button class="icon-btn" id="noticeClose" aria-label="Dismiss"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
+<div class="stage" id="stage">
+  <img class="screen" id="screen" alt="" draggable="false" hidden>
+  <div class="empty" id="empty">
+    <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg>
+    <b id="emptyTitle">Connecting…</b>
+    <span id="emptyText"></span>
+  </div>
+  <textarea class="sink" id="sink" aria-label="Browser keyboard input" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  <span class="size" id="size"></span>
+</div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var api = window.scribe && window.scribe.browser;
+  var screen = $("screen"), stage = $("stage"), sink = $("sink"), urlInput = $("url");
+
+  var view = null;      // the thread's BrowserView: tabs, control, handoff, viewport, fit, key
+  var frame = null;     // the last frame: { tab, width, height }
+  var stopWatch = null;
+  var visible = false;
+  var info = null;
+
+  function setEmpty(title, text) {
+    $("emptyTitle").textContent = title;
+    $("emptyText").textContent = text || "";
+    $("empty").hidden = false;
+    screen.hidden = true;
+  }
+
+  if (!api) {
+    setEmpty("Not available", "This view needs the Scribe board.");
+    return;
+  }
+
+  /* ---------- notices ---------- */
+  function showError(message) {
+    $("noticeText").textContent = message;
+    $("notice").hidden = false;
+  }
+  $("noticeClose").addEventListener("click", function () { $("notice").hidden = true; });
+  var toastTimer = 0;
+  function toast(text) {
+    var old = document.querySelector(".toast");
+    if (old) old.remove();
+    var t = document.createElement("div");
+    t.className = "toast";
+    t.textContent = text;
+    document.body.appendChild(t);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.remove(); }, 2400);
+  }
+  function check(res) {
+    if (res && res.ok === false) {
+      if (res.error === "agent_driving") nudge();
+      else if (res.error) showError(res.error);
+    }
+    return res;
+  }
+  function call(promise) {
+    return Promise.resolve(promise).then(check, function (err) { showError(String((err && err.message) || err)); });
+  }
+
+  /* ---------- live stream: only while the view is on screen ---------- */
+  function onEvent(event) {
+    if (!event) return;
+    if (event.type === "frame") {
+      frame = { tab: event.tab, width: event.width, height: event.height };
+      screen.src = "data:image/jpeg;base64," + event.data;
+      // A blank tab keeps the empty state instead of a white rectangle.
+      var tab = currentTab();
+      var blank = !tab || tab.url === "about:blank";
+      screen.hidden = blank;
+      $("empty").hidden = !blank;
+      $("loading").hidden = true;
+      $("size").textContent = event.width + " × " + event.height;
+      layout();
+    } else if (event.type === "view") {
+      setView(event.view);
+    }
+  }
+  function syncWatch() {
+    var want = visible && document.visibilityState === "visible";
+    if (want && !stopWatch) {
+      stopWatch = api.watch(onEvent);
+    } else if (!want && stopWatch) {
+      stopWatch();
+      stopWatch = null;
+    }
+  }
+  new IntersectionObserver(function (entries) {
+    visible = entries[entries.length - 1].isIntersecting;
+    syncWatch();
+  }).observe(stage);
+  document.addEventListener("visibilitychange", syncWatch);
+  window.addEventListener("pagehide", function () { if (stopWatch) stopWatch(); stopWatch = null; });
+
+  /* ---------- view state ---------- */
+  function currentTab() {
+    return view && view.tabs ? view.tabs.find(function (t) { return t.current; }) || null : null;
+  }
+
+  function setView(next) {
+    view = next || null;
+    var tab = currentTab();
+    if (document.activeElement !== urlInput) {
+      urlInput.value = tab && tab.url !== "about:blank" ? tab.url : "";
+    }
+    ["back", "forward", "reload"].forEach(function (id) { $(id).disabled = !tab; });
+    if (!view || !tab) frame = null;
+    if (!view || !tab || tab.url === "about:blank") {
+      setEmpty("No page open", "Type an address above to open one. The agent can use it too.");
+    } else if (frame) {
+      screen.hidden = false;
+      $("empty").hidden = true;
+    }
+    renderTabs();
+    renderControl();
+    renderHandoff();
+    $("fit").classList.toggle("on", Boolean(view && view.fit));
+    $("fit").setAttribute("aria-pressed", String(Boolean(view && view.fit)));
+    if (view && view.fit) fitSoon();
+  }
+
+  function renderTabs() {
+    var box = $("tabs");
+    var tabs = (view && view.tabs) || [];
+    box.hidden = tabs.length < 2;
+    box.textContent = "";
+    if (box.hidden) return;
+    tabs.forEach(function (t) {
+      var b = document.createElement("button");
+      b.className = "tab" + (t.current ? " current" : "");
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(t.current));
+      b.dataset.tooltip = (t.title ? t.title + "\n" : "") + t.url;
+      var label = document.createElement("span");
+      label.textContent = t.title || t.url || "New tab";
+      var x = document.createElement("span");
+      x.className = "x";
+      x.setAttribute("aria-label", "Close tab");
+      x.innerHTML = '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+      b.append(label, x);
+      b.addEventListener("click", function (event) {
+        if (event.target.closest(".x")) call(api.tabs({ close: t.tab }));
+        else if (!t.current) call(api.tabs({ select: t.tab }));
+      });
+      b.addEventListener("auxclick", function (event) {
+        if (event.button === 1) call(api.tabs({ close: t.tab }));
+      });
+      box.appendChild(b);
+    });
+    var add = document.createElement("button");
+    add.className = "icon-btn";
+    add.setAttribute("aria-label", "New tab");
+    add.innerHTML = '<svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>';
+    add.addEventListener("click", newTab);
+    box.appendChild(add);
+  }
+
+  function newTab() {
+    call(api.tabs({ newTab: true })).then(function () { urlInput.focus(); });
+  }
+
+  function control() { return (view && view.control) || "free"; }
+
+  function renderControl() {
+    var state = control();
+    var box = $("control"), status = $("status"), btn = $("controlBtn");
+    stage.classList.toggle("agent", state === "agent");
+    box.hidden = !view || state === "free";
+    status.className = "status " + state;
+    if (state === "agent") {
+      $("statusText").textContent = "Agent is driving";
+      btn.textContent = "Take control";
+      btn.className = "btn";
+    } else if (state === "user") {
+      $("statusText").textContent = "You're driving";
+      btn.textContent = "Hand back";
+      btn.className = "btn primary";
+    }
+    // A pending handoff has its own Hand back in the banner.
+    btn.hidden = state === "user" && Boolean(view && view.handoff);
+  }
+
+  function renderHandoff() {
+    var h = view && view.handoff;
+    $("handoff").hidden = !h;
+    $("handoffText").textContent = h ? h.message : "";
+  }
+
+  function nudge() {
+    var status = $("status");
+    status.classList.remove("nudge");
+    void status.offsetWidth;
+    status.classList.add("nudge");
+    $("controlBtn").focus();
+  }
+
+  function handBack() {
+    call(api.control("handBack")).then(function (res) {
+      if (res && res.ok !== false) toast("Handed back to the agent");
+    });
+  }
+  $("controlBtn").addEventListener("click", function () {
+    if (control() === "agent") call(api.control("take")).then(function () { sink.focus(); });
+    else handBack();
+  });
+  $("handoffBtn").addEventListener("click", handBack);
+
+  /* ---------- toolbar ---------- */
+  $("back").addEventListener("click", function () { call(api.navigate({ action: "back" })); });
+  $("forward").addEventListener("click", function () { call(api.navigate({ action: "forward" })); });
+  $("reload").addEventListener("click", function () { call(api.navigate({ action: "reload" })); });
+
+  /** What the user typed as a URL: bare hosts get a scheme (http for local ones). */
+  function toUrl(raw) {
+    var text = raw.trim();
+    if (!text) return "";
+    if (/^[a-z][a-z0-9+.-]*:/i.test(text) && !/^(localhost|[\w.-]+):\d+/i.test(text)) return text;
+    var local = /^(localhost|127(\.\d{1,3}){3}|\[::1\]|[\w-]+\.localhost)(?=[:/]|$)/i.test(text);
+    return (local ? "http://" : "https://") + text;
+  }
+  urlInput.addEventListener("focus", function () { urlInput.select(); });
+  urlInput.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      var url = toUrl(urlInput.value);
+      if (!url) return;
+      $("loading").hidden = false;
+      $("notice").hidden = true;
+      call(api.navigate({ url: url })).then(function (res) {
+        $("loading").hidden = true;
+        if (!res || res.ok !== false) sink.focus();
+      });
+    } else if (event.key === "Escape") {
+      var tab = currentTab();
+      urlInput.value = tab && tab.url !== "about:blank" ? tab.url : "";
+      if (frame) {
+        event.preventDefault();
+        sink.focus();
+      }
+    }
+  });
+
+  /* ---------- fit the page to the view ---------- */
+  var fitTimer = 0;
+  function stageSize() {
+    return { width: Math.max(320, Math.floor(stage.clientWidth)), height: Math.max(320, Math.floor(stage.clientHeight)) };
+  }
+  function fitSoon() {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(function () {
+      if (!view || !view.fit || !visible) return;
+      var size = stageSize();
+      if (view.viewport && view.viewport.width === size.width && view.viewport.height === size.height) return;
+      call(api.fit(size));
+    }, 250);
+  }
+  $("fit").addEventListener("click", function () {
+    call(api.fit(view && view.fit ? null : stageSize()));
+  });
+  new ResizeObserver(function () { layout(); if (view && view.fit) fitSoon(); }).observe(stage);
+
+  function layout() {
+    if (!frame) return;
+    var scaled = frame.width > stage.clientWidth || frame.height > stage.clientHeight;
+    stage.classList.toggle("scaled", scaled);
+  }
+
+  /* ---------- menu ---------- */
+  var menu = null;
+  function closeMenu() {
+    if (menu) menu.remove();
+    menu = null;
+    $("more").classList.remove("on");
+  }
+  function menuItem(label, svg, run, cls) {
+    var b = document.createElement("button");
+    b.setAttribute("role", "menuitem");
+    if (cls) b.className = cls;
+    b.innerHTML = '<svg viewBox="0 0 16 16">' + svg + "</svg>";
+    b.appendChild(document.createTextNode(label));
+    b.addEventListener("click", function (event) { event.stopPropagation(); run(b); });
+    return b;
+  }
+  $("more").addEventListener("click", function (event) {
+    event.stopPropagation();
+    if (menu) { closeMenu(); return; }
+    menu = document.createElement("div");
+    menu.className = "menu";
+    menu.setAttribute("role", "menu");
+    menu.append(
+      menuItem("New tab", '<path d="M8 3.5v9M3.5 8h9"/>', function () { closeMenu(); newTab(); }),
+      menuItem("Copy browser key", '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5"/>', function () {
+        closeMenu();
+        var key = (view && view.key) || (info && info.key);
+        if (!key) return;
+        navigator.clipboard.writeText(key).then(function () { toast("Copied " + key); }, function () { showError("Couldn't copy " + key); });
+      }),
+      document.createElement("hr"),
+      menuItem("Close browser", '<path d="M4 4l8 8M12 4l-8 8"/>', function (b) {
+        // Two-step: the first click arms it.
+        if (!b.classList.contains("armed")) {
+          b.classList.add("armed");
+          b.lastChild.textContent = "Close browser and its tabs?";
+          setTimeout(function () { if (b.isConnected) { b.classList.remove("armed"); b.lastChild.textContent = "Close browser"; } }, 2500);
+          return;
+        }
+        closeMenu();
+        call(api.close());
+      }, "danger")
+    );
+    document.body.appendChild(menu);
+    var r = $("more").getBoundingClientRect();
+    menu.style.top = r.bottom + 6 + "px";
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - menu.offsetWidth - 8, r.right - menu.offsetWidth)) + "px";
+    $("more").classList.add("on");
+  });
+  document.addEventListener("mousedown", function (event) {
+    if (menu && !menu.contains(event.target) && event.target !== $("more")) closeMenu();
+  });
+  window.addEventListener("resize", closeMenu);
+
+  /* ---------- input: mouse ---------- */
+  // Inputs go one at a time, in order; a mouse move is dropped while another is on its way.
+  var queue = Promise.resolve();
+  var movePending = false;
+  function send(input) {
+    if (!frame) return;
+    if (control() === "agent") {
+      if (input.kind !== "move") nudge();
+      return;
+    }
+    if (input.kind === "move") {
+      if (movePending) return;
+      movePending = true;
+    }
+    var body = Object.assign({ tab: frame.tab }, input);
+    queue = queue
+      .then(function () { return api.input(body); })
+      .then(function (res) { if (res && res.ok === false && res.error === "agent_driving") nudge(); })
+      .catch(function () {})
+      .then(function () { if (input.kind === "move") movePending = false; });
+  }
+  function at(event) {
+    var rect = screen.getBoundingClientRect();
+    var x = Math.min(rect.right, Math.max(rect.left, event.clientX));
+    var y = Math.min(rect.bottom, Math.max(rect.top, event.clientY));
+    return {
+      x: Math.round(((x - rect.left) * frame.width) / rect.width),
+      y: Math.round(((y - rect.top) * frame.height) / rect.height),
+    };
+  }
+  var BUTTONS = ["left", "middle", "right"];
+  var pressed = false;
+  screen.addEventListener("mousedown", function (event) {
+    event.preventDefault();
+    sink.focus({ preventScroll: true });
+    if (!frame) return;
+    pressed = control() !== "agent";
+    send(Object.assign({ kind: "down", button: BUTTONS[event.button] || "left", clickCount: event.detail || 1 }, at(event)));
+  });
+  screen.addEventListener("mousemove", function (event) {
+    if (frame && control() !== "agent") send(Object.assign({ kind: "move" }, at(event)));
+  });
+  window.addEventListener("mouseup", function (event) {
+    if (!pressed || !frame) return;
+    pressed = false;
+    send(Object.assign({ kind: "up", button: BUTTONS[event.button] || "left", clickCount: event.detail || 1 }, at(event)));
+  });
+  screen.addEventListener("contextmenu", function (event) { event.preventDefault(); });
+  screen.addEventListener("wheel", function (event) {
+    event.preventDefault();
+    if (!frame) return;
+    var scale = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1;
+    send(Object.assign({ kind: "wheel", dx: event.deltaX * scale, dy: event.deltaY * scale }, at(event)));
+  }, { passive: false });
+
+  /* ---------- input: keys, through a hidden text field ---------- */
+  // Typing into a text field keeps Scribe's page shortcuts (Ctrl+Z…) out of the way, and gives
+  // paste and IME composition for free.
+  sink.addEventListener("focus", function () { stage.classList.add("focused"); });
+  sink.addEventListener("blur", function () { stage.classList.remove("focused"); });
+
+  /** A KeyboardEvent as a Playwright key, or null for a lone modifier. */
+  function browserKey(event) {
+    if (["Shift", "Control", "Alt", "Meta", "Dead", "Unidentified", "Process", "AltGraph", "CapsLock"].indexOf(event.key) >= 0) return null;
+    var printable = event.key.length === 1;
+    var mods = [];
+    if (event.ctrlKey) mods.push("Control");
+    if (event.altKey) mods.push("Alt");
+    if (event.metaKey) mods.push("Meta");
+    // A printable key already carries Shift ("A", "!"); named keys need it spelled out.
+    if (event.shiftKey && (!printable || mods.length)) mods.push("Shift");
+    return mods.concat([printable && mods.length ? event.key.toLowerCase() : event.key]).join("+");
+  }
+  var lastEscape = 0;
+  sink.addEventListener("keydown", function (event) {
+    if (event.isComposing || event.keyCode === 229) return;
+    var mod = event.ctrlKey || event.metaKey;
+    var lower = event.key.toLowerCase();
+    // Ctrl+V: the paste event brings the text across. Ctrl+K stays the chat's.
+    if (mod && !event.altKey && (lower === "v" || lower === "k")) return;
+    if (mod && !event.altKey && lower === "l") {
+      event.preventDefault();
+      urlInput.focus();
+      return;
+    }
+    if (event.key === "Escape") {
+      // Esc goes to the page; a second one in a row leaves the view, as Esc does elsewhere in Scribe.
+      var now = Date.now();
+      if (now - lastEscape < 600) { lastEscape = 0; sink.blur(); return; }
+      lastEscape = now;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    // Printable keys without modifiers arrive as input text (so layouts and IME work); the rest as keys.
+    if (event.key.length === 1 && !mod && !event.altKey) return sendText(event.key);
+    var key = browserKey(event);
+    if (key) send({ kind: "key", key: key });
+  });
+  function sendText(text) {
+    if (text) send({ kind: "text", text: text });
+  }
+  sink.addEventListener("compositionend", function (event) {
+    sendText(event.data);
+    sink.value = "";
+  });
+  sink.addEventListener("input", function (event) {
+    if (event.isComposing) return;
+    sink.value = "";
+  });
+  sink.addEventListener("paste", function (event) {
+    event.preventDefault();
+    sendText(event.clipboardData && event.clipboardData.getData("text/plain"));
+  });
+
+  /* ---------- start ---------- */
+  setEmpty("Connecting…", "");
+  Promise.resolve(api.info()).then(function (res) {
+    if (res && res.ok === false) {
+      setEmpty("Browser unavailable", res.error || "");
+      return;
+    }
+    info = res;
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>

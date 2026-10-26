@@ -288,3 +288,9 @@ export function ensureTempColumn(db: DatabaseSync): void {
   }
   db.exec("ALTER TABLE tabs ADD COLUMN temp INTEGER NOT NULL DEFAULT 0");
 }
+
+/** Additive browser-page binding (#845). */
+export function ensureBrowserColumn(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
+  if (!columns.some(column => column.name === "browser")) db.exec("ALTER TABLE tabs ADD COLUMN browser TEXT");
+}

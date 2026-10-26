@@ -1886,6 +1886,43 @@ ${POINTER_DRAG_JS}
     return askBoard({ type: "scribe-reply", data: payload, summary: summary }, AGENT_ASK_MS);
   }
 
+  // ---------- shared browser view ----------
+  var browserWatches = {};
+  var browserWatchSeq = 0;
+  window.addEventListener("pagehide", function () {
+    Object.keys(browserWatches).forEach(function (watchId) {
+      parent.postMessage({ type: "scribe-browser", op: "stop", id: tabId, watchId: watchId }, "*");
+    });
+    browserWatches = {};
+  });
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (event.source !== parent || !data || data.type !== "scribe-browser-event" || data.id !== tabId) return;
+    var callback = browserWatches[data.watchId];
+    if (callback) callback(data.event);
+  });
+  function browserCall(op, options) {
+    return askBoard({ type: "scribe-browser", op: op, options: options }, 60000);
+  }
+  var browserApi = {
+    info: function () { return browserCall("info"); },
+    watch: function (onEvent) {
+      var watchId = client + ":browser:" + (++browserWatchSeq);
+      browserWatches[watchId] = onEvent;
+      askBoard({ type: "scribe-browser", op: "watch", watchId: watchId }, 10000);
+      return function () {
+        delete browserWatches[watchId];
+        askBoard({ type: "scribe-browser", op: "stop", watchId: watchId }, 10000);
+      };
+    },
+    input: function (input) { return browserCall("input", input); },
+    navigate: function (options) { return browserCall("navigate", options); },
+    tabs: function (options) { return browserCall("tabs", options); },
+    control: function (action) { return browserCall("control", { action: action }); },
+    fit: function (size) { return browserCall("fit", size || { fit: false }); },
+    close: function () { return browserCall("close", {}); }
+  };
+
   // ---------- file pages ----------
   /**
    * A file page's file (#654). The board reads and writes the file on this page's tab; the page
@@ -1950,6 +1987,7 @@ ${POINTER_DRAG_JS}
     action: action,
     reply: reply,
     file: fileApi,
+    browser: browserApi,
     open: open,
     resolve: resolve,
     preview: preview,

@@ -1745,7 +1745,7 @@
     el.setAttribute("aria-label", tab.title);
     // A file page shows its kind (#707).
     const fileName = tab.file?.path || "";
-    let fileBadge = el.querySelector(".file-badge");
+    let fileBadge = el.querySelector(".file-badge:not(.browser-badge)");
     if ((fileBadge?.dataset.name || "") !== fileName) {
       fileBadge?.remove();
       if (fileName) {
@@ -1754,6 +1754,13 @@
         el.insertBefore(fileBadge, el.querySelector(".tab-title"));
       }
     }
+    let browserBadge = el.querySelector(".browser-badge");
+    if (tab.browser && !browserBadge) {
+      browserBadge = document.createElement("span");
+      browserBadge.className = "file-badge browser-badge";
+      browserBadge.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>';
+      el.insertBefore(browserBadge, el.querySelector(".tab-title"));
+    } else if (!tab.browser) browserBadge?.remove();
     let pin = el.querySelector(".tab-pin");
     if (tab.pinned) {
       if (!pin) {
@@ -4595,6 +4602,48 @@
     return value;
   }
 
+  const browserPageWatches = new Map();
+  async function onPageBrowser(event) {
+    const data = event.data;
+    const source = event.source;
+    const frameId = frameIdByWindow(source);
+    const tab = frameId ? findAnyTab(frameId) : null;
+    const reply = result => source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    if (!tab?.browser) { reply({ ok: false, error: "not_a_browser_page" }); return; }
+    const threadId = tab.browser.threadId;
+    const base = `/api/agent/threads/${encodeURIComponent(threadId)}/browser`;
+    if (data.op === "info") { reply({ ok: true, threadId, key: tab.key, title: tab.title }); return; }
+    const watchKey = `${frameId}:${data.watchId}`;
+    if (data.op === "stop") { browserPageWatches.get(watchKey)?.(); reply({ ok: true }); return; }
+    if (data.op === "watch") {
+      browserPageWatches.get(watchKey)?.();
+      const frame = [...document.querySelectorAll("iframe")].find(f => f.contentWindow === source);
+      if (!frame) { reply({ ok: false, error: "frame_gone" }); return; }
+      const stream = new EventSource(`${base}/live`);
+      const stop = () => {
+        stream.close(); clearInterval(check);
+        browserPageWatches.delete(watchKey);
+      };
+      // A removed frame sends no pagehide: notice it on the next event, or within a few seconds on a still page.
+      const check = setInterval(() => { if (!frame.isConnected) stop(); }, 5000);
+      browserPageWatches.set(watchKey, stop);
+      for (const type of ["frame", "view"]) stream.addEventListener(type, e => {
+        if (!frame.isConnected) { stop(); return; }
+        try {
+          const payload = JSON.parse(e.data);
+          source.postMessage({ type: "scribe-browser-event", id: tab.id, watchId: data.watchId, event: type === "frame" ? { type, ...payload } : { type, view: payload } }, "*");
+        } catch { /* ignore a disconnected frame */ }
+      });
+      reply({ ok: true }); return;
+    }
+    if (!["input", "navigate", "tabs", "control", "fit", "close"].includes(data.op)) { reply({ ok: false, error: "unknown_browser_op" }); return; }
+    try {
+      const res = await fetch(`${base}/${data.op}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data.options || {}) });
+      const result = await res.json().catch(() => ({}));
+      reply(res.ok ? { ...result, ok: true } : { ...result, ok: false, status: res.status, error: String(result.error || `HTTP ${res.status}`) });
+    } catch (err) { reply({ ok: false, error: String(err.message || err) }); }
+  }
+
   async function onPageFile(event) {
     const data = event.data;
     const source = event.source;
@@ -5964,6 +6013,8 @@
       onPageAudio(event);
     } else if (event.data?.type === "scribe-reply") {
       onPageReply(event);
+    } else if (event.data?.type === "scribe-browser") {
+      void onPageBrowser(event);
     } else if (event.data?.type === "scribe-file") {
       void onPageFile(event);
     } else if (event.data?.type === "scribe-title") {

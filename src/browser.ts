@@ -55,7 +55,19 @@ type BrowserTab = {
   network: NetworkEntry[];
 };
 
+export type BrowserControl = "free" | "agent" | "user";
+export type Activity = { kind: "text"; field: string; count: number; password?: boolean } | { kind: "event"; text: string };
+
 type Session = {
+  control: BrowserControl;
+  controlSince: number;
+  agentAt: number;
+  userActivity: Activity[];
+  userOrigins: Set<string>;
+  handoff: { message: string } | null;
+  fit: boolean;
+  viewport: { width: number; height: number };
+  reportedControl?: BrowserControl;
   threadId: string;
   context: BrowserContext;
   tabs: Map<string, BrowserTab>;
@@ -69,6 +81,13 @@ export type Target = { ref?: string; selector?: string; text?: string };
 
 /** A thread's tabs, for the chat's browser button and live view. */
 export type BrowserView = {
+  control: BrowserControl;
+  controlSince: number;
+  agentAt: number;
+  handoff: { message: string } | null;
+  viewport: { width: number; height: number };
+  fit: boolean;
+  key?: string;
   threadId: string;
   tabs: Array<{ tab: string; url: string; title: string; current: boolean }>;
 };
@@ -97,6 +116,8 @@ type Watcher = {
   tab?: BrowserTab;
   cdp?: CDPSession;
   closed: boolean;
+  maxWidth?: number;
+  everyNthFrame?: number;
 };
 
 let browser: Browser | null = null;
@@ -111,7 +132,7 @@ const watchers = new Set<Watcher>();
  * Hosts the agent browser may load as a page: loopback only (dev servers and Scribe itself).
  * Subresources and iframes are not checked, so a local page can still pull in its CDN fonts.
  */
-export function allowedBrowserUrl(raw: string): boolean {
+export function allowedBrowserUrl(raw: string, userOrigins?: ReadonlySet<string>): boolean {
   let url: URL;
   try {
     url = new URL(raw);
@@ -124,6 +145,7 @@ export function allowedBrowserUrl(raw: string): boolean {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return false;
   }
+  if (userOrigins?.has(url.origin)) return true;
   const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return (
     host === "localhost" ||
@@ -139,7 +161,7 @@ export function allowedBrowserUrl(raw: string): boolean {
  * board UI (or fetch from it) to open and read any file. Agents may link files (file: links), and
  * read a file page once the user has opened it, like any page.
  */
-const FILE_OPEN_ROUTES = /^\/api\/(files\/(open|open-folder|upload|list)|temp-pages\/)/;
+const FILE_OPEN_ROUTES = /^\/api\/(files\/(open|open-folder|upload|list)|temp-pages\/|agent\/(?:threads\/[^/]+\/browser(?:\/|$)|browsers(?:$|\?)))/;
 
 /** A request from the agent browser to this board's file-opening routes. Other loopback servers are left alone. */
 export function blockedBoardRequest(raw: string, port: number = PORT): boolean {
@@ -173,6 +195,7 @@ export function resolveBrowserUrl(input: { url?: string; key?: string }): string
 }
 
 export function browserHttpStatus(message: string): number {
+  if (message === "agent_driving" || message.startsWith("The user is controlling the browser.")) return 409;
   if (
     message.startsWith("tab not found") ||
     message.startsWith("no browser tab") ||
@@ -198,10 +221,9 @@ export async function browserOpen(
   input: { url?: string; key?: string; tab?: string; newTab?: boolean; snapshot?: boolean }
 ) {
   const url = resolveBrowserUrl(input);
-  if (!allowedBrowserUrl(url)) {
-    throw new Error(blockedMessage(url));
-  }
   const session = await ensureSession(threadId);
+  agentOperation(session, true);
+  if (!allowedBrowserUrl(url, session.userOrigins)) throw new Error(blockedMessage(url));
   const tab = input.newTab || !session.tabs.size ? await newTab(session) : pickTab(session, input.tab);
   session.current = tab.id;
   changed(threadId);
@@ -229,7 +251,9 @@ export async function browserSnapshot(
   threadId: string,
   input: { tab?: string; selector?: string; maxChars?: number; frame?: string }
 ) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, false);
+  const tab = pickTab(session, input.tab);
   const maxChars = clamp(input.maxChars ?? DEFAULT_SNAPSHOT_CHARS, 1_000, MAX_SNAPSHOT_CHARS);
   const frame = await frameOf(tab.page, input.frame);
   return {
@@ -256,7 +280,9 @@ export async function browserAct(
     frame?: string;
   }
 ) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, true);
+  const tab = pickTab(session, input.tab);
   const { page } = tab;
   const frame = await frameOf(page, input.frame);
   const locate = (target: Target) => locateIn(page, frame, target);
@@ -350,7 +376,9 @@ export async function browserScreenshot(
   threadId: string,
   input: Target & { tab?: string; fullPage?: boolean; frame?: string }
 ) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, false);
+  const tab = pickTab(session, input.tab);
   const { page } = tab;
   const frame = await frameOf(page, input.frame);
   // With a frame and no target, the iframe's own box.
@@ -370,7 +398,9 @@ export async function browserScreenshot(
 }
 
 export async function browserEval(threadId: string, input: { tab?: string; script: string; frame?: string }) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, true);
+  const tab = pickTab(session, input.tab);
   if (!input.script?.trim()) {
     throw new Error("Provide script");
   }
@@ -402,7 +432,9 @@ export async function browserConsole(
   threadId: string,
   input: { tab?: string; level?: string; pattern?: string; since?: number; limit?: number; clear?: boolean }
 ) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, false);
+  const tab = pickTab(session, input.tab);
   const pattern = input.pattern ? new RegExp(input.pattern, "i") : null;
   const levels = levelFilter(input.level);
   const rows = tab.console.filter(
@@ -420,7 +452,9 @@ export async function browserNetwork(
   threadId: string,
   input: { tab?: string; urlPattern?: string; failedOnly?: boolean; since?: number; limit?: number; clear?: boolean }
 ) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, false);
+  const tab = pickTab(session, input.tab);
   const pattern = input.urlPattern ? new RegExp(input.urlPattern, "i") : null;
   const rows = tab.network.filter(
     (row) =>
@@ -439,12 +473,16 @@ export async function browserViewport(
   threadId: string,
   input: { tab?: string; width?: number; height?: number; colorScheme?: "light" | "dark" | "no-preference" }
 ) {
-  const tab = pickTab(await requireSession(threadId), input.tab);
+  const session = await requireSession(threadId);
+  agentOperation(session, true);
+  const tab = pickTab(session, input.tab);
   const current = tab.page.viewportSize() ?? DEFAULT_VIEWPORT;
   const size = {
     width: clamp(input.width ?? current.width, MIN_VIEWPORT, MAX_VIEWPORT),
     height: clamp(input.height ?? current.height, MIN_VIEWPORT, MAX_VIEWPORT),
   };
+  session.viewport = size;
+  changed(threadId);
   await tab.page.setViewportSize(size);
   if (input.colorScheme) {
     await tab.page.emulateMedia({ colorScheme: input.colorScheme });
@@ -453,9 +491,12 @@ export async function browserViewport(
 }
 
 export async function browserTabs(threadId: string, input: { close?: string; select?: string; closeAll?: boolean }) {
+  const active = sessions.get(threadId);
+  if (active) agentOperation(active, Boolean(input.close || input.select || input.closeAll));
   if (input.closeAll) {
+    const metadata = browserAgentResult(threadId);
     await closeThreadBrowser(threadId);
-    return { tabs: [], closed: true };
+    return { tabs: [], closed: true, ...metadata };
   }
   const session = sessions.get(threadId);
   if (!session) {
@@ -466,6 +507,7 @@ export async function browserTabs(threadId: string, input: { close?: string; sel
     const tab = pickTab(session, input.close);
     await tab.page.close().catch(() => undefined);
     session.tabs.delete(tab.id);
+    if (session.control === "user") addActivity(session.userActivity, { kind: "event", text: `Closed tab ${tab.id}` });
     if (session.current === tab.id) {
       session.current = [...session.tabs.keys()].at(-1);
     }
@@ -540,7 +582,7 @@ export async function browserView(threadId: string): Promise<BrowserView | null>
       current: tab.id === session.current,
     }))
   );
-  return { threadId, tabs };
+  return { threadId, tabs, control: session.control, controlSince: session.controlSince, agentAt: session.agentAt, handoff: session.handoff, viewport: session.viewport, fit: session.fit, ...(store.browserPage(threadId) ? { key: store.browserPage(threadId)!.key } : {}) };
 }
 
 export async function browserViews(): Promise<BrowserView[]> {
@@ -561,15 +603,18 @@ export function onBrowserChange(fn: (view: BrowserView | null, threadId: string)
 export function watchBrowser(
   threadId: string,
   onFrame: (frame: BrowserFrame) => void,
-  onView: (view: BrowserView | null) => void
+  onView: (view: BrowserView | null) => void,
+  opts: { maxWidth?: number; everyNthFrame?: number } = {}
 ): () => void {
-  const watcher: Watcher = { threadId, onFrame, onView, closed: false };
+  const watcher: Watcher = { threadId, onFrame, onView, closed: false, ...opts };
   watchers.add(watcher);
   void browserView(threadId).then((view) => !watcher.closed && onView(view));
   void retarget(watcher);
   return () => {
     watcher.closed = true;
     watchers.delete(watcher);
+    const session = sessions.get(threadId);
+    if (session) touch(session);
     void stopCast(watcher.cdp);
     watcher.cdp = undefined;
   };
@@ -578,7 +623,9 @@ export function watchBrowser(
 /** The user's mouse and keys from the chat's live view, at viewport CSS pixels. */
 export async function browserInput(threadId: string, input: BrowserInput) {
   const session = await requireSession(threadId);
+  userOperation(session);
   const { page } = pickTab(session, input.tab);
+  await logInput(session, page, input);
   const x = Number(input.x ?? 0);
   const y = Number(input.y ?? 0);
   const button = input.button === "middle" || input.button === "right" ? input.button : "left";
@@ -615,6 +662,144 @@ export async function browserInput(threadId: string, input: BrowserInput) {
   return { ok: true };
 }
 
+/** Compact activity records never retain typed values. */
+export function addActivity(log: Activity[], entry: Activity): void {
+  const last = log.at(-1);
+  if (entry.kind === "text" && last?.kind === "text" && entry.field === last.field && !!entry.password === !!last.password) last.count += entry.count;
+  else log.push(entry);
+  if (log.length > 60) log.splice(0, log.length - 60);
+}
+
+export function activitySummary(log: readonly Activity[]): string[] {
+  return log.map(entry => entry.kind === "event" ? entry.text : entry.password ? "Typed into a password field" : `Typed ${entry.count} characters into ${entry.field}`);
+}
+
+type ControlState = { control: BrowserControl; controlSince: number; userActivity: Activity[] };
+export function setBrowserControl(state: ControlState, control: BrowserControl): void {
+  if (state.control !== control) { state.control = control; state.controlSince = Date.now(); }
+}
+export function agentControlRule(state: ControlState, mutating: boolean): void {
+  if (!mutating) return;
+  if (state.control === "user") throw new Error('The user is controlling the browser. Read-only tools (browser_snapshot, browser_screenshot, browser_console, browser_network) still work. To act, call browser_control with action "take", or "handoff" to wait until they hand it back.' + (state.userActivity.length ? "\n" + activitySummary(state.userActivity).join("\n") : ""));
+  setBrowserControl(state, "agent");
+}
+export function userControlRule(state: ControlState): void {
+  if (state.control === "agent") throw new Error("agent_driving");
+  setBrowserControl(state, "user");
+}
+export function releaseAgentControl(state: ControlState): void {
+  if (state.control === "agent") setBrowserControl(state, "free");
+}
+function agentOperation(session: Session, mutating: boolean): void {
+  agentControlRule(session, mutating);
+  session.agentAt = Date.now();
+  changed(session.threadId);
+}
+function userOperation(session: Session): void {
+  userControlRule(session);
+  changed(session.threadId);
+}
+/** Added to every MCP result, consuming only activity delivered to the agent. */
+export function browserAgentResult(threadId: string): { userActivity?: string[]; control?: BrowserControl } {
+  const session = sessions.get(threadId);
+  if (!session) return {};
+  const result = { ...(session.userActivity.length ? { userActivity: activitySummary(session.userActivity) } : {}), ...(session.reportedControl !== session.control ? { control: session.control } : {}) };
+  session.userActivity.length = 0;
+  session.reportedControl = session.control;
+  return result;
+}
+export function browserTurnEnded(threadId: string): void {
+  const session = sessions.get(threadId);
+  if (session) { releaseAgentControl(session); changed(threadId); }
+}
+export function browserUserMessage(threadId: string): void {
+  const session = sessions.get(threadId);
+  if (session?.control === "user") { setBrowserControl(session, "free"); session.handoff = null; changed(threadId); }
+}
+export async function ensureBrowserView(threadId: string): Promise<void> {
+  const session = await ensureSession(threadId);
+  if (!session.tabs.size) { const tab = await newTab(session); session.current = tab.id; }
+  changed(threadId);
+}
+export async function browserControl(threadId: string, control: BrowserControl, message?: string): Promise<void> {
+  await ensureBrowserView(threadId);
+  const session = await requireSession(threadId);
+  setBrowserControl(session, control);
+  session.handoff = message ? { message } : null;
+  if (control === "agent") session.agentAt = Date.now();
+  changed(threadId);
+}
+export async function browserHandoffResult(threadId: string) {
+  const session = await requireSession(threadId);
+  setBrowserControl(session, "agent");
+  session.handoff = null;
+  session.agentAt = Date.now();
+  const tab = pickTab(session);
+  changed(threadId);
+  return { control: "agent", userActivity: [] as string[], url: tab.page.url(), title: await tab.page.title().catch(() => ""), ...await snapshotOf(tab.page, undefined, DEFAULT_SNAPSHOT_CHARS), ...browserAgentResult(threadId) };
+}
+export function browserActivity(threadId: string): string[] {
+  return activitySummary(sessions.get(threadId)?.userActivity ?? []);
+}
+export async function browserNavigate(threadId: string, input: { tab?: string; url?: string; action?: "back" | "forward" | "reload" }) {
+  const session = await requireSession(threadId);
+  // Address-bar URLs are user grants; reject invalid schemes before changing the control.
+  const url = input.url === undefined ? undefined : resolveBrowserUrl({ url: input.url });
+  if (url && !/^https?:/.test(url)) throw new Error("Navigation needs an http(s) URL");
+  if (!url && !["back", "forward", "reload"].includes(input.action ?? "")) throw new Error("Provide url or action");
+  userOperation(session);
+  const tab = pickTab(session, input.tab);
+  session.current = tab.id;
+  if (url) {
+    session.userOrigins.add(new URL(url).origin);
+    addActivity(session.userActivity, { kind: "event", text: `Opened ${url}` });
+    await tab.page.goto(url, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+  } else if (input.action === "back") await tab.page.goBack({ timeout: NAV_TIMEOUT_MS });
+  else if (input.action === "forward") await tab.page.goForward({ timeout: NAV_TIMEOUT_MS });
+  else await tab.page.reload({ timeout: NAV_TIMEOUT_MS });
+  changed(threadId);
+  return { ok: true };
+}
+export async function browserUserTabs(threadId: string, input: { select?: string; close?: string; newTab?: boolean }) {
+  const session = await requireSession(threadId);
+  userOperation(session);
+  if (input.newTab) session.current = (await newTab(session)).id;
+  if (input.select) {
+    const tab = pickTab(session, input.select);
+    session.current = tab.id;
+    await tab.page.bringToFront();
+    addActivity(session.userActivity, { kind: "event", text: `Selected tab ${tab.id}` });
+  }
+  if (input.close) await pickTab(session, input.close).page.close();
+  changed(threadId);
+  return { ok: true };
+}
+export async function browserFit(threadId: string, input: { width?: number; height?: number; fit?: false }) {
+  const session = await requireSession(threadId);
+  session.fit = input.fit !== false;
+  session.viewport = session.fit ? { width: clamp(Number(input.width), MIN_VIEWPORT, MAX_VIEWPORT), height: clamp(Number(input.height), MIN_VIEWPORT, MAX_VIEWPORT) } : { ...DEFAULT_VIEWPORT };
+  await Promise.all([...session.tabs.values()].map(tab => tab.page.setViewportSize(session.viewport)));
+  changed(threadId);
+  return { ok: true };
+}
+
+async function logInput(session: Session, page: Page, input: BrowserInput): Promise<void> {
+  if (input.kind === "click" || input.kind === "down") {
+    const target = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      if (!el) return { role: "element", name: "" };
+      return { role: el.getAttribute("role") || el.tagName.toLowerCase(), name: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 60) };
+    }, { x: Number(input.x ?? 0), y: Number(input.y ?? 0) }).catch(() => ({ role: "element", name: "" }));
+    addActivity(session.userActivity, { kind: "event", text: `Clicked ${target.role} "${target.name}"` });
+  } else if (input.kind === "text" || (input.kind === "key" && input.key?.length === 1)) {
+    const field = await page.evaluate(() => {
+      const el = document.activeElement;
+      return { password: el?.getAttribute("type") === "password", name: (el?.getAttribute("aria-label") || el?.getAttribute("name") || el?.id || "field").slice(0, 60) };
+    }).catch(() => ({ password: false, name: "field" }));
+    addActivity(session.userActivity, { kind: "text", field: field.name, password: field.password, count: input.kind === "text" ? [...(input.text ?? "")].length : 1 });
+  }
+}
+
 function blockedMessage(url: string): string {
   return `The agent browser only opens loopback addresses (localhost, 127.x.x.x, *.localhost) and Scribe pages; ${url} is not one.`;
 }
@@ -645,20 +830,23 @@ async function ensureSession(threadId: string): Promise<Session> {
 
 async function createSession(threadId: string): Promise<Session> {
   const opened = await ensureBrowser();
-  const context = await opened.newContext({ viewport: DEFAULT_VIEWPORT });
+  const context = await opened.newContext({ viewport: DEFAULT_VIEWPORT, serviceWorkers: "block" });
   context.setDefaultTimeout(ACTION_TIMEOUT_MS);
   context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  const session: Session = { threadId, context, tabs: new Map(), nextTab: 1, seq: 0, idle: null, control: "free", controlSince: Date.now(), agentAt: 0, userActivity: [], userOrigins: new Set(), handoff: null, fit: false, viewport: { ...DEFAULT_VIEWPORT } };
   // Top-level navigations stay on loopback, including links and redirects the page follows. No request
   // may reach the board's file-opening routes (blockedBoardRequest).
   await context.route("**/*", (route) => {
     const request = route.request();
-    if (blockedBoardRequest(request.url()) || (request.isNavigationRequest() && !request.frame().parentFrame() && !allowedBrowserUrl(request.url()))) {
+    const top = request.isNavigationRequest() && !request.frame().parentFrame();
+    const userNavigation = top && session.control === "user" && /^https?:/.test(request.url());
+    if (userNavigation) session.userOrigins.add(new URL(request.url()).origin);
+    if (blockedBoardRequest(request.url()) || (top && !userNavigation && !allowedBrowserUrl(request.url(), session.userOrigins))) {
       void route.abort("blockedbyclient");
       return;
     }
     void route.fallback();
   });
-  const session: Session = { threadId, context, tabs: new Map(), nextTab: 1, seq: 0, idle: null };
   context.on("page", (page) => {
     if (![...session.tabs.values()].some((tab) => tab.page === page)) {
       // A popup or target=_blank link: track it like a tab the agent opened.
@@ -680,12 +868,14 @@ async function createSession(threadId: string): Promise<Session> {
 
 async function newTab(session: Session): Promise<BrowserTab> {
   const page = await session.context.newPage();
+  await page.setViewportSize(session.viewport);
   return [...session.tabs.values()].find((tab) => tab.page === page) ?? track(session, page);
 }
 
 function track(session: Session, page: Page): BrowserTab {
   const tab: BrowserTab = { id: `b${session.nextTab++}`, page, console: [], network: [] };
   session.tabs.set(tab.id, tab);
+  if (session.control === "user") addActivity(session.userActivity, { kind: "event", text: `Opened tab ${tab.id}` });
   const push = <T>(list: T[], row: T) => {
     list.push(row);
     if (list.length > MAX_LOG) {
@@ -737,11 +927,15 @@ function track(session: Session, page: Page): BrowserTab {
     row.failure = request.failure()?.errorText ?? "failed";
   });
   page.on("framenavigated", (frame) => {
-    if (!frame.parentFrame()) changed(session.threadId);
+    if (!frame.parentFrame()) {
+      if (session.control === "user" && /^https?:/.test(frame.url())) addActivity(session.userActivity, { kind: "event", text: `Navigated to ${frame.url()}` });
+      changed(session.threadId);
+    }
   });
   page.on("load", () => changed(session.threadId));
   page.on("close", () => {
     session.tabs.delete(tab.id);
+    if (session.control === "user") addActivity(session.userActivity, { kind: "event", text: `Closed tab ${tab.id}` });
     if (session.current === tab.id) {
       session.current = [...session.tabs.keys()].at(-1);
     }
@@ -868,6 +1062,7 @@ function touch(session: Session): void {
     clearTimeout(session.idle);
   }
   session.idle = setTimeout(() => {
+    if ([...watchers].some(w => w.threadId === session.threadId && !w.closed)) { touch(session); return; }
     log(`Closing the idle agent browser of ${session.threadId}`);
     void closeThreadBrowser(session.threadId);
   }, IDLE_CLOSE_MS);
@@ -959,12 +1154,13 @@ async function retarget(watcher: Watcher): Promise<void> {
         height: Math.round(event.metadata.deviceHeight),
       });
     });
-    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_QUALITY, maxWidth: FRAME_MAX, maxHeight: FRAME_MAX });
+    await cdp.send("Page.startScreencast", { format: "jpeg", quality: FRAME_QUALITY, maxWidth: clamp(watcher.maxWidth ?? FRAME_MAX, 160, FRAME_MAX), maxHeight: FRAME_MAX, everyNthFrame: clamp(watcher.everyNthFrame ?? 1, 1, 60) });
     // A still page paints nothing new: send what it shows now.
     const size = tab.page.viewportSize() ?? DEFAULT_VIEWPORT;
-    const shot = await tab.page.screenshot({ type: "jpeg", quality: FRAME_QUALITY, timeout: ACTION_TIMEOUT_MS });
+    // The viewport as it is now (a clip would be relative to the document, so a scrolled page would show its top).
+    const shot = (await tab.page.screenshot({ type: "jpeg", quality: FRAME_QUALITY, timeout: ACTION_TIMEOUT_MS })).toString("base64");
     if (!watcher.closed && watcher.tab === tab) {
-      watcher.onFrame({ tab: tab.id, data: shot.toString("base64"), ...size });
+      watcher.onFrame({ tab: tab.id, data: shot, ...size });
     }
   } catch (err) {
     // The next change tries again.

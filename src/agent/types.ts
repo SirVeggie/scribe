@@ -627,6 +627,7 @@ export type ItemBody =
       note?: string;
     }
   /** settings_show: rows of Scribe's settings dialogs, shown in the chat to change there (ids from the client's settings index). */
+  | { kind: "browser_handoff"; message: string; status: "pending" | "done" | "cancelled"; activity?: string[] }
   | { kind: "settings"; ids: string[]; title?: string }
   | { kind: "component"; html?: string; plugin?: string; component?: string; props?: unknown; title?: string; fallback?: string; summary?: string; local?: Record<string, unknown>; wait: boolean; status: "shown" | "pending" | "answered" | "skipped" | "expired" }
   | { kind: "todos"; todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }

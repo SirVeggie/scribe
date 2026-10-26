@@ -2291,3 +2291,25 @@ test("a template change marks its pages' upsert notices, so a page on screen can
   assert.equal(notices.find(([id]) => id === tab.id)?.[1].template, undefined);
   store.closeDb();
 });
+
+test("browser pages reuse their binding after close and persist while staying temporary", () => {
+  const store = loaded();
+  const first = store.openBrowserPage("thr_browser", "A thread", { activate: true });
+  assert.equal(first.created, true);
+  assert.equal(first.tab.temp, true);
+  assert.deepEqual(toMeta(first.tab).browser, { threadId: "thr_browser" });
+  assert.throws(() => store.keepPage(first.tab.id), /A browser view stays temporary/);
+  assert.throws(() => store.update(first.tab.id, { pin: true }), /A browser view stays temporary/);
+  assert.throws(() => store.movePage(first.tab.id, null, 0), /A browser view stays temporary/);
+  store.closeTab(first.tab.id);
+  const again = store.openBrowserPage("thr_browser", "Renamed");
+  assert.equal(again.tab.id, first.tab.id);
+  assert.equal(again.created, false);
+  assert.equal(again.tab.title, "Renamed");
+  store.closeDb();
+  const reloaded = loaded();
+  assert.equal(reloaded.browserPage("thr_browser")?.id, first.tab.id);
+  assert.deepEqual(reloaded.openBrowserPage("thr_browser", "Renamed", { activate: true }).tab.browser, { threadId: "thr_browser" });
+  assert.equal(reloaded.searchLibrary("").hits.some(hit => hit.tab.id === first.tab.id), false);
+  reloaded.closeDb();
+});

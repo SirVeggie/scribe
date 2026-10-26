@@ -249,7 +249,7 @@ export class BoardStore extends EventEmitter {
       if (row.status === "open") {
         delete tab.closedAt;
         this.tabs.set(tab.id, tab);
-      } else if (isAppTab(tab)) {
+      } else if (isAppTab(tab) && !tab.browser) {
         this.removed.add(tab.id);
       } else if (row.status === "closed") {
         tab.closedAt = typeof tab.closedAt === "number" ? tab.closedAt : tab.updatedAt;
@@ -1520,6 +1520,7 @@ export class BoardStore extends EventEmitter {
     if (existing && isTemplateBound(existing.tab)) {
       throw new Error(boundHtmlError(existing.tab, this.templateLabel(existing.tab)));
     }
+    if (existing?.tab.browser) throw new Error("A browser view stays temporary");
     if (existing?.tab.file) {
       throw new Error(`${existing.tab.key} is a file page (${existing.tab.file.path}); its HTML comes from Scribe. Edit the file instead.`);
     }
@@ -1751,6 +1752,7 @@ export class BoardStore extends EventEmitter {
       throw new Error(`tab not found: ${idOrKey}`);
     }
     this.assertTabRevision(located.tab, patch.expectedRevision);
+    if (patch.pin === true && located.tab.browser) throw new Error("A browser view stays temporary");
     let title: string | undefined;
     let kept: string | undefined;
     if (patch.title !== undefined) {
@@ -2206,7 +2208,7 @@ export class BoardStore extends EventEmitter {
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
-    if (isAppTab(located.tab)) {
+    if (isAppTab(located.tab) && !located.tab.browser) {
       return this.discardAppTab(located.tab);
     }
     if (located.where === "closed") {
@@ -2808,6 +2810,7 @@ export class BoardStore extends EventEmitter {
     if (!located) {
       throw new Error(`tab not found: ${idOrKey}`);
     }
+    if (located.tab.browser) throw new Error("A browser view stays temporary");
     if (located.tab.temp) {
       // Dragging a temporary page into the Library keeps it there.
       if (folderId) {
@@ -2916,9 +2919,32 @@ export class BoardStore extends EventEmitter {
     return { tab, created: true };
   }
 
+  /** Reuse one temporary browser page per thread, including a closed view. */
+  browserPage(threadId: string): Tab | undefined {
+    return [...this.tabs.values(), ...this.closed.values()].find(tab => tab.browser?.threadId === threadId);
+  }
+
+  openBrowserPage(threadId: string, title: string, opts: { activate?: boolean } = {}): { tab: Tab; created: boolean } {
+    const existing = this.browserPage(threadId);
+    if (existing) {
+      if (existing.title !== title) this.update(existing.id, { title, activate: false });
+      if (opts.activate) this.openPage(existing.id);
+      return { tab: existing, created: false };
+    }
+    const key = `browser-${threadId}`;
+    if (this.locate(key)) throw new Error("Browser page key already in use");
+    const { tab } = this.upsert({ key, title, html: filePlaceholderHtml(title, `Browser view for thread ${threadId}`), temp: true, activate: opts.activate === true, markUnread: false });
+    tab.browser = { threadId };
+    this.markDirty(tab.id);
+    this.persistSoon();
+    this.emit("tab_upserted", toMeta(tab), undefined, { activate: opts.activate === true, structural: false });
+    return { tab, created: true };
+  }
+
   /** Keep in Library: a temporary page becomes a page like any other (#655). */
   keepPage(idOrKey: string): Tab {
     const tab = this.requireAny(idOrKey);
+    if (tab.browser) throw new Error("A browser view stays temporary");
     if (!tab.temp) {
       return tab;
     }

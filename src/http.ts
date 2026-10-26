@@ -46,6 +46,9 @@ import {
   browserViewport,
   closeAgentBrowser,
   onBrowserChange,
+  browserAgentResult,
+  browserControl,
+  browserHandoffResult,
 } from "./browser.js";
 import { waitForEvents } from "./wait.js";
 import type { ActionCaller } from "./actions/index.js";
@@ -73,6 +76,7 @@ import { appearanceRouter } from "./appearance.js";
 import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
+import { browserViewHtml } from "./browserPage.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
@@ -977,6 +981,29 @@ export async function startHttp(): Promise<http.Server> {
     viewport: browserViewport,
     tabs: browserTabs,
   };
+  app.post("/api/browser/control", async (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) { res.status(403).json({ error: "Browser control needs a Scribe chat thread." }); return; }
+    const body = isPlainObject(req.body) ? req.body : {};
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const gone = () => { if (!res.writableEnded) abort.abort(); };
+    res.on("close", gone);
+    try {
+      if (body.action === "take") {
+        await browserControl(thread, "agent");
+        res.json({ control: "agent", userActivity: [], ...browserAgentResult(thread) });
+      } else if (body.action === "handoff") {
+        if (typeof body.message !== "string" || !body.message.trim()) throw new Error("handoff requires message");
+        await agentHost.handoffBrowser(thread, body.message, abort.signal);
+        const result = await browserHandoffResult(thread);
+        if (!res.writableEnded) res.json(result);
+      } else throw new Error("action must be take or handoff");
+    } catch (err) {
+      if (!res.writableEnded) res.status(browserHttpStatus((err as Error).message)).json({ error: (err as Error).message });
+    } finally { res.off("close", gone); }
+  });
   app.post("/api/browser/:op", (req, res) => {
     const thread = threadOf(req);
     if (!thread) {
@@ -991,12 +1018,13 @@ export async function startHttp(): Promise<http.Server> {
     op(thread, isPlainObject(req.body) ? req.body : {})
       .then((result) => {
         if (!res.writableEnded) {
-          res.json(result);
+          res.json({ ...(result as object), ...browserAgentResult(thread) });
         }
       })
       .catch((err: Error) => {
         if (!res.writableEnded) {
-          res.status(browserHttpStatus(err.message)).json({ error: err.message.split("\n")[0] });
+          // The user-control refusal lists what the user did; other errors keep their first line (Playwright adds call logs).
+          res.status(browserHttpStatus(err.message)).json({ error: err.message.startsWith("The user is controlling") ? err.message : err.message.split("\n")[0] });
         }
       });
   });
@@ -2903,7 +2931,7 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
 </script>`;
 
 function collectPageProblems(req: express.Request, tab: Tab) {
-  if (req.body?.checkProblems !== true || tab.file || embedUrlFromHtml(tab.html)) return Promise.resolve([]);
+  if (req.body?.checkProblems !== true || tab.file || tab.browser || embedUrlFromHtml(tab.html)) return Promise.resolve([]);
   const reach = reachFor(req);
   return pageProblems.collect(tab.id, tab.revision, signal => probeTab(tab.id, signal), { exists: key => {
     const linked = store.get(key);
@@ -2913,7 +2941,7 @@ function collectPageProblems(req: express.Request, tab: Tab) {
 }
 
 function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: BoardState): string {
-  const html = injectBoardKeys(tab.file ? fileViewerHtml() : rewriteAssetRefs(tab.html, tab.id));
+  const html = injectBoardKeys(tab.browser ? browserViewHtml() : tab.file ? fileViewerHtml() : rewriteAssetRefs(tab.html, tab.id));
   if (html.includes("data-scribe-bridge")) {
     return html;
   }
@@ -2935,7 +2963,7 @@ function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: Boar
         }
       : null,
   });
-  const diagnostic = pageProblems.boot(tab.id, tab.revision);
+  const diagnostic = tab.browser ? null : pageProblems.boot(tab.id, tab.revision);
   const opening = /<head[^>]*>/i.exec(html) || /<body[^>]*>/i.exec(html);
   const at = opening ? opening.index + opening[0].length : 0;
   const problemBoot = diagnostic ? {
