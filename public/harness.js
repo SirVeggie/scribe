@@ -1283,14 +1283,14 @@
     window.addEventListener(
       "keydown",
       (event) => {
-        // A dialog over the panel that an earlier listener just closed has taken the key.
+        // Bubble phase, after the app's own Escape: a control or dialog over the panel that
+        // handled the key has marked it.
         if (event.key !== "Escape" || event.defaultPrevented || !harness.isOpen()) return;
         if (document.querySelector("dialog[open]") || window.scribeSettingsUI?.isOpen?.() || document.querySelector(".ag-modal, .settings:not([hidden])")) return;
         event.preventDefault();
         event.stopPropagation();
         harness.close();
-      },
-      true
+      }
     );
     // A tab picked from the strip shows that page again, as it does over the full-window chat.
     document.addEventListener(

@@ -1998,7 +1998,11 @@
       };
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") finish(input.value.trim() || null);
-        if (event.key === "Escape") finish(null);
+        if (event.key === "Escape") {
+          // Handled here, so the chat's own Escape does not close what is under the picker too.
+          event.preventDefault();
+          finish(null);
+        }
       });
       const actions = el("div", "ag-modal-actions");
       // With files, a file's path browses its folder (the daemon lists the parent).

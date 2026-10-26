@@ -4286,22 +4286,100 @@
     selectTab(next.id, { fromUser: true });
   }
 
-  function onBoardShortcut(event) {
-    // Ordinary typing has no board action. Only scan for dialogs when a shortcut
-    // could run; the spaces overview also handles unmodified navigation keys.
-    if (!event.ctrlKey && !event.metaKey && event.key !== "Escape" && !isFindKey(event) && !spaces.isOpen()) {
+  /**
+   * Escape closes one thing: the innermost open layer. It runs in the bubble phase so a
+   * control that handles Escape itself (dictation, a menu, the @ picker, a rename, the
+   * image preview) goes first and marks the key handled.
+   */
+  function onBoardEscape(event) {
+    if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) {
       return;
     }
     if (document.querySelector("dialog[open]")) {
       return;
     }
     if (childId) {
-      if (event.key === "Escape") {
-        if (window.scribeChat?.escape() || library.onEscape() || views.escape()) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      } else if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+      if (window.scribeChat?.escape() || library.onEscape() || views.escape()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+    if (spaces.onKey(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (window.scribeChat?.escape()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    // The harness panel covers the board, so its own listener closes it rather than
+    // the library, a peek or the sidebar underneath.
+    if (window.scribeHarness?.isOpen() && !isSettingsOpen() && !isTemplateModalOpen()) {
+      return;
+    }
+    if (library.onEscape()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (drag) {
+      event.preventDefault();
+      abortDrag();
+      return;
+    }
+    if (isTemplateModalOpen()) {
+      event.preventDefault();
+      closeTemplateModal();
+      return;
+    }
+    if (isSettingsOpen()) {
+      event.preventDefault();
+      closeSettings();
+      return;
+    }
+    if (isPaletteOpen()) {
+      event.preventDefault();
+      closePalette();
+      return;
+    }
+    if (views.escape()) {
+      event.preventDefault();
+      return;
+    }
+    if (state.sideOpen && state.trashOpen) {
+      event.preventDefault();
+      closeTrash();
+      return;
+    }
+    if (state.sideOpen && library.searchFocused()) {
+      event.preventDefault();
+      library.clearSearch();
+      return;
+    }
+    if (state.sideOpen) {
+      event.preventDefault();
+      setSideOpen(false);
+    }
+  }
+
+  function onBoardShortcut(event) {
+    // Escape is handled in the bubble phase (onBoardEscape).
+    if (event.key === "Escape") {
+      return;
+    }
+    // Ordinary typing has no board action. Only scan for dialogs when a shortcut
+    // could run; the spaces overview also handles unmodified navigation keys.
+    if (!event.ctrlKey && !event.metaKey && !isFindKey(event) && !spaces.isOpen()) {
+      return;
+    }
+    if (document.querySelector("dialog[open]")) {
+      return;
+    }
+    if (childId) {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
         downloadActive();
       }
@@ -4317,7 +4395,7 @@
       event.stopPropagation();
       return;
     }
-    if (spaces.isOpen() && event.key !== "Escape") {
+    if (spaces.isOpen()) {
       // The board is out of sight: its own shortcuts wait until the overview closes.
       return;
     }
@@ -4335,57 +4413,6 @@
         runShortcut(spaceAction);
         return;
       }
-    }
-    if (event.key === "Escape") {
-      if (window.scribeChat?.escape()) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (library.onEscape()) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (drag) {
-        event.preventDefault();
-        abortDrag();
-        return;
-      }
-      if (isTemplateModalOpen()) {
-        event.preventDefault();
-        closeTemplateModal();
-        return;
-      }
-      if (isSettingsOpen()) {
-        event.preventDefault();
-        closeSettings();
-        return;
-      }
-      if (isPaletteOpen()) {
-        event.preventDefault();
-        closePalette();
-        return;
-      }
-      if (views.escape()) {
-        event.preventDefault();
-        return;
-      }
-      if (state.sideOpen && state.trashOpen) {
-        event.preventDefault();
-        closeTrash();
-        return;
-      }
-      if (state.sideOpen && library.searchFocused()) {
-        event.preventDefault();
-        library.clearSearch();
-        return;
-      }
-      if (state.sideOpen) {
-        event.preventDefault();
-        setSideOpen(false);
-      }
-      return;
     }
     if (isFindKey(event) && libraryShown() && !isTypingTarget(event.target)) {
       event.preventDefault();
@@ -5858,6 +5885,7 @@
   );
 
   window.addEventListener("keydown", onBoardShortcut, true);
+  window.addEventListener("keydown", onBoardEscape);
   // Keep the empty palette's pending questions current while it is open.
   window.addEventListener("scribe:agent-status", () => {
     if (isPaletteOpen() && paletteKind === "pages" && !paletteQuery().query) {
