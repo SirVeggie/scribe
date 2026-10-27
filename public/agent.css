@@ -3518,8 +3518,10 @@ html.fx-off .ag-slash { transition: none; }
   background: rgba(var(--lift-rgb), 0.05);
 }
 
+/* The open thread: a hairline outline over a faint fill, quiet next to the working and status looks (#852). */
 .ag-row.on {
-  background: var(--accent-soft);
+  background-color: rgba(var(--lift-rgb), 0.025);
+  box-shadow: inset 0 0 0 1px rgba(var(--lift-rgb), 0.13);
 }
 
 /* The row Enter opens, shown while the search box has the focus once an arrow key moved it. */
@@ -3740,6 +3742,10 @@ html[data-theme="cream"] .ag-glow {
 /* A shader look without WebGL or motion: a still edge in the theme's effect colour. */
 :is([data-working-fx="edge"], [data-working-fx="comet"], [data-working-fx="scan"], [data-working-fx="motes"]):not(.ag-glow-gl) > .ag-list .ag-row.s-running {
   box-shadow: inset 2px 0 0 rgba(var(--fx-3), 0.6), inset 0 -1px 0 rgba(var(--fx-3), 0.45);
+}
+
+:is([data-working-fx="edge"], [data-working-fx="comet"], [data-working-fx="scan"], [data-working-fx="motes"]):not(.ag-glow-gl) > .ag-list .ag-row.on.s-running {
+  box-shadow: inset 2px 0 0 rgba(var(--fx-3), 0.6), inset 0 -1px 0 rgba(var(--fx-3), 0.45), inset 0 0 0 1px rgba(var(--lift-rgb), 0.13);
 }
 
 /* Classic looks: CSS on the row itself. */
