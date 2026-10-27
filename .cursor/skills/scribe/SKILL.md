@@ -58,7 +58,7 @@ Before writing HTML or calling `page_show` / `page_patch`, mention in a new line
 
 - `key`: stable slug for this page (reuse only for in-place edits of that same page, e.g. `clims-12345-analysis`). Scribe stores it as `scribe:clims-12345-analysis`; either form finds the page later.
 - `title`: short tab label
-- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit, so the usual parts need no CSS; see Theme and Page kit) or a complete HTML document with inline CSS
+- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit; see Theme and Page kit) or a complete HTML document with inline CSS
 - `base`: a starter page's key, when the user names one; your `html` fills its slot (see Page kit)
 - `htmlPath`: instead of `html`, a local HTML file. In Code mode, write a large page to a temp file (not the workspace) and pass the path so it is not pasted as a tool argument. Same title, state, assets, folder, and background rules as `html`. Mutually exclusive with `html`.
 - `assets`: omit unless the page needs images
@@ -206,13 +206,13 @@ Fragment pages (no `<!DOCTYPE html>` / `<html`) are wrapped in a **dark** theme.
 
 Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall back to them (`color: var(--fg, #222)`): `--fg` is not defined, so the fallback is dark text on `--bg`. A full document skips this wrapper — copy the same `:root` block, or set both background and color yourself so they contrast.
 
-### Page kit: components without CSS
+### Page kit: form wiring and building blocks
 
 **One-click replies.** `<button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button>` sends the optional JSON object as answers and `data-reply` as the summary through `scribe.reply`. An empty `data-reply` uses the button text. No form or script is needed. All reply buttons in the page are disabled after choosing, and the chosen button is marked; failed delivery allows retry. Invalid `data-context` shows an error without sending. Without `replyTo`, it logs `submitted` with `{ answers, summary }`, like a reply form. The wiring also works in any component host that provides `window.scribe.reply`; that host determines reply routing.
 
-Fragment pages also get Scribe's page kit: ready styles for the usual parts of reports and forms, and form wiring with no script. Use these classes instead of writing CSS for the same thing; your own `<style>` still wins over the kit where you need something else.
+Fragment pages also get Scribe's page kit: form wiring with no script, themed fields, and building blocks for reports (boxes, cards, tags, flows, mock-ups). Always use it for forms and questions. The rest is optional: use the blocks that help, restyle them with your own `<style>` (it always wins over the kit), and write your own markup where they don't fit.
 
-The kit is a baseline, not a look. A short report or a form needs little more. A design doc, investigation or comparison should be easy to scan: color-code categories and options (tags, toned boxes and cards, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG for anything richer), and show proposed UI as a mock-up rather than describing it. Add your own CSS or SVG wherever the kit falls short; a plain page of headings and default tables reads much worse.
+The kit is a baseline, not a look, and it is not a way to save tokens: a page's HTML is a small share of a chat's cost, so never make a page plainer to keep it short. A short report or a form needs little more. A design doc, investigation or comparison should be easy to scan: color-code categories and options (tags, toned boxes and cards, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG for anything richer), and show proposed UI as a mock-up rather than describing it. Add your own CSS or SVG wherever the kit falls short; a plain page of headings and default tables reads much worse.
 
 <!-- kit-catalog:start -->
 | Write | Gives | Example |
