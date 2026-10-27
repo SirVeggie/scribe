@@ -97,6 +97,9 @@
   button:hover { background: rgba(255, 255, 255, 0.1); }
   button:disabled { opacity: 0.45; cursor: default; background: rgba(255, 255, 255, 0.06); }
   button.primary { background: rgba(255, 255, 255, 0.14); }
+  button.icon { width: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+  button.icon:hover { color: var(--text); }
+  button.icon svg { display: block; flex: none; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
   .seg button { border: 0; border-radius: 0; background: transparent; color: var(--muted); }
   .seg button + button { border-left: 1px solid var(--border); }
@@ -272,7 +275,7 @@
     <span class="tag hidden" id="copyTag" data-tooltip="A dropped file is a copy kept in Scribe. Save as writes it to a folder on disk.">Copy</span>
     <span class="path" id="path"></span>
     <div class="actions">
-      <button type="button" id="openLocation" aria-label="Open file location" data-tooltip="Open file location"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1H6l1.5 2h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z"/></svg></button>
+      <button type="button" class="icon" id="openLocation" aria-label="Open file location" data-tooltip="Open file location"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1H6l1.5 2h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z"/></svg></button>
       <button type="button" class="toggle hidden" id="wrapBtn" aria-pressed="false" data-tooltip="Word wrap (Alt+Z)">Wrap</button>
       <div class="seg hidden" id="modeSeg" role="group" aria-label="View">
         <button type="button" data-mode="render">Preview</button>
