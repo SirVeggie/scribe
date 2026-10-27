@@ -6,7 +6,7 @@ import { test } from "node:test";
 import express from "express";
 import type { AgentHost } from "./host.js";
 import { git, snapshotTree } from "./git.js";
-import { intellijDiffArgs, intellijFileArgs, launchIntelliJ, intellijSettings } from "./intellij.js";
+import { intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProject, launchIntelliJ, intellijSettings } from "./intellij.js";
 
 test("IntelliJ exports exact historical blobs, renames, additions, deletions and binary bytes", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-idea-test-"));
@@ -81,6 +81,7 @@ test("IntelliJ routes persist the opt-in and reject disabled, cross-origin and u
     db: { getSetting: (key: string, fallback: unknown) => settings.get(key) ?? fallback, setSetting: (key: string, value: unknown) => settings.set(key, value) },
     getThread: () => ({ id: "thread", cwd: dir }),
     changes: async () => ({ repo: null, files: [] }),
+    fileVersions: (_thread: string, file: string) => file === "saved.ts" ? { before: Buffer.from("a"), after: Buffer.from("b") } : null,
   } as unknown as AgentHost;
   const app = express();
   app.use("/api/agent", agentRouter(host));
@@ -102,11 +103,52 @@ test("IntelliJ routes persist the opt-in and reject disabled, cross-origin and u
     const missing = await request("POST", "/intellij/open", { mode: "diff", threadId: "thread", path: "file.ts" });
     assert.equal(missing.status, 400);
     assert.match((await missing.json()).error, /snapshots/);
+    const saved = await request("POST", "/intellij/open", { mode: "diff", threadId: "thread", path: "saved.ts" });
+    assert.equal(saved.status, 200);
     const traversal = await request("POST", "/intellij/open", { mode: "file", threadId: "thread", path: "../outside" });
     assert.equal(traversal.status, 400);
     assert.match((await traversal.json()).error, /inside/);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
+    if (oldHome === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = oldHome;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("IntelliJ opens a file in its own .idea project and diffs saved versions without git", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-idea-project-"));
+  try {
+    const root = await fs.realpath(dir);
+    await fs.mkdir(path.join(root, "src", "main"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "main", "A.java"), "class A {}");
+    assert.equal(await intellijProject(root, path.join(root, "src", "main")), null);
+    assert.deepEqual(await intellijFileArgs(root, "src/main/A.java", 3, 2), ["--line", "3", "--column", "2", path.join(root, "src", "main", "A.java")]);
+    await fs.mkdir(path.join(root, ".idea"));
+    assert.equal(await intellijProject(root, path.join(root, "src", "main")), root);
+    assert.deepEqual(await intellijFileArgs(root, "src/main/A.java", 3, 2), [root, "--line", "3", "--column", "2", path.join(root, "src", "main", "A.java")]);
+    const args = await intellijExportDiff("src/main/A.java", Buffer.from("old"), Buffer.from("new"), path.join(root, "exports"));
+    assert.equal(args[0], "diff");
+    assert.deepEqual(await Promise.all(args.slice(1).map(p => fs.readFile(p, "utf8"))), ["old", "new"]);
+    assert.ok(args[1].endsWith("A.java") && args[2].endsWith("A.java"));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("File snapshots keep content by id and treat a missing file as empty", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-snapshots-"));
+  const oldHome = process.env.SCRIBE_HOME;
+  process.env.SCRIBE_HOME = dir;
+  try {
+    const { saveSnapshot, readSnapshot, removeThreadSnapshots, MAX_SNAPSHOT_BYTES } = await import("./fileSnapshots.js");
+    const id = saveSnapshot("th_1", "hello ü")!;
+    assert.match(id, /^[0-9a-f]{64}$/);
+    assert.equal(readSnapshot("th_1", id)!.toString("utf8"), "hello ü");
+    assert.equal(saveSnapshot("th_1", null), null);
+    assert.equal(readSnapshot("th_1", null)!.length, 0);
+    assert.equal(saveSnapshot("th_1", "x".repeat(MAX_SNAPSHOT_BYTES + 1)), undefined);
+    assert.equal(readSnapshot("th_1", "../../etc"), null);
+    removeThreadSnapshots("th_1");
+    assert.equal(readSnapshot("th_1", id), null);
+  } finally {
     if (oldHome === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = oldHome;
     await fs.rm(dir, { recursive: true, force: true });
   }

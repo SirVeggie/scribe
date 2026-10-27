@@ -26,6 +26,7 @@ import { PageProblems } from "../pageProblems.js";
 import { probeComponent } from "../screenshot.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
+import { readSnapshot, removeThreadSnapshots, saveSnapshot } from "./fileSnapshots.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
 import { UsageWindowStarts, cleanWindowStarts, type WindowStartState } from "./usageWindowStarts.js";
 import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
@@ -435,6 +436,8 @@ type RunState = {
   tools: Map<string, Item>;
   /** Last known content per absolute path this turn, for per-tool diffs. */
   known: Map<string, string | null>;
+  /** Without git: each changed file's content before its first and after its last edit this turn, by display path. */
+  versions: Map<string, { before: string | null; after: string | null }>;
   repo: string | null;
   cancelled: boolean;
   usage: Usage;
@@ -1838,6 +1841,7 @@ export class AgentHost {
     this.db.deleteSetting(`fork:${id}`);
     try {
       removeThreadFiles(id);
+      removeThreadSnapshots(id);
     } catch (err) {
       log(`Removing the files of ${id} failed: ${(err as Error).message}`);
     }
@@ -3753,7 +3757,7 @@ export class AgentHost {
     } else {
       this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
     }
-    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null, suspect: null } };
+    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), versions: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null, suspect: null } };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
@@ -3907,6 +3911,8 @@ export class AgentHost {
       if (turn.beforeHead) turn.afterHead = (await headCommit(run.repo)) ?? undefined;
     } else {
       turn.files = this.toolFiles(run);
+      const snapshots = this.saveVersions(threadId, run);
+      if (snapshots) turn.snapshots = snapshots;
     }
     if (this.closed) return;
     if (turn.page) {
@@ -3983,6 +3989,44 @@ export class AgentHost {
       this.turnWaiters.delete(threadId);
     }
     void this.pageRuns.check(threadId);
+  }
+
+  /** Keeps the turn's file versions on disk, so a diff tool can compare them without git. */
+  private saveVersions(threadId: string, run: RunState): Turn["snapshots"] {
+    const saved: NonNullable<Turn["snapshots"]> = {};
+    for (const [file, version] of run.versions) {
+      try {
+        const before = saveSnapshot(threadId, version.before);
+        const after = saveSnapshot(threadId, version.after);
+        if (before !== undefined && after !== undefined) saved[file] = { before, after };
+      } catch (err) {
+        log(`Saving file versions for ${threadId} failed: ${(err as Error).message}`);
+      }
+    }
+    return Object.keys(saved).length ? saved : undefined;
+  }
+
+  /**
+   * Full before and after content of one file over a turn, or the whole thread, from the versions
+   * saved without git. Null when none were saved for it.
+   */
+  fileVersions(threadId: string, file: string, turnId?: string): { before: Buffer; after: Buffer } | null {
+    const running = this.runs.get(threadId);
+    let before: string | null | undefined, after: string | null | undefined;
+    for (const turn of this.loadTurns(threadId).filter((t) => !turnId || t.id === turnId)) {
+      const saved = turn.snapshots?.[file];
+      const current = running?.turn.id === turn.id ? running.versions.get(file) : undefined;
+      if (current) {
+        if (before === undefined) before = saveSnapshot(threadId, current.before);
+        after = saveSnapshot(threadId, current.after);
+      } else if (saved) {
+        if (before === undefined) before = saved.before;
+        after = saved.after;
+      }
+    }
+    if (before === undefined || after === undefined) return null;
+    const a = readSnapshot(threadId, before), b = readSnapshot(threadId, after);
+    return a && b ? { before: a, after: b } : null;
   }
 
   private toolFiles(run: RunState): FileChange[] {
@@ -4933,6 +4977,7 @@ export class AgentHost {
       const display = run.repo ? repoRelative(run.repo, abs) ?? abs : thread?.cwd ? path.relative(thread.cwd, abs).replaceAll("\\", "/") : abs;
       const diff = unifiedDiff(before, after, display);
       if (!diff.patch) continue;
+      if (!run.repo) run.versions.set(display, { before: run.versions.has(display) ? run.versions.get(display)!.before : before, after });
       files.push({ path: display, added: diff.added, removed: diff.removed, status: before === null ? "A" : after === null ? "D" : "M" });
       patches.push(diff.patch);
     }

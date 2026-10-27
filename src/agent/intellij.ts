@@ -56,7 +56,19 @@ export async function intellijFileArgs(repo: string, file: string, line: unknown
   const real = await fs.realpath(target).catch(() => { throw new Error("This file no longer exists in the working copy."); });
   if (!inside(root, real) || !(await fs.stat(real)).isFile()) throw new Error("Choose a file inside this workspace.");
   const position = (n: unknown) => typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : 1;
-  return ["--line", String(position(line)), "--column", String(position(column)), target];
+  // Without a project, IntelliJ opens the file in whichever window was focused last. If that
+  // project does not contain the file, it shows as a non-project file: full path, tinted tab,
+  // plain highlighting. Naming the file's IntelliJ project first opens (or focuses) that one.
+  const project = await intellijProject(root, path.dirname(target));
+  return [...(project ? [project] : []), "--line", String(position(line)), "--column", String(position(column)), target];
+}
+
+/** The nearest folder with an .idea project from dir up to the workspace root, if any. */
+export async function intellijProject(root: string, dir: string): Promise<string | null> {
+  for (let current = dir; ; current = path.dirname(current)) {
+    if (await fs.stat(path.join(current, ".idea")).then(s => s.isDirectory(), () => false)) return current;
+    if (!inside(root, current)) return null;
+  }
 }
 
 /** Compare complete blobs, never the possibly truncated patch shown in the chat. */
@@ -74,6 +86,11 @@ export async function intellijDiffArgs(repo: string, from: string, to: string, f
     change.status === "A" ? Buffer.alloc(0) : blob(from, change.oldPath || file),
     change.status === "D" ? Buffer.alloc(0) : blob(to, file),
   ]);
+  return intellijExportDiff(file, before, after, exportRoot);
+}
+
+/** Writes both versions to temporary files named like the original, for IntelliJ's diff command. */
+export async function intellijExportDiff(file: string, before: Buffer, after: Buffer, exportRoot = path.join(os.tmpdir(), "scribe-intellij")): Promise<string[]> {
   await fs.mkdir(exportRoot, { recursive: true });
   // Retain exports for a week: the launcher can exit while its diff stays open.
   const old = await fs.readdir(exportRoot, { withFileTypes: true });

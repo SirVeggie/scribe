@@ -447,6 +447,11 @@ export type Turn = {
   beforeHead?: string;
   afterHead?: string;
   files?: FileChange[];
+  /**
+   * Without git: content ids (fileSnapshots.ts) of each changed file before and after the turn,
+   * by its path relative to the workspace. null means the file did not exist.
+   */
+  snapshots?: Record<string, { before: string | null; after: string | null }>;
   usage?: Usage;
   error?: string;
   /** Scribe stopped (or crashed) while this turn ran; the next start sends the thread on. */
