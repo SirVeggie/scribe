@@ -45,7 +45,7 @@
       if (localStorage.getItem("scribe.agentSide") === "left") {
         document.documentElement.dataset.agentSide = "left";
       }
-      if (localStorage.getItem("scribe.librarySide") === "left") {
+      if (localStorage.getItem("scribe.librarySide") !== "right") {
         document.documentElement.dataset.librarySide = "left";
       }
       const theme = appearanceStorage.getItem("scribe.theme");

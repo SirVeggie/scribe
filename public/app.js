@@ -1249,7 +1249,9 @@
   }
 
   function paneSide(key) {
-    return appearanceStorage.getItem(key) === "left" ? "left" : "right";
+    const stored = appearanceStorage.getItem(key);
+    if (stored === "left" || stored === "right") return stored;
+    return key === LIBRARY_SIDE_KEY ? "left" : "right";
   }
 
   function applyPaneSideAttr(attr, side) {
