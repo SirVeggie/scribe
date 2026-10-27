@@ -45,7 +45,8 @@ test("floating chats open in the sidebar with their draft and reveal the convers
     await clickOpen();
     const draft = await page.evaluate(() => {
       const { S, sidebar, dock } = (window as any).handoffTest;
-      return { open: S.sideOpen, list: sidebar.listOpen, hidden: sidebar.view.composer.hidden, draft: sidebar.view.draft, text: sidebar.view.input.value, mentions: sidebar.view.mentions, sourceText: dock.view.input.value };
+      const d = sidebar.view.draft;
+      return { open: S.sideOpen, list: sidebar.listOpen, hidden: sidebar.view.composer.hidden, draft: d && { scope: d.scope, settings: d.settings }, text: sidebar.view.input.value, mentions: sidebar.view.mentions, sourceText: dock.view.input.value };
     });
     assert.equal(draft.open, true);
     assert.equal(draft.list, false);

@@ -718,6 +718,8 @@
     switch (msg.type) {
       case "agent_thread": {
         const prev = S.threads.get(msg.thread.id);
+        const saving = draftWrites.get(msg.thread.id);
+        if (saving) msg.thread.draft = saving.draft;
         S.threads.set(msg.thread.id, msg.thread);
         for (const view of views()) {
           if (view.threadId === msg.thread.id) view.onThread(msg.thread, prev);
@@ -988,18 +990,34 @@
    * Save an unsent composer's text and chips on its thread, so the list can mark it and a reload
    * keeps it. A draft thread that was emptied again goes away.
    */
+  const draftWrites = new Map();
+
   function syncThreadDraft(t, content) {
     const draft = content ? { text: content.text, context: content.mentions } : null;
     const was = t.draft ? JSON.stringify({ text: t.draft.text, context: t.draft.context || [] }) : null;
     if (was === (draft && JSON.stringify(draft))) return;
     const unsentOnly = Boolean(t.draft) && !draft && t.stats.turns === 0 && !t.queued && t.status === "idle";
     t.draft = draft;
-    if (unsentOnly) api("DELETE", `/threads/${encodeURIComponent(t.id)}`).catch(() => undefined);
-    else api("PATCH", `/threads/${encodeURIComponent(t.id)}`, { draft }).catch(() => undefined);
+    // Coalesce edits that overtake a request, and keep the final delete after any earlier save.
+    let write = draftWrites.get(t.id);
+    if (!write) {
+      write = { pending: null, promise: null };
+      draftWrites.set(t.id, write);
+      write.promise = Promise.resolve().then(async () => {
+        while (write.pending) {
+          const next = write.pending;
+          write.pending = null;
+          await api(next.remove ? "DELETE" : "PATCH", `/threads/${encodeURIComponent(t.id)}`, next.remove ? undefined : { draft: next.draft }).catch(() => undefined);
+        }
+        draftWrites.delete(t.id);
+      });
+    }
+    write.pending = { draft, remove: unsentOnly };
+    write.draft = draft;
     renderLists();
   }
 
-  /** Keep a new thread the user wrote in and left unsent as a draft thread. Its files stay in this window. */
+  /** Keep a new unsent thread. Its files stay in this window. */
   async function saveDraftThread(s, content, tab) {
     try {
       const { thread } = await api("POST", "/threads", {
@@ -1022,6 +1040,7 @@
       // The floating chat comes back to it on that page, unless it has moved on to another thread there.
       if (tab && !S.dockPicks.get(tab)?.id && !(dock.view.draft && dock.view.draftTab === tab)) setDockPick(tab, thread.id);
       renderLists();
+      return thread;
     } catch (err) {
       notice(`Could not keep the unsent thread: ${err.message}`);
     }
@@ -1160,6 +1179,7 @@
 
   /** The dock should stay on this chat after it moved onto the page now in front. */
   function dockFollowsThread(thread, prev) {
+    if (thread.draft) return false;
     if (!prev && dock.draftMatches(thread)) return true;
     const tab = activeTab();
     if (!tab || thread.archived) return false;
@@ -3214,6 +3234,8 @@
 
     /** Hand this chat to another layout as it is: its thread or unsent draft, and the composer with its files. */
     takeChat() {
+      // A creation already in flight belongs to this composer. The receiving layout saves its copy.
+      if (this.draft?.saving) this.draft.content = null;
       const snap = {
         threadId: this.threadId,
         draft: this.threadId || !this.draft ? null : { scope: { ...this.draft.scope }, settings: { ...this.draft.settings } },
@@ -3267,6 +3289,71 @@
       this.renderContext();
     }
 
+    /** Save while writing, without replacing the input or interrupting its selection. */
+    syncComposerDraft() {
+      if (this.sending || this.handedOff) return;
+      const content = this.composerContent();
+      const t = this.thread();
+      if (t) {
+        if (!content && t.draft && t.stats.turns === 0 && !t.queued && t.status === "idle") {
+          // Detach before deleting: its deletion event must not clear a newly typed composer.
+          const settings = { ...inheritSettings(this), scope: this.settings().scope };
+          if (this.planChips?.has(t.id)) {
+            this.planChips.set("", this.planChips.get(t.id));
+            this.planChips.delete(t.id);
+          }
+          this.threadId = null;
+          this.draft = { scope: settings.scope, settings: { ...settings } };
+          if (S.current === t.id) setCurrent(null);
+          if (this.variant === "dock") dock.remember(null);
+          S.threads.delete(t.id);
+          S.composers.delete(t.id);
+          syncThreadDraft(t, null);
+          this.renderChrome();
+          return;
+        }
+        syncThreadDraft(t, content);
+        return;
+      }
+      const d = this.draft;
+      if (this.threadId || !d) return;
+      d.content = content;
+      if (!content || d.saving) return;
+      const settings = this.settings();
+      let savedSettings = JSON.stringify({ ...d.settings, scope: d.scope });
+      d.saving = saveDraftThread(settings, content, this.variant === "dock" ? this.draftTab : null).then(async (thread) => {
+        if (!thread) return;
+        // Keep settings chosen during creation, even if this composer has since been parked.
+        while (savedSettings !== JSON.stringify({ ...d.settings, scope: d.scope })) {
+          const patch = { ...d.settings, scope: d.scope };
+          savedSettings = JSON.stringify(patch);
+          try {
+            ({ thread } = await api("PATCH", `/threads/${encodeURIComponent(thread.id)}`, patch));
+            S.threads.set(thread.id, thread);
+          } catch (err) { notice(err.message); break; }
+        }
+        const current = this.draft === d && !this.threadId && !this.handedOff;
+        if (current) {
+          if (this.planChips?.has("")) {
+            this.planChips.set(thread.id, this.planChips.get(""));
+            this.planChips.delete("");
+          }
+          this.threadId = thread.id;
+          this.draft = null;
+          S.composers.delete(thread.id);
+          S.details.set(thread.id, { items: [], byId: new Map(), turns: new Map() });
+          if (this.variant === "dock") dock.remember(thread.id);
+          else setCurrent(thread.id);
+          this.syncComposerDraft();
+          this.renderChrome();
+        } else {
+          if (d.content) S.composers.set(thread.id, d.content);
+          else S.composers.delete(thread.id);
+          syncThreadDraft(thread, d.content);
+        }
+      }).finally(() => { delete d.saving; });
+    }
+
     /**
      * Keep what is being written before this view shows something else: on its thread, or for an
      * unsent new thread, as a draft thread the list marks with a pen.
@@ -3284,8 +3371,9 @@
         if (content) S.composers.set(t.id, content);
         else S.composers.delete(t.id);
         syncThreadDraft(t, content);
-      } else if (!this.threadId && this.draft && content) {
-        void saveDraftThread(this.settings(), content, this.variant === "dock" ? this.draftTab : null);
+      } else if (!this.threadId && this.draft) {
+        if (this.draft.saving) this.draft.content = content;
+        else if (content) void saveDraftThread(this.settings(), content, this.variant === "dock" ? this.draftTab : null);
       }
     }
 
@@ -3495,7 +3583,7 @@
       if (sameScope(cur.scope, scope)) return;
       const t = this.thread();
       if (!t) {
-        this.draft = { scope, settings: this.draft?.settings || {} };
+        this.draft = Object.assign(this.draft || { settings: {} }, { scope });
         this.renderAll();
         if (this.variant === "dock") dock.renderTitle();
         return;
@@ -3547,7 +3635,7 @@
       // Code and Plan keep their mode with no workspace: the agent starts in a scratch folder (#273).
       const t = this.thread();
       if (!t) {
-        this.draft = { scope, settings: { ...(this.draft?.settings || {}), cwd: dir } };
+        this.draft = Object.assign(this.draft || {}, { scope, settings: { ...(this.draft?.settings || {}), cwd: dir } });
         this.renderAll();
         if (this.variant === "dock") dock.renderTitle();
         if (dir) await this.rememberDraftPrefs();
@@ -5400,6 +5488,7 @@
         this.autosize();
         this.updatePicker();
         this.warm();
+        this.syncComposerDraft();
       });
       this.input.addEventListener("keydown", (event) => this.onKey(event));
       this.input.addEventListener("keyup", (event) => {
@@ -5546,6 +5635,14 @@
     }
 
     renderContext() {
+      // Chip, file, paste and voice changes also reach here. Run after the composer update finishes.
+      const key = this.threadId || this.draft;
+      const content = this.composerContent();
+      const value = JSON.stringify(content && { text: content.text, mentions: content.mentions, files: content.attachments.map((f) => f.name) });
+      if (this.composerSnapshot?.key === key && this.composerSnapshot.value !== value) {
+        queueMicrotask(() => { if ((this.threadId || this.draft) === key) this.syncComposerDraft(); });
+      }
+      this.composerSnapshot = { key, value };
       const row = this.ctxRow;
       if (!row) return;
       row.replaceChildren();
@@ -6637,6 +6734,7 @@
         this.hidePicker();
         this.autosize();
         await this.applyLocalSlash(localCmd[1].toLowerCase());
+        this.syncComposerDraft();
         return;
       }
       // "/plan <task>" sends a plan turn (#721); "/plan" alone turns the Plan chip on.
@@ -6646,6 +6744,7 @@
         this.hidePicker();
         this.autosize();
         this.setPlan(true);
+        this.syncComposerDraft();
         return;
       }
       const actionCmd = planCmd ? null : /^\/([a-z][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
@@ -6676,6 +6775,9 @@
         return;
       }
       this.sending = true;
+      // Reuse a draft whose creation has not returned yet, rather than creating a second thread.
+      if (this.draft?.saving) await this.draft.saving;
+      if (this.threadId && draftWrites.has(this.threadId)) await draftWrites.get(this.threadId).promise;
       // Check before consuming the draft: a missing workspace needs a repair popup, not a failed turn.
       try {
         const cwd = this.settings().cwd;

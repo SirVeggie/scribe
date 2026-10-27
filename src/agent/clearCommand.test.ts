@@ -190,9 +190,10 @@ test("sending /clear consumes the command locally, including with attachments", 
     view.hidePicker = () => calls.push("hide");
     view.autosize = () => {};
     view.applyLocalSlash = async (name: string) => calls.push(name);
+    view.syncComposerDraft = () => calls.push("sync");
     await view.send();
     assert.equal(view.input.value, "");
-    assert.deepEqual(calls, ["hide", "clear"]);
+    assert.deepEqual(calls, ["hide", "clear", "sync"]);
   }
 });
 
