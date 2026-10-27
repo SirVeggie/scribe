@@ -20,6 +20,8 @@ export type LensCondition = { not?: boolean } & (
   | { type: "madeFrom"; target: { kind: "page" | "folder"; id: string } }
   /** The page's workspace is this folder or inside it. */
   | { type: "workspace"; path: string }
+  /** On disk under this folder: the page's file, its disk-linked Library folder, or its workspace (#64). */
+  | { type: "location"; path: string }
   | { type: "age"; basis: LensAgeBasis; days: number }
   | { type: "kind"; kinds: LensKind[] }
   /** Semantic: pages about this phrase (needs semantic search). */
@@ -92,6 +94,10 @@ export function normalizeCondition(raw: unknown): LensCondition | null {
     case "workspace": {
       const path = text(item.path);
       return path ? { type: "workspace", path, ...not } : null;
+    }
+    case "location": {
+      const path = text(item.path);
+      return path ? { type: "location", path, ...not } : null;
     }
     case "age": {
       const days = Number(item.days);

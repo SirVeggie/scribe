@@ -20,6 +20,13 @@
     return String(path || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
+  /** Whether a path on disk is the folder or inside it ("S:" covers the whole drive). */
+  function under(path, folder) {
+    const have = normPath(path);
+    const want = normPath(folder);
+    return Boolean(have && want) && (have === want || have.startsWith(want + "/"));
+  }
+
   /** The same date the Clean up dialog ages a page by. */
   function dateOf(page, basis) {
     const edited = Math.max(page.updatedAt || 0, page.stateUpdatedAt || 0);
@@ -58,11 +65,10 @@
         if (origin.kind === "folder") return inside(ctx, origin.id, cond.target.id);
         return inside(ctx, ctx.folderOf(origin.id), cond.target.id);
       }
-      case "workspace": {
-        const want = normPath(cond.path);
-        const have = normPath(page.workspace);
-        return Boolean(have) && (have === want || have.startsWith(want + "/"));
-      }
+      case "workspace":
+        return under(page.workspace, cond.path);
+      case "location":
+        return [page.file?.path, ctx.diskPath?.(page.folderId), page.workspace].some((path) => under(path, cond.path));
       case "age": {
         const at = dateOf(page, cond.basis);
         return at > 0 && ctx.now - at <= cond.days * DAY;
@@ -106,6 +112,8 @@
           return `Made from ${cond.target.kind === "page" ? names.page(cond.target.id) : names.folder(cond.target.id)}`;
         case "workspace":
           return `Workspace ${cond.path}`;
+        case "location":
+          return `On disk in ${cond.path}`;
         case "age":
           return `${BASIS_LABEL[cond.basis] || "Active"} in the last ${cond.days} day${cond.days === 1 ? "" : "s"}`;
         case "kind":

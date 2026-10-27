@@ -289,6 +289,7 @@ window.createLibrary = function createLibrary(host) {
     }
     const subtrees = new Map();
     const levels = new Map();
+    const disks = new Map();
     const home = space.home && model.folderById.has(space.home) ? space.home : null;
     const ctx = {
       spaceId: space.id,
@@ -299,6 +300,11 @@ window.createLibrary = function createLibrary(host) {
         return subtrees.get(id);
       },
       folderOf: (pageId) => model.pageById.get(pageId)?.folderId || null,
+      diskPath: (folderId) => {
+        const key = folderId || "";
+        if (!disks.has(key)) disks.set(key, folderId ? window.scribeFiles?.diskPath(model.folders, folderId) || null : null);
+        return disks.get(key);
+      },
       isUnread: (id) => host.isUnread(id),
       chats: (id) => host.pageThreads?.(id) || 0,
       access: (page) => {
@@ -473,6 +479,7 @@ window.createLibrary = function createLibrary(host) {
     ["madeBy", "Made by"],
     ["madeFrom", "Made from a page or folder"],
     ["workspace", "Workspace"],
+    ["location", "Location on disk"],
     ["age", "Age"],
     ["kind", "Kind of page"],
     ["about", "About (semantic)"],
@@ -581,6 +588,12 @@ window.createLibrary = function createLibrary(host) {
           input.placeholder = "Folder on disk";
           read = () => (input.value.trim() ? { type: "workspace", path: input.value.trim() } : null);
         }
+        break;
+      }
+      case "location": {
+        const input = addInput("text", cond.path, "Folder on disk");
+        input.placeholder = "A folder or drive, e.g. S:\\";
+        read = () => (input.value.trim() ? { type: "location", path: input.value.trim() } : null);
         break;
       }
       case "age": {

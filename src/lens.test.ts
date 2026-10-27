@@ -39,7 +39,7 @@ function subtree(id: string): Set<string> {
 const pages: Page[] = [
   { id: "a", folderId: "sub", madeIn: "s1", createdAt: now - 2 * DAY, updatedAt: now - 2 * DAY, templateId: "kanban", pinned: true },
   { id: "b", folderId: "other", madeIn: "s2", createdAt: now - 40 * DAY, updatedAt: now - 40 * DAY, provenance: { created: { thread: "th_1", at: 1 } }, access: { origin: { kind: "page", id: "a" } }, workspace: "S:\\Projects\\app\\src" },
-  { id: "c", createdAt: now - 3 * DAY, updatedAt: now - 3 * DAY, file: { path: "x.md" }, agentHidden: true, access: { origin: { kind: "folder", id: "sub" } } },
+  { id: "c", createdAt: now - 3 * DAY, updatedAt: now - 3 * DAY, file: { path: "C:/Notes/x.md" }, agentHidden: true, access: { origin: { kind: "folder", id: "sub" } } },
 ];
 const byId = new Map(pages.map((page) => [page.id, page]));
 const ctx = {
@@ -48,6 +48,7 @@ const ctx = {
   now,
   subtree,
   folderOf: (id: string) => byId.get(id)?.folderId ?? null,
+  diskPath: (id: string | null) => (id === "sub" ? "C:/Notes/Linked/sub" : null),
   isUnread: (id: string) => id === "b",
   chats: (id: string) => (id === "c" ? 2 : 0),
   access: (page: Page) => (page.agentHidden ? "restricted" : "open"),
@@ -71,6 +72,11 @@ test("lens conditions pick the pages they describe (#260)", () => {
   assert.deepEqual(shown(api, [{ type: "madeFrom", target: { kind: "folder", id: "home" } }]), ["b", "c"]);
   assert.deepEqual(shown(api, [{ type: "workspace", path: "s:/projects/app" }]), ["b"]);
   assert.deepEqual(shown(api, [{ type: "workspace", path: "S:\\Projects\\ap" }]), []);
+  // Location covers files, disk-linked folders and workspaces; "Not S:" hides the whole drive (#64).
+  assert.deepEqual(shown(api, [{ type: "location", path: "S:" }]), ["b"]);
+  assert.deepEqual(shown(api, [{ type: "location", path: "C:/Notes/" }]), ["a", "c"]);
+  assert.deepEqual(shown(api, [{ type: "location", path: "c:/notes/linked" }]), ["a"]);
+  assert.deepEqual(shown(api, [{ type: "location", path: "S:", not: true }]), ["a", "c"]);
   assert.deepEqual(shown(api, [{ type: "age", basis: "created", days: 7 }]), ["a", "c"]);
   assert.deepEqual(shown(api, [{ type: "kind", kinds: ["file", "template"] }]), ["a", "c"]);
   assert.deepEqual(shown(api, [{ type: "about", text: "audio" }]), ["b"]);
