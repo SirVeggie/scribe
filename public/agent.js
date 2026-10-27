@@ -9086,6 +9086,28 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return count;
   }
 
+  /**
+   * The strip's name for a New page that has threads: "New - <title>" once one has sent something,
+   * else "Draft - <unsent text>". Null leaves the page's own title.
+   */
+  function blankPageTitle(tabId) {
+    let sent = null;
+    let draft = null;
+    for (const t of S.threads.values()) {
+      if (t.archived || t.helperOf || t.scope.kind !== "page" || t.scope.ref !== tabId) continue;
+      const at = t.activityAt || t.updatedAt || 0;
+      if (t.stats?.turns || t.status !== "idle" || t.queued) {
+        if (!sent || at > sent.at) sent = { t, at };
+      } else if (t.draft?.text?.trim() && (!draft || at > draft.at)) {
+        draft = { t, at };
+      }
+    }
+    if (sent) return `New - ${sent.t.title || "New thread"}`;
+    if (!draft) return null;
+    const text = draft.t.draft.text.replace(/\s+/g, " ").trim();
+    return `Draft - ${text.length > 40 ? `${text.slice(0, 40).trimEnd()}…` : text}`;
+  }
+
   /** Questions, approvals and plans the user still has to answer, newest thread first, for the palette. */
   function pendingAsks() {
     const label = { approval: "Approval", question: "Question", plan: "Plan", browser_handoff: "Browser" };
@@ -13046,7 +13068,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

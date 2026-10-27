@@ -1744,7 +1744,8 @@
     if (drag?.moved && drag.id === tab.id) {
       el.classList.add("dragging");
     }
-    el.setAttribute("aria-label", tab.title);
+    const label = stripTitle(tab);
+    el.setAttribute("aria-label", label);
     // A file page shows its kind (#707).
     const fileName = tab.file?.path || "";
     let fileBadge = el.querySelector(".file-badge:not(.browser-badge)");
@@ -1813,8 +1814,13 @@
     }
     const title = el.querySelector(".tab-title");
     if (title) {
-      title.textContent = tab.title;
+      title.textContent = label;
     }
+  }
+
+  /** A New page in the strip is named by its threads: "New - <thread>" or "Draft - <unsent text>". */
+  function stripTitle(tab) {
+    return (isBlank(tab) && window.scribeChat?.blankPageTitle?.(tab.id)) || tab.title;
   }
 
   function createTabEl(tab) {
@@ -6163,6 +6169,12 @@
   newTabBtn.addEventListener("click", () => runShortcut("new-page"));
   // The New page screen leaves only its background once the page has a thread.
   window.addEventListener("scribe:agent-threads", () => {
+    for (const tab of state.tabs) {
+      const el = isBlank(tab) ? tabEls.get(tab.id) : null;
+      if (el) {
+        syncTabEl(el, tab);
+      }
+    }
     const tab = activeTab();
     if (isBlank(tab)) {
       newPageView.render(tab);
