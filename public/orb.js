@@ -139,13 +139,14 @@ float n=fbm(uv*3.+vec2(t*.1));float dens=clamp(arm*(.4+.8*n)*exp(-r*1.4)*1.8+exp
 vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1,r));}
 
 // Three dots wander on their own when idle; while working they line up and ripple in a wave.
-vec4 trio(vec2 uv,float t){vec4 c=vec4(0.);float rad=.23;
+// Each dot is a soft glow: a hot core fading into a palette-coloured halo, with no hard edge.
+vec4 trio(vec2 uv,float t){vec4 c=vec4(0.);
 for(int i=0;i<3;i++){float fi=float(i);
 vec2 drift=.33*vec2(sin(t*.53+fi*2.1)+.5*sin(t*1.17+fi*4.3),cos(t*.61+fi*3.7)+.5*sin(t*.89+fi*1.9));
-vec2 wave=vec2((fi-1.)*.58,.3*sin(t*3.5-fi*1.2));vec2 p=mix(drift,wave,u_work);
-vec2 q=(uv-p)/rad;float d=length(uv-p)-rad;float a=aaIn(d);
-vec3 col=lit(pal(.45+.25*fi),q*min(1.,1./max(length(q),.001)),.6);
-c=over(c,pm(col,a));c=over(c,pm(pal(.6+.2*fi),exp(-max(d,0.)*14.)*.25*(1.-a)));}
+vec2 wave=vec2((fi-1.)*.58,.17*sin(t*3.5-fi*1.2));vec2 p=mix(drift,wave,u_work);
+float dd=length(uv-p);float core=exp(-dd*dd*90.);float halo=exp(-dd*6.)*.6;
+vec3 col=mix(pal(.45+.25*fi),u_c3,core);
+c=over(c,pm(col,clamp(core+halo,0.,1.)));}
 return c;}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
