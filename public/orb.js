@@ -16,7 +16,7 @@
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
   // CSS backgrounds for the composer, drawn behind the chat surface effect.
-  const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", deepenColor: "Colour fade", deepenColorWork: "Colour fade while working", tint: "Palette wash", rim: "Glowing rim while working", sheen: "Sheen while working" };
+  const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", deepenColor: "Colour fade", deepenColorWork: "Colour fade while working", tint: "Palette wash", rim: "Glowing rim while working" };
   const ICON_PALETTES = {
     white: ["#e0eaff", "#ffffff"],
     ice: ["#7ee7ff", "#ffffff"],
@@ -252,7 +252,6 @@ gl_FragColor=c;
     backdrop.setAttribute("aria-hidden", "true");
     Object.assign(backdrop.style, { position: "absolute", inset: "0", borderRadius: "inherit", pointerEvents: "none", transition: "opacity .8s ease" });
     container.prepend(backdrop);
-    let sheen = null;
     if (!spill) surface.remove();
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
@@ -283,7 +282,7 @@ gl_FragColor=c;
       work += ((busy ? 1 : 0) - work) * Math.min(1, dt * 3);
       if (!draw()) loop.stop();
     }, { element: btn });
-    function paintBackdrop(moving) {
+    function paintBackdrop() {
       const id = current.background || "none";
       const [c0, c1, c2, c3] = current.colors;
       const mix = (c, pct, to = "transparent") => `color-mix(in srgb, ${c} ${pct}%, ${to})`;
@@ -301,20 +300,16 @@ gl_FragColor=c;
         deepenColorWork: { background: tinted, on: busy },
         tint: { background: `linear-gradient(90deg, ${mix(c1, 24)}, ${mix(c2, 8)} 55%, transparent)`, on: true },
         rim: { boxShadow: `inset 0 0 ${16 * k}px ${mix(c1, 55)}`, on: busy },
-        sheen: { background: `linear-gradient(100deg, transparent 35%, ${mix(c3, 14)} 50%, transparent 65%) 0 0 / 300% 100%`, on: busy },
       };
       const look = looks[id] || { on: false };
       backdrop.style.background = look.background || "none";
       backdrop.style.boxShadow = look.boxShadow || "none";
       backdrop.style.opacity = look.on ? "1" : "0";
-      const animate = id === "sheen" && moving;
-      if (animate && !sheen) sheen = backdrop.animate([{ backgroundPosition: "100% 0" }, { backgroundPosition: "0% 0" }], { duration: 2800, iterations: Infinity });
-      if (!animate && sheen) { sheen.cancel(); sheen = null; }
     }
     function update() {
       if (disposed) return;
       const moving = !still.matches && !document.documentElement.classList.contains("fx-off");
-      paintBackdrop(moving);
+      paintBackdrop();
       if (broken) return;
       btn.classList.toggle("fx-live", moving);
       if (moving) loop.start();
@@ -340,7 +335,7 @@ gl_FragColor=c;
         window.removeEventListener("scribe:orb-appearance", refresh);
         still.removeEventListener("change", update);
         canvas.removeEventListener("webglcontextlost", lost);
-        sheen?.cancel(); backdrop.remove();
+        backdrop.remove();
         fx.destroy(); spill?.destroy(); canvas.remove(); surface.remove(); btn.classList.remove("gl", "fx-live");
       },
     };
