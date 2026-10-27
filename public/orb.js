@@ -11,6 +11,8 @@
   const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", none: "None" };
   // Shape animation speed while idle and working; others use [.6, 2].
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
+  // The same for surface effects.
+  const SURFACE_SPEEDS = { pulse: [.6, 1.2] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
   const ICON_PALETTES = {
@@ -58,7 +60,7 @@
   });
   const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
   const FRAG = `precision highp float;
-uniform vec2 u_res;uniform float u_time;uniform float u_shapeTime;uniform float u_energy;uniform float u_prov;uniform float u_bleed;
+uniform vec2 u_res;uniform float u_time;uniform float u_shapeTime;uniform float u_surfaceTime;uniform float u_energy;uniform float u_prov;uniform float u_bleed;
 uniform vec3 u_c0;uniform vec3 u_c1;uniform vec3 u_c2;uniform vec3 u_c3;uniform vec3 u_i0;uniform vec3 u_i1;uniform float u_iconSize;
 #define PI 3.14159265
 #define TAU 6.2831853
@@ -174,7 +176,7 @@ return pm(color,clamp(a*(.65+.35*u_energy),0.,1.));
 void main(){
 float s=.5*min(u_res.x,u_res.y);px=1./s;
 if(u_surface>.5){vec2 uv=(gl_FragCoord.xy-vec2(23.)*u_res.x/160.)/(15.*u_res.x/160.);
-gl_FragColor=u_bleedmode<.5?vec4(0.):surface(uv,u_time);return;}
+gl_FragColor=u_bleedmode<.5?vec4(0.):surface(uv,u_surfaceTime);return;}
 vec2 uv=(gl_FragCoord.xy-.5*u_res)/s*u_bleed;px=u_bleed/s;
 vec4 c=base(uv,u_shapeTime);
 float r=length(uv);
@@ -217,9 +219,9 @@ gl_FragColor=c;
     if (!spill) surface.remove();
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
-    let time = 12, shapeTime = 12, work = 0, busy = false, disposed = false, broken = false;
+    let time = 12, shapeTime = 12, surfaceTime = 12, work = 0, busy = false, disposed = false, broken = false;
     const values = () => ({
-      u_time: time, u_shapeTime: shapeTime, u_energy: busy ? 1 : 0, u_work: work,
+      u_time: time, u_shapeTime: shapeTime, u_surfaceTime: surfaceTime, u_energy: busy ? 1 : 0, u_work: work,
       u_prov: Math.max(0, Object.keys(PROVIDERS).indexOf(provider)),
       u_style: Object.keys(STYLES).indexOf(current.style),
       u_symbol: Object.keys(SYMBOLS).indexOf(current.symbol),
@@ -235,9 +237,11 @@ gl_FragColor=c;
       return fx.draw({ ...uniforms, u_surface: 0 });
     }
     const loop = window.scribeGL.loop(dt => {
-      // The shape has its own clock so its speed does not change the surface or icon.
+      // Shape and surface have their own clocks so their speeds stay independent.
       const [idle, working] = SPEEDS[current.style] || [.6, 2];
       shapeTime += dt * (busy ? working : idle);
+      const [surfaceIdle, surfaceWorking] = SURFACE_SPEEDS[current.bleed] || [.6, 2];
+      surfaceTime += dt * (busy ? surfaceWorking : surfaceIdle);
       time += dt * (busy ? 2 : .6);
       work += ((busy ? 1 : 0) - work) * Math.min(1, dt * 3);
       if (!draw()) loop.stop();
