@@ -147,8 +147,9 @@ vec2 wave=vec2((fi-1.)*.58,.17*sin(t*3.5-fi*1.2));vec2 p=mix(drift,wave,u_work);
 float dd=length(uv-p);float core=exp(-dd*dd*90.);float halo=exp(-dd*6.)*.6;
 vec3 col=mix(pal(.45+.25*fi),u_c3,core);
 c=over(c,pm(col,clamp(core+halo,0.,1.)));}
-// A dark shade behind the dots so they stand out; it fades out softly before the canvas edge (r≈1.27).
-float r=length(uv);return over(c,pm(u_c0*.25,.8*(1.-smoothstep(.5,1.24,r))));}
+return c;}
+// The dots' dark shade is drawn on the surface strip (over its effect, under the orb) so it can reach past the orb.
+vec4 trioShade(vec2 uv){return pm(u_c0*.25,.8*(1.-smoothstep(.5,2.6,length(uv))));}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
@@ -240,7 +241,8 @@ return pm(color,clamp(a*(.65+.35*u_energy),0.,1.));
 void main(){
 float s=.5*min(u_res.x,u_res.y);px=1./s;
 if(u_surface>.5){vec2 uv=(gl_FragCoord.xy-vec2(23.)*u_res.x/160.)/(15.*u_res.x/160.);
-gl_FragColor=u_bleedmode<.5?vec4(0.):surface(uv,u_surfaceTime);return;}
+vec4 sc=u_bleedmode<.5?vec4(0.):surface(uv,u_surfaceTime);
+gl_FragColor=u_style>8.5?over(trioShade(uv),sc):sc;return;}
 vec2 uv=(gl_FragCoord.xy-.5*u_res)/s*u_bleed;px=u_bleed/s;
 vec4 c=base(uv,u_shapeTime);
 float r=length(uv);
