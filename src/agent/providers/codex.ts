@@ -104,6 +104,23 @@ function readText(file: string): string | null {
   }
 }
 
+/** The ChatGPT account Codex is logged in to (Scribe's copy of the login, else the CLI's), or null. */
+export function codexAccountId(): string | null {
+  for (const file of [path.join(scribeCodexHome(), "auth.json"), userAuthFile()]) {
+    const text = readText(file);
+    if (text == null) continue;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      const tokens = isPlainRecord(parsed) ? parsed.tokens : null;
+      const id = isPlainRecord(tokens) ? tokens.account_id : null;
+      if (typeof id === "string" && id) return id;
+    } catch {
+      // Unreadable: try the other copy.
+    }
+  }
+  return null;
+}
+
 /** Replace through a temp file so a Codex process never reads half a login. */
 function writeAuth(file: string, text: string): void {
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;

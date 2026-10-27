@@ -107,7 +107,11 @@ export function sourceModelLimits(source: OpenAISource, model: string, catalog: 
   return { contextWindow, maxTokens: Math.min(SOURCE_MAX_TOKENS, Math.floor(contextWindow / 2)) };
 }
 
-export function modelRateSnapshot(model: Model, source?: OpenAISource): RateSnapshot {
+/**
+ * The catalog price for one call: tiered prices (by prompt length, as Pi's own cost) need the call's
+ * prompt tokens, so without them a tiered model has no flat rate.
+ */
+export function modelRateSnapshot(model: Model, source?: OpenAISource, promptTokens?: number): RateSnapshot {
   // Keep pricing identity without URL credentials or query secrets.
   const endpoint = source ? new URL(source.baseUrl) : null;
   const base: RateSnapshot = { origin: "unknown", provider: model.provider, model: model.id, ...(source ? { sourceId: source.id, endpoint: endpoint!.origin + endpoint!.pathname } : {}), unit: "USD/1M tokens", freshness: "unknown" };
@@ -117,11 +121,21 @@ export function modelRateSnapshot(model: Model, source?: OpenAISource): RateSnap
   const tariffProfile = deepSeekProfile(model.provider, model.id, source ? base.endpoint : model.baseUrl);
   const automatic = { ...base, ...(tariffProfile ? { tariffProfile } : {}) };
   // Flat snapshots cannot represent prompt-length tiers without understating long prompts.
-  if (model.cost.tiers?.length) return automatic;
-  const rates = [model.cost.input, model.cost.output, model.cost.cacheRead, model.cost.cacheWrite];
+  let cost: { input: number; output: number; cacheRead: number; cacheWrite: number } = model.cost;
+  if (model.cost.tiers?.length) {
+    if (promptTokens === undefined) return automatic;
+    let above = -1;
+    for (const tier of model.cost.tiers) {
+      if (promptTokens > tier.inputTokensAbove && tier.inputTokensAbove > above) {
+        cost = tier;
+        above = tier.inputTokensAbove;
+      }
+    }
+  }
+  const rates = [cost.input, cost.output, cost.cacheRead, cost.cacheWrite];
   if (rates.some((n) => !Number.isFinite(n) || n < 0 || n > 1_000_000) || !rates.some((n) => n > 0)) return automatic;
   const decimal = (n: number) => n.toFixed(9).replace(/\.?0+$/, "") || "0";
-  return { ...automatic, origin: "catalog", rates: { input: decimal(model.cost.input), output: decimal(model.cost.output), cacheRead: decimal(model.cost.cacheRead), cacheWrite: decimal(model.cost.cacheWrite) } };
+  return { ...automatic, origin: "catalog", rates: { input: decimal(cost.input), output: decimal(cost.output), cacheRead: decimal(cost.cacheRead), cacheWrite: decimal(cost.cacheWrite) } };
 }
 
 /** "<pi provider>/<model id>" → its parts. Model ids may contain slashes themselves (OpenRouter). */
@@ -180,6 +194,42 @@ function textOf(content: unknown): string {
     .join("\n");
 }
 
+/**
+ * Subscription logins Agent settings offers for Native, through Pi's own OAuth flows. Each keeps its
+ * own token in Scribe's Pi auth.json: sharing ~/.codex/auth.json would put two refreshers on one
+ * rotating refresh token, and they would log each other out (#296). Anthropic is left out: Claude
+ * subscriptions outside Claude Code break Anthropic's terms.
+ */
+export const PI_LOGINS: readonly { id: string; label: string }[] = [
+  { id: "openai-codex", label: "ChatGPT (Codex)" },
+  { id: "github-copilot", label: "GitHub Copilot" },
+  { id: "xai", label: "xAI (SuperGrok, X Premium)" },
+  { id: "kimi-coding", label: "Kimi Code" },
+];
+
+export type PiLoginView = {
+  id: string;
+  label: string;
+  state: "out" | "in" | "expired" | "pending";
+  /** The ChatGPT account the login belongs to (openai-codex), to match the Codex provider's plan windows. */
+  accountId?: string;
+  /** While pending: the page to finish the login on, and the device code to enter there. */
+  url?: string;
+  userCode?: string;
+  /** While pending: the flow also takes the redirect URL pasted by hand (its callback port was busy). */
+  paste?: string;
+  /** The last attempt's error. */
+  error?: string;
+};
+
+type PendingLogin = {
+  abort: AbortController;
+  url?: string;
+  userCode?: string;
+  paste?: { message: string; answer: (value: string) => void };
+  error?: string;
+};
+
 export class PiProvider implements AgentProvider {
   readonly id = "pi" as const;
   readonly label = "Native";
@@ -190,8 +240,151 @@ export class PiProvider implements AgentProvider {
   private registered = new Set<string>();
   private sessions = new Set<PiSession>();
   private spares = new SparePool<PiSession>();
+  private pending = new Map<string, PendingLogin>();
+  /** Logins whose token refresh failed, until a refresh or a new login works. */
+  private expired = new Map<string, string>();
+  private lastErrors = new Map<string, string>();
 
-  constructor(private sources: () => OpenAISource[]) {}
+  constructor(private sources: () => OpenAISource[], private loggedIn: (id: string) => void = () => undefined) {}
+
+  /** Scribe's Pi auth.json as stored: per provider, its type and (OAuth) expiry and account. Secrets stay here. */
+  private storedCredentials(): Record<string, { type?: unknown; expires?: unknown; accountId?: unknown }> {
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(path.join(agentDir(), "auth.json"), "utf8"));
+      return isPlainRecord(parsed) ? (parsed as Record<string, { type?: unknown }>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** The subscription logins and their state. A token past its expiry is refreshed first, so a dead login shows as expired. */
+  async logins(): Promise<PiLoginView[]> {
+    let stored = this.storedCredentials();
+    const stale = PI_LOGINS.filter(({ id }) => {
+      const cred = stored[id];
+      return !this.pending.has(id) && cred?.type === "oauth" && typeof cred.expires === "number" && cred.expires < Date.now() + 60_000;
+    });
+    if (stale.length) {
+      const runtime = await this.runtime();
+      await Promise.all(
+        stale.map(async ({ id }) => {
+          try {
+            await runtime.getAuth(id, { signal: AbortSignal.timeout(20_000) });
+            this.expired.delete(id);
+          } catch (err) {
+            this.expired.set(id, (err as Error).message);
+          }
+        })
+      );
+      stored = this.storedCredentials();
+    }
+    return PI_LOGINS.map(({ id, label }) => {
+      const cred = stored[id];
+      const pending = this.pending.get(id);
+      const accountId = typeof cred?.accountId === "string" ? cred.accountId : undefined;
+      const error = pending?.error ?? this.lastErrors.get(id);
+      if (pending) return { id, label, state: "pending", ...(pending.url ? { url: pending.url } : {}), ...(pending.userCode ? { userCode: pending.userCode } : {}), ...(pending.paste ? { paste: pending.paste.message } : {}) };
+      if (cred?.type !== "oauth") return { id, label, state: "out", ...(error ? { error } : {}) };
+      if (this.expired.has(id)) return { id, label, state: "expired", ...(accountId ? { accountId } : {}) };
+      return { id, label, state: "in", ...(accountId ? { accountId } : {}) };
+    });
+  }
+
+  /**
+   * Start a login. Resolves once the flow has a page or device code to show (or has ended); the
+   * flow itself goes on, and logins() reports how it went.
+   */
+  async startLogin(id: string): Promise<PiLoginView> {
+    if (!PI_LOGINS.some((login) => login.id === id)) throw new Error(`Unknown login: ${id}`);
+    this.pending.get(id)?.abort.abort();
+    const runtime = await this.runtime();
+    const pending: PendingLogin = { abort: new AbortController() };
+    this.pending.set(id, pending);
+    this.lastErrors.delete(id);
+    let shown: () => void = () => undefined;
+    const ready = new Promise<void>((resolve) => {
+      shown = resolve;
+    });
+    const signal = pending.abort.signal;
+    const flow = runtime
+      .login(id, "oauth", {
+        signal,
+        notify: (event) => {
+          if (event.type === "auth_url") pending.url = event.url;
+          else if (event.type === "device_code") {
+            pending.url = event.verificationUri;
+            pending.userCode = event.userCode;
+          } else return;
+          shown();
+        },
+        prompt: (prompt) => {
+          // The default (browser) method, and github.com rather than a GitHub Enterprise domain.
+          if (prompt.type === "select") return Promise.resolve(prompt.options[0]?.id ?? "");
+          if (prompt.type === "text") return Promise.resolve("");
+          if (prompt.type !== "manual_code") return Promise.reject(new Error("This login needs a key; add it as a model source instead."));
+          // Raced against the callback server, which aborts this prompt when it wins.
+          return new Promise<string>((resolve, reject) => {
+            const stop = () => {
+              if (pending.paste?.answer === answer) delete pending.paste;
+              reject(new Error("Login cancelled"));
+            };
+            const answer = (value: string) => {
+              delete pending.paste;
+              resolve(value);
+            };
+            if (prompt.signal?.aborted || signal.aborted) return stop();
+            pending.paste = { message: prompt.message, answer };
+            prompt.signal?.addEventListener("abort", stop, { once: true });
+            signal.addEventListener("abort", stop, { once: true });
+          });
+        },
+      })
+      .then(() => {
+        this.expired.delete(id);
+        this.invalidate();
+        this.loggedIn(id);
+      })
+      .catch((err) => {
+        if (!signal.aborted) {
+          this.lastErrors.set(id, (err as Error).message);
+          log(`Native: ${id} login failed: ${(err as Error).message}`);
+        }
+      })
+      .finally(() => {
+        if (this.pending.get(id) === pending) this.pending.delete(id);
+        shown();
+      });
+    void flow;
+    await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000))]);
+    return (await this.logins()).find((login) => login.id === id)!;
+  }
+
+  /** The redirect URL the user pasted for a login whose callback could not be received. */
+  answerLogin(id: string, value: string): void {
+    const paste = this.pending.get(id)?.paste;
+    if (!paste) throw new Error("This login is not waiting for a pasted URL.");
+    paste.answer(value);
+  }
+
+  cancelLogin(id: string): void {
+    this.pending.get(id)?.abort.abort();
+    this.pending.delete(id);
+  }
+
+  async logout(id: string): Promise<void> {
+    if (!PI_LOGINS.some((login) => login.id === id)) throw new Error(`Unknown login: ${id}`);
+    this.cancelLogin(id);
+    await (await this.runtime()).logout(id);
+    this.expired.delete(id);
+    this.lastErrors.delete(id);
+    this.invalidate();
+  }
+
+  /** The ChatGPT account of the Codex login, when there is one. */
+  codexAccountId(): string | null {
+    const cred = this.storedCredentials()["openai-codex"];
+    return cred?.type === "oauth" && typeof cred.accountId === "string" ? cred.accountId : null;
+  }
 
   /** Pi's model and key runtime, on Scribe's own auth.json and models.json. */
   runtime(): Promise<ModelRuntime> {
@@ -209,7 +402,7 @@ export class PiProvider implements AgentProvider {
   async status(): Promise<ProviderStatus> {
     try {
       const models = await this.models();
-      if (!models.length) return { id: this.id, label: this.label, available: false, detail: "No models: add a model source in Agent settings, or set a provider's API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, …)." };
+      if (!models.length) return { id: this.id, label: this.label, available: false, detail: "No models: log in to a subscription or add a model source in Agent settings, or set a provider's API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, …)." };
       return { id: this.id, label: this.label, available: true, detail: models.length === 1 ? "1 model" : `${models.length} models` };
     } catch (err) {
       return { id: this.id, label: this.label, available: false, detail: `Native harness failed to load: ${(err as Error).message}` };
@@ -294,7 +487,7 @@ export class PiProvider implements AgentProvider {
         id: `${m.provider}/${m.id}`,
         label: m.name || m.id,
         provider: "pi",
-        description: names.get(m.provider) ?? runtime.getProvider(m.provider)?.name ?? m.provider,
+        description: names.get(m.provider) ?? PI_LOGINS.find((login) => login.id === m.provider)?.label ?? runtime.getProvider(m.provider)?.name ?? m.provider,
         efforts: levels.map((level) => ({ id: level, label: EFFORT_LABELS[level] ?? level })),
         defaultEffort: null,
         params: [],
@@ -323,8 +516,8 @@ export class PiProvider implements AgentProvider {
     return { ...model, cost: source ? sourceModelCost(source, model.id, runtime.getModels("deepseek")) : { ...model.cost } };
   }
 
-  rateSnapshot(model: Model): RateSnapshot {
-    return modelRateSnapshot(model, this.sources().find((s) => sourceProviderId(s.id) === model.provider));
+  rateSnapshot(model: Model, promptTokens?: number): RateSnapshot {
+    return modelRateSnapshot(model, this.sources().find((s) => sourceProviderId(s.id) === model.provider), promptTokens);
   }
 
   async complete(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
@@ -1065,8 +1258,10 @@ class PiSession implements ProviderSession {
         const costId = randomUUID();
         const u = message.usage;
         const prev = this.usage;
-        const rate = this.rate && this.rate.provider === message.provider && this.rate.model === message.model
-          ? this.rate : { origin: "unknown" as const, provider: message.provider, model: message.model, unit: "USD/1M tokens" as const, freshness: "unknown" as const };
+        const same = this.rate && this.rate.provider === message.provider && this.rate.model === message.model;
+        const tiered = same && this.session?.model?.cost.tiers?.length && this.session.model.provider === message.provider && this.session.model.id === message.model ? this.session.model : null;
+        const rate = tiered ? this.provider.rateSnapshot(tiered, u.input + u.cacheRead + u.cacheWrite)
+          : same ? this.rate! : { origin: "unknown" as const, provider: message.provider, model: message.model, unit: "USD/1M tokens" as const, freshness: "unknown" as const };
         const cost = recordTariff(estimateCost(costId, message.timestamp, rate, { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite }), {
           basis: "assistant-message", attempts: "unavailable", endedAt: Date.now(), ...(this.observedRequest ?? {}),
         });

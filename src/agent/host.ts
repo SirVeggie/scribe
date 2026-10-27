@@ -30,10 +30,10 @@ import { readSnapshot, removeThreadSnapshots, saveSnapshot } from "./fileSnapsho
 import { findSvnRoot, svnEnd, svnStart, type SvnStart } from "./svn.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
 import { UsageWindowStarts, cleanWindowStarts, type WindowStartState } from "./usageWindowStarts.js";
-import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
+import { CodexProvider, codexAccountId, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
-import { PiProvider } from "./providers/pi.js";
+import { PiProvider, type PiLoginView } from "./providers/pi.js";
 import { HOOKS_FEATURE, HookPipeline, OBSERVE_DEADLINE_MS, earlyEnd, holdsAll, isGating, normalizeRules, ruleDetectors, toolCallText, verdict, clip as clipChunk, type Chunk, type Detector, type Finding, type HookDecide, type HookEvent, type HookRule } from "./hooks.js";
 import { mlService } from "../ml/service.js";
 import type { SendKind } from "../ml/types.js";
@@ -555,7 +555,7 @@ export class AgentHost {
     } catch (err) {
       log(`skills scan failed: ${(err as Error).message}`);
     }
-    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), codex: new CodexProvider(), pi: new PiProvider(() => this.modelSources()) };
+    this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), codex: new CodexProvider(), pi: new PiProvider(() => this.modelSources(), () => void this.models("pi", true).catch(() => undefined)) };
     if (FAKE_AGENTS) {
       const deps = {
         runAction: (page: string, name: string, args: Record<string, unknown>, caller: ActionCaller) => store.runAction(page, name, args, caller, (id) => this.runInfo(id)).result,
@@ -1176,6 +1176,43 @@ export class AgentHost {
       this.codexUsageFetchAt = 0;
       void this.refreshCodexUsage();
     });
+  }
+
+  /** Native's subscription logins (Pi's OAuth) and their state. */
+  piLogins(): Promise<PiLoginView[]> {
+    return (this.providers.pi as PiProvider).logins();
+  }
+
+  piLogin(id: string): Promise<PiLoginView> {
+    return (this.providers.pi as PiProvider).startLogin(id);
+  }
+
+  piLoginAnswer(id: string, value: string): void {
+    (this.providers.pi as PiProvider).answerLogin(id, value);
+  }
+
+  piLoginCancel(id: string): void {
+    (this.providers.pi as PiProvider).cancelLogin(id);
+  }
+
+  piLogout(id: string): Promise<void> {
+    return (this.providers.pi as PiProvider).logout(id);
+  }
+
+  /**
+   * Native models whose plan windows are another provider's: the ChatGPT (Codex) login's, when it is
+   * the same ChatGPT account Codex is logged in to, since the windows belong to the account.
+   */
+  nativePlans(): Record<string, ProviderId> {
+    const account = (this.providers.pi as PiProvider).codexAccountId();
+    return account && account === codexAccountId() ? { "openai-codex": "codex" } : {};
+  }
+
+  /** The provider whose plan windows a thread uses: its own, or Codex's for a Native thread on the same ChatGPT account. */
+  private planProvider(thread: Pick<Thread, "provider" | "model">): ProviderId {
+    if (thread.provider !== "pi") return thread.provider;
+    const at = thread.model?.indexOf("/") ?? -1;
+    return (at > 0 && this.nativePlans()[thread.model!.slice(0, at)]) || thread.provider;
   }
 
   /** Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. */
@@ -3984,9 +4021,10 @@ export class AgentHost {
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
     if (thread.provider === "cursor") this.refreshCursorUsage();
-    if (thread.provider === "codex") void this.refreshCodexUsage();
+    const plan = this.planProvider(thread);
+    if (plan === "codex") void this.refreshCodexUsage();
     if (result.status === "error") {
-      const resetsAt = usageLimitResetsAt(result.error, thread.provider === "claude" ? this.claudeThreadLimits.get(threadId) : this.planLimits[thread.provider], turn.startedAt, turn.endedAt);
+      const resetsAt = usageLimitResetsAt(result.error, thread.provider === "claude" ? this.claudeThreadLimits.get(threadId) : this.planLimits[plan], turn.startedAt, turn.endedAt);
       if (resetsAt) turn.limitResetsAt = resetsAt;
     }
     this.saveTurn(turn);

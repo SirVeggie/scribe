@@ -160,6 +160,7 @@ export function agentRouter(host: AgentHost): express.Router {
       prefs: host.prefs(),
       models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor"), codex: host.cachedModels("codex"), pi: host.cachedModels("pi") },
       limits: host.limits(),
+      nativePlans: host.nativePlans(),
     }))
   );
 
@@ -199,6 +200,32 @@ export function agentRouter(host: AgentHost): express.Router {
   // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
   router.post("/codex/login", wrap(() => host.codexLogin()));
   router.post("/claude/login", wrap(() => host.claudeLogin()));
+  // Native's subscription logins (Pi's OAuth flows, tokens in Scribe's Pi auth.json).
+  router.get("/pi/logins", wrap(async () => ({ logins: await host.piLogins() })));
+  router.post("/pi/logins/:id", wrap(async (req) => ({ login: await host.piLogin(req.params.id) })));
+  router.post(
+    "/pi/logins/:id/answer",
+    wrap((req) => {
+      const value = typeof req.body?.value === "string" ? req.body.value.trim() : "";
+      if (!value) throw new Error("value is required");
+      host.piLoginAnswer(req.params.id, value);
+      return { ok: true };
+    })
+  );
+  router.post(
+    "/pi/logins/:id/cancel",
+    wrap((req) => {
+      host.piLoginCancel(req.params.id);
+      return { ok: true };
+    })
+  );
+  router.delete(
+    "/pi/logins/:id",
+    wrap(async (req) => {
+      await host.piLogout(req.params.id);
+      return { ok: true };
+    })
+  );
 
   // The providers' own allow / deny / ask lists (Claude Code settings, Cursor CLI config).
   router.get("/permissions", wrap((req) => ({ sets: listPermissions(typeof req.query.cwd === "string" ? req.query.cwd : null) })));

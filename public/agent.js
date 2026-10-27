@@ -6174,7 +6174,7 @@
         bindHoverTip(skills, () => noteTip(detail));
         bar.append(skills);
       }
-      const meter = usageChip(s.provider, this.variant !== "full", s.model, this.thread());
+      const meter = usageChip(planProvider(s.provider, s.model), this.variant !== "full", s.model, this.thread());
       const mic = button("", "ag-pill ag-mic", () => this.audioComposer.toggle(), "Dictate (Ctrl+Shift+Space)", false);
       mic.append(icon("mic"), el("span", "ag-mic-status"));
       mic.setAttribute("aria-label", "Dictate (Ctrl+Shift+Space)");
@@ -10091,6 +10091,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return (windows || []).map((w) => (w.resetsAt && w.resetsAt <= now ? { ...w, utilization: 0 } : w));
   }
 
+  /** The provider whose plan windows a chat on this model uses: Codex's for Native's ChatGPT login on the same account. */
+  function planProvider(provider, model) {
+    if (provider !== "pi" || typeof model !== "string") return provider;
+    const at = model.indexOf("/");
+    return (at > 0 && S.config.nativePlans?.[model.slice(0, at)]) || provider;
+  }
+
   function planLimits(provider, thread = null) {
     const limits = S.config.limits?.[provider];
     if (!limits) return null;
@@ -11577,6 +11584,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         instructions.append(settingRow(label, control, { id: `ag-instruction-${id}`, ...(hint ? { hint } : {}) }));
       }
 
+      const logins = el("section", "settings-section");
+      this.logins = el("div", "ag-sources");
+      logins.append(
+        helpHeading("Native logins", "Use a subscription's models in Native. Each login has its own token, separate from the Codex app's."),
+        this.logins
+      );
+
       const sources = el("section", "settings-section");
       this.sources = el("div", "ag-sources");
       const sourceActions = el("div", "settings-actions");
@@ -11720,7 +11734,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
       panel.append(title, providers, sdks, cursor, helpers, forkSummaries, memory, instructions, sources, usage, chat, keys);
       this.categories = window.scribeSettingsUI.mount(panel, [
-        { label: "Providers", sections: [providers, sdks, cursor, sources, usage] },
+        { label: "Providers", sections: [providers, sdks, cursor, logins, sources, usage] },
         { label: "Chat", sections: [chat] },
         { label: "Instructions", sections: [instructions] },
         { label: "Memory", sections: [memory] },
@@ -11833,6 +11847,65 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         this.sources.append(row);
       }
     },
+    /** Native's subscription logins; while one is pending, checks again every 2 s. */
+    async renderLogins() {
+      if (!this.logins) return;
+      clearTimeout(this.loginPoll);
+      let list = [];
+      try {
+        list = (await api("GET", "/pi/logins")).logins || [];
+      } catch (err) {
+        this.logins.replaceChildren(el("div", "ag-muted", err.message));
+        return;
+      }
+      const pending = list.some((login) => login.state === "pending");
+      // A login just ended: Native's models and plan windows follow it.
+      if (this.loginsPending && !pending) void sourcesChanged();
+      this.loginsPending = pending;
+      const call = async (method, path, body) => {
+        try {
+          return await api(method, path, body);
+        } catch (err) {
+          notice(err.message);
+          return null;
+        } finally {
+          void this.renderLogins();
+        }
+      };
+      this.logins.replaceChildren();
+      for (const login of list) {
+        const row = el("div", "setting-row");
+        const label = el("span");
+        const state = login.state === "in" ? "Logged in" : login.state === "expired" ? "Login expired" :
+          login.state === "pending" ? (login.userCode ? `Enter code ${login.userCode} on the login page` : "Finish the login in your browser") :
+          login.error ? `Login failed: ${login.error}` : "Not logged in";
+        label.append(el("strong", null, login.label), el("span", "ag-muted", ` · ${state}`));
+        const actions = el("span", "settings-actions");
+        if (login.state === "pending") {
+          if (login.url) actions.append(button("Open page", "ag-btn small", () => window.open(login.url, "_blank", "noopener")));
+          actions.append(button("Cancel", "ag-btn small", () => call("POST", `/pi/logins/${login.id}/cancel`)));
+        } else if (login.state === "in") {
+          actions.append(button("Log out", "ag-btn small", () => call("DELETE", `/pi/logins/${login.id}`)));
+        } else {
+          actions.append(button(login.state === "expired" ? "Log in again" : "Log in", "ag-btn", async () => {
+            const res = await call("POST", `/pi/logins/${login.id}`);
+            if (res?.login?.url) window.open(res.login.url, "_blank", "noopener");
+          }));
+        }
+        row.append(label, actions);
+        this.logins.append(row);
+        if (login.state === "pending" && login.paste) {
+          // The flow's callback port was taken (another login running): the redirect URL goes in by hand.
+          const field = el("input", "ag-input");
+          field.placeholder = "Paste the redirect URL from the browser";
+          field.setAttribute("aria-label", login.paste);
+          const paste = el("div", "setting-row");
+          paste.append(field, button("Submit", "ag-btn small", () => field.value.trim() && call("POST", `/pi/logins/${login.id}/answer`, { value: field.value.trim() })));
+          this.logins.append(paste);
+        }
+      }
+      if (pending && this.isOpen()) this.loginPoll = setTimeout(() => void this.renderLogins(), 2000);
+    },
     isOpen() {
       return Boolean(this.categories?.isOpen());
     },
@@ -11939,6 +12012,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.renderStatus();
       this.renderCycleModes();
       void this.renderSources();
+      void this.renderLogins();
       this.renderSummarizer();
       void window.scribeMemories?.store.load();
       this.categories.open();

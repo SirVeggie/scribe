@@ -245,12 +245,15 @@ test("DeepSeek source registration prices cached and uncached usage from the SDK
   assert.equal(modelRateSnapshot(model, { ...source, baseUrl: "https://secret:password@api.deepseek.com/v1?key=hidden" }).endpoint, "https://api.deepseek.com/v1");
 });
 
-test("Native rate snapshots keep flat prices and leave tiered catalog prices unavailable", () => {
+test("Native rate snapshots keep flat prices, and price tiers by the call's prompt length", () => {
   const model = { provider: "test", id: "tiered", cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } } as Parameters<typeof modelRateSnapshot>[0];
   assert.equal(modelRateSnapshot(model).origin, "catalog");
   model.cost.tiers = [{ inputTokensAbove: 200000, input: 2, output: 4, cacheRead: 0, cacheWrite: 0 }];
   assert.equal(modelRateSnapshot(model).origin, "unknown");
   assert.equal(modelRateSnapshot(model).rates, undefined);
+  // With the call's prompt length, the tier that applies (as Pi's own cost picks it).
+  assert.deepEqual(modelRateSnapshot(model, undefined, 200000).rates, { input: "1", output: "2", cacheRead: "0", cacheWrite: "0" });
+  assert.deepEqual(modelRateSnapshot(model, undefined, 200001).rates, { input: "2", output: "4", cacheRead: "0", cacheWrite: "0" });
   model.cost.tiers = [];
   assert.equal(modelRateSnapshot(model).origin, "catalog");
   model.cost.input = NaN;
