@@ -3,7 +3,7 @@ import { Router } from "express";
 export const APPEARANCE_KEYS = [
   "scribe.theme", "scribe.tightSmall", "scribe.uiEffects", "scribe.auroraEdge",
   "scribe.newPageBackgrounds", "scribe.newPageProviderColors", "scribe.chromeFx", "scribe.chromeFxWhen",
-  "scribe.dock-appearance.v1",
+  "scribe.dock-appearance.v1", "scribe.workingFx",
 ] as const;
 export type Appearance = Record<string, string>;
 
@@ -19,6 +19,7 @@ export function parseAppearance(value: unknown): Appearance {
     if (["scribe.tightSmall", "scribe.uiEffects", "scribe.auroraEdge", "scribe.newPageProviderColors"].includes(key) && !["0", "1"].includes(item)) throw new Error("Invalid appearance switch");
     if (key === "scribe.chromeFx" && !["wash", "motes", "rise", "off"].includes(item)) throw new Error("Invalid title bar background");
     if (key === "scribe.chromeFxWhen" && !["idle-still", "always", "busy"].includes(item)) throw new Error("Invalid title bar motion");
+    if (key === "scribe.workingFx" && !["shimmer", "comet-css", "edge", "comet", "scan", "motes"].includes(item)) throw new Error("Invalid working thread look");
     if (key === "scribe.newPageBackgrounds" && (!item || item.split(",").some(id => !["nebula", "stardust", "aurora", "caustics", "contours", "halftone", "bokeh"].includes(id)))) throw new Error("Invalid backgrounds");
     if (key === "scribe.dock-appearance.v1") {
       const dock = JSON.parse(item);

@@ -685,6 +685,13 @@
   }
 
   window.addEventListener("scribe:agent-event", (event) => onEvent(event.detail));
+  // The working-thread look (Settings > Working threads), motion and synced appearance all change how rows show.
+  for (const name of ["scribe:working-fx", "scribe:ui-fx", "scribe:appearance"]) {
+    window.addEventListener(name, () => {
+      renderWorkingFxSetting();
+      renderLists();
+    });
+  }
   window.addEventListener("scribe:connection", (event) => {
     if (event.detail?.connected) {
       loadStartupData();
@@ -7456,38 +7463,81 @@
   }
 
   /**
-   * The working glow of thread rows (#836): one WebGL canvas over each thread list, its shader painting light
-   * along the bottom and left edges of the working rows only, so many working threads cost one draw call.
-   * It runs at ~30 fps while a working row shows, stops otherwise, and falls back to static CSS without
-   * WebGL or with reduced motion.
+   * How working thread rows show (#836), chosen in Settings (scribe.workingFx). Classic ones are CSS on the
+   * row; shader ones draw with one WebGL canvas over each thread list, painting the working rows only, so
+   * many working threads cost one draw call. The first shader entry's mode is 0, and so on (MODE in FS).
    */
+  const WORKING_FX_KEY = "scribe.workingFx";
+  const WORKING_FX = [
+    { id: "shimmer", name: "Shimmer", kind: "css", about: "A soft light sweeps across the row." },
+    { id: "comet-css", name: "Comet", kind: "css", about: "A spark runs around the row's outline." },
+    { id: "edge", name: "Edge glow", kind: "gl", mode: 0, about: "Light flows along the bottom edge, with a soft glow at the left." },
+    { id: "comet", name: "Comet", kind: "gl", mode: 1, about: "A spark with a fading tail runs around the row's outline." },
+    { id: "scan", name: "Scan line", kind: "gl", mode: 2, about: "A soft vertical light passes along the row now and then." },
+    { id: "motes", name: "Drifting motes", kind: "gl", mode: 3, about: "Tiny twinkling specks drift over a faint glow at the bottom." },
+  ];
+  const WORKING_FX_DEFAULT = "motes";
+
+  function workingFx() {
+    const stored = (window.scribeAppearance || localStorage).getItem(WORKING_FX_KEY);
+    return WORKING_FX.find((fx) => fx.id === stored) || WORKING_FX.find((fx) => fx.id === WORKING_FX_DEFAULT);
+  }
+
   const rowGlow = (() => {
     const MAX = 16;
     const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+    // u_c1..3 are the theme's effect colours (glfx.js palette); c is the base, hi a lighter highlight.
     const FS = `precision mediump float;
-uniform float t;uniform vec4 rects[${MAX}];uniform int n;uniform float dpr;uniform vec3 acc;
+uniform float t;uniform vec4 rects[${MAX}];uniform int n;uniform float dpr;uniform vec3 u_c2,u_c3;
 float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}
 float fbm(vec2 p){float s=0.,a=.5;for(int i=0;i<4;i++){s+=a*vn(p);p*=2.03;a*=.5;}return s;}
 float sdr(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return length(max(q,0.))+min(max(q.x,q.y),0.)-r;}
-void main(){vec2 p=gl_FragCoord.xy;vec4 o=vec4(0.);
-for(int i=0;i<${MAX};i++){if(i>=n)break;vec4 r=rects[i];
-float m=clamp(.5-sdr(p-(r.xy+r.zw*.5),r.zw*.5,8.*dpr),0.,1.);if(m<=0.)continue;
-float ly=(p.y-r.y)/r.w;float f=fbm(vec2((p.x-r.x)/(64.*dpr)-t*.8,t*.2));
-float g=exp(-ly*7.)*(.3+.9*f);float l=exp(-(p.x-r.x)/(5.*dpr));
-vec3 col=mix(acc,vec3(.6,.95,.85),f);float a=(.5*g+.35*l*(.6+.4*sin(t*2.5)))*m;
-o.rgb+=col*a;o.a+=a;}
+float per(vec2 q,vec2 s){float dl=q.x,dr=s.x-q.x,db=q.y,dt=s.y-q.y;float mn=min(min(dl,dr),min(db,dt));
+if(mn==db)return q.x;if(mn==dr)return s.x+q.y;if(mn==dt)return 2.*s.x+s.y-q.x;return 2.*s.x+2.*s.y-q.y;}
+void main(){vec2 p=gl_FragCoord.xy;vec4 o=vec4(0.);vec3 c=u_c3;vec3 hi=mix(u_c2,vec3(1.),.55);
+for(int i=0;i<${MAX};i++){if(i>=n)break;vec4 r=rects[i];float fi=float(i);
+float d=sdr(p-(r.xy+r.zw*.5),r.zw*.5,8.*dpr);float m=clamp(.5-d,0.,1.);if(m<=0.)continue;
+vec2 q=(p-r.xy)/dpr;vec2 sz=r.zw/dpr;float ed=max(-d/dpr,0.);vec3 col=c;float a=0.;
+#if MODE==0
+float f=fbm(vec2(q.x/64.-t*.8,t*.2+fi));float g=exp(-q.y/sz.y*7.)*(.3+.9*f);float l=exp(-q.x/5.);
+col=mix(c,hi,f);a=.5*g+.35*l*(.6+.4*sin(t*2.5));
+#elif MODE==1
+float P=2.*(sz.x+sz.y);float s=per(q,sz);float bh=mod(mod(t*150.+fi*260.,P)-s,P);
+float tail=exp(-bh/80.);float head=exp(-bh/5.);float ln=exp(-ed/1.3);float halo=exp(-ed/6.);
+col=mix(c,mix(hi,vec3(1.),.5),.7*head);a=tail*(.7*ln+.18*halo)+.35*head*halo+.05*ln;
+#elif MODE==2
+float sx=mod(t*110.+fi*170.,sz.x+160.)-80.;float dx=q.x-sx;
+float beam=exp(-dx*dx/300.);float trail=dx<0.?exp(dx/70.):0.;float yv=abs(q.y/sz.y-.5)*2.;
+col=mix(c,hi,.6*beam);a=(.38*beam+.14*trail)*(.3+.7*yv*yv)+.06*exp(-q.y/2.)+.05*exp(-ed/1.2);
+#else
+float cs=13.;vec2 gr=(q-vec2(t*16.,t*3.5))/cs;vec2 ce=floor(gr);vec2 f=fract(gr);
+float rn=h(ce+fi*7.3);vec2 pp=.2+.6*vec2(h(ce+vec2(.31,.7)),h(ce+vec2(.83,.19)));
+float dd=length((f-pp)*cs);float sp=step(.6,rn)*exp(-dd*dd/1.8)*(.55+.45*sin(t*2.3+rn*40.));
+col=mix(c,mix(hi,vec3(1.),.5),sp);a=.85*sp+.07*exp(-q.y/3.)+.05*exp(-q.x/8.);
+#endif
+a=clamp(a,0.,1.)*m;o.rgb+=col*a;o.a+=a;}
 gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const hosts = new Map();
     let raf = 0;
     let last = 0;
     let broken = false;
-    const still = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    function setup(host) {
+    function drop(host) {
+      const g = hosts.get(host);
+      if (!g) return;
+      hosts.delete(host);
+      g.dead = true;
+      g.cv.remove();
+      g.gl.getExtension("WEBGL_lose_context")?.loseContext();
+      host.classList.remove("ag-glow-gl");
+    }
+
+    /** A canvas per host and look: a WebGL context keeps the one shader it was made with. */
+    function setup(host, mode) {
       const cv = el("canvas", "ag-glow");
       cv.dataset.key = "glow";
-      const gl = cv.getContext("webgl", { premultipliedAlpha: true, alpha: true, antialias: false });
+      const gl = cv.getContext("webgl", { premultipliedAlpha: true, alpha: true, antialias: false, depth: false, powerPreference: "low-power" });
       if (!gl) return null;
       const shader = (type, src) => {
         const s = gl.createShader(type);
@@ -7497,7 +7547,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       };
       const pr = gl.createProgram();
       gl.attachShader(pr, shader(gl.VERTEX_SHADER, VS));
-      gl.attachShader(pr, shader(gl.FRAGMENT_SHADER, FS));
+      gl.attachShader(pr, shader(gl.FRAGMENT_SHADER, `#define MODE ${mode}\n${FS}`));
       gl.linkProgram(pr);
       if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) return null;
       gl.useProgram(pr);
@@ -7506,22 +7556,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       const u = (name) => gl.getUniformLocation(pr, name);
+      const g = { cv, gl, mode, list: null, dead: false, u: { t: u("t"), rects: u("rects[0]"), n: u("n"), dpr: u("dpr"), c2: u("u_c2"), c3: u("u_c3") } };
       // A lost context (GPU reset) drops to the CSS look for good rather than retrying every frame.
       cv.addEventListener("webglcontextlost", () => {
+        if (g.dead) return;
         broken = true;
-        for (const [h, g] of hosts) {
-          h.classList.remove("ag-glow-gl");
-          g.cv.remove();
-        }
-        hosts.clear();
+        for (const h of [...hosts.keys()]) drop(h);
       });
       if (getComputedStyle(host).position === "static") host.style.position = "relative";
-      return { cv, gl, u: { t: u("t"), rects: u("rects[0]"), n: u("n"), dpr: u("dpr"), acc: u("acc") }, list: null };
-    }
-
-    function accent() {
-      const rgb = getComputedStyle(document.documentElement).getPropertyValue("--accent-rgb").split(",").map(Number);
-      return rgb.length === 3 && rgb.every((v) => v >= 0) ? rgb.map((v) => v / 255) : [0.54, 0.71, 1];
+      return g;
     }
 
     function draw(g, ms) {
@@ -7552,11 +7595,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         rects.set([(r.left - x0) * dpr, (y0 + hgt - r.bottom) * dpr, r.width * dpr, r.height * dpr], n * 4);
         n++;
       }
+      const colours = window.scribeGL?.palette() || { u_c2: [0.58, 0.3, 0.98], u_c3: [0.32, 0.64, 1] };
       gl.uniform4fv(u.rects, rects);
       gl.uniform1i(u.n, n);
       gl.uniform1f(u.dpr, dpr);
       gl.uniform1f(u.t, ms / 1000);
-      gl.uniform3fv(u.acc, accent());
+      gl.uniform3fv(u.c2, colours.u_c2);
+      gl.uniform3fv(u.c3, colours.u_c3);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (n) gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -7569,7 +7614,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (due) last = ms;
       for (const [host, g] of hosts) {
         if (!host.isConnected) {
-          hosts.delete(host);
+          drop(host);
           continue;
         }
         const on = Boolean(g.list?.isConnected && g.list.offsetParent && g.list.querySelector(".ag-row.s-running"));
@@ -7587,12 +7632,23 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const g = hosts.get(host);
         return g ? [g.cv] : [];
       },
-      /** After a render: draw the host's working rows, starting the loop if it stopped. */
-      watch(host, list) {
-        if (broken || still()) return;
+      /**
+       * After a render: mark the host with its look (fx, default the setting) and, for a shader look, draw
+       * its working rows, starting the loop if it stopped. Without WebGL or motion the CSS fallback shows.
+       */
+      watch(host, list, fx = workingFx()) {
+        host.dataset.workingFx = fx.id;
+        if (fx.kind !== "gl" || broken || !window.scribeMotion?.enabled()) {
+          drop(host);
+          return;
+        }
         let g = hosts.get(host);
+        if (g && g.mode !== fx.mode) {
+          drop(host);
+          g = null;
+        }
         if (!g) {
-          g = setup(host);
+          g = setup(host, fx.mode);
           if (!g) {
             broken = true;
             return;
@@ -7605,8 +7661,83 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         g.list = list;
         if (!raf) raf = requestAnimationFrame(frame);
       },
+      drop,
     };
   })();
+
+  /** Settings > Working threads: every look running on sample rows; a click picks one. */
+  function openWorkingFxPicker() {
+    const dialog = el("dialog", "confirm working-fx-picker");
+    dialog.setAttribute("aria-label", "Working threads");
+    const close = button("Done", "", () => dialog.close());
+    const body = el("div", "working-fx-sections");
+    dialog.append(el("h3", null, "Working threads"), body, close);
+    const hosts = [];
+    const sample = () => {
+      const list = el("div", "ag-list");
+      const row = (title, meta, cls = "") => {
+        const r = el("div", `ag-row s-running${cls}`);
+        const main = el("span", "ag-row-main");
+        main.append(el("span", "ag-row-title", title));
+        if (meta) main.append(el("span", "ag-row-meta", meta));
+        r.append(main);
+        return r;
+      };
+      const helpers = el("div", "ag-row-helpers");
+      helpers.append(row("Audit the CSS"));
+      list.append(row("Thread list style improvements", "Opus · now"), helpers);
+      return list;
+    };
+    const mark = () => {
+      const current = workingFx().id;
+      for (const b of body.querySelectorAll("button[data-fx]")) b.setAttribute("aria-pressed", String(b.dataset.fx === current));
+    };
+    for (const [kind, title, note] of [
+      ["css", "Classic", "CSS animation: lightest on the GPU and battery."],
+      ["gl", "Shaders", "WebGL: one canvas per thread list draws all working rows, about 30 fps while any show."],
+    ]) {
+      const section = el("section", "working-fx-section");
+      const grid = el("div", "working-fx-grid");
+      section.append(el("h4", null, title), el("p", "working-fx-note", note), grid);
+      for (const fx of WORKING_FX.filter((item) => item.kind === kind)) {
+        const pick = button("", "working-fx-option", () => {
+          (window.scribeAppearance || localStorage).setItem(WORKING_FX_KEY, fx.id);
+          mark();
+          window.dispatchEvent(new Event("scribe:working-fx"));
+        });
+        pick.dataset.fx = fx.id;
+        const host = el("div", "working-fx-preview");
+        const list = sample();
+        host.append(list);
+        pick.append(host, el("span", "working-fx-name", fx.name), el("span", "working-fx-about", fx.about));
+        grid.append(pick);
+        hosts.push([host, list, fx]);
+      }
+      body.append(section);
+    }
+    mark();
+    document.body.append(dialog);
+    dialog.showModal();
+    for (const [host, list, fx] of hosts) rowGlow.watch(host, list, fx);
+    dialog.addEventListener("close", () => {
+      for (const [host] of hosts) rowGlow.drop(host);
+      dialog.remove();
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const box = dialog.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
+    });
+  }
+
+  /** The settings row's button names the current look and opens the picker. */
+  function renderWorkingFxSetting() {
+    const trigger = document.getElementById("working-fx");
+    if (!trigger) return;
+    trigger.textContent = `${workingFx().name}${workingFx().kind === "gl" ? " (shader)" : ""}`;
+    trigger.onclick = openWorkingFxPicker;
+  }
+  renderWorkingFxSetting();
 
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
