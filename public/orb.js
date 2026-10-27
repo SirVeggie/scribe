@@ -16,7 +16,7 @@
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
   // CSS backgrounds for the composer, drawn behind the chat surface effect.
-  const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", tint: "Palette wash", rim: "Glowing rim while working", sheen: "Sheen while working" };
+  const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", deepenColor: "Colour fade", deepenColorWork: "Colour fade while working", tint: "Palette wash", rim: "Glowing rim while working", sheen: "Sheen while working" };
   const ICON_PALETTES = {
     white: ["#e0eaff", "#ffffff"],
     ice: ["#7ee7ff", "#ffffff"],
@@ -289,10 +289,14 @@ gl_FragColor=c;
       const mix = (c, pct, to = "transparent") => `color-mix(in srgb, ${c} ${pct}%, ${to})`;
       // Scale the stops with the surface strip (160px in the app, zoomed in the lab).
       const k = (surface.getBoundingClientRect().width || 160) / 160;
-      const deep = `linear-gradient(90deg, ${mix(c0, 85, "black")} 0px, ${mix(c0, 50)} ${110 * k}px, transparent ${210 * k}px)`;
+      const fade = (from, mid) => `linear-gradient(90deg, ${from} 0px, ${mid} ${110 * k}px, transparent ${210 * k}px)`;
+      const deep = fade("rgba(0, 0, 0, .88)", "rgba(0, 0, 0, .45)");
+      const tinted = fade(mix(c0, 85, "black"), mix(c0, 50));
       const looks = {
         deepen: { background: deep, on: true },
         deepenWork: { background: deep, on: busy },
+        deepenColor: { background: tinted, on: true },
+        deepenColorWork: { background: tinted, on: busy },
         tint: { background: `linear-gradient(90deg, ${mix(c1, 24)}, ${mix(c2, 8)} 55%, transparent)`, on: true },
         rim: { boxShadow: `inset 0 0 0 1px ${mix(c2, 55)}, inset 0 0 ${14 * k}px ${mix(c1, 45)}`, on: busy },
         sheen: { background: `linear-gradient(100deg, transparent 35%, ${mix(c3, 14)} 50%, transparent 65%) 0 0 / 300% 100%`, on: busy },
