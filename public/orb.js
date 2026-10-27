@@ -11,9 +11,9 @@
     aurora: ["#081a24", "#0f7a6c", "#7ad9a8", "#e9e2ff"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", trio: "Three dots" };
+  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", trio: "Three dots", orbit: "Orbit", bars: "Voice bars" };
   // Shape animation speed while idle and working; others use [.6, 2].
-  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1], trio: [.6, 1.4] };
+  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1], trio: [.6, 1.4], orbit: [.6, 1.2], bars: [.6, 1.3] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1], glow: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch" };
@@ -148,13 +148,38 @@ float dd=length(uv-p);float core=exp(-dd*dd*90.);float halo=exp(-dd*6.)*.6;
 vec3 col=mix(pal(.45+.25*fi),u_c3,core);
 c=over(c,pm(col,clamp(core+halo,0.,1.)));}
 return c;}
-// The dots' dark shade is drawn on the surface strip (over its effect, under the orb) so it can reach past the orb.
+// Orbit: four sparks drift on loose orbits of their own when idle; while working they
+// gather on one ring and chase each other round it, trailing comet tails.
+vec4 orbit(vec2 uv,float t){vec4 c=vec4(0.);float r=length(uv);float pa=atan(uv.y,uv.x);
+for(int i=0;i<4;i++){float fi=float(i);
+float ia=t*(.45+.13*fi)+fi*1.7;float ir=.32+.12*fi+.08*sin(t*.5+fi*2.3);
+float wa=t*2.6-fi*.5+.35*sin(t*1.3);float R=.6;
+vec2 p=mix(ir*vec2(cos(ia),sin(ia)),R*vec2(cos(wa),sin(wa)),u_work);
+float dd=length(uv-p);float sz=1.-.18*fi*u_work;
+float core=exp(-dd*dd*150./(sz*sz));float halo=exp(-dd*8./sz)*.5;
+float behind=mod(wa-pa,TAU);float tail=exp(-pow((r-R)*13.,2.))*exp(-behind*(4.+fi*2.))*u_work*.55;
+vec3 col=mix(pal(.45+.2*fi),u_c3,core);
+c=over(c,pm(col,clamp(core+halo+tail,0.,1.)));}
+return c;}
+// Voice bars: four soft dots breathe in turn when idle; while working they stretch into bars
+// that bounce like a voice meter.
+vec4 bars(vec2 uv,float t){vec4 c=vec4(0.);
+for(int i=0;i<4;i++){float fi=float(i);float x=(fi-1.5)*.36;
+float idle=.03+.04*(.5+.5*sin(t*1.6-fi*.9));
+float busy=.12+.42*abs(sin(t*3.1+fi*1.3)*sin(t*1.7+fi*2.9+1.));
+float h=mix(idle,busy,u_work);
+float d=sdSeg(uv,vec2(x,-h),vec2(x,h))-.09;
+float core=1.-smoothstep(-.05,.03,d);float halo=exp(-max(d,0.)*9.)*.45;
+vec3 col=mix(pal(.4+.18*fi),u_c3,core*(1.-.5*smoothstep(0.,.4,abs(uv.y))));
+c=over(c,pm(col,clamp(core+halo,0.,1.)));}
+return c;}
+// The dot shapes' dark shade is drawn on the surface strip (over its effect, under the orb) so it can reach past the orb.
 // Lighter while idle, full strength while working.
 vec4 trioShade(vec2 uv){return pm(u_c0*.25,mix(.45,.8,u_work)*(1.-smoothstep(.5,2.6,length(uv))));}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
-if(u_style<8.5)return galaxy(uv*1.6,t);return trio(uv,t);
+if(u_style<8.5)return galaxy(uv*1.6,t);if(u_style<9.5)return trio(uv,t);if(u_style<10.5)return orbit(uv,t);return bars(uv,t);
 }
 float bevel(vec2 p){return smoothstep(0.,.08,-sym(p/u_iconSize)*u_iconSize);}
 vec4 mark(vec2 uv,float t){
