@@ -16,7 +16,7 @@
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1], glow: [.6, 1.1] };
-  const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
+  const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch", fill: "Liquid fill" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
   // CSS backgrounds for the composer, drawn behind the chat surface effect.
   const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", deepenColor: "Colour fade", deepenColorWork: "Colour fade while working", tint: "Palette wash", rim: "Glowing rim while working" };
@@ -141,6 +141,7 @@ if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
 return galaxy(uv*1.6,t);
 }
+float bevel(vec2 p){return smoothstep(0.,.08,-sym(p/u_iconSize)*u_iconSize);}
 vec4 mark(vec2 uv,float t){
 float d=sym(uv/u_iconSize)*u_iconSize;float inside=aaIn(d);float a=0.;vec3 c=mix(u_i0,u_i1,.7);
 if(u_symbol<1.5){a=inside*.95+exp(-max(d,0.)*20.)*.3;c=mix(u_i0,u_i1,liqT(uv,t*.5));}
@@ -148,9 +149,27 @@ else if(u_symbol<2.5){float angle=atan(uv.y,uv.x)-t*2.2;float band=pow(.5+.5*cos
 a=inside*.3+exp(-abs(d)*40.)*(.75+.25*band);c=mix(u_i0,u_i1,clamp(band,0.,1.));}
 else if(u_symbol<3.5){float scan=.65+.35*sin(uv.y*45.);float roll=1.+.2*exp(-abs(fract(uv.y*.35-t*.25)-.5)*30.);
 a=(inside+exp(-max(d,0.)*20.)*.25)*scan*roll;}
-else {float n=8.;vec2 g=uv*n,id=floor(g)+.5;float on=step(sym(id/n/u_iconSize),.04);
+else if(u_symbol<4.5){float n=8.;vec2 g=uv*n,id=floor(g)+.5;float on=step(sym(id/n/u_iconSize),.04);
 float dotmask=1.-smoothstep(.3-px*n,.3+px*n,length(g-id));
 a=on*dotmask*(.8+.2*sin(t*3.+hash(id)*TAU));}
+else if(u_symbol<5.5){
+// Bevelled relief: lit from the top left when idle; the light circles the icon while working.
+vec2 ex=vec2(.03,0.),ey=vec2(0.,.03);
+float hx=bevel(uv-ex)-bevel(uv+ex),hy=bevel(uv-ey)-bevel(uv+ey);
+vec3 nrm=normalize(vec3(hx,hy,.35));
+vec3 L=normalize(mix(vec3(-.7,.7,.8),vec3(cos(t*1.2),sin(t*1.2),.8),u_work));float lit=clamp(dot(nrm,L),0.,1.);
+c=mix(u_i0*.45,u_i1,lit)+vec3(pow(lit,24.)*.5);a=inside;}
+else if(u_symbol<6.5){
+// Rows slip sideways with a colour split: now and then when idle, often while working.
+float slot=floor(t*7.);float g=step(mix(.93,.6,u_work),h1(slot));
+float off=(h1(floor(uv.y*7.)+slot*3.1)-.5)*.3*g;float sp=.06*g;
+float aR=aaIn(sym((uv+vec2(off+sp,0.))/u_iconSize)*u_iconSize),aG=aaIn(sym((uv+vec2(off,0.))/u_iconSize)*u_iconSize),aB=aaIn(sym((uv+vec2(off-sp,0.))/u_iconSize)*u_iconSize);
+a=max(aG,max(aR,aB));c=mix(u_i0,u_i1,.7)*vec3(aR,aG,aB)/max(a,.001);}
+else {
+// Full when idle; while working the level rises and falls in a wavy line.
+float lvl=mix(1.5,.45*sin(t*.9),u_work)+.05*sin(uv.x*9.+t*4.);
+float fill=1.-smoothstep(-px,px,uv.y-lvl);
+a=inside*(.18+.77*fill)+exp(-abs(d)*40.)*.35*(1.-fill);c=mix(u_i0,u_i1,fill*.8);}
 return pm(c,clamp(a,0.,1.)*(1.-smoothstep(1.,1.2,length(uv))));
 }
 vec4 surface(vec2 uv,float t){
