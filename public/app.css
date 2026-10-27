@@ -3389,12 +3389,16 @@ body .orb-settings-help {
   box-shadow: none;
   cursor: default;
 }
-.background-picker { width: min(640px, calc(100vw - 40px)); max-width: 640px; padding: 18px; }
-.background-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
-.background-grid button { padding: 4px; overflow: hidden; border: 2px solid transparent; }
-.background-grid button[aria-pressed="true"] { border-color: var(--accent); }
-.background-grid canvas { display: block; width: 100%; height: 90px; border-radius: 5px; background: var(--bg); }
-.background-grid span { display: block; padding: 6px 0; }
+.background-picker { width: min(640px, calc(100vw - 40px)); max-width: 640px; }
+.background-picker h3 { margin: 0; padding: 18px 20px 4px; font-size: 15px; color: var(--heading); }
+.background-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 12px 20px 4px; }
+.background-grid button { height: auto; padding: 0; flex-direction: column; align-items: stretch; justify-content: flex-start; overflow: hidden; border-radius: 10px; outline: 2px solid transparent; outline-offset: -2px; transition: outline-color var(--dur-fast) ease, background var(--dur-fast) ease; }
+.background-grid button[aria-pressed="true"] { outline-color: var(--accent); background: var(--accent-soft); }
+.background-grid button[aria-pressed="false"] canvas { opacity: 0.55; }
+.background-grid canvas { display: block; width: 100%; height: 90px; background: var(--bg); transition: opacity var(--dur-fast) ease; }
+.background-grid span { padding: 8px 10px; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.background-grid button[aria-pressed="true"] span { color: var(--heading); }
+.background-picker .confirm-actions { padding: 14px 20px 18px; }
 .audio-sources-link { margin-top: 12px; }
 .settings-hint-after {
   margin: 8px 2px 0;

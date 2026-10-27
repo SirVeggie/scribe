@@ -1324,9 +1324,11 @@
     dialog.setAttribute("aria-label", "New page backgrounds");
     const title = document.createElement("h3"); title.textContent = "New page backgrounds";
     const track = document.createElement("div"); track.className = "background-grid";
-    const close = document.createElement("button"); close.type = "button"; close.textContent = "Done";
+    const close = document.createElement("button"); close.type = "button"; close.className = "primary"; close.textContent = "Done";
     close.addEventListener("click", () => dialog.close());
-    dialog.append(title, track, close);
+    const actions = document.createElement("div"); actions.className = "confirm-actions";
+    actions.append(close);
+    dialog.append(title, track, actions);
     document.body.append(dialog);
     dialog.showModal();
     const effects = [];
