@@ -508,7 +508,7 @@ window.createLibrary = function createLibrary(host) {
   }
 
   /** One condition's controls in the lens editor; read() gives the condition back, or null. */
-  function conditionRow(cond, space) {
+  function conditionRow(cond, space, onChange) {
     const row = document.createElement("div");
     row.className = "lens-cond";
     const name = document.createElement("span");
@@ -622,13 +622,19 @@ window.createLibrary = function createLibrary(host) {
     not.className = "lens-not";
     not.textContent = "Not";
     not.setAttribute("aria-pressed", cond.not ? "true" : "false");
-    not.addEventListener("click", () => not.setAttribute("aria-pressed", not.getAttribute("aria-pressed") === "true" ? "false" : "true"));
+    not.addEventListener("click", () => {
+      not.setAttribute("aria-pressed", not.getAttribute("aria-pressed") === "true" ? "false" : "true");
+      onChange();
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "lens-remove";
     remove.setAttribute("aria-label", "Remove condition");
     remove.textContent = "×";
-    remove.addEventListener("click", () => row.remove());
+    remove.addEventListener("click", () => {
+      row.remove();
+      onChange();
+    });
     row.append(name, controls, not, remove);
     for (const select of selects) {
       window.createSelect?.(select);
@@ -670,7 +676,10 @@ window.createLibrary = function createLibrary(host) {
     onToggle.setAttribute("aria-labelledby", onLabel.id);
     // Setting a lens up for the first time is asking to see it.
     onToggle.setAttribute("aria-checked", lens.on || !space.lens ? "true" : "false");
-    onToggle.addEventListener("click", () => onToggle.setAttribute("aria-checked", onToggle.getAttribute("aria-checked") === "true" ? "false" : "true"));
+    onToggle.addEventListener("click", () => {
+      onToggle.setAttribute("aria-checked", onToggle.getAttribute("aria-checked") === "true" ? "false" : "true");
+      save();
+    });
     onRow.append(onLabel, onToggle);
 
     const homeField = document.createElement("div");
@@ -694,7 +703,7 @@ window.createLibrary = function createLibrary(host) {
     const list = document.createElement("div");
     list.className = "lens-conds";
     for (const cond of lens.conditions) {
-      list.appendChild(conditionRow(cond, space));
+      list.appendChild(conditionRow(cond, space, save));
     }
     const add = selectOf([["", "Add condition…"], ...CONDITION_TYPES], "", "Add condition");
     const addWrap = document.createElement("div");
@@ -702,18 +711,7 @@ window.createLibrary = function createLibrary(host) {
     addWrap.appendChild(add);
 
     fields.append(onRow, homeField, matchField, list, addWrap);
-    const actions = document.createElement("div");
-    actions.className = "confirm-actions";
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", () => dialog.close());
-    const save = document.createElement("button");
-    save.type = "submit";
-    save.className = "primary";
-    save.textContent = "Save";
-    actions.append(cancel, save);
-    form.append(title, fields, actions);
+    form.append(title, fields);
     dialog.appendChild(form);
     document.body.appendChild(dialog);
     const homeWrap = window.createSelect?.(homeSelect);
@@ -723,25 +721,55 @@ window.createLibrary = function createLibrary(host) {
       if (!add.value) {
         return;
       }
-      list.appendChild(conditionRow({ type: add.value }, { ...space, home: homeSelect.value || null }));
+      list.appendChild(conditionRow({ type: add.value }, { ...space, home: homeSelect.value || null }, save));
       add.value = "";
       addSelectWrap?.syncSelect?.();
     });
     homeSelect.addEventListener("change", () => homeWrap?.syncSelect?.());
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const conditions = [...list.children].map((row) => row.read()).filter(Boolean);
-      save.disabled = true;
-      const ok = await saveSpace({
+    let saveTimer;
+    let saves = Promise.resolve();
+    let lastPatch;
+    function save() {
+      clearTimeout(saveTimer);
+      const patch = {
         home: homeSelect.value || null,
-        lens: { on: onToggle.getAttribute("aria-checked") === "true", match: matchSelect.value, conditions },
+        lens: {
+          on: onToggle.getAttribute("aria-checked") === "true",
+          match: matchSelect.value,
+          conditions: [...list.children].map((row) => row.read()).filter(Boolean),
+        },
+      };
+      const key = JSON.stringify(patch);
+      if (key === lastPatch) return;
+      lastPatch = key;
+      // Keep rapid edits in order, and keep saving to the space this editor opened for.
+      saves = saves.then(async () => {
+        if (!await saveSpace(patch, space) && lastPatch === key) lastPatch = null;
+      }).catch(() => {
+        if (lastPatch === key) lastPatch = null;
+        host.showNotice("Could not save the space");
       });
-      save.disabled = false;
-      if (ok) {
+    }
+    form.addEventListener("input", () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(save, 250);
+    });
+    form.addEventListener("change", save);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      save();
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const box = dialog.getBoundingClientRect();
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) {
         dialog.close();
       }
     });
-    dialog.addEventListener("close", () => dialog.remove(), { once: true });
+    dialog.addEventListener("close", () => {
+      save();
+      dialog.remove();
+    }, { once: true });
     dialog.showModal();
   }
 

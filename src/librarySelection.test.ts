@@ -15,7 +15,7 @@ async function fixture(browser: Browser) {
   await page.route("http://selection.test/", route => route.fulfill({ contentType: "text/html", body: html }));
   await page.goto("http://selection.test/");
   await page.addStyleTag({ content: fs.readFileSync(new URL("../public/app.css", import.meta.url), "utf8") });
-  await loadShellScripts(page, { scripts: ["pointer-drag.js", "dom-sync.js", "select.js", "files.js", "library.js"] });
+  await loadShellScripts(page, { scripts: ["pointer-drag.js", "dom-sync.js", "select.js", "files.js", "lens.js", "library.js"] });
   await page.evaluate(() => {
     const w = window as any;
     document.documentElement.removeAttribute("data-restoring");
@@ -46,6 +46,7 @@ async function fixture(browser: Browser) {
     w.scribeChat = { pickWorkspace: async () => "C:\\Work" };
     w.library = w.createLibrary({
       folders: () => w.folders, pages: () => w.pages, paneOpen: () => true,
+      space: () => w.activeSpace,
       findAny: (id: string) => w.pages.find((p: any) => p.id === id),
       isOpen: () => false, isUnread: () => false, icons: {},
       hoverCard: { hide() {}, bind() {}, suspend() {}, resume() {} },
@@ -65,6 +66,44 @@ async function fixture(browser: Browser) {
   });
   return { page, errors };
 }
+
+test("Lens editor autosaves controls and pending text on outside click or Escape", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Lens editor test" });
+  try {
+    const { page, errors } = await fixture(browser);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.activeSpace = { id: "s1", name: "Work", lens: { on: false, match: "all", conditions: [{ type: "about", text: "audio" }] } };
+      w.library.render();
+    });
+    const open = () => page.locator("#library-lens").dispatchEvent("contextmenu");
+    const latest = () => page.evaluate(() => (window as any).requests.at(-1));
+    await open();
+    const dialog = page.locator(".lens-editor");
+    assert.equal(await dialog.getByRole("button", { name: /^(Save|Cancel)$/ }).count(), 0);
+    await dialog.getByRole("switch").click();
+    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.on === true);
+    assert.equal(await dialog.isVisible(), true);
+    await dialog.getByRole("button", { name: "Not", exact: true }).click();
+    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.conditions[0]?.not === true);
+    await dialog.getByLabel("Topic", { exact: true }).fill("music");
+    await page.mouse.click(1, 1);
+    await dialog.waitFor({ state: "detached" });
+    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.conditions[0]?.text === "music");
+    assert.equal((await latest()).url, "/api/spaces/s1");
+    await open();
+    await dialog.getByLabel("Remove condition", { exact: true }).click();
+    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.conditions.length === 0);
+    // Adding an empty text condition is kept in the editor until it has a value.
+    await dialog.getByRole("button", { name: "Add condition", exact: true }).click();
+    await dialog.getByRole("option", { name: "About (semantic)", exact: true }).click();
+    await dialog.getByLabel("Topic", { exact: true }).fill("design");
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.conditions[0]?.text === "design");
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
 
 test("Library selection entry, toggles, ranges, folder coverage and split clicks", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Library selection test" });
