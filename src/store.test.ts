@@ -109,9 +109,9 @@ test("open tabs sort pinned first, then strip_seq", () => {
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
   store.update("c", { pin: true, activate: false });
-  assert.deepEqual(titles(store), ["C", "A", "B"]);
+  assert.deepEqual(titles(store), ["C", "B", "A"]);
   store.update("c", { pin: false, activate: false });
-  assert.deepEqual(titles(store), ["A", "B", "C"]);
+  assert.deepEqual(titles(store), ["C", "B", "A"]);
   store.closeDb();
 });
 
@@ -121,9 +121,9 @@ test("unpin restores the tab's original strip hole", () => {
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
   store.update("b", { pin: true, activate: false });
-  assert.deepEqual(titles(store), ["B", "A", "C"]);
+  assert.deepEqual(titles(store), ["B", "C", "A"]);
   store.update("b", { pin: false, activate: false });
-  assert.deepEqual(titles(store), ["A", "B", "C"]);
+  assert.deepEqual(titles(store), ["C", "B", "A"]);
   store.closeDb();
 });
 
@@ -136,6 +136,37 @@ test("pinned tabs follow strip_seq within the pinned group", () => {
   store.update("a", { pin: true, activate: false });
   assert.deepEqual(titles(store), ["A", "C", "B"]);
   store.closeDb();
+});
+
+test("new unpinned tabs open left of older ones, new pinned tabs right of older pins (#861)", () => {
+  const store = loaded();
+  store.upsert({ title: "P", html: "<p>p</p>", pin: true });
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "Q", html: "<p>q</p>", pin: true });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  assert.deepEqual(titles(store), ["P", "Q", "B", "A"]);
+  store.closeDb();
+});
+
+test("the strip order migration keeps the order unpinned tabs had before (#861)", () => {
+  const store = loaded();
+  store.upsert({ title: "P", html: "<p>p</p>", pin: true });
+  store.upsert({ title: "A", html: "<p>a</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.closeTab("b");
+  store.persist();
+  store.closeDb();
+  // A board from before #861 had these seqs and showed P, A, C.
+  const db = new DatabaseSync(path.join(dir, "scribe.sqlite"));
+  db.prepare("DELETE FROM meta WHERE k = 'strip_order'").run();
+  db.close();
+  const again = loaded();
+  assert.deepEqual(titles(again), ["P", "A", "C"]);
+  again.closeDb();
+  const third = loaded();
+  assert.deepEqual(titles(third), ["P", "A", "C"]);
+  third.closeDb();
 });
 
 test("persists strip order across reload", () => {
@@ -152,9 +183,9 @@ test("persists strip order across reload", () => {
 
 test("Ctrl+Z keeps strip_seq so the tab returns to its hole", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
-  store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.closeTab("b");
   assert.deepEqual(titles(store), ["A", "C"]);
   store.restoreLast();
@@ -164,9 +195,9 @@ test("Ctrl+Z keeps strip_seq so the tab returns to its hole", () => {
 
 test("closing the active tab focuses its right neighbor, or the left one when rightmost", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
-  store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.focus("b");
   const activeTitle = () => store.snapshot().tabs.find((tab) => tab.id === store.snapshot().activeId)?.title;
   store.closeTab("b");
@@ -176,21 +207,21 @@ test("closing the active tab focuses its right neighbor, or the left one when ri
   store.closeDb();
 });
 
-test("opening a closed page assigns a new seq and appends", () => {
+test("opening a closed page assigns a new seq and opens left of older unpinned tabs", () => {
   const store = loaded();
   store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
   store.closeTab("b");
   store.restore("b", { placement: "append", activate: false });
-  assert.deepEqual(titles(store), ["A", "C", "B"]);
+  assert.deepEqual(titles(store), ["B", "C", "A"]);
   store.closeDb();
 });
 
 test("focus does not change strip order", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
   store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.focus("a");
   assert.deepEqual(titles(store), ["A", "B"]);
   store.closeDb();
@@ -206,9 +237,9 @@ test("toMeta omits stripSeq", () => {
 
 test("swapStripSeq reorders two unpinned tabs and persists", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
-  store.upsert({ title: "B", html: "<p>b</p>" });
   store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.persist();
   store.swapStripSeq("a", "b");
   assert.deepEqual(titles(store), ["B", "A", "C"]);
@@ -254,10 +285,10 @@ test("swapStripSeq rejects a closed page", () => {
 
 test("reorderTab after persist walks adjacent swaps without unique collisions", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
-  store.upsert({ title: "B", html: "<p>b</p>" });
-  store.upsert({ title: "C", html: "<p>c</p>" });
   store.upsert({ title: "D", html: "<p>d</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.persist();
   store.reorderTab("a", null);
   assert.deepEqual(titles(store), ["B", "C", "D", "A"]);
@@ -288,10 +319,10 @@ test("persist remints duplicate strip_seq instead of failing", () => {
 
 test("reorderTab walks adjacent swaps to the end of the group", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
-  store.upsert({ title: "B", html: "<p>b</p>" });
-  store.upsert({ title: "C", html: "<p>c</p>" });
   store.upsert({ title: "D", html: "<p>d</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.reorderTab("a", null);
   assert.deepEqual(titles(store), ["B", "C", "D", "A"]);
   const seqs = store.listOpenTabs().map((tab) => tab.stripSeq);
@@ -308,16 +339,16 @@ test("reorderTab stays inside the pinned group", () => {
   store.update("a", { pin: true, activate: false });
   store.update("b", { pin: true, activate: false });
   store.reorderTab("a", null);
-  assert.deepEqual(titles(store), ["B", "A", "C", "D"]);
+  assert.deepEqual(titles(store), ["B", "A", "D", "C"]);
   store.closeDb();
 });
 
 test("reorderTab does not steal a closed tab's strip hole", () => {
   const store = loaded();
-  store.upsert({ title: "A", html: "<p>a</p>" });
-  store.upsert({ title: "B", html: "<p>b</p>" });
-  store.upsert({ title: "C", html: "<p>c</p>" });
   store.upsert({ title: "D", html: "<p>d</p>" });
+  store.upsert({ title: "C", html: "<p>c</p>" });
+  store.upsert({ title: "B", html: "<p>b</p>" });
+  store.upsert({ title: "A", html: "<p>a</p>" });
   store.closeTab("b");
   store.reorderTab("a", null);
   assert.deepEqual(titles(store), ["C", "D", "A"]);
@@ -337,7 +368,7 @@ test("pin does not steal a closed tab's strip_seq", () => {
   store.update("c", { pin: true, activate: false });
   store.update("c", { pin: false, activate: false });
   store.restoreLast();
-  assert.deepEqual(titles(store), ["A", "B", "C"]);
+  assert.deepEqual(titles(store), ["C", "B", "A"]);
   const seqs = store.listOpenTabs().map((tab) => tab.stripSeq);
   assert.equal(new Set(seqs).size, seqs.length);
   store.closeDb();
@@ -2182,7 +2213,7 @@ test("a New page draft stays out of the strip and the Library until it is promot
   const promoted = store.promoteDraft(draft.id, { activate: false });
   assert.equal(promoted?.id, draft.id);
   assert.equal(store.isDraft(draft.id), false);
-  assert.deepEqual(titles(store), ["A", "New page"]);
+  assert.deepEqual(titles(store), ["New page", "A"]);
   assert.equal(toMeta(store.get(draft.id)!).blank, true);
   store.persist();
   store.closeDb();

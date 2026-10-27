@@ -1708,12 +1708,14 @@
     }
   }
 
-  function revealTab(el, smooth) {
+  function revealTab(el, smooth, center = false) {
     const left = el.offsetLeft;
     const right = left + el.offsetWidth;
     const viewLeft = tabsEl.scrollLeft;
     const viewRight = viewLeft + tabsEl.clientWidth;
-    if (left < viewLeft) {
+    if (center && (left < viewLeft || right > viewRight)) {
+      scrollTabsTo(left - (tabsEl.clientWidth - el.offsetWidth) / 2, smooth);
+    } else if (left < viewLeft) {
       scrollTabsTo(left, smooth);
     } else if (right > viewRight) {
       scrollTabsTo(right - tabsEl.clientWidth, smooth);
@@ -1930,11 +1932,16 @@
     }
     const seen = new Set();
     const ordered = [];
+    const firstRender = tabEls.size === 0;
+    let fresh = null;
     for (const tab of state.tabs) {
       let el = tabEls.get(tab.id);
       if (!el) {
         el = createTabEl(tab);
         tabEls.set(tab.id, el);
+        if (!firstRender && (!fresh || tab.id === state.activeId)) {
+          fresh = el;
+        }
       } else {
         syncTabEl(el, tab);
       }
@@ -1958,7 +1965,12 @@
       before = el;
     }
     const active = tabsEl.querySelector(".tab.active");
-    if (active && !drag) {
+    if (fresh && !drag && (fresh === active || !active)) {
+      // A tab that just appeared: bring it to the middle of the strip if it is out of view (#861).
+      revealTab(fresh, smoothTabScroll(), true);
+      revealedTabId = state.activeId;
+      revealedTabShape = ordered.length + ":" + tabsEl.clientWidth;
+    } else if (active && !drag) {
       // Only when the active tab or the strip changed: any other render would pull a strip the user scrolled back.
       const shape = ordered.length + ":" + tabsEl.clientWidth;
       if (revealedTabId !== state.activeId || revealedTabShape !== shape) {

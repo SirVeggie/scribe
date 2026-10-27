@@ -69,7 +69,7 @@ test("switching swaps the strip and comes back with order, pins, and focus", () 
   const e = page(store, "E");
   assert.deepEqual(titles(store), ["E"]);
   store.switchSpace(main);
-  assert.deepEqual(titles(store), ["D", "A", "B", "C"]);
+  assert.deepEqual(titles(store), ["D", "C", "B", "A"]);
   assert.equal(store.get("d")?.pinned, true);
   assert.equal(store.getActiveId(), a);
   assert.ok(store.isClosed(e));
@@ -88,7 +88,7 @@ test("a page can be a tab in two spaces", () => {
   assert.deepEqual(titles(store), ["A"]);
   assert.equal(store.getActiveId(), a);
   store.switchSpace(other.id);
-  assert.deepEqual(titles(store), ["A", "B"]);
+  assert.deepEqual(titles(store), ["B", "A"]);
   store.closeDb();
 });
 

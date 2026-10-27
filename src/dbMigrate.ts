@@ -294,3 +294,34 @@ export function ensureBrowserColumn(db: DatabaseSync): void {
   const columns = db.prepare("PRAGMA table_info(tabs)").all() as Array<{ name: string }>;
   if (!columns.some(column => column.name === "browser")) db.exec("ALTER TABLE tabs ADD COLUMN browser TEXT");
 }
+
+/**
+ * New unpinned tabs now open at the left of their group (#861), so the strip sorts unpinned tabs
+ * by strip_seq descending. Reverse the open unpinned tabs' seqs once, so the order users had stays.
+ */
+export function ensureNewestFirstStrip(db: DatabaseSync): void {
+  const done = db.prepare("SELECT v FROM meta WHERE k = ?").get("strip_order") as { v: string } | undefined;
+  if (done?.v === "newest-first") {
+    return;
+  }
+  const rows = db
+    .prepare("SELECT id, strip_seq AS seq FROM tabs WHERE status = 'open' AND pinned = 0 ORDER BY strip_seq")
+    .all() as Array<{ id: string; seq: number }>;
+  const min = db.prepare("SELECT MIN(strip_seq) AS m FROM tabs").get() as { m: number | null } | undefined;
+  const park = db.prepare("UPDATE tabs SET strip_seq = ? WHERE id = ?");
+  db.exec("BEGIN");
+  try {
+    // Park first: strip_seq is UNIQUE, so the final values can't be written in place.
+    let temp = Math.min(-1, (typeof min?.m === "number" ? min.m : 0) - 1);
+    for (const row of rows) {
+      park.run(temp, row.id);
+      temp -= 1;
+    }
+    rows.forEach((row, i) => park.run(rows[rows.length - 1 - i].seq, row.id));
+    db.prepare("INSERT INTO meta (k, v) VALUES ('strip_order', 'newest-first') ON CONFLICT(k) DO UPDATE SET v = excluded.v").run();
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}

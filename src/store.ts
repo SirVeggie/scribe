@@ -2678,8 +2678,12 @@ export class BoardStore extends EventEmitter {
         this.tabs.set(tab.id, tab);
       }
       tab.pinned = entry.pinned;
-      tab.stripSeq = this.nextSeq();
       this.markDirty(tab.id);
+    }
+    // Unpinned tabs sort newest first, so number them right to left to keep the saved order.
+    const placed = [...want.filter((entry) => entry.pinned), ...want.filter((entry) => !entry.pinned).reverse()];
+    for (const entry of placed) {
+      this.tabs.get(entry.id)!.stripSeq = this.nextSeq();
     }
     this.rebuildOrder();
     this.activeId = target.activeId && this.tabs.has(target.activeId) ? target.activeId : (this.order[0] ?? null);
@@ -3339,9 +3343,10 @@ export class BoardStore extends EventEmitter {
     this.requireFolder(id);
     const pages = this.pagesIn(id);
     const opened: Tab[] = [];
-    for (const tab of pages) {
+    // New unpinned tabs open at the left of the group: restore right to left to keep Library order.
+    for (const tab of [...pages].reverse()) {
       if (this.closed.has(tab.id)) {
-        opened.push(this.restoreTab(tab, "append", false));
+        opened.unshift(this.restoreTab(tab, "append", false));
       }
     }
     const first = pages[0];
@@ -4173,7 +4178,8 @@ export class BoardStore extends EventEmitter {
         if (ap !== bp) {
           return ap - bp;
         }
-        return a.stripSeq - b.stripSeq;
+        // Pinned tabs append on the right; unpinned ones open at the left of their group (#861).
+        return a.pinned ? a.stripSeq - b.stripSeq : b.stripSeq - a.stripSeq;
       })
       .map((tab) => tab.id);
   }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureBrowserColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureBrowserColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, ensureNewestFirstStrip, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
 import { normalizeFolderAccess, normalizePageAccess } from "./pageAccess.js";
 import { normalizeEvents } from "./events.js";
@@ -316,6 +316,7 @@ export class BoardDb {
       ensureAccessColumns(db);
       ensureMadeInColumn(db);
       ensureFolderDiskColumn(db);
+      ensureNewestFirstStrip(db);
       db.prepare("INSERT INTO meta (k, v) VALUES (?, ?)").run("schema", String(SCHEMA_VERSION));
       const board = new BoardDb(db);
       if (fs.existsSync(jsonPath)) {
@@ -681,6 +682,7 @@ export class BoardDb {
       ensureAccessColumns(db);
       ensureMadeInColumn(db);
       ensureFolderDiskColumn(db);
+      ensureNewestFirstStrip(db);
       return new BoardDb(db);
     } catch (err) {
       try {

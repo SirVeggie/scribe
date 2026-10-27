@@ -1,5 +1,14 @@
 # Migrations
 
+## Newest-first unpinned strip and the `strip_order` meta key (#861, data change, schema still 3)
+
+- **What changed:** New unpinned tabs open at the left of the unpinned group (next to the pinned tabs) instead of the right end, so the strip sorts unpinned tabs by `strip_seq` descending. Pinned tabs still sort ascending (new pins on the right). Space switches and Open folder number tabs so their saved or Library order still reads left to right.
+- **Data:** `ensureNewestFirstStrip` reverses the `strip_seq` of open unpinned tabs once, so the order users had stays, then writes `strip_order = newest-first` to the meta table. Closed tabs keep their seqs: a Ctrl+Z restore of a tab closed before the update may land in a different spot.
+- **Why no version bump:** The migration runs on open and is guarded by the meta key. An older daemon on a migrated board shows the unpinned tabs reversed. `SCHEMA_VERSION` and `VERSION` stay as is.
+- **Where:** `src/dbMigrate.ts` (`ensureNewestFirstStrip`), `src/db.ts`, `src/store.ts` (`rebuildOrder`, `switchSpace`, `openFolder`), `public/app.js` (`renderTabs`, `revealTab`: a new tab out of view scrolls to the middle of the strip).
+- **How to verify:** `src/store.test.ts` (#861 tests), `src/spaces.test.ts`.
+- **When to remove:** Keep.
+
 ## Shared markdown renderer `/vendor/scribe-md.js` (#770, additive, no data change)
 
 - **What changed:** The markdown note, the kanban board (descriptions and comments) and the file page render markdown with one script, `templates/scribe-md.js`, served as `/vendor/scribe-md.js` on top of `/vendor/marked.js` and `/vendor/purify.js`. It replaces the note's and board's own parsers. Notes and cards keep their line-by-line reading (a single newline is a break, a plain line ends the list or quote above it, one `~` is not a strike) and show raw HTML as text; the file page keeps standard markdown with sanitized HTML.
