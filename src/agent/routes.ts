@@ -9,6 +9,7 @@ import { identify } from "../callers.js";
 import { toMeta } from "../types.js";
 import { browserHttpStatus, ensureBrowserView, browserControl, browserNavigate, browserUserTabs, browserFit, browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
 import { diffPatch, findRepo, workingChanges } from "./git.js";
+import { findSvnRoot, svnBase, svnRevision, svnWorkingChanges } from "./svn.js";
 import { searchWorkspaceFiles } from "./workspaceFiles.js";
 import { MAX_FILE_BYTES, MAX_FILES_PER_MESSAGE, MAX_IMAGE_BYTES, MAX_MESSAGE_BYTES, filePath, guessMimeType, isTextFile } from "./attachments.js";
 import type { ChatFile, ChatImage, ContextChip, ProviderId, Thread, ThreadScope } from "./types.js";
@@ -110,6 +111,24 @@ export function agentRouter(host: AgentHost): express.Router {
     const body = isPlainRecord(req.body) ? req.body : {};
     if (body.mode !== "diff" && body.mode !== "file") throw new Error("Choose diff or file.");
     if (typeof body.path !== "string" || !body.path) throw new Error("Choose a file to open.");
+    // An svn working copy's changes: the file against its checked-out base (BASE).
+    if (typeof body.svn === "string" && body.svn) {
+      const dir = body.svn;
+      if (!findSvnRoot(dir)) throw new Error("This folder is not an svn working copy.");
+      const launcher = await intellijLauncher(settings.launcher);
+      let args: string[];
+      if (body.mode === "file") args = await intellijFileArgs(dir, body.path, body.line, body.column);
+      else {
+        const rel = path.relative(dir, path.resolve(dir, body.path));
+        if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("Choose a file inside this workspace.");
+        const before = (await svnBase(dir, rel)) ?? Buffer.alloc(0);
+        let after = Buffer.alloc(0);
+        try { after = await fs.promises.readFile(path.join(dir, rel)); } catch { /* deleted */ }
+        args = await intellijExportDiff(body.path, before, after);
+      }
+      await launchIntelliJ(launcher, args);
+      return { ok: true };
+    }
     let repo = typeof body.repo === "string" ? await findRepo(body.repo) : null;
     let from = typeof body.from === "string" ? body.from : "";
     let to = typeof body.to === "string" ? body.to : "";
@@ -865,11 +884,26 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap(async (req) => {
       const cwd = typeof req.query.cwd === "string" ? req.query.cwd : "";
       const repo = await findRepo(cwd);
-      if (!repo) return { repo: null, files: [] };
+      if (!repo) {
+        // An svn working copy: its changes under the workspace folder, against BASE.
+        if (!findSvnRoot(cwd)) return { repo: null, vcs: null, files: [] };
+        const [changes, revision] = await Promise.all([svnWorkingChanges(cwd), svnRevision(cwd)]);
+        if (!changes) return { repo: null, vcs: "svn", svn: cwd, files: [], error: "Could not read the svn working copy. Is the svn command-line client installed?" };
+        return { repo: null, vcs: "svn", svn: cwd, revision, ...changes };
+      }
       // A worktree thread compares against the commit its branch started from, so its commits show too.
       const base = typeof req.query.base === "string" && /^[0-9a-f]{40,64}$/.test(req.query.base) ? req.query.base : undefined;
       const changes = await workingChanges(repo, base);
-      return changes ? { repo, ...changes } : { repo, files: [], error: "Could not read the working copy" };
+      return changes ? { repo, vcs: "git", ...changes } : { repo, vcs: "git", files: [], error: "Could not read the working copy" };
+    })
+  );
+
+  // Which version control a workspace folder uses, so the UI offers only what fits.
+  router.get(
+    "/vcs",
+    wrap(async (req) => {
+      const cwd = typeof req.query.cwd === "string" ? req.query.cwd : "";
+      return { vcs: (await findRepo(cwd)) ? "git" : findSvnRoot(cwd) ? "svn" : null };
     })
   );
 
@@ -988,7 +1022,7 @@ function shellOnly(req: express.Request, res: express.Response, next: express.Ne
   next();
 }
 
-async function listDir(dir: string): Promise<{ path: string; parent: string | null; dirs: Array<{ name: string; path: string }>; repo: string | null; exists: boolean }> {
+async function listDir(dir: string): Promise<{ path: string; parent: string | null; dirs: Array<{ name: string; path: string }>; repo: string | null; vcs: "git" | "svn" | null; exists: boolean }> {
   // "C:" alone means the current directory on C:, not its root.
   const abs = path.resolve(/^[A-Za-z]:$/.test(dir) ? `${dir}\\` : dir);
   let entries: fs.Dirent[] = [];
@@ -1004,7 +1038,8 @@ async function listDir(dir: string): Promise<{ path: string; parent: string | nu
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
     .slice(0, 500);
   const parent = path.dirname(abs);
-  return { path: abs, parent: parent === abs ? "" : parent, dirs, repo: exists ? await findRepo(abs) : null, exists };
+  const repo = exists ? await findRepo(abs) : null;
+  return { path: abs, parent: parent === abs ? "" : parent, dirs, repo, vcs: repo ? "git" : exists && findSvnRoot(abs) ? "svn" : null, exists };
 }
 
 function parseProvider(value: unknown): ProviderId {

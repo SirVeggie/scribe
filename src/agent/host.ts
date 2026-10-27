@@ -27,6 +27,7 @@ import { probeComponent } from "../screenshot.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { readSnapshot, removeThreadSnapshots, saveSnapshot } from "./fileSnapshots.js";
+import { findSvnRoot, svnEnd, svnStart, type SvnStart } from "./svn.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
 import { UsageWindowStarts, cleanWindowStarts, type WindowStartState } from "./usageWindowStarts.js";
 import { CodexProvider, fetchCodexPlanUsage } from "./providers/codex.js";
@@ -438,6 +439,8 @@ type RunState = {
   known: Map<string, string | null>;
   /** Without git: each changed file's content before its first and after its last edit this turn, by display path. */
   versions: Map<string, { before: string | null; after: string | null }>;
+  /** An svn working copy: what was already changed when the turn started, to find the turn's own edits (shell ones too). */
+  svn?: SvnStart;
   repo: string | null;
   cancelled: boolean;
   usage: Usage;
@@ -3800,6 +3803,7 @@ export class AgentHost {
     const worktree = openWorktree(thread);
     if (thread.mode !== "board" && thread.cwd && !setupError) {
       run.repo = await findRepo(thread.cwd);
+      if (!run.repo && findSvnRoot(thread.cwd)) run.svn = (await svnStart(thread.cwd)) ?? undefined;
       if (run.repo) {
         turn.repo = run.repo;
         turn.beforeTree = (await snapshotTree(run.repo)) ?? undefined;
@@ -3910,7 +3914,12 @@ export class AgentHost {
       }
       if (turn.beforeHead) turn.afterHead = (await headCommit(run.repo)) ?? undefined;
     } else {
-      turn.files = this.toolFiles(run);
+      const cwd = this.threads.get(threadId)?.cwd;
+      if (run.svn && cwd) {
+        // Edits from shell commands too: whatever svn sees changed since the turn started.
+        for (const [file, version] of await svnEnd(cwd, run.svn, run.versions)) run.versions.set(file, version);
+      }
+      turn.files = this.versionFiles(run);
       const snapshots = this.saveVersions(threadId, run);
       if (snapshots) turn.snapshots = snapshots;
     }
@@ -4010,7 +4019,7 @@ export class AgentHost {
    * Full before and after content of one file over a turn, or the whole thread, from the versions
    * saved without git. Null when none were saved for it.
    */
-  fileVersions(threadId: string, file: string, turnId?: string): { before: Buffer; after: Buffer } | null {
+  fileVersions(threadId: string, file: string, turnId?: string): { before: Buffer; after: Buffer; existed: { before: boolean; after: boolean } } | null {
     const running = this.runs.get(threadId);
     let before: string | null | undefined, after: string | null | undefined;
     for (const turn of this.loadTurns(threadId).filter((t) => !turnId || t.id === turnId)) {
@@ -4026,7 +4035,43 @@ export class AgentHost {
     }
     if (before === undefined || after === undefined) return null;
     const a = readSnapshot(threadId, before), b = readSnapshot(threadId, after);
-    return a && b ? { before: a, after: b } : null;
+    return a && b ? { before: a, after: b, existed: { before: before !== null, after: after !== null } } : null;
+  }
+
+  /** Files changed in the turn: from the saved versions where there are some, else from the tool calls. */
+  private versionFiles(run: RunState): FileChange[] {
+    const files: FileChange[] = [];
+    for (const [file, { before, after }] of run.versions) {
+      if (before === after) continue;
+      const diff = unifiedDiff(before, after, file);
+      files.push({ path: file, status: before === null ? "A" : after === null ? "D" : "M", added: diff.added, removed: diff.removed });
+    }
+    const seen = new Set(files.map((f) => f.path));
+    return [...files, ...this.toolFiles(run).filter((f) => !seen.has(f.path))];
+  }
+
+  /**
+   * Without git: each file's change over a turn or the whole thread, from the saved versions
+   * (first before, last after). Files without saved versions are not in it.
+   */
+  private snapshotChanges(threadId: string, turnId?: string): Map<string, { file: FileChange; patch: string }> {
+    const paths = new Set<string>();
+    const running = this.runs.get(threadId);
+    for (const turn of this.loadTurns(threadId).filter((t) => !turnId || t.id === turnId)) {
+      for (const file of Object.keys(turn.snapshots ?? {})) paths.add(file);
+      if (running?.turn.id === turn.id) for (const file of running.versions.keys()) paths.add(file);
+    }
+    const out = new Map<string, { file: FileChange; patch: string }>();
+    for (const file of paths) {
+      const versions = this.fileVersions(threadId, file, turnId);
+      if (!versions) continue;
+      const before = versions.existed.before ? versions.before.toString("utf8") : null;
+      const after = versions.existed.after ? versions.after.toString("utf8") : null;
+      if (before === after) continue;
+      const diff = unifiedDiff(before, after, file);
+      out.set(file, { file: { path: file, status: before === null ? "A" : after === null ? "D" : "M", added: diff.added, removed: diff.removed }, patch: diff.patch });
+    }
+    return out;
   }
 
   private toolFiles(run: RunState): FileChange[] {
@@ -5669,13 +5714,15 @@ export class AgentHost {
       return { repo: first.repo!, from: first.beforeTree, to: last.afterTree, files };
     }
     const byPath = new Map<string, FileChange>();
+    const saved = this.snapshotChanges(threadId, turnId);
     for (const turn of turns) {
       for (const file of turn.files ?? []) {
+        if (saved.has(file.path)) continue;
         const prev = byPath.get(file.path);
         byPath.set(file.path, { ...file, added: (prev?.added ?? 0) + file.added, removed: (prev?.removed ?? 0) + file.removed });
       }
     }
-    return { repo: null, files: [...byPath.values()] };
+    return { repo: null, files: [...[...saved.values()].map((c) => c.file), ...byPath.values()] };
   }
 
   /** Patch for a turn or thread; without git, the per-tool diffs recorded during the turns. */
@@ -5684,11 +5731,15 @@ export class AgentHost {
     if (info.repo && info.from && info.to) {
       return diffPatch(info.repo, info.from, info.to, file ? [file] : []);
     }
+    // Saved versions give each file's whole change; per-tool diffs cover the files without them.
+    const saved = this.snapshotChanges(threadId, turnId);
     const turnIds = new Set(this.loadTurns(threadId).filter((turn) => !turnId || turn.id === turnId).map((turn) => turn.id));
-    const patches = this.loadItems(threadId)
+    const patches = [...saved.values()].filter((c) => !file || c.file.path === file).map((c) => c.patch);
+    patches.push(...this.loadItems(threadId)
       .filter((item) => item.kind === "tool" && item.turnId && turnIds.has(item.turnId) && item.diff)
+      .filter((item) => item.kind === "tool" && !(item.files ?? []).some((f) => saved.has(f.path)))
       .filter((item) => !file || (item.kind === "tool" && item.files?.some((f) => f.path === file)))
-      .map((item) => (item.kind === "tool" ? item.diff ?? "" : ""));
+      .map((item) => (item.kind === "tool" ? item.diff ?? "" : "")));
     return { patch: patches.join(""), truncated: false };
   }
 
@@ -5731,7 +5782,7 @@ export class AgentHost {
     if (!opts.keepChanges) {
       // Newest first, so each revert applies on top of the state the next one left.
       for (const turn of [...dropped].reverse()) {
-        if (turn.reverted || !turn.files?.length || !turn.beforeTree) continue;
+        if (turn.reverted || !turn.files?.length || !(turn.beforeTree || turn.snapshots)) continue;
         const result = await this.revertTurn(threadId, turn.id);
         if (!result.ok) throw new Error(`Could not undo the file changes of turn ${turn.seq}: ${result.error ?? "unknown error"}. Turns after it were undone; nothing was removed from the chat.`);
       }
@@ -6040,10 +6091,49 @@ export class AgentHost {
     return forkBlock(fork.title, this.providers[fork.provider].label, material);
   }
 
+  /** Without git: put back each file's saved version from before the turn, if none changed since. */
+  private revertVersions(threadId: string, turn: Turn): { ok: boolean; error?: string } {
+    const cwd = this.threads.get(threadId)?.cwd;
+    const saved = turn.snapshots ?? {};
+    if (!cwd) return { ok: false, error: "This thread has no workspace folder." };
+    const missing = (turn.files ?? []).filter((f) => !saved[f.path]).map((f) => f.path);
+    if (missing.length) return { ok: false, error: `No saved versions for ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "…" : ""}, so this turn cannot be reverted automatically.` };
+    const plan: Array<{ abs: string; before: Buffer | null }> = [];
+    for (const [file, version] of Object.entries(saved)) {
+      const abs = path.resolve(cwd, file);
+      const after = readSnapshot(threadId, version.after);
+      const before = version.before === null ? null : readSnapshot(threadId, version.before);
+      if (!after || (version.before !== null && !before)) return { ok: false, error: `The saved versions of ${file} are gone.` };
+      let current: Buffer | null = null;
+      try { current = fs.readFileSync(abs); } catch { /* deleted */ }
+      const same = version.after === null ? current === null : current !== null && current.equals(after);
+      if (!same) return { ok: false, error: `${file} changed after this turn, so the revert does not apply cleanly.` };
+      plan.push({ abs, before });
+    }
+    try {
+      for (const { abs, before } of plan) {
+        if (before === null) fs.rmSync(abs, { force: true });
+        else {
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, before);
+        }
+      }
+    } catch (err) {
+      return { ok: false, error: `Reverting failed part way: ${(err as Error).message}` };
+    }
+    turn.reverted = true;
+    this.saveTurn(turn);
+    this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: `Reverted the changes from turn ${turn.seq}.` });
+    this.flushNow();
+    this.emitThread(threadId);
+    return { ok: true };
+  }
+
   async revertTurn(threadId: string, turnId: string): Promise<{ ok: boolean; error?: string }> {
     if (this.runs.has(threadId)) return { ok: false, error: "Stop the running turn first." };
     const turn = this.loadTurns(threadId).find((t) => t.id === turnId);
     if (!turn) return { ok: false, error: "Turn not found" };
+    if (!turn.repo && turn.snapshots) return this.revertVersions(threadId, turn);
     if (!turn.repo || !turn.beforeTree || !turn.afterTree) return { ok: false, error: "This turn has no git snapshot, so it cannot be reverted automatically." };
     // In a worktree the agent commits as it goes: move the branch back too, but only if nothing was committed after this turn.
     const moveHead = turn.beforeHead && turn.afterHead && turn.beforeHead !== turn.afterHead;

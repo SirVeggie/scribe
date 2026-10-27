@@ -2046,7 +2046,7 @@
             crumbs.append(button("↑", "ag-btn ghost small", () => load(data.parent), "Up", false));
           }
           crumbs.append(el("span", "ag-ws-cur", data.path || "This PC"));
-          if (data.repo) crumbs.append(el("span", "ag-tag", "git"));
+          if (data.vcs || data.repo) crumbs.append(el("span", "ag-tag", data.vcs || "git"));
           if (saving) {
             saveDir = data.exists === false ? "" : data.path || "";
             input.setCustomValidity("");
@@ -2827,6 +2827,22 @@
 
   /* ---------- diff viewer ---------- */
 
+  /** Which version control a workspace folder uses ("git", "svn" or null), asked once a minute at most. */
+  const vcsCache = new Map();
+  function vcsOf(cwd) {
+    if (!cwd) return Promise.resolve(null);
+    const hit = vcsCache.get(cwd);
+    if (hit && Date.now() - hit.at < 60000) return hit.value;
+    const entry = { at: Date.now(), known: hit?.known, value: null };
+    entry.value = api("GET", `/vcs?cwd=${encodeURIComponent(cwd)}`).then((r) => r.vcs || null, () => null).then((vcs) => (entry.known = vcs));
+    vcsCache.set(cwd, entry);
+    return entry.value;
+  }
+  /** The cached answer, or undefined while it is not known yet. */
+  function vcsKnown(cwd) {
+    return vcsCache.get(cwd)?.known;
+  }
+
   /** source: { kind: "turn"|"thread"|"git", threadId?, turnId?, cwd?, path? } */
   async function openDiff(source) {
     const { panel, close } = modal("ag-diffview");
@@ -2846,8 +2862,14 @@
     const kinds = [];
     if (source.turnId) kinds.push({ id: "turn", label: "This turn" });
     if (source.threadId) kinds.push({ id: "thread", label: "Thread" });
-    if (cwd) kinds.push({ id: "git", label: openWorktree(thread) && !source.cwd ? "Branch" : "Git working tree" });
-    let current = source.kind;
+    // The working copy tab follows the workspace's version control: git, svn, or none.
+    const vcs = openWorktree(thread) && !source.cwd ? "git" : await vcsOf(cwd);
+    if (cwd && vcs) kinds.push({ id: "git", label: openWorktree(thread) && !source.cwd ? "Branch" : vcs === "svn" ? "SVN working copy" : "Git working tree" });
+    let current = kinds.some((k) => k.id === source.kind) ? source.kind : kinds[0]?.id;
+    if (!current) {
+      side.replaceChildren(el("div", "ag-muted ag-pad", "Not a git or svn working copy"));
+      return;
+    }
 
     const renderTabs = () => {
       tabs.replaceChildren();
@@ -2875,19 +2897,31 @@
           const wt = openWorktree(thread);
           const base = wt && !source.cwd ? `&base=${wt.baseCommit}` : "";
           const info = await api("GET", `/git?cwd=${encodeURIComponent(cwd)}${base}`);
-          if (!info.repo) {
-            side.replaceChildren(el("div", "ag-muted ag-pad", "Not a git repository"));
+          if (info.vcs === "svn") {
+            if (info.error) {
+              side.replaceChildren(el("div", "ag-muted ag-pad", info.error));
+              return;
+            }
+            title.textContent = `Changes · ${R.basename(info.svn)}${info.revision ? ` · r${info.revision}` : ""}`;
+            files = info.files || [];
+            patch = info.patch || "";
+            truncated = !!info.truncated;
+            intellijSource = { svn: info.svn };
+            actions.append(button("Refresh", "ag-btn small", () => load()));
+          } else if (!info.repo) {
+            side.replaceChildren(el("div", "ag-muted ag-pad", "Not a git or svn working copy"));
             return;
+          } else {
+            title.textContent = `Changes · ${info.branch || R.basename(info.repo)}${base ? ` since ${wt.base || "it started"}` : ""}`;
+            files = info.files || [];
+            intellijSource = { repo: info.repo, from: info.head, to: info.tree };
+            if (files.length) {
+              const p = await api("GET", `/git/patch?repo=${encodeURIComponent(info.repo)}&from=${info.head}&to=${info.tree}`);
+              patch = p.patch;
+              truncated = p.truncated;
+            }
+            actions.append(button("Refresh", "ag-btn small", () => load()));
           }
-          title.textContent = `Changes · ${info.branch || R.basename(info.repo)}${base ? ` since ${wt.base || "it started"}` : ""}`;
-          files = info.files || [];
-          intellijSource = { repo: info.repo, from: info.head, to: info.tree };
-          if (files.length) {
-            const p = await api("GET", `/git/patch?repo=${encodeURIComponent(info.repo)}&from=${info.head}&to=${info.tree}`);
-            patch = p.patch;
-            truncated = p.truncated;
-          }
-          actions.append(button("Refresh", "ag-btn small", () => load()));
         } else {
           const turnQ = current === "turn" ? `?turn=${encodeURIComponent(source.turnId)}` : "";
           const info = await api("GET", `/threads/${encodeURIComponent(source.threadId)}/changes${turnQ}`);
@@ -2899,7 +2933,7 @@
           title.textContent = current === "turn" ? "Changes in this turn" : `Changes in “${thread?.title || "thread"}”`;
           if (current === "turn") {
             const turn = S.details.get(source.threadId)?.turns.get(source.turnId);
-            if (turn?.beforeTree && !turn.reverted) {
+            if ((turn?.beforeTree || turn?.snapshots) && !turn.reverted) {
               actions.append(
                 button("Revert turn", "ag-btn small danger", async () => {
                   if (!(await app().confirm("Undo this turn's file changes in the working copy?", "Revert"))) return;
@@ -3524,7 +3558,14 @@
       const acts = el("div", "ag-thead-actions");
       if (!helper && s.cwd && s.mode !== "board") {
         const onBranch = openWorktree(t);
-        acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, ...(onBranch ? {} : { cwd: s.cwd }) }), onBranch ? `Changes on ${onBranch.branch}` : "Git working tree changes"));
+        // Shown for git or svn working copies only, named after the one in use.
+        const vcs = onBranch ? "git" : vcsKnown(s.cwd);
+        if (vcs === undefined) {
+          const cwd = s.cwd;
+          vcsOf(cwd).then(() => { if (this.settings()?.cwd === cwd) this.renderHeader(); });
+        } else if (vcs) {
+          acts.append(button(icon("git"), "ag-icon-btn", () => openDiff({ kind: "git", threadId: t?.id, ...(onBranch ? {} : { cwd: s.cwd }) }), onBranch ? `Changes on ${onBranch.branch}` : vcs === "svn" ? "SVN working copy changes" : "Git working tree changes"));
+        }
       }
       if (t) {
         const use = browserBtnState(S.browsers.get(t.id));
