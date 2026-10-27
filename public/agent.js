@@ -1979,14 +1979,18 @@
   /* ---------- workspace picker ---------- */
 
   /**
-   * opts.files: "open" lists files too and picks one; "save" picks where to save (input holds the
-   * full path, and browsing keeps its file name; opts.name is the fallback). opts.action names the button.
+   * opts.files: "open" lists files too and picks one; "save" keeps the filename in the input and
+   * the destination in the folder browser. initial is a full file path; opts.name is the fallback.
    */
   /** opts.remember: { label, checked } adds a checkbox under the path; its state is written back to it. */
   function pickWorkspace(initial, opts = {}) {
     const files = opts.files === "open" || opts.files === "save" ? opts.files : "";
     const sep = (dir) => (/\\/.test(dir) || /^[A-Za-z]:/.test(dir) ? "\\" : "/");
     const joinPath = (dir, name) => (dir ? dir.replace(/[\\/]+$/, "") + sep(dir) + name : name);
+    const saving = files === "save";
+    const initialPath = initial || "";
+    const split = Math.max(initialPath.lastIndexOf("/"), initialPath.lastIndexOf("\\"));
+    let saveDir = split >= 0 ? initialPath.slice(0, split + 1) : prefs().recentWorkspaces[0] || "";
     return new Promise((resolve) => {
       const { panel, close: closeModal } = modal("ag-ws");
       let done = false;
@@ -2001,9 +2005,20 @@
       const row = el("div", "ag-ws-row");
       const input = el("input", "ag-input");
       input.type = "text";
-      input.placeholder = files ? "C:\\path\\to\\file.txt" : "C:\\path\\to\\project";
-      input.value = initial || prefs().recentWorkspaces[0] || "";
-      const use = button(opts.action || "Use folder", "ag-btn primary", () => finish(input.value.trim() || null));
+      input.placeholder = saving ? "File name" : files ? "C:\\path\\to\\file.txt" : "C:\\path\\to\\project";
+      input.value = saving ? initialPath.slice(split + 1) || opts.name || "untitled.txt" : initial || prefs().recentWorkspaces[0] || "";
+      if (saving) input.setAttribute("aria-label", "File name");
+      const submit = () => {
+        const value = input.value.trim();
+        if (saving && (!saveDir || !value || /[\\/]/.test(value) || value === "." || value === "..")) {
+          input.setCustomValidity(!saveDir ? "Choose a folder first." : "Enter a file name without a folder path.");
+          input.reportValidity();
+          return;
+        }
+        finish(saving ? joinPath(saveDir, value) : value || null);
+      };
+      const use = button(opts.action || "Use folder", "ag-btn primary", submit);
+      input.addEventListener("input", () => input.setCustomValidity(""));
       row.append(input, use);
       const used = el("div", "ag-ws-used");
       const withThreads = opts.used === false || files ? [] : threadWorkspaces();
@@ -2032,7 +2047,10 @@
           }
           crumbs.append(el("span", "ag-ws-cur", data.path || "This PC"));
           if (data.repo) crumbs.append(el("span", "ag-tag", "git"));
-          if (data.path) input.value = files === "save" ? joinPath(data.path, R.basename(input.value) || opts.name || "untitled.txt") : data.path;
+          if (saving) {
+            saveDir = data.exists === false ? "" : data.path || "";
+            input.setCustomValidity("");
+          } else if (data.path) input.value = data.path;
           list.replaceChildren();
           for (const d of data.dirs) {
             const item = button(d.name, "ag-ws-dir", () => load(d.path));
@@ -2042,7 +2060,7 @@
           }
           for (const f of files ? data.files || [] : []) {
             const item = button(f.name, "ag-ws-dir ag-ws-file", () => {
-              input.value = f.path;
+              input.value = saving ? f.name : f.path;
               for (const other of list.querySelectorAll(".ag-ws-file.is-picked")) other.classList.remove("is-picked");
               item.classList.add("is-picked");
             });
@@ -2056,7 +2074,7 @@
         }
       };
       input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") finish(input.value.trim() || null);
+        if (event.key === "Enter") submit();
         if (event.key === "Escape") {
           // Handled here, so the chat's own Escape does not close what is under the picker too.
           event.preventDefault();
@@ -2064,8 +2082,11 @@
         }
       });
       const actions = el("div", "ag-modal-actions");
-      // With files, a file's path browses its folder (the daemon lists the parent).
-      actions.append(button("Browse here", "ag-btn ghost", () => load(input.value.trim())), el("span", "ag-grow"));
+      actions.append(button(saving ? "Choose folder" : "Browse here", "ag-btn ghost", async () => {
+        if (!saving) return load(input.value.trim());
+        const dir = await pickWorkspace(saveDir, { title: "Save in folder", hint: "", action: "Use folder", used: false });
+        if (dir) await load(dir);
+      }), el("span", "ag-grow"));
       // opts.clear: a button that resolves "" (no folder), apart from Cancel's null.
       if (opts.clear) actions.append(button(opts.clear, "ag-btn", () => finish("")));
       actions.append(button("Cancel", "ag-btn", () => finish(null)));
@@ -2081,7 +2102,7 @@
       }
       if (used.childElementCount) panel.append(used);
       panel.append(browser, actions);
-      load(input.value.trim());
+      load(saving ? saveDir : input.value.trim());
       setTimeout(() => input.focus(), 0);
       // Esc from the modal stack resolves as cancel.
       modalStack[modalStack.length - 1] = () => finish(null);
