@@ -36,6 +36,13 @@ test("new composers save live, reuse pending creation, and clean up cleared or m
       if (!path.startsWith("/api/")) return route.fulfill({ contentType: "text/html", body:
         '<div class="workspace"><main></main></div><aside id="agent-pane"><div class="agent-inner"></div><div class="agent-resizer"></div></aside>' });
       const body = request.postDataJSON() || {};
+      const interaction = /^\/api\/agent\/threads\/([^/]+)\/interact$/.exec(path);
+      if (interaction) {
+        const thread = threads.get(interaction[1]);
+        thread.interactedAt = Date.now();
+        await emit({ type: "agent_thread", thread });
+        return route.fulfill({ json: {} });
+      }
       if (path === "/api/agent/threads" && request.method() === "POST") {
         const id = `draft-${++creates}`;
         if (hold) await new Promise<void>(resolve => { release = resolve; creationStarted!(); });
@@ -68,7 +75,7 @@ test("new composers save live, reuse pending creation, and clean up cleared or m
     await page.goto("http://chat.test/");
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
     await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/,
-      "  window.draftTest = { S, sidebar, dock, full, draftWrites };"));
+      "  window.draftTest = { S, sidebar, dock, full, draftWrites, recentThreads };"));
     await page.evaluate(() => {
       const { S, sidebar, dock, full } = (window as any).draftTest;
       S.config.providers = [{ id: "codex", label: "Codex", available: true }];
@@ -85,6 +92,8 @@ test("new composers save live, reuse pending creation, and clean up cleared or m
     await page.evaluate(() => (window as any).draftTest.sidebar.view.setPlan(true));
     await input.fill("First thought");
     await page.waitForFunction(() => (window as any).draftTest.sidebar.view.threadId);
+    await page.waitForFunction(() => (window as any).draftTest.S.threads.get("draft-1")?.interactedAt);
+    assert.equal(await page.evaluate(() => (window as any).draftTest.recentThreads()[0].id), "draft-1");
     assert.equal(await page.evaluate(() => (window as any).draftTest.sidebar.view.planOn()), true);
     await input.fill("Revised thought");
     await settled();

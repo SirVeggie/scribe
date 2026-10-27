@@ -83,6 +83,17 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     ]);
     assert.ok(interactions.some(url => url.endsWith("/t4/interact")));
     assert.equal(await page.evaluate(() => (window as any).recentTest.recentThreads()[0].id), "t4");
+    // Previously saved drafts count too, even without an interaction timestamp.
+    await page.evaluate(() => {
+      const { S } = (window as any).recentTest;
+      const base = { ...S.threads.get("worker"), fromPage: false, stats: { turns: 0 }, draft: { text: "Unsent idea" } };
+      S.threads.set("saved-draft", { ...base, id: "saved-draft", updatedAt: Date.now() - 500 });
+      S.threads.set("old-draft", { ...base, id: "old-draft", updatedAt: Date.now() - 8 * 3600000 });
+      S.threads.set("empty-draft", { ...base, id: "empty-draft", draft: { text: " " }, updatedAt: Date.now() });
+      (document.querySelector("#full-list") as any).agFill();
+    });
+    assert.deepEqual(await full.locator(".ag-list-recent .ag-row").evaluateAll(rows => rows.map(row => (row as HTMLElement).dataset.id)), ["t4", "saved-draft", "t0", "t1", "t2"]);
+    assert.equal(await full.locator('.ag-list-recent [data-id="saved-draft"] .ag-row-title').textContent(), "Unsent idea");
     // Let the clock reach the exact cutoff: entries expire without another thread update.
     await page.clock.fastForward(8 * 3600000);
     assert.equal(await full.locator(".ag-list-recent .ag-row").count(), 0);

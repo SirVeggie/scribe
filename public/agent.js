@@ -1035,6 +1035,7 @@
     if (was === (draft && JSON.stringify(draft))) return;
     const unsentOnly = Boolean(t.draft) && !draft && t.stats.turns === 0 && !t.queued && t.status === "idle";
     t.draft = draft;
+    if (draft) interactWithThread(t.id);
     // Coalesce edits that overtake a request, and keep the final delete after any earlier save.
     let write = draftWrites.get(t.id);
     if (!write) {
@@ -1074,6 +1075,7 @@
         remember: false,
       });
       S.threads.set(thread.id, thread);
+      interactWithThread(thread.id);
       S.composers.set(thread.id, content);
       // The floating chat comes back to it on that page, unless it has moved on to another thread there.
       if (tab && !S.dockPicks.get(tab)?.id && !(dock.view.draft && dock.view.draftTab === tab)) setDockPick(tab, thread.id);
@@ -7963,10 +7965,16 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   const RECENT_THREAD_MS = 8 * 60 * 60 * 1000;
   const RECENT_TIP = "Up to five threads you interacted with in the last eight hours, from every scope. This switch applies only to this list.";
 
+  function recentInteractionAt(t) {
+    // Drafts saved before interaction tracking already record the user's intent.
+    const savedDraft = t.draft?.text?.trim() || t.draft?.context?.length;
+    return t.interactedAt || (savedDraft ? t.updatedAt || t.createdAt : 0);
+  }
+
   function recentThreads(now = Date.now()) {
     return [...S.threads.values()]
-      .filter((t) => !t.archived && t.interactedAt && now - t.interactedAt < RECENT_THREAD_MS)
-      .sort((a, b) => b.interactedAt - a.interactedAt)
+      .filter((t) => !t.archived && recentInteractionAt(t) && now - recentInteractionAt(t) < RECENT_THREAD_MS)
+      .sort((a, b) => recentInteractionAt(b) - recentInteractionAt(a))
       .slice(0, 5);
   }
 
@@ -8088,7 +8096,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       rowGlow.watch(container, list);
       clearTimeout(container.agRecentTimer);
       if (container.agRecent) {
-        const expiry = Math.min(...recentThreads().map((t) => t.interactedAt + RECENT_THREAD_MS));
+        const expiry = Math.min(...recentThreads().map((t) => recentInteractionAt(t) + RECENT_THREAD_MS));
         if (Number.isFinite(expiry)) container.agRecentTimer = setTimeout(() => {
           if (container.isConnected) container.agFill();
         }, Math.max(1, expiry - Date.now()));
@@ -8100,7 +8108,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const q = S.search.trim().toLowerCase();
       if (container.agRecent) {
         let recent = recentThreads();
-        if (q) recent = rankedThreads(recent, q).map((row) => row.thread).sort((a, b) => b.interactedAt - a.interactedAt);
+        if (q) recent = rankedThreads(recent, q).map((row) => row.thread).sort((a, b) => recentInteractionAt(b) - recentInteractionAt(a));
         const head = el("div", "ag-list-group");
         head.dataset.key = "recent-heading";
         head.append(el("span", "ag-list-group-kind", "Recent"));
@@ -8894,7 +8902,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const entries = recent.map((t) => ({ label: t.title, detail: `${modelLabel(t.provider, t.model)} · ${scopeLabel(t.scope).text}`, lead: lead(t), checked: t.id === currentId, run: () => this.pick(t.id) }));
         items.splice(0, items.length, ordinary[0], ...(this.recent ? [{ header: "Recent" }, ...(entries.length ? entries : [{ label: "No threads interacted with in the last eight hours", disabled: true }])] : []), ...ordinary.slice(1));
         clearTimeout(expiryTimer);
-        const expiry = Math.min(...recent.map((t) => t.interactedAt + RECENT_THREAD_MS));
+        const expiry = Math.min(...recent.map((t) => recentInteractionAt(t) + RECENT_THREAD_MS));
         if (Number.isFinite(expiry)) expiryTimer = setTimeout(() => { fillRecent(); refreshRecent(); }, Math.max(1, expiry - Date.now()));
       };
       fillRecent();
