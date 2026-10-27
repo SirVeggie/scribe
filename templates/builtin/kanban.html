@@ -6111,7 +6111,8 @@
   function placeWorkersPanel() {
     var r = workersBtn.getBoundingClientRect();
     workersPop.style.top = r.bottom + 8 + "px";
-    workersPop.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+    var width = workersPop.getBoundingClientRect().width;
+    workersPop.style.left = clamp(r.right - width, 8, Math.max(8, window.innerWidth - width - 8)) + "px";
     workersPop.style.maxHeight = Math.max(200, window.innerHeight - r.bottom - 20) + "px";
   }
   function renderWorkersPanel() {
