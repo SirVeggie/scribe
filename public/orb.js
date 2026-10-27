@@ -175,9 +175,9 @@ else if(u_bleedmode<8.5){float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
 // Motes cross the surface up and to the right at about 55 degrees, each on a fresh lane per pass.
 vec2 dir=vec2(.574,.819),side=vec2(-.819,.574),c=vec2(3.8,.5*(yb+yt));float w=10.6,h=yt-yb;
 float W=w*.819+h*.574,L=w*.574+h*.819+3.;
-// Twelve more motes fade in while working.
-for(int i=0;i<40;i++){float fi=float(i);float on=fi<28.?1.:u_work;if(on<.01)break;float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
-vec2 p=c+side*((h1(fi*7.3+seed*13.1)-.5)*W+.15*sin(t*.7+fi))+dir*(phase-.5)*L;
+// 28 more motes fade in while working; lanes lean left so the left side is denser.
+for(int i=0;i<56;i++){float fi=float(i);float on=fi<28.?1.:u_work;if(on<.01)break;float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
+vec2 p=c+side*((pow(h1(fi*7.3+seed*13.1),.6)-.5)*W+.15*sin(t*.7+fi))+dir*(phase-.5)*L;
 float d=length(uv-p);
 a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65*on;}}
 else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;float hb=uv.y-yb;
