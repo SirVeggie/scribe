@@ -4049,6 +4049,56 @@ html.tight-small .agent-full {
   pointer-events: none;
 }
 
+/* In a split, the floating chat sits over the focused pane, whose page it is about, and moves with the focus.
+   views.js marks that pane on main (data-focus-pane); --split-1 to --split-3 are the pane borders. */
+main.has-split .agent-dock {
+  --dock-from: 0;
+  --dock-to: var(--split-1);
+  left: calc((var(--dock-from) + var(--dock-to)) * 50%);
+  width: min(680px, calc((var(--dock-to) - var(--dock-from)) * 100% - 32px));
+  transition:
+    left var(--dur-slow) var(--ease),
+    width var(--dur-slow) var(--ease),
+    top var(--dur-slow) var(--ease),
+    bottom var(--dur-slow) var(--ease);
+}
+
+main.has-split[data-focus-pane="b"] .agent-dock {
+  --dock-from: var(--split-1);
+  --dock-to: var(--split-2);
+}
+
+main.has-split[data-focus-pane="c"] .agent-dock {
+  --dock-from: var(--split-2);
+  --dock-to: var(--split-3);
+}
+
+main.has-split[data-focus-pane="d"] .agent-dock {
+  --dock-from: var(--split-3);
+  --dock-to: 1;
+}
+
+/* Stacked panes: at the bottom of the focused pane, and no taller than it. */
+main.has-split.split-col .agent-dock {
+  left: 50%;
+  width: min(680px, calc(100% - 40px));
+  top: calc(var(--dock-from) * 100% + var(--view-head) + 8px);
+  bottom: calc((1 - var(--dock-to)) * 100% + 12px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+main.has-split.split-col .dock-panel {
+  max-height: 100%;
+  min-height: 0;
+}
+
+/* Dragging a divider: keep up with the pointer. */
+body.resizing-split main.has-split .agent-dock {
+  transition: none;
+}
+
 .dock-panel {
   pointer-events: auto;
   display: flex;

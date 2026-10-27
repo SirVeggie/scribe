@@ -872,6 +872,9 @@ window.createViews = function createViews(host) {
     mainEl.classList.toggle("has-split", Boolean(split));
     mainEl.classList.toggle("split-col", split?.dir === "col");
     mainEl.classList.toggle("has-peek", Boolean(visibleTop));
+    // The floating chat sits over the focused pane (agent.css).
+    if (split) mainEl.dataset.focusPane = PANES[split.focus];
+    else delete mainEl.dataset.focusPane;
     if (split) {
       applyStops(split);
     }
