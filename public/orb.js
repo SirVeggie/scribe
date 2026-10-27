@@ -12,7 +12,7 @@
   // Shape animation speed while idle and working; others use [.6, 2].
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   // The same for surface effects.
-  const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1] };
+  const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes" };
   const ICON_PALETTES = {
@@ -175,7 +175,7 @@ else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
 // Motes cross the surface up and to the right at about 55 degrees, each on a fresh lane per pass.
 vec2 dir=vec2(.574,.819),side=vec2(-.819,.574),c=vec2(3.8,.5*(yb+yt));float w=10.6,h=yt-yb;
 float W=w*.819+h*.574,L=w*.574+h*.819+3.;
-for(int i=0;i<16;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
+for(int i=0;i<28;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
 vec2 p=c+side*((h1(fi*7.3+seed*13.1)-.5)*W+.15*sin(t*.7+fi))+dir*(phase-.5)*L;
 float d=length(uv-p);
 a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65;}}
