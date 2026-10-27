@@ -16,7 +16,7 @@
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1], glow: [.6, 1.1] };
-  const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch", echo: "Echo" };
+  const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
   // CSS backgrounds for the composer, drawn behind the chat surface effect.
   const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", deepenColor: "Colour fade", deepenColorWork: "Colour fade while working", tint: "Palette wash", rim: "Glowing rim while working" };
@@ -165,16 +165,12 @@ float hx=bevel(uv-ex)-bevel(uv+ex),hy=bevel(uv-ey)-bevel(uv+ey);
 vec3 nrm=normalize(vec3(hx,hy,.35));
 vec3 L=normalize(mix(vec3(-.7,.7,.8),vec3(cos(t*1.2),sin(t*1.2),.8),u_work));float lit=clamp(dot(nrm,L),0.,1.);
 c=mix(u_i0*.45,u_i1,lit)+vec3(pow(lit,24.)*.5);a=inside;}
-else if(u_symbol<5.5){
+else {
 // Rows slip sideways with a colour split: now and then when idle, often while working.
 float slot=floor(t*7.);float g=step(mix(.93,.6,u_work),h1(slot));
 float off=(h1(floor(uv.y*7.)+slot*3.1)-.5)*.3*g;float sp=.06*g;
 float aR=aaIn(sym((uv+vec2(off+sp,0.))/u_iconSize)*u_iconSize),aG=aaIn(sym((uv+vec2(off,0.))/u_iconSize)*u_iconSize),aB=aaIn(sym((uv+vec2(off-sp,0.))/u_iconSize)*u_iconSize);
 a=max(aG,max(aR,aB));c=mix(u_i0,u_i1,.7)*vec3(aR,aG,aB)/max(a,.001);}
-else {
-// A solid icon with a soft halo; while working, copies of its outline ripple outward and fade.
-float ring=0.;for(int i=0;i<3;i++){float ph=fract(t*.3+float(i)/3.);ring+=exp(-abs(d-ph*.45)*36.)*(1.-ph)*smoothstep(0.,.15,ph);}
-a=inside*.95+exp(-max(d,0.)*16.)*.22+ring*.7*u_work;c=mix(u_i0,u_i1,inside*.6+.3);}
 return pm(c,clamp(a,0.,1.)*(1.-smoothstep(1.,1.2,length(uv))));
 }
 vec4 surface(vec2 uv,float t){
