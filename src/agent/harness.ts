@@ -8,7 +8,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { dataDir } from "../config.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
 import { mcpCall, toolUses, type ThreadStats, type ToolUse } from "./threadStats.js";
-import type { Item, ProviderId, Thread, ThreadMode, Turn, Usage } from "./types.js";
+import type { Item, ProviderId, Thread, ThreadMode, Turn, TurnLatency, Usage } from "./types.js";
+import { summarize, type LatencySummary } from "./latency.js";
 import { threadToken } from "../callers.js";
 
 export { mcpCall };
@@ -264,6 +265,8 @@ export function promptTokens(provider: ProviderId, usage: Usage | undefined): nu
 
 type CostTotals = { costUsd: number; estimatedCostUsd?: number; reportedCostUsd?: number; pricedTurns?: number; unpricedTurns?: number; costPartial?: boolean };
 export type TokenTotals = CostTotals & { turns: number; prompt: number; cached: number; output: number; reasoning: number; modelCalls?: number; modelCallTurns?: number };
+/** Medians and p90s over finished turns with timing (latency.ts), plus where their time went in total. */
+export type LatencyStats = { first?: LatencySummary; total: LatencySummary; model: LatencySummary; modelMs: number; toolMs: number; waitMs: number };
 export type ToolRow = { name: string; kind: string; calls: number; errors: number; outputTokens: number; ms: number };
 
 export type HarnessStats = {
@@ -272,8 +275,8 @@ export type HarnessStats = {
   threads: number;
   totals: TokenTotals & { toolCalls: number; toolErrors: number };
   outcomes: { done: number; error: number; cancelled: number };
-  providers: Array<TokenTotals & { provider: ProviderId; threads: number; toolCalls: number; toolErrors: number; errors: number }>;
-  models: Array<TokenTotals & { provider: ProviderId; model: string; toolCalls: number }>;
+  providers: Array<TokenTotals & { provider: ProviderId; threads: number; toolCalls: number; toolErrors: number; errors: number; latency?: LatencyStats }>;
+  models: Array<TokenTotals & { provider: ProviderId; model: string; toolCalls: number; latency?: LatencyStats }>;
   days: Array<CostTotals & { day: string; prompt: Partial<Record<ProviderId, number>>; output: Partial<Record<ProviderId, number>>; turns: number }>;
   toolKinds: ToolRow[];
   tools: Array<ToolRow & { provider: ProviderId }>;
@@ -323,6 +326,26 @@ function bump<K, V>(map: Map<K, V>, key: K, make: () => V): V {
   return value;
 }
 
+type LatencySamples = { first: number[]; total: number[]; model: number[]; modelMs: number; toolMs: number; waitMs: number };
+
+function addLatency(map: Map<string, LatencySamples>, key: string, latency: TurnLatency): void {
+  const into = bump(map, key, (): LatencySamples => ({ first: [], total: [], model: [], modelMs: 0, toolMs: 0, waitMs: 0 }));
+  if (latency.firstMs !== undefined) into.first.push(latency.firstMs);
+  into.total.push(latency.totalMs);
+  into.model.push(latency.modelMs);
+  into.modelMs += latency.modelMs;
+  into.toolMs += latency.toolMs;
+  into.waitMs += latency.waitMs;
+}
+
+function latencyStats(samples: LatencySamples | undefined): { latency?: LatencyStats } {
+  const total = samples && summarize(samples.total);
+  const model = samples && summarize(samples.model);
+  if (!samples || !total || !model) return {};
+  const first = summarize(samples.first);
+  return { latency: { ...(first ? { first } : {}), total, model, modelMs: samples.modelMs, toolMs: samples.toolMs, waitMs: samples.waitMs } };
+}
+
 const newTool = (name: string, kind: string): ToolRow => ({ name, kind, calls: 0, errors: 0, outputTokens: 0, ms: 0 });
 
 /**
@@ -347,6 +370,7 @@ export function harnessStats(
   const skills = new Map<string, number>();
   const baselines = new Map<string, { provider: ProviderId; mode: ThreadMode; values: number[] }>();
   const heavy: HarnessStats["heavy"] = [];
+  const latencies = new Map<string, LatencySamples>();
   let counted = 0;
 
   type Source = {
@@ -406,6 +430,11 @@ export function harnessStats(
       addUsage(bump(models, `${provider}\n${turn.model}`, () => ({ ...emptyTotals(), provider, model: turn.model, toolCalls: 0 })), provider, turn.usage);
       if (turn.status === "done" || turn.status === "error" || turn.status === "cancelled") outcomes[turn.status] += 1;
       if (turn.status === "error") row.errors += 1;
+      // Finished turns only: a failed or stopped one would skew the times, and its retry is a turn of its own.
+      if (turn.status === "done" && turn.usage?.latency) {
+        addLatency(latencies, provider, turn.usage.latency);
+        addLatency(latencies, `${provider}\n${turn.model}`, turn.usage.latency);
+      }
       const prompt = promptTokens(provider, turn.usage);
       const day = bump(days, dayKey(turn.startedAt), (): HarnessStats["days"][number] => ({ day: dayKey(turn.startedAt), prompt: {}, output: {}, turns: 0, costUsd: 0 }));
       day.turns += 1;
@@ -429,8 +458,8 @@ export function harnessStats(
     threads: counted,
     totals,
     outcomes,
-    providers: [...providers.values()].sort((a, b) => b.prompt - a.prompt),
-    models: [...models.values()].filter((m) => m.turns > 0).sort((a, b) => b.prompt - a.prompt).slice(0, 20),
+    providers: [...providers.values()].map((p) => ({ ...p, ...latencyStats(latencies.get(p.provider)) })).sort((a, b) => b.prompt - a.prompt),
+    models: [...models.values()].filter((m) => m.turns > 0).map((m) => ({ ...m, ...latencyStats(latencies.get(`${m.provider}\n${m.model}`)) })).sort((a, b) => b.prompt - a.prompt).slice(0, 20),
     days: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)),
     toolKinds: byCalls(toolKinds.values()),
     tools: byCalls(tools.values()).slice(0, 60),

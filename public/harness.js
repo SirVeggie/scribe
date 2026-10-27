@@ -335,6 +335,26 @@
     );
     out.push(models);
 
+    const timed = [...stats.providers, ...stats.models].filter((r) => r.latency);
+    if (timed.length) {
+      const span = (s) => s ? `${duration(s.median)} / ${duration(s.p90)}` : "–";
+      const share = (r, key) => pct(r.latency[key], r.latency.modelMs + r.latency.toolMs + r.latency.waitMs);
+      const columns = [
+        { label: "Provider", get: (r) => providerChip(r.provider) },
+        { label: "Model", get: (r) => r.model ?? "All" },
+        { label: "Turns timed", num: true, get: (r) => count(r.latency.total.samples) },
+        { label: "First output", num: true, get: (r) => span(r.latency.first) },
+        { label: "Turn", num: true, get: (r) => span(r.latency.total) },
+        { label: "Model time", num: true, get: (r) => span(r.latency.model) },
+        { label: "Model %", num: true, get: (r) => share(r, "modelMs") },
+        { label: "Tools %", num: true, get: (r) => share(r, "toolMs") },
+        { label: "Waiting %", num: true, get: (r) => share(r, "waitMs") },
+      ];
+      const latency = card("Response times", "Median / p90 over finished turns. First output counts from the prompt being sent; the shares split the time after it between the model, tool calls and waiting on you.");
+      latency.append(table(columns, timed));
+      out.push(latency);
+    }
+
     const base = card(
       "What a session starts with, measured",
       "The first model response's input, including cached tokens and your message. Older turns without response measurements contribute their total input only when they made no tool call. Forks are excluded."

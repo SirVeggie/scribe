@@ -66,6 +66,7 @@ import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
+import { turnLatency } from "./latency.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanApprovals, cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
@@ -445,6 +446,8 @@ type RunState = {
   repo: string | null;
   cancelled: boolean;
   usage: Usage;
+  /** For the turn's latency (latency.ts): prompt sent, first output, waits on the user. */
+  clock?: { sentAt?: number; firstAt?: number; waits: Array<[number, number | undefined]> };
   /** A queued message handed to this turn with steer, until the agent takes it in. */
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
   /** A workspace the agent asked for with thread_update and the user allowed: the thread moves there when the turn ends. */
@@ -3782,7 +3785,7 @@ export class AgentHost {
     } else {
       this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "A background task finished; the agent picked it up." });
     }
-    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), versions: new Map(), repo: null, cancelled: false, usage: {}, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null, suspect: null } };
+    const run: RunState = { turn, textItem: null, reasoningItem: null, tools: new Map(), known: new Map(), versions: new Map(), repo: null, cancelled: false, usage: {}, clock: { waits: [] }, steer: null, hooks: { lastUser: msg?.text ?? "", dock: Boolean(msg?.dock), called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set(), earlyItem: null, suspect: null } };
     this.runs.set(threadId, run);
     this.status.set(threadId, "running");
     this.limitTurn = { provider: thread.provider, threadId, turnId: turn.id, before: snapshotWindows(this.planLimits[thread.provider]) };
@@ -3867,6 +3870,7 @@ export class AgentHost {
           const planNote = msg?.plan ? planTurnNote(live) : "";
           // A note the agent must read comes before the text, so the message is then not sent as a command.
           const command = msg && !earlier && !reopened && !planNote ? this.commandText(thread, msg) : null;
+          (run.clock ??= { waits: [] }).sentAt = Date.now();
           result = await session.run(
             {
               text: command ?? (msg ? earlier + reopened + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
@@ -3969,6 +3973,14 @@ export class AgentHost {
       this.db.deleteSetting(`fork:${threadId}`);
       this.db.saveThread(rewound);
     }
+    const latency = turnLatency({
+      startedAt: turn.startedAt,
+      endedAt: turn.endedAt,
+      waits: [],
+      ...run.clock,
+      tools: [...run.tools.values()].flatMap((item): Array<[number, number | undefined]> => item.kind === "tool" && !item.parentToolId ? [[item.startedAt, item.endedAt]] : []),
+    });
+    if (latency) run.usage = { ...run.usage, latency };
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
     if (thread.provider === "cursor") this.refreshCursorUsage();
@@ -4137,6 +4149,8 @@ export class AgentHost {
 
   /** Wait for the user to answer an interaction item; the thread shows as waiting meanwhile. */
   private waitPending<T>(threadId: string, run: RunState, kind: Pending["kind"], itemId: string, signal?: AbortSignal): Promise<T> {
+    const wait: [number, number | undefined] = [Date.now(), undefined];
+    (run.clock ??= { waits: [] }).waits.push(wait);
     return new Promise<T>((resolve, reject) => {
       const requestId = itemId;
       this.pending.set(requestId, { kind, threadId, itemId, resolve: resolve as never, reject } as Pending);
@@ -4153,6 +4167,7 @@ export class AgentHost {
       if (signal?.aborted) onAbort();
       else signal?.addEventListener("abort", onAbort);
     }).finally(() => {
+      wait[1] = Date.now();
       if (this.runs.get(threadId) !== run) return;
       if (![...this.pending.values()].some((p) => p.threadId === threadId)) this.setStatus(threadId, "running");
       else this.emitThread(threadId);
@@ -4431,6 +4446,7 @@ export class AgentHost {
       text(delta, parentToolId) {
         if (!delta) return;
         run.turn.outputAt = Date.now();
+        if (!parentToolId) (run.clock ??= { waits: [] }).firstAt ??= run.turn.outputAt;
         if (parentToolId) {
           // A subagent's message, whole: one nested item each, shown under the tool call that started it.
           if (run.tools.has(parentToolId)) host.hookBlock(run, host.addItem(threadId, turnId, { kind: "text", text: delta, parentToolId }));
@@ -4452,6 +4468,7 @@ export class AgentHost {
       reasoning(delta, parentToolId) {
         if (!delta) return;
         run.turn.outputAt = Date.now();
+        if (!parentToolId) (run.clock ??= { waits: [] }).firstAt ??= run.turn.outputAt;
         if (parentToolId) {
           const now = Date.now();
           if (run.tools.has(parentToolId)) host.hookBlock(run, host.addItem(threadId, turnId, { kind: "reasoning", text: delta, startedAt: now, endedAt: now, parentToolId }));
@@ -4477,6 +4494,7 @@ export class AgentHost {
       toolStart(tool: ToolStart) {
         if (run.tools.has(tool.toolId)) return;
         run.turn.outputAt = Date.now();
+        if (!tool.parentToolId) (run.clock ??= { waits: [] }).firstAt ??= run.turn.outputAt;
         host.closeBlocks(run);
         const item = host.addItem(threadId, turnId, {
           kind: "tool",

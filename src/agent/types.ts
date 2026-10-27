@@ -411,6 +411,24 @@ export type Usage = {
   contextWindow?: number;
   /** How much of each subscription window this turn used (0–1 of that window). Claude only. */
   plan?: Array<{ id: string; label: string; used: number }>;
+  /** How long the turn took and where the time went, as Scribe saw it (latency.ts). Same for every provider. */
+  latency?: TurnLatency;
+};
+
+/** A turn's timing in ms. Helper chats are their own threads, so their time is only a tool call here. */
+export type TurnLatency = {
+  /** Turn start to end, Scribe's setup included. */
+  totalMs: number;
+  /** Scribe's setup before the prompt went out: worktree, git snapshot, session start. */
+  setupMs?: number;
+  /** Prompt sent to the first text, thinking or tool call. */
+  firstMs?: number;
+  /** Main-thread tool calls running, parallel ones counted once, waits on the user left out. */
+  toolMs: number;
+  /** Waiting on the user: approvals and questions. */
+  waitMs: number;
+  /** The rest after the prompt went out: the model, and the provider's own overhead and retries. */
+  modelMs: number;
 };
 
 /** Totals across a thread's turns (reverted turns omitted). Boards read this when a worker chat ends. */
