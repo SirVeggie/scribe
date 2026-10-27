@@ -1204,15 +1204,15 @@ export class AgentHost {
    * the same ChatGPT account Codex is logged in to, since the windows belong to the account.
    */
   nativePlans(): Record<string, ProviderId> {
-    const account = (this.providers.pi as PiProvider).codexAccountId();
+    const pi = this.providers.pi;
+    const account = pi instanceof PiProvider ? pi.codexAccountId() : null;
     return account && account === codexAccountId() ? { "openai-codex": "codex" } : {};
   }
 
   /** The provider whose plan windows a thread uses: its own, or Codex's for a Native thread on the same ChatGPT account. */
   private planProvider(thread: Pick<Thread, "provider" | "model">): ProviderId {
-    if (thread.provider !== "pi") return thread.provider;
-    const at = thread.model?.indexOf("/") ?? -1;
-    return (at > 0 && this.nativePlans()[thread.model!.slice(0, at)]) || thread.provider;
+    if (thread.provider !== "pi" || !thread.model?.startsWith("openai-codex/")) return thread.provider;
+    return this.nativePlans()["openai-codex"] ?? thread.provider;
   }
 
   /** Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. */
