@@ -63,12 +63,47 @@ export async function intellijFileArgs(repo: string, file: string, line: unknown
   return [...(project ? [project] : []), "--line", String(position(line)), "--column", String(position(column)), target];
 }
 
-/** The nearest folder with an .idea project from dir up to the workspace root, if any. */
-export async function intellijProject(root: string, dir: string): Promise<string | null> {
+/**
+ * The IntelliJ project for a file: folders with an .idea from dir up to the workspace root.
+ * A nested module can have its own .idea (trunk\1_Code\11_Source inside trunk), so prefer
+ * one IntelliJ has open (the deepest, if several), else the outermost.
+ */
+export async function intellijProject(root: string, dir: string, open?: Set<string>): Promise<string | null> {
+  const found: string[] = [];
   for (let current = dir; ; current = path.dirname(current)) {
-    if (await fs.stat(path.join(current, ".idea")).then(s => s.isDirectory(), () => false)) return current;
-    if (!inside(root, current)) return null;
+    if (await fs.stat(path.join(current, ".idea")).then(s => s.isDirectory(), () => false)) found.push(current);
+    if (!inside(root, current)) break;
   }
+  if (!found.length) return null;
+  const opened = open ?? await openIntelliJProjects();
+  return found.find(p => opened.has(projectKey(p))) ?? found[found.length - 1];
+}
+
+const projectKey = (p: string) => {
+  const normal = path.resolve(p).replace(/[\\/]+$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? normal.toLowerCase() : normal;
+};
+
+/** IntelliJ's own config folders (one per product and version). */
+function jetbrainsConfigRoot(): string | null {
+  if (process.platform === "win32") return process.env.APPDATA ? path.join(process.env.APPDATA, "JetBrains") : null;
+  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "JetBrains");
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "JetBrains");
+}
+
+/** Projects IntelliJ has open, from each installed version's recentProjects.xml. */
+export async function openIntelliJProjects(configRoot = jetbrainsConfigRoot()): Promise<Set<string>> {
+  const open = new Set<string>();
+  if (!configRoot) return open;
+  const products = await fs.readdir(configRoot, { withFileTypes: true }).catch(() => []);
+  for (const product of products.filter(d => d.isDirectory())) {
+    const xml = await fs.readFile(path.join(configRoot, product.name, "options", "recentProjects.xml"), "utf8").catch(() => "");
+    for (const m of xml.matchAll(/<entry key="([^"]+)">\s*<value>\s*<RecentProjectMetaInfo\b([^>]*)>/g)) {
+      if (!/\bopened="true"/.test(m[2])) continue;
+      open.add(projectKey(m[1].replace("$USER_HOME$", os.homedir()).replaceAll("&amp;", "&")));
+    }
+  }
+  return open;
 }
 
 /** Compare complete blobs, never the possibly truncated patch shown in the chat. */

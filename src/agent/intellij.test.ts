@@ -6,7 +6,7 @@ import { test } from "node:test";
 import express from "express";
 import type { AgentHost } from "./host.js";
 import { git, snapshotTree } from "./git.js";
-import { intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProject, launchIntelliJ, intellijSettings } from "./intellij.js";
+import { intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProject, launchIntelliJ, intellijSettings, openIntelliJProjects } from "./intellij.js";
 
 test("IntelliJ exports exact historical blobs, renames, additions, deletions and binary bytes", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-idea-test-"));
@@ -152,4 +152,36 @@ test("File snapshots keep content by id and treat a missing file as empty", asyn
     if (oldHome === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = oldHome;
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test("IntelliJ prefers the open project over a nested module's .idea, else the outermost", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-idea-nested-"));
+  try {
+    const root = await fs.realpath(dir);
+    const nested = path.join(root, "1_Code", "11_Source");
+    await fs.mkdir(path.join(nested, ".idea"), { recursive: true });
+    await fs.mkdir(path.join(root, ".idea"));
+    const src = path.join(nested, "src");
+    await fs.mkdir(src);
+    assert.equal(await intellijProject(root, src, new Set()), root);
+    assert.equal(await intellijProject(root, src, new Set([nested.toLowerCase(), nested])), nested);
+    const config = path.join(root, "config");
+    await fs.mkdir(path.join(config, "IntelliJIdea2026.1", "options"), { recursive: true });
+    await fs.writeFile(path.join(config, "IntelliJIdea2026.1", "options", "recentProjects.xml"), `<application><component name="RecentProjectsManager"><option name="additionalInfo"><map>
+        <entry key="${nested.replaceAll("\\", "/")}">
+          <value>
+            <RecentProjectMetaInfo frameTitle="11_Source" projectWorkspaceId="a">
+            </RecentProjectMetaInfo>
+          </value>
+        </entry>
+        <entry key="${root.replaceAll("\\", "/")}">
+          <value>
+            <RecentProjectMetaInfo frameTitle="trunk" opened="true" projectWorkspaceId="b">
+            </RecentProjectMetaInfo>
+          </value>
+        </entry></map></option></component></application>`);
+    const open = await openIntelliJProjects(config);
+    assert.equal(open.size, 1);
+    assert.equal(await intellijProject(root, src, open), root);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
