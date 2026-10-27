@@ -9,6 +9,8 @@
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
   const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", none: "None" };
+  // Animation speed per style while idle and working; others use [.6, 2].
+  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", breathing: "Animated glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
   const ICON_PALETTES = {
@@ -232,7 +234,8 @@ gl_FragColor=c;
       return fx.draw({ ...uniforms, u_surface: 0 });
     }
     const loop = window.scribeGL.loop(dt => {
-      time += dt * (current.style === "meshquick" ? (busy ? 1.3 : 1) : busy ? 2 : .6);
+      const [idle, working] = SPEEDS[current.style] || [.6, 2];
+      time += dt * (busy ? working : idle);
       work += ((busy ? 1 : 0) - work) * Math.min(1, dt * 3);
       if (!draw()) loop.stop();
     }, { element: btn });
