@@ -4508,9 +4508,12 @@ html.spaces-open .workspace {
   box-shadow: 0 0 10px var(--space);
 }
 
+/* Same ring as .selected, so the clicked card only lifts as the overview fades instead of flashing brighter. */
 .spaces.shown .space-card.chosen {
-  transform: scale(1.04);
-  box-shadow: 0 0 0 2px var(--space), 0 10px 40px color-mix(in srgb, var(--space) 30%, transparent);
+  transform: scale(1.02);
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--space, var(--accent)) 70%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--space, var(--accent)) 22%, transparent);
+  transition-delay: 0s;
 }
 
 .spaces.shown .space-card.dragging {

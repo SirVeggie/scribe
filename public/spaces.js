@@ -35,6 +35,8 @@ window.createSpaces = function createSpaces(host) {
   let menu = null;
   let drag = null;
   let busy = false;
+  // Set while a switch is on its way: the overview closes on the old view rather than redrawing the new one (#65).
+  let switching = false;
   let animTimer = 0;
 
   /* ---------- DOM ---------- */
@@ -88,7 +90,7 @@ window.createSpaces = function createSpaces(host) {
     selected = Math.min(selected, Math.max(0, data.spaces.length - 1));
     renderChip();
     // Not while a name is being typed: a redraw would replace the input.
-    if (open && !drag && !renaming) {
+    if (open && !drag && !renaming && !switching) {
       render();
     }
   }
@@ -181,14 +183,17 @@ window.createSpaces = function createSpaces(host) {
       return;
     }
     busy = true;
+    switching = true;
     grid.querySelector(`[data-id="${CSS.escape(id)}"]`)?.classList.add("chosen");
     try {
       await call("POST", `/api/spaces/${encodeURIComponent(id)}/switch`);
       close();
     } catch (err) {
       host.showNotice(String(err.message || err));
+      grid.querySelector(".space-card.chosen")?.classList.remove("chosen");
     } finally {
       busy = false;
+      switching = false;
     }
   }
 
