@@ -1030,11 +1030,12 @@
   const draftWrites = new Map();
 
   function syncThreadDraft(t, content) {
-    const draft = content ? { text: content.text, context: content.mentions } : null;
+    const draft = content ? { text: content.text, context: content.mentions || [] } : null;
     const was = t.draft ? JSON.stringify({ text: t.draft.text, context: t.draft.context || [] }) : null;
     if (was === (draft && JSON.stringify(draft))) return;
     const unsentOnly = Boolean(t.draft) && !draft && t.stats.turns === 0 && !t.queued && t.status === "idle";
     t.draft = draft;
+    // Writing or changing a draft is the user's own interaction; parking an unchanged one returned above.
     if (draft) interactWithThread(t.id);
     // Coalesce edits that overtake a request, and keep the final delete after any earlier save.
     let write = draftWrites.get(t.id);
@@ -3039,7 +3040,6 @@
       this.mentionLoading = false;
 
       this.root = el("div", `ag-view ag-view-${variant}`);
-      this.bindInteractions(this.root);
       this.header = el("div", "ag-thead");
       this.scroll = el("div", "ag-scroll");
       this.transcript = el("div", "ag-transcript");
@@ -3259,13 +3259,6 @@
       }
     }
 
-    bindInteractions(root) {
-      // Only real input counts: restoring a chat, streaming and automatic scrolling do not.
-      for (const type of ["pointerdown", "keydown", "wheel"]) root.addEventListener(type, (event) => {
-        if (event.isTrusted && !root.classList.contains("listing")) interactWithThread(this.threadId);
-      }, { capture: true, passive: true });
-    }
-
     setThread(id) {
       if (this.threadId === id && id) return;
       this.audioComposer?.cancel();
@@ -3296,7 +3289,6 @@
 
     /** Show a thread here, and make it the one this view comes back to. */
     openThread(id) {
-      interactWithThread(id);
       if (this.variant === "helper") { this.setThread(id); return; }
       if (this.variant !== "dock") setCurrent(id);
       else dock.remember(id);
@@ -7963,12 +7955,22 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   renderWorkingFxSetting();
 
   const RECENT_THREAD_MS = 8 * 60 * 60 * 1000;
-  const RECENT_TIP = "Up to five threads you interacted with in the last eight hours, from every scope. This switch applies only to this list.";
+  const RECENT_TIP = "Up to five threads you sent to, answered or wrote a draft in during the last eight hours, from every scope. Opening a thread does not count. This switch applies only to this list.";
 
   function recentInteractionAt(t) {
-    // Drafts saved before interaction tracking already record the user's intent.
-    const savedDraft = t.draft?.text?.trim() || t.draft?.context?.length;
+    // An unsent thread saved before interaction tracking: its update time is when the draft was saved.
+    // Threads with turns move updatedAt on agent activity, so they wait for a real interaction.
+    const savedDraft = !t.stats?.turns && (t.draft?.text?.trim() || t.draft?.context?.length);
     return t.interactedAt || (savedDraft ? t.updatedAt || t.createdAt : 0);
+  }
+
+  /** Each list keeps its own Recent switch: "sidebar", "full" or "dock". */
+  function recentOn(list) {
+    return localStorage.getItem(`scribe.agent.recent.${list}`) === "1";
+  }
+  function setRecentOn(list, on) {
+    if (on) localStorage.setItem(`scribe.agent.recent.${list}`, "1");
+    else localStorage.removeItem(`scribe.agent.recent.${list}`);
   }
 
   function recentThreads(now = Date.now()) {
@@ -7988,7 +7990,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     void api("POST", `/threads/${encodeURIComponent(id)}/interact`).catch(() => undefined);
   }
 
-  function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
+  function renderThreadList(container, { onPick, currentId, onNew, onNewIn, recentList }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
     const hadFocus = Boolean(oldSearch) && document.activeElement === oldSearch;
@@ -8071,10 +8073,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       renderLists();
       return compactThreads();
     }, "Each thread shows only its title, provider, status and changes, in a smaller font with less spacing");
-    const recent = listSwitch("Recent", Boolean(container.agRecent), () => {
-      container.agRecent = !container.agRecent;
+    const recent = listSwitch("Recent", recentOn(recentList), () => {
+      const on = !recentOn(recentList);
+      setRecentOn(recentList, on);
       container.agFill();
-      return container.agRecent;
+      return on;
     }, RECENT_TIP);
     tools.append(showWorkersToggle(), compact, recent);
     const oldTools = top.querySelector(".ag-list-tools");
@@ -8095,7 +8098,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       highlight(Math.max(0, at), false);
       rowGlow.watch(container, list);
       clearTimeout(container.agRecentTimer);
-      if (container.agRecent) {
+      if (recentOn(recentList)) {
         const expiry = Math.min(...recentThreads().map((t) => recentInteractionAt(t) + RECENT_THREAD_MS));
         if (Number.isFinite(expiry)) container.agRecentTimer = setTimeout(() => {
           if (container.isConnected) container.agFill();
@@ -8106,7 +8109,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     container.agFill = fill;
     const collect = (out) => {
       const q = S.search.trim().toLowerCase();
-      if (container.agRecent) {
+      if (recentOn(recentList)) {
         let recent = recentThreads();
         if (q) recent = rankedThreads(recent, q).map((row) => row.thread).sort((a, b) => recentInteractionAt(b) - recentInteractionAt(a));
         const head = el("div", "ag-list-group");
@@ -8326,7 +8329,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function threadRow(t, current, onPick, label) {
     // Working rows glow (rowGlow), waiting and unread ones get a gradient from the right: no status column.
     const state = t.status === "running" || (t.status === "idle" && t.background) ? " s-running" : t.status === "waiting" ? " s-waiting" : "";
-    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}${state}`, () => { interactWithThread(t.id); onPick(t.id); });
+    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}${state}`, () => onPick(t.id));
     row.dataset.id = t.id;
     const main = el("span", "ag-row-main");
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
@@ -8462,6 +8465,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     renderList() {
       if (!this.listOpen) return;
       renderThreadList(this.listEl, {
+        recentList: "sidebar",
         currentId: this.view.threadId,
         onPick: (id) => {
           setCurrent(id);
@@ -8563,6 +8567,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     renderList() {
       if (!S.fullOpen) return;
       renderThreadList(this.list, {
+        recentList: "full",
         currentId: this.view.threadId,
         onPick: (id) => {
           setCurrent(id);
@@ -8660,7 +8665,6 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.root = root;
       this.history = history;
       this.view.root = root;
-      this.view.bindInteractions(root);
       window.addEventListener("scribe:orb-appearance", () => this.renderSweep());
       this.view.root.addEventListener("click", (event) => onLinkClick(event));
       this.view.root.addEventListener("auxclick", (event) => onLinkClick(event));
@@ -8898,9 +8902,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       let expiryTimer;
       let refreshRecent = () => {};
       const fillRecent = () => {
-        const recent = this.recent ? recentThreads() : [];
+        const recent = recentOn("dock") ? recentThreads() : [];
         const entries = recent.map((t) => ({ label: t.title, detail: `${modelLabel(t.provider, t.model)} · ${scopeLabel(t.scope).text}`, lead: lead(t), checked: t.id === currentId, run: () => this.pick(t.id) }));
-        items.splice(0, items.length, ordinary[0], ...(this.recent ? [{ header: "Recent" }, ...(entries.length ? entries : [{ label: "No threads interacted with in the last eight hours", disabled: true }])] : []), ...ordinary.slice(1));
+        items.splice(0, items.length, ordinary[0], ...(recentOn("dock") ? [{ header: "Recent" }, ...(entries.length ? entries : [{ label: "No threads interacted with in the last eight hours", disabled: true }])] : []), ...ordinary.slice(1));
         clearTimeout(expiryTimer);
         const expiry = Math.min(...recent.map((t) => recentInteractionAt(t) + RECENT_THREAD_MS));
         if (Number.isFinite(expiry)) expiryTimer = setTimeout(() => { fillRecent(); refreshRecent(); }, Math.max(1, expiry - Date.now()));
@@ -8916,18 +8920,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           compact.closest(".ag-menu")?.classList.toggle("compact", on);
           return on;
         }, "Each thread shows only its title and provider");
-        const recent = listSwitch("Recent", Boolean(this.recent), () => {
-          this.recent = !this.recent;
+        const recent = listSwitch("Recent", recentOn("dock"), () => {
+          const on = !recentOn("dock");
+          setRecentOn("dock", on);
           fillRecent();
           refresh();
-          return this.recent;
+          return on;
         }, RECENT_TIP);
         tools.append(showWorkersToggle(refresh, true), compact, recent);
         return tools;
       } });
     },
-    pick(id, { interact = true } = {}) {
-      if (interact) interactWithThread(id);
+    pick(id) {
       this.remember(id);
       this.view.setThread(id);
       this.renderTitle();
@@ -12078,7 +12082,6 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
    * Without it (background starts and sends) nothing the user has open is closed.
    */
   function showPageThread(id, where, { reveal = false } = {}) {
-    if (reveal) interactWithThread(id);
     if (CHAT) {
       if (reveal) {
         closeMenu();
@@ -12105,7 +12108,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       sidebar.view.setThread(id);
       if (reveal && sidebar.listOpen) sidebar.toggleList();
     } else if (where === "dock") {
-      if (id !== dock.view.threadId) dock.pick(id, { interact: reveal });
+      if (id !== dock.view.threadId) dock.pick(id);
       if (!S.dockShown) dock.setShown(true);
     }
   }
@@ -12114,7 +12117,6 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function openThread(id) {
     const thread = S.threads.get(id);
     if (!thread || thread.archived) return false;
-    interactWithThread(id);
     showPageThread(id, "sidebar", { reveal: true });
     return true;
   }

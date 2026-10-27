@@ -42,12 +42,12 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
       S.threads.set("stale", { ...base, id: "stale", title: "Stale", interactedAt: Date.now() - 8 * 3600000 });
       S.threads.set("worker", { ...base, id: "worker", title: "Worker", fromPage: true });
       S.threads.set("archived", { ...base, id: "archived", title: "Archived", archived: true, interactedAt: Date.now() });
-      for (const id of ["side-list", "full-list", "other-chat"]) {
+      for (const [id, recentList] of [["side-list", "sidebar"], ["full-list", "full"], ["other-chat", "other"]]) {
         const list = document.createElement("div");
         list.id = id;
         list.style.cssText = "display:inline-block;vertical-align:top;width:380px;height:650px";
         document.querySelector("main")!.append(list);
-        renderThreadList(list, { currentId: null, onPick: () => {}, onNew: () => {}, onNewIn: () => {} });
+        renderThreadList(list, { recentList, currentId: null, onPick: () => {}, onNew: () => {}, onNewIn: () => {} });
       }
       const anchor = document.createElement("button");
       anchor.id = "dock-picker";
@@ -76,12 +76,22 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     assert.equal(await menu.locator(".ag-menu-head").first().textContent(), "Recent");
     assert.deepEqual(await menu.locator(".ag-menu-label").allTextContents().then(labels => labels.slice(1, 6)), ["Thread 0", "Thread 1", "Thread 2", "Thread 3", "Thread 4"]);
     await page.keyboard.press("Escape");
-    // A row click records direct interaction.
+    // Each list keeps its own switch across reloads.
+    assert.deepEqual(await page.evaluate(() => ["sidebar", "full", "other", "dock"].map(list => localStorage.getItem(`scribe.agent.recent.${list}`))), [null, "1", null, "1"]);
+    // Opening threads is not interaction: a row click, the floating picker, or a link from a page.
+    await full.locator('.ag-list-recent .ag-row[data-id="t4"]').click();
+    await page.evaluate(() => {
+      const { dock, showPageThread } = (window as any).recentTest;
+      showPageThread("t3", "dock", { reveal: true });
+      dock.pick("t2");
+    });
+    assert.equal(await page.evaluate(() => (window as any).recentTest.recentThreads()[0].id), "t0");
+    // Requests arrive in order, so once t4's lands, opening has had its chance to send any.
     await Promise.all([
-      page.waitForRequest(request => request.url().endsWith("/interact")),
-      full.locator('.ag-list-recent .ag-row[data-id="t4"]').click(),
+      page.waitForResponse(response => response.url().endsWith("/t4/interact")),
+      page.evaluate(() => (window as any).recentTest.interactWithThread("t4")),
     ]);
-    assert.ok(interactions.some(url => url.endsWith("/t4/interact")));
+    assert.deepEqual(interactions.map(url => url.split("/").at(-2)), ["t4"]);
     assert.equal(await page.evaluate(() => (window as any).recentTest.recentThreads()[0].id), "t4");
     // Previously saved drafts count too, even without an interaction timestamp.
     await page.evaluate(() => {
@@ -98,7 +108,7 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     await page.clock.fastForward(8 * 3600000);
     assert.equal(await full.locator(".ag-list-recent .ag-row").count(), 0);
     assert.deepEqual(errors, []);
-    // Restoring a page-owned chat does not count; real typing in its composer does.
+    // Opening a chat, clicking and scrolling in it do not count; typing a draft in its composer does.
     await page.evaluate(() => {
       const { S, sidebar } = (window as any).recentTest;
       const view = sidebar.view;
@@ -107,6 +117,9 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
       document.querySelector("main")!.replaceChildren(view.root);
       view.setThread("worker");
     });
+    await page.locator(".ag-scroll").first().click({ force: true }).catch(() => {});
+    await page.mouse.wheel(0, 200);
+    await page.keyboard.press("PageDown");
     assert.equal(await page.evaluate(() => (window as any).recentTest.S.threads.get("worker").interactedAt), undefined);
     await Promise.all([
       page.waitForRequest(request => request.url().endsWith("/worker/interact")),

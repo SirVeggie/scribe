@@ -805,10 +805,17 @@ export function agentRouter(host: AgentHost): express.Router {
   router.post("/threads/:id/turns/:turnId/revert", wrap((req) => host.revertTurn(req.params.id, req.params.turnId)));
   router.post("/threads/:id/turns/:turnId/revert-page", wrap((req) => host.revertPage(req.params.id, req.params.turnId)));
 
+  // Answering an approval or question in the chat counts for the Recent thread lists.
+  const interactPending = (requestId: string) => {
+    const threadId = host.pendingThreadId(requestId);
+    if (threadId) host.interact(threadId);
+  };
+
   router.post(
     "/approvals/:requestId",
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
+      interactPending(req.params.requestId);
       host.resolveApproval(req.params.requestId, String(body.optionId ?? ""), typeof body.note === "string" && body.note.trim() ? body.note.trim() : undefined);
       return { ok: true };
     })
@@ -845,6 +852,8 @@ export function agentRouter(host: AgentHost): express.Router {
   });
   router.post("/threads/:id/components/:itemId", wrap(req => {
     const body = isPlainRecord(req.body) ? req.body : {};
+    // Answering an inline component is the user's own interaction; its other calls are automatic.
+    if (body.action === "reply" || body.action === "skip") host.interact(req.params.id);
     return host.updateComponent(req.params.id, req.params.itemId, body);
   }));
   router.post("/threads/:id/components/:itemId/expand", wrap(req => {
@@ -858,6 +867,7 @@ export function agentRouter(host: AgentHost): express.Router {
     "/questions/:requestId",
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
+      interactPending(req.params.requestId);
       if (body.skip === true) {
         host.resolveQuestion(req.params.requestId, { skipped: true, reason: typeof body.reason === "string" ? body.reason : undefined });
       } else {
@@ -883,6 +893,7 @@ export function agentRouter(host: AgentHost): express.Router {
     "/threads/:id/plans/:itemId",
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
+      host.interact(req.params.id);
       host.resolvePlan(req.params.id, req.params.itemId, { accepted: body.accepted === true, note: typeof body.note === "string" ? body.note : undefined });
       return { ok: true };
     })

@@ -1863,6 +1863,11 @@ export class AgentHost {
     this.emit({ type: "agent_thread", thread: this.view(thread) });
   }
 
+  /** The thread an approval or question waits in, so answering it counts as the user's interaction. */
+  pendingThreadId(requestId: string): string | undefined {
+    return this.pending.get(requestId)?.threadId;
+  }
+
   markRead(id: string): void {
     if (this.unread.delete(id)) {
       const thread = this.threads.get(id);
