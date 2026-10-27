@@ -2891,6 +2891,7 @@
       let patch = "";
       let truncated = false;
       let intellijSource = { threadId: source.threadId, turnId: current === "turn" ? source.turnId : undefined };
+      let unversioned = 0;
       try {
         if (current === "git") {
           // A worktree thread shows everything on its branch: commits and uncommitted changes since it started.
@@ -2907,6 +2908,7 @@
             patch = info.patch || "";
             truncated = !!info.truncated;
             intellijSource = { svn: info.svn };
+            unversioned = info.unversioned || 0;
             actions.append(button("Refresh", "ag-btn small", () => load()));
           } else if (!info.repo) {
             side.replaceChildren(el("div", "ag-muted ag-pad", "Not a git or svn working copy"));
@@ -2961,6 +2963,11 @@
       const sum = el("div", "ag-diff-sum");
       sum.append(el("span", null, `${files.length} file${files.length === 1 ? "" : "s"}`), R.counts(totals.a, totals.r));
       side.append(sum);
+      if (unversioned) {
+        const note = el("div", "ag-muted ag-pad", `${unversioned} unversioned item${unversioned === 1 ? "" : "s"} not shown`);
+        note.dataset.tooltip = "Files and folders svn does not track, such as logs, build output and IDE settings. svn add them to list them here.";
+        side.append(note);
+      }
       if (!files.length) {
         main.append(el("div", "ag-empty-diff", "No changes"));
         return;

@@ -53,10 +53,11 @@ test("svn working copy changes against BASE", { skip: !hasSvn && "svn is not ins
     fs.rmSync(path.join(wc, "src", "c.txt"));
     const changes = (await svnWorkingChanges(wc))!;
     const byPath = Object.fromEntries(changes.files.map((f) => [f.path, f]));
-    assert.deepEqual(Object.keys(byPath).sort(), ["a.txt", "b.txt", "new/deep/n.txt", "src/c.txt"]);
+    // The unversioned folder is counted once, not listed.
+    assert.deepEqual(Object.keys(byPath).sort(), ["a.txt", "b.txt", "src/c.txt"]);
+    assert.equal(changes.unversioned, 1);
     assert.deepEqual([byPath["a.txt"].status, byPath["a.txt"].added, byPath["a.txt"].removed], ["M", 1, 1]);
     assert.equal(byPath["b.txt"].status, "D");
-    assert.deepEqual([byPath["new/deep/n.txt"].status, byPath["new/deep/n.txt"].added], ["A", 2]);
     assert.equal(byPath["src/c.txt"].status, "D");
     assert.match(changes.patch, /\+changed/);
   } finally {
@@ -70,7 +71,8 @@ test("a turn's svn changes leave out what was already changed before it", { skip
     fs.writeFileSync(path.join(wc, "a.txt"), "user edit\n");
     fs.writeFileSync(path.join(wc, "untracked.txt"), "mine\n");
     const start = (await svnStart(wc))!;
-    // A shell command during the turn: edits a clean file, an already edited one, and adds one.
+    // A shell command during the turn: edits a clean file and adds one. A file that already
+    // existed unversioned changes too, as a log a running server appends to: not the turn's.
     fs.writeFileSync(path.join(wc, "b.txt"), "b1\nshell\n");
     await new Promise((resolve) => setTimeout(resolve, 20));
     fs.writeFileSync(path.join(wc, "untracked.txt"), "mine\nagent\n");
@@ -79,8 +81,10 @@ test("a turn's svn changes leave out what was already changed before it", { skip
     assert.deepEqual(Object.fromEntries([...turn].sort(([a], [b]) => a.localeCompare(b))), {
       "b.txt": { before: "b1\n", after: "b1\nshell\n" },
       "src/made.txt": { before: null, after: "made\n" },
-      "untracked.txt": { before: "mine\n", after: "mine\nagent\n" },
     });
+    // Written by an edit tool, it is the turn's after all.
+    const tool = await svnEnd(wc, start, new Map([["untracked.txt", { before: "mine\n", after: "mine\nagent\n" }]]));
+    assert.deepEqual(tool.get("untracked.txt"), { before: "mine\n", after: "mine\nagent\n" });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

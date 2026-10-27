@@ -51,7 +51,8 @@ export function findSvnRoot(cwd: string | null | undefined): string | null {
   return root;
 }
 
-export type SvnEntry = { path: string; status: "A" | "M" | "D" };
+/** unversioned: not under version control (svn status "?"), as opposed to added. */
+export type SvnEntry = { path: string; status: "A" | "M" | "D"; unversioned?: boolean };
 
 const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 const unescapeXml = (s: string) => s.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, (_m, e: string) =>
@@ -69,10 +70,11 @@ export function parseSvnStatus(xml: string): Array<{ path: string; item: string;
 
 /**
  * Changed files under `dir` (paths relative to it, with /): modified, added, deleted and
- * unversioned ones, the files inside unversioned folders too. Ignored files are left out.
+ * unversioned ones. With `walk`, the files inside unversioned folders are listed one by one;
+ * without it, an unversioned folder is one entry. Ignored files are left out.
  * Null when svn could not run.
  */
-export async function svnChangedFiles(dir: string): Promise<SvnEntry[] | null> {
+export async function svnChangedFiles(dir: string, options: { walk?: boolean } = {}): Promise<SvnEntry[] | null> {
   const res = await svn(["status", "--xml", "."], dir, { timeoutMs: 60_000 });
   if (res.code !== 0) return null;
   const entries: SvnEntry[] = [];
@@ -80,19 +82,18 @@ export async function svnChangedFiles(dir: string): Promise<SvnEntry[] | null> {
   for (const { path: rel, item } of parseSvnStatus(String(res.stdout))) {
     if (!rel || rel === ".") continue;
     const abs = path.join(dir, rel);
-    if (item === "unversioned" || item === "added") {
+    if (item === "unversioned") {
       let stat: fs.Stats | null = null;
       try { stat = fs.statSync(abs); } catch { /* gone since */ }
-      if (stat?.isDirectory()) {
-        // An added folder's own files are listed by svn; an unversioned one's are not.
-        if (item === "added") continue;
+      if (stat?.isDirectory() && options.walk !== false) {
         for (const file of walk(abs, MAX_UNVERSIONED_FILES - unversioned)) {
-          entries.push({ path: path.relative(dir, file).replaceAll("\\", "/"), status: "A" });
+          entries.push({ path: path.relative(dir, file).replaceAll("\\", "/"), status: "A", unversioned: true });
           unversioned += 1;
         }
-        continue;
-      }
-      if (stat?.isFile()) entries.push({ path: rel, status: "A" });
+      } else if (stat) entries.push({ path: rel, status: "A", unversioned: true });
+    } else if (item === "added") {
+      // An added folder's own files are listed by svn.
+      if (!isDir(abs)) entries.push({ path: rel, status: "A" });
     } else if (item === "deleted" || item === "missing") {
       // A deleted folder is listed too; svnWorkingChanges drops it, as it has no base content.
       if (!isDir(abs)) entries.push({ path: rel, status: "D" });
@@ -167,10 +168,15 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 
 const MAX_PATCH = 4 * 1024 * 1024;
 
-/** The working copy under `dir` against BASE: changed files with line counts, and one patch. */
-export async function svnWorkingChanges(dir: string): Promise<{ files: FileChange[]; patch: string; truncated: boolean } | null> {
-  const entries = await svnChangedFiles(dir);
-  if (!entries) return null;
+/**
+ * The working copy under `dir` against BASE: changed files with line counts, and one patch.
+ * Unversioned files are not changes to the checkout (logs, build output, IDE files), so they
+ * are only counted, as svn status lists them: a folder counts once.
+ */
+export async function svnWorkingChanges(dir: string): Promise<{ files: FileChange[]; patch: string; truncated: boolean; unversioned: number } | null> {
+  const all = await svnChangedFiles(dir, { walk: false });
+  if (!all) return null;
+  const entries = all.filter((e) => !e.unversioned);
   const results = await mapLimit(entries, 6, async (entry) => {
     const base = entry.status === "A" ? null : await svnBase(dir, entry.path);
     if (entry.status === "D" && !base) return null;
@@ -185,11 +191,11 @@ export async function svnWorkingChanges(dir: string): Promise<{ files: FileChang
   let patch = kept.map((r) => r.patch).join("");
   const truncated = patch.length > MAX_PATCH;
   if (truncated) patch = patch.slice(0, MAX_PATCH);
-  return { files, patch, truncated };
+  return { files, patch, truncated, unversioned: all.length - entries.length };
 }
 
 /** What was already changed in a working copy when a turn started. content is left out past the memory budget. */
-export type SvnStart = { files: Map<string, { size: number; mtimeMs: number; missing?: boolean; content?: string | null }> };
+export type SvnStart = { files: Map<string, { size: number; mtimeMs: number; missing?: boolean; unversioned?: boolean; content?: string | null }> };
 
 /** Content kept from files that were already changed at the start of a turn, in total. */
 const START_BUDGET = 32 * 1024 * 1024;
@@ -204,6 +210,12 @@ export async function svnStart(dir: string): Promise<SvnStart | null> {
     try { stat = fs.statSync(path.join(dir, entry.path)); } catch { /* deleted */ }
     if (!stat?.isFile()) {
       files.set(entry.path, { size: 0, mtimeMs: 0, missing: true, content: null });
+      continue;
+    }
+    // Unversioned files that already exist (logs a server appends to) are not the turn's
+    // changes, so only their presence is noted: a new one at the end was made in the turn.
+    if (entry.unversioned) {
+      files.set(entry.path, { size: stat.size, mtimeMs: stat.mtimeMs, unversioned: true });
       continue;
     }
     const keep = stat.size <= MAX_SVN_FILE_BYTES && stat.size <= budget;
@@ -232,6 +244,8 @@ export async function svnEnd(dir: string, start: SvnStart, known: Map<string, { 
     let before: string | null;
     if (was) {
       if (was.missing ? !now : now && now.size === was.size && now.mtimeMs === was.mtimeMs) return;
+      // An unversioned file from before the turn counts only when an edit tool wrote it.
+      if (was.unversioned && !known.has(rel)) return;
       if (was.content !== undefined) before = was.content;
       else if (known.has(rel)) before = known.get(rel)!.before;
       else return;
