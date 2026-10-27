@@ -102,7 +102,11 @@ vec3 col=(u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05)/(w0+w1+w2+w3+.05);return pm(
 vec4 meshquick(vec2 uv,float t){float r=length(uv);float a=aaIn(r-1.);if(a<=0.)return vec4(0.);t*=.5;float k=mix(4.,10.,u_work);
 vec2 p0=.6*vec2(sin(t*.7),cos(t*.9)),p1=.6*vec2(sin(t*.8+2.),cos(t*.6+1.)),p2=.6*vec2(sin(t*.5+4.),cos(t*.75+3.)),p3=.6*vec2(sin(t*.65+1.),cos(t*.85+5.));
 float w0=exp(-k*dot(uv-p0,uv-p0)),w1=exp(-k*dot(uv-p1,uv-p1)),w2=exp(-k*dot(uv-p2,uv-p2)),w3=exp(-k*dot(uv-p3,uv-p3));
-vec3 col=(u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05)/(w0+w1+w2+w3+.05);return pm(col,a);}
+vec3 cs=u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05;float ws=w0+w1+w2+w3+.05;
+if(u_work>.01){vec2 p4=.55*vec2(sin(t*.9+3.),cos(t*.7+2.)),p5=.55*vec2(sin(t*.6+5.),cos(t*.95+4.)),p6=.55*vec2(sin(t*.85+1.5),cos(t*.55+6.)),p7=.55*vec2(sin(t*.75+.5),cos(t*.8+3.5));
+float w4=u_work*exp(-k*dot(uv-p4,uv-p4)),w5=u_work*exp(-k*dot(uv-p5,uv-p5)),w6=u_work*exp(-k*dot(uv-p6,uv-p6)),w7=u_work*exp(-k*dot(uv-p7,uv-p7));
+cs+=u_c2*w4+u_c3*w5+u_c0*w6+u_c1*w7;ws+=w4+w5+w6+w7;}
+return pm(cs/ws,a);}
 vec4 ring(vec2 uv,float t){float r=length(uv);float w=.17;float d=abs(r-.8)-w;float a=aaIn(d);if(a<=0.)return vec4(0.);
 float ang=atan(uv.y,uv.x)/TAU;float k=fract(ang+t*.12+.25*fbm(uv*2.5+vec2(t*.3,0.)));vec3 col=pal(abs(k*2.-1.));
 float x=clamp((r-.8)/w,-1.,1.);float z=sqrt(1.-x*x);col*=.6+.5*z;col+=vec3(.6)*pow(z,12.)*smoothstep(0.,.5,uv.y+.3)*.5;return pm(col,a);}
