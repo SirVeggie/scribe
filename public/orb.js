@@ -12,7 +12,7 @@
   // Shape animation speed while idle and working; others use [.6, 2].
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   // The same for surface effects.
-  const SURFACE_SPEEDS = { pulse: [.6, 1.2] };
+  const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes" };
   const ICON_PALETTES = {
