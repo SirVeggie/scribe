@@ -14,7 +14,7 @@
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
-  const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes" };
+  const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
   const ICON_PALETTES = {
     white: ["#e0eaff", "#ffffff"],
     ice: ["#7ee7ff", "#ffffff"],
@@ -171,7 +171,7 @@ for(int i=0;i<14;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);fl
 vec2 p=vec2(-2.5+phase*11.,mix(yb+.3,yt-.3,h1(fi*7.3+seed*13.1))+.2*sin(t*.7+fi));
 float d=length(uv-p);
 a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65;}}
-else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
+else if(u_bleedmode<8.5){float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
 // Motes cross the surface up and to the right at about 55 degrees, each on a fresh lane per pass.
 vec2 dir=vec2(.574,.819),side=vec2(-.819,.574),c=vec2(3.8,.5*(yb+yt));float w=10.6,h=yt-yb;
 float W=w*.819+h*.574,L=w*.574+h*.819+3.;
@@ -180,6 +180,23 @@ for(int i=0;i<40;i++){float fi=float(i);float on=fi<28.?1.:u_work;if(on<.01)brea
 vec2 p=c+side*((h1(fi*7.3+seed*13.1)-.5)*W+.15*sin(t*.7+fi))+dir*(phase-.5)*L;
 float d=length(uv-p);
 a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65*on;}}
+else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;float hb=uv.y-yb;
+// Idle: coals smoulder in place along the bottom with a few lazy sparks.
+// Working: flames lick upward from the coals and a shower of sparks rises.
+float coal=fbm(uv*vec2(1.4,2.2)+vec2(t*.07,0.));coal=smoothstep(.35,.75,coal)*(.75+.25*sin(t*1.3+coal*9.));
+float bed=coal*exp(-hb*mix(2.4,1.4,u_work));
+float f=fbm(vec2(uv.x*1.1,hb*.8)-vec2(0.,t*1.1));
+float flame=clamp(f*1.9-hb/2.4-.15,0.,1.);
+float heat=mix(bed*.9,max(bed*.6,flame),u_work);
+float sp=0.;
+for(int i=0;i<14;i++){float fi=float(i);float on=fi<3.?1.:u_work;if(on<.01)break;
+float cyc=t*(.25+.15*h1(fi))+h1(fi+3.);float phase=fract(cyc);float seed=floor(cyc);
+vec2 p=vec2(mix(-1.3,6.,h1(fi*5.1+seed*7.7))+.35*sin(phase*6.+fi)+phase*1.2,yb+phase*(yt-yb+.5));
+float d=length(uv-p);sp+=(exp(-d*28.)+exp(-d*9.)*.12)*(1.-phase)*on;}
+vec3 col=mix(u_c1,u_c2,smoothstep(.15,.55,heat));col=mix(col,u_c3,smoothstep(.55,.95,heat));
+col=mix(col,mix(u_c2,u_c3,.7),clamp(sp,0.,1.));
+a=clamp(heat*1.1+sp,0.,1.)*.8*(1.-smoothstep(5.,8.,uv.x));
+return pm(col,clamp(a*(.75+.25*u_energy),0.,1.));}
 a*=1.-smoothstep(5.,8.,uv.x);
 vec3 color=u_bleedmode>3.5?mix(u_c2,u_c3,.45):pal(.4+.5*n);
 return pm(color,clamp(a*(.65+.35*u_energy),0.,1.));
