@@ -3836,11 +3836,20 @@ html[data-theme="cream"] .ag-glow {
   padding: 6px;
   gap: 2px;
   text-align: left;
-  border: 2px solid transparent;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: none;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: outline-color var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+
+.working-fx-option:hover {
+  background: rgba(0, 0, 0, 0.45);
 }
 
 .working-fx-option[aria-pressed="true"] {
-  border-color: var(--accent);
+  outline-color: var(--accent);
 }
 
 .working-fx-preview {
