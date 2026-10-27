@@ -3668,6 +3668,15 @@ html.fx-off .ag-slash { transition: none; }
   padding-left: 8px;
 }
 
+/* Without a Show more button closing it, a section gets about half that button's room before the next heading. */
+.ag-list-group-body:not(:has(> .ag-list-more)) {
+  padding-bottom: 16px;
+}
+
+.ag-list.compact .ag-list-group-body:not(:has(> .ag-list-more)) {
+  padding-bottom: 10px;
+}
+
 .ag-list.compact .ag-row-title {
   font-size: 12px;
   line-height: 1.3;
@@ -3686,9 +3695,12 @@ html.fx-off .ag-slash { transition: none; }
   height: 12px;
 }
 
-/* The changes fill the archive and delete buttons' room, and give way to them on hover. */
-.ag-list.compact .ag-row-wrap > .ag-row:has(.ag-row-counts) {
-  padding-right: 4px;
+/* The changes fill the archive and delete buttons' room, and give way to them on hover.
+   Without hover the buttons always show, so the row keeps their room and the changes sit before them. */
+@media (hover: hover) {
+  .ag-list.compact .ag-row-wrap > .ag-row:has(.ag-row-counts) {
+    padding-right: 4px;
+  }
 }
 
 .ag-row-counts {
