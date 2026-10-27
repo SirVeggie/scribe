@@ -271,14 +271,50 @@ gl_FragColor=c;
     help.setAttribute("aria-description", help.dataset.tooltip);
     const heading = node("div", null, "orb-settings-heading");
     heading.append(title, help);
+
+    /** A segmented track of text buttons (app.css .button-track). */
+    function track(options, pick) {
+      const wrap = node("div", null, "button-track text-track");
+      wrap.setAttribute("role", "group");
+      const buttons = Object.entries(options).map(([value, text]) => {
+        const b = node("button", text); b.type = "button"; b.dataset.value = value;
+        b.addEventListener("click", () => pick(value)); wrap.append(b); return b;
+      });
+      wrap.sync = (value) => buttons.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.value === value)));
+      return wrap;
+    }
+    const providers = track(PROVIDERS, (value) => { provider = value; paint(); });
+    providers.setAttribute("aria-label", "Provider");
+    heading.append(providers);
+
+    // The preview on the left, the chosen provider's settings on the right.
+    const stage = node("div", null, "orb-settings-stage");
+    const preview = node("div", null, "dock-input orb-settings-preview");
+    const orb = node("button", null, "dock-orb"); orb.type = "button"; orb.setAttribute("aria-label", "Appearance preview");
+    preview.append(orb, node("span", "Message your agent…", "orb-preview-text"));
+    const busy = node("button", null, "pill-toggle"); busy.type = "button";
+    busy.setAttribute("role", "switch"); busy.setAttribute("aria-checked", "false");
+    busy.setAttribute("aria-label", "Preview while working");
+    const busyRow = node("div", null, "orb-settings-busy");
+    const busyLabel = node("span", "Working");
+    busyLabel.addEventListener("click", () => busy.click());
+    busyRow.append(busyLabel, busy);
+    stage.append(preview, busyRow);
+
+    const form = node("div", null, "orb-settings-form");
     const body = node("div", null, "orb-settings-body");
+    body.append(stage, form);
     dialog.append(heading, body);
+
     const selects = [];
-    function row(label, control) {
-      // Select rows stay a div: a label would send clicks on its text to the hidden select.
-      const wrap = node(control.tagName === "SELECT" ? "div" : "label", null, "setting-row");
-      if (control.matches("select, input")) control.setAttribute("aria-label", label);
-      wrap.append(node("span", label), control); body.append(wrap);
+    function section(name) {
+      const s = node("section", null, "orb-settings-section");
+      s.append(node("h3", name)); form.append(s); return s;
+    }
+    function row(parent, label, control) {
+      const wrap = node("div", null, "setting-row");
+      control.setAttribute("aria-label", label);
+      wrap.append(node("span", label), control); parent.append(wrap);
       if (control.tagName === "SELECT") selects.push(window.createSelect(control));
       return control;
     }
@@ -287,55 +323,71 @@ gl_FragColor=c;
       for (const [value, text] of Object.entries(options)) { const opt = node("option", text); opt.value = value; sel.append(opt); }
       return sel;
     }
-    const providers = row("Provider", select(PROVIDERS));
-    const style = row("Shape", select(STYLES));
-    const symbol = row("Provider display", select(SYMBOLS));
-    const bleed = row("Chat surface", select(BLEEDS));
-    const palette = row("Shape palette", select({ ...Object.fromEntries(Object.keys(PALETTES).map(p => [p, p[0].toUpperCase()+p.slice(1)])), custom: "Custom" }));
-    const colorWrap = node("div", null, "orb-settings-colors");
-    const colors = Array.from({ length: 4 }, (_, i) => {
-      const input = node("input"); input.type = "color"; input.setAttribute("aria-label", ["Deep colour", "Mid colour", "Bright colour", "Highlight"][i]);
-      colorWrap.append(input); return input;
-    });
-    row("Shape colours", colorWrap);
-    const iconPalette = row("Icon palette", select({ white: "White", ice: "Ice", amber: "Amber", ink: "Ink", custom: "Custom" }));
-    const iconWrap = node("div", null, "orb-settings-colors");
-    const iconColors = Array.from({ length: 2 }, (_, i) => {
-      const input = node("input"); input.type = "color"; input.setAttribute("aria-label", i ? "Icon highlight" : "Icon base colour");
-      iconWrap.append(input); return input;
-    });
-    row("Icon colours", iconWrap);
+    /** Preset swatches, then colour wells; editing a well makes the palette custom. */
+    function swatches(presets, names, onPreset) {
+      const wrap = node("div", null, "orb-swatches");
+      wrap.setAttribute("role", "group");
+      const buttons = Object.entries(presets).map(([name, cols]) => {
+        const b = node("button", null, "orb-swatch"); b.type = "button"; b.dataset.value = name;
+        const label = name[0].toUpperCase() + name.slice(1);
+        b.setAttribute("aria-label", label); b.dataset.tooltip = label;
+        const stops = cols.map((c, i) => `${c} ${Math.round(i * 100 / (cols.length - 1))}%`).join(", ");
+        b.style.setProperty("--sw", `linear-gradient(135deg, ${stops})`);
+        b.addEventListener("click", () => onPreset(name)); wrap.append(b); return b;
+      });
+      const wells = node("div", null, "orb-wells");
+      const inputs = names.map(n => {
+        const input = node("input"); input.type = "color"; input.setAttribute("aria-label", n); input.dataset.tooltip = n;
+        wells.append(input); return input;
+      });
+      wrap.append(wells);
+      wrap.sync = (cols) => {
+        const match = Object.keys(presets).find(p => presets[p].every((v, i) => v.toLowerCase() === cols[i].toLowerCase()));
+        buttons.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.value === match)));
+        wells.classList.toggle("custom", !match);
+        inputs.forEach((n, i) => { n.value = cols[i]; });
+      };
+      wrap.inputs = inputs;
+      return wrap;
+    }
+
+    const shapeSec = section("Shape");
+    const style = row(shapeSec, "Style", select(STYLES));
+    const palette = row(shapeSec, "Colours", swatches(PALETTES, ["Deep colour", "Mid colour", "Bright colour", "Highlight"],
+      (name) => { draft[provider].colors = [...PALETTES[name]]; paint(); }));
+    const surfaceSec = section("Chat surface");
+    const bleed = row(surfaceSec, "Effect", select(BLEEDS));
+    const iconSec = section("Provider icon");
+    const symbol = row(iconSec, "Display", select(SYMBOLS));
+    const iconPalette = row(iconSec, "Colours", swatches(ICON_PALETTES, ["Icon base colour", "Icon highlight"],
+      (name) => { draft[provider].iconColors = [...ICON_PALETTES[name]]; paint(); }));
     const sizeWrap = node("div", null, "orb-settings-size");
-    const size = node("input"); size.type = "range"; size.min = "50"; size.max = "110"; size.step = "5"; size.setAttribute("aria-label", "Icon size");
+    const size = node("input", null, "orb-range"); size.type = "range"; size.min = "50"; size.max = "110"; size.step = "5";
     const sizeValue = node("output"); sizeValue.setAttribute("aria-hidden", "true");
-    sizeWrap.append(size, sizeValue); row("Icon size", sizeWrap);
-    const preview = node("div", null, "dock-input orb-settings-preview");
-    const orb = node("button", null, "dock-orb"); orb.type = "button"; orb.setAttribute("aria-label", "Appearance preview");
-    preview.append(orb, node("span", "Message your agent…", "orb-preview-text"));
-    body.append(preview);
-    const busy = node("input"); busy.type = "checkbox";
-    row("Preview busy", busy);
-    const error = node("p", null, "orb-settings-error"); error.setAttribute("role", "alert"); body.append(error);
+    sizeWrap.append(size, sizeValue); row(iconSec, "Size", sizeWrap);
+    size.setAttribute("aria-label", "Icon size");
+    const error = node("p", null, "orb-settings-error"); error.setAttribute("role", "alert"); form.append(error);
+
     function paint() {
       const c = draft[provider];
-      providers.value = provider; style.value = c.style; symbol.value = c.symbol; bleed.value = c.bleed;
-      palette.value = Object.keys(PALETTES).find(p => PALETTES[p].every((v,i) => v.toLowerCase() === c.colors[i].toLowerCase())) || "custom";
-      colors.forEach((n,i) => { n.value = c.colors[i]; });
-      iconPalette.value = Object.keys(ICON_PALETTES).find(p => ICON_PALETTES[p].every((v,i) => v.toLowerCase() === c.iconColors[i].toLowerCase())) || "custom";
-      iconColors.forEach((n,i) => { n.value = c.iconColors[i]; });
+      providers.sync(provider); style.value = c.style; symbol.value = c.symbol; bleed.value = c.bleed;
+      palette.sync(c.colors);
+      iconPalette.sync(c.iconColors);
       size.value = String(Math.round(c.iconSize * 100)); sizeValue.textContent = size.value + "%";
       size.setAttribute("aria-valuetext", sizeValue.textContent);
+      size.style.setProperty("--fill", ((size.value - size.min) / (size.max - size.min) * 100) + "%");
       selects.forEach(s => s.syncSelect());
       previewFx?.setConfig(c, provider);
     }
-    providers.addEventListener("change", () => { provider = providers.value; paint(); });
     for (const [sel,key] of [[style,"style"],[symbol,"symbol"],[bleed,"bleed"]]) sel.addEventListener("change", () => { draft[provider][key] = sel.value; paint(); });
-    palette.addEventListener("change", () => { if (PALETTES[palette.value]) draft[provider].colors = [...PALETTES[palette.value]]; paint(); });
-    colors.forEach((input,i) => input.addEventListener("input", () => { draft[provider].colors[i] = input.value; paint(); }));
-    iconPalette.addEventListener("change", () => { if (ICON_PALETTES[iconPalette.value]) draft[provider].iconColors = [...ICON_PALETTES[iconPalette.value]]; paint(); });
-    iconColors.forEach((input,i) => input.addEventListener("input", () => { draft[provider].iconColors[i] = input.value; paint(); }));
+    palette.inputs.forEach((input,i) => input.addEventListener("input", () => { draft[provider].colors[i] = input.value; paint(); }));
+    iconPalette.inputs.forEach((input,i) => input.addEventListener("input", () => { draft[provider].iconColors[i] = input.value; paint(); }));
     size.addEventListener("input", () => { draft[provider].iconSize = Number(size.value) / 100; paint(); });
-    busy.addEventListener("change", () => { preview.classList.toggle("busy", busy.checked); previewFx?.setBusy(busy.checked); });
+    busy.addEventListener("click", () => {
+      const on = busy.getAttribute("aria-checked") !== "true";
+      busy.setAttribute("aria-checked", String(on));
+      preview.classList.toggle("busy", on); previewFx?.setBusy(on);
+    });
     const actions = node("div", null, "orb-settings-actions");
     function action(text, run, cls) { const b = node("button", text, cls); b.type = "button"; b.addEventListener("click", run); actions.append(b); }
     action("Reset provider", () => { draft[provider] = defaults(provider); paint(); });
@@ -350,6 +402,8 @@ gl_FragColor=c;
     dialog.addEventListener("click", e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
     document.body.append(dialog); dialog.showModal();
     previewFx = create(orb, preview, provider, draft[provider]); paint();
+    // Start on the provider choice, not the ? button (focus would pop its tooltip).
+    providers.querySelector('[aria-pressed="true"]')?.focus({ focusVisible: false });
     if (!previewFx) error.textContent = "WebGL is unavailable. The chat uses the gradient fallback.";
   }
   document.getElementById("dock-appearance")?.addEventListener("click", openSettings);
