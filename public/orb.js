@@ -299,7 +299,7 @@ gl_FragColor=c;
         deepenColor: { background: tinted, on: true },
         deepenColorWork: { background: tinted, on: busy },
         tint: { background: `linear-gradient(90deg, ${mix(c1, 24)}, ${mix(c2, 8)} 55%, transparent)`, on: true },
-        rim: { boxShadow: `inset 0 0 ${2.5 * k}px ${mix(c2, 50)}, inset 0 0 ${11 * k}px ${mix(c1, 55)}`, on: busy },
+        rim: { background: "rgba(0, 0, 0, .35)", boxShadow: `inset 0 0 ${2.5 * k}px ${mix(c2, 50)}, inset 0 0 ${11 * k}px ${mix(c1, 55)}`, on: busy },
       };
       const look = looks[id] || { on: false };
       backdrop.style.background = look.background || "none";
