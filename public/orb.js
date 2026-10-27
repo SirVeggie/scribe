@@ -169,8 +169,8 @@ else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
 // Motes enter from beyond the left edge at a fresh height each pass and drift right across the full height.
 for(int i=0;i<14;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
 vec2 p=vec2(-2.5+phase*11.,mix(yb+.3,yt-.3,h1(fi*7.3+seed*13.1))+.2*sin(t*.7+fi));
-float d=length(uv-p);float fade=1.-smoothstep(.55,1.,phase);
-a+=(exp(-d*24.)+exp(-d*7.)*.15)*fade*.65;}}
+float d=length(uv-p);
+a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65;}}
 a*=1.-smoothstep(5.,8.,uv.x);
 vec3 color=u_bleedmode>3.5?mix(u_c2,u_c3,.45):pal(.4+.5*n);
 return pm(color,clamp(a*(.65+.35*u_energy),0.,1.));
