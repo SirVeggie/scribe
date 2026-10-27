@@ -3661,9 +3661,9 @@ html.fx-off .ag-slash { transition: none; }
   padding-right: 50px;
 }
 
-/* Inset top-level threads beneath their workspace headings. */
-.ag-list > .ag-row-wrap > .ag-row {
-  padding-left: 16px;
+/* Inset the whole section, including helpers and Show more, beneath its heading. */
+.ag-list-group-body {
+  padding-left: 8px;
 }
 
 .ag-list.compact .ag-row-title {

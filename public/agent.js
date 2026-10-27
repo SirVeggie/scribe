@@ -7880,7 +7880,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       }
       const open = S.threads.get(currentId);
       const keepId = !q && open && nestsUnder(open) ? open.helperOf : currentId;
-      const helperRows = (parent) => {
+      const helperRows = (parent, target) => {
         const all = q ? [] : helpersOf(parent.id).filter((h) => h.archived === parent.archived);
         if (!all.length) return;
         // Working ones and the open one always show; of the rest, the latest two until asked for more.
@@ -7900,7 +7900,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           more.append(el("span", null, hidden ? `Show ${hidden} earlier ${hidden === 1 ? "helper" : "helpers"}` : "Show fewer helpers"));
           box.append(more);
         }
-        out.push(box);
+        target.append(box);
       };
       if (!threads.length) {
         if (hiddenList.length) return;
@@ -7991,9 +7991,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (acts.childNodes.length) head.append(acts);
         out.push(head);
         if (folded) continue;
+        const body = el("div", "ag-list-group-body");
+        body.dataset.key = `group-body:${key}`;
         for (const t of visible) {
-          out.push(threadRow(t, t.id === currentId, onPick));
-          helperRows(t);
+          body.append(threadRow(t, t.id === currentId, onPick));
+          helperRows(t, body);
         }
         if (hidden) {
           const more = button("", "ag-list-more", () => {
@@ -8002,8 +8004,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           });
           more.dataset.key = `more:${key}`;
           more.append(el("span", null, visible.length ? "Show 10 more" : "Show older threads"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
-          out.push(more);
+          body.append(more);
         }
+        out.push(body);
       }
       if (!shown) {
         out.push(
