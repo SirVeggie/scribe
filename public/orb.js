@@ -149,7 +149,8 @@ vec3 col=mix(pal(.45+.25*fi),u_c3,core);
 c=over(c,pm(col,clamp(core+halo,0.,1.)));}
 return c;}
 // The dots' dark shade is drawn on the surface strip (over its effect, under the orb) so it can reach past the orb.
-vec4 trioShade(vec2 uv){return pm(u_c0*.25,.8*(1.-smoothstep(.5,2.6,length(uv))));}
+// Lighter while idle, full strength while working.
+vec4 trioShade(vec2 uv){return pm(u_c0*.25,mix(.45,.8,u_work)*(1.-smoothstep(.5,2.6,length(uv))));}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
