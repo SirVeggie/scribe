@@ -1,5 +1,5 @@
 # Native in-app skills — #239
-Updated 2026-10-27 against 6618ef5 (previous version: 2026-10-11, 15f9f13). Design final (all questions answered 2026-10-27); nothing implemented.
+Updated 2026-10-27 against 6618ef5 (previous version: 2026-10-11, 15f9f13). Design final (all questions answered 2026-10-27). v1 (build order 1–5) implemented in #850: `src/agent/scribeSkills.ts`, routes `/scribe-skills*`, MCP `skill_read`, thread `skills` picks, worker `skills` picks.
 
 ## Decisions (from the user, 2026-10)
 - Storage: skill folders on disk plus database metadata.

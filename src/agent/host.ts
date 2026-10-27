@@ -5818,6 +5818,7 @@ export class AgentHost {
       useWorktree: Boolean(wt),
     });
     if (wt) thread.worktree = { ...wt };
+    if (source.skills?.length) thread.skills = [...source.skills];
     if (to.provider && to.provider !== source.provider) {
       // The other provider's own last-used settings, as when a new thread switches provider.
       const prefs = this.prefs();

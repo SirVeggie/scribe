@@ -260,6 +260,7 @@
     details: new Map(),
     loading: new Map(),
     commands: new Map(),
+    scribeSkills: null,
     current: localStorage.getItem(LS.current) || null,
     sideOpen: !SOLO && localStorage.getItem(LS.side) === "1",
     fullOpen: false,
@@ -317,6 +318,27 @@
     // The toast sits on the floating chat. Skip it when that chat is the one in use.
     if (S.dockShown && !S.fullOpen && (dockFocused() || !S.sideOpen)) return;
     app()?.showNotice?.(text);
+  }
+
+  let scribeSkillsLoad = null;
+  async function loadScribeSkills(refresh = false) {
+    if (scribeSkillsLoad) return scribeSkillsLoad;
+    if (S.scribeSkills && !refresh) return S.scribeSkills;
+    scribeSkillsLoad = api("GET", "/scribe-skills")
+      .then((data) => {
+        if (Array.isArray(data?.skills)) S.scribeSkills = data.skills.filter((skill) => !skill.removedAt);
+        return S.scribeSkills || [];
+      })
+      .catch(() => S.scribeSkills || [])
+      .finally(() => { scribeSkillsLoad = null; });
+    return scribeSkillsLoad;
+  }
+
+  function effectiveScribeSkills(settings) {
+    if (settings.noTools) return [];
+    const picks = new Set(settings.skills || []);
+    return (S.scribeSkills || []).filter((skill) => !skill.missing && (skill.enabled || picks.has(skill.id))
+      && !(skill.builtin && settings.scope?.kind === "workspace"));
   }
 
   /* ----- moved workspace folders (#338) ----- */
@@ -628,6 +650,7 @@
       if (data?.models?.length) S.config.models[provider] = data.models;
     }
     agentSettings.renderSummarizer();
+    await loadScribeSkills(true);
     requestRender();
   }
 
@@ -3063,6 +3086,7 @@
         // A custom mode that plans first turns the Plan chip on for the first message (#721).
         planNext: Boolean(custom?.plan),
         web: custom?.off.includes("web") ? "off" : webMode(d.settings.web, webMode(p.web)),
+        skills: d.settings.skills || [],
         cwd,
         // Last choice made in this workspace.
         useWorktree: d.settings.useWorktree !== undefined ? d.settings.useWorktree : Boolean(cwd && p.worktrees?.[dirKey(cwd)]),
