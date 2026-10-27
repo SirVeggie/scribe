@@ -162,7 +162,7 @@ float dotmask=1.-smoothstep(.2,.36,length(g-id));
 float wave=pow(.5+.5*cos(length(id/3.)*3.3-t*3.3),3.);
 a=dotmask*exp(-length(id/3.)*.42)*(.08+.8*wave);}
 else if(u_bleedmode<6.5){float phase=fract(t*.35);float R=.8+phase*6.;
-a=exp(-pow((r-R)/(.55+phase*.7),2.))*(1.-phase)*.5+exp(-r*r*.6)*.1;}
+a=exp(-pow((r-R)/((.55+phase*.7)*mix(1.7,1.,u_work)),2.))*smoothstep(0.,.3,phase)*(1.-phase)*.5+exp(-r*r*.6)*.1;}
 else {for(int i=0;i<12;i++){float fi=float(i);float phase=fract(t*(.12+.06*h1(fi))+h1(fi+2.));
 vec2 p=vec2(.7+phase*7.,(h1(fi+8.)-.5)*2.+.2*sin(t*.7+fi));
 float d=length(uv-p);float fade=smoothstep(0.,.12,phase)*(1.-smoothstep(.45,1.,phase));
