@@ -1856,6 +1856,13 @@ export class AgentHost {
     this.scheduleUnusedPageCleanup();
   }
 
+  interact(id: string): void {
+    const thread = this.requireThread(id);
+    thread.interactedAt = Date.now();
+    this.db.saveThread(thread);
+    this.emit({ type: "agent_thread", thread: this.view(thread) });
+  }
+
   markRead(id: string): void {
     if (this.unread.delete(id)) {
       const thread = this.threads.get(id);

@@ -233,6 +233,8 @@ export type Thread = {
   updatedAt: number;
   /** Last user message or finished turn; drives list order. */
   activityAt: number;
+  /** Last direct interaction in a chat UI; agent and page activity do not advance it. */
+  interactedAt?: number;
   /**
    * What the user typed in the composer and left unsent. A thread with a draft and no turns is a
    * draft thread (the list marks it with a pen). Attached files stay in the window that has them.

@@ -3037,6 +3037,7 @@
       this.mentionLoading = false;
 
       this.root = el("div", `ag-view ag-view-${variant}`);
+      this.bindInteractions(this.root);
       this.header = el("div", "ag-thead");
       this.scroll = el("div", "ag-scroll");
       this.transcript = el("div", "ag-transcript");
@@ -3256,6 +3257,13 @@
       }
     }
 
+    bindInteractions(root) {
+      // Only real input counts: restoring a chat, streaming and automatic scrolling do not.
+      for (const type of ["pointerdown", "keydown", "wheel"]) root.addEventListener(type, (event) => {
+        if (event.isTrusted && !root.classList.contains("listing")) interactWithThread(this.threadId);
+      }, { capture: true, passive: true });
+    }
+
     setThread(id) {
       if (this.threadId === id && id) return;
       this.audioComposer?.cancel();
@@ -3286,6 +3294,7 @@
 
     /** Show a thread here, and make it the one this view comes back to. */
     openThread(id) {
+      interactWithThread(id);
       if (this.variant === "helper") { this.setThread(id); return; }
       if (this.variant !== "dock") setCurrent(id);
       else dock.remember(id);
@@ -7951,6 +7960,26 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   }
   renderWorkingFxSetting();
 
+  const RECENT_THREAD_MS = 8 * 60 * 60 * 1000;
+  const RECENT_TIP = "Up to five threads you interacted with in the last eight hours, from every scope. This switch applies only to this list.";
+
+  function recentThreads(now = Date.now()) {
+    return [...S.threads.values()]
+      .filter((t) => !t.archived && t.interactedAt && now - t.interactedAt < RECENT_THREAD_MS)
+      .sort((a, b) => b.interactedAt - a.interactedAt)
+      .slice(0, 5);
+  }
+
+  function interactWithThread(id) {
+    const thread = S.threads.get(id);
+    if (!thread) return;
+    const now = Date.now();
+    // Coalesce typing and wheel events, while switching between threads still reorders them.
+    if (thread.interactedAt && now - thread.interactedAt < 15000 && recentThreads(now)[0]?.id === id) return;
+    thread.interactedAt = now;
+    void api("POST", `/threads/${encodeURIComponent(id)}/interact`).catch(() => undefined);
+  }
+
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
@@ -8034,7 +8063,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       renderLists();
       return compactThreads();
     }, "Each thread shows only its title, provider, status and changes, in a smaller font with less spacing");
-    tools.append(showWorkersToggle(), compact);
+    const recent = listSwitch("Recent", Boolean(container.agRecent), () => {
+      container.agRecent = !container.agRecent;
+      container.agFill();
+      return container.agRecent;
+    }, RECENT_TIP);
+    tools.append(showWorkersToggle(), compact, recent);
     const oldTools = top.querySelector(".ag-list-tools");
     if (oldTools) window.scribeSyncChildren(oldTools, [...tools.childNodes]);
     window.scribeSyncChildren(top, [search, seg, newBtn, oldTools || tools, ...movedBanners()]);
@@ -8052,11 +8086,30 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
       highlight(Math.max(0, at), false);
       rowGlow.watch(container, list);
+      clearTimeout(container.agRecentTimer);
+      if (container.agRecent) {
+        const expiry = Math.min(...recentThreads().map((t) => t.interactedAt + RECENT_THREAD_MS));
+        if (Number.isFinite(expiry)) container.agRecentTimer = setTimeout(() => {
+          if (container.isConnected) container.agFill();
+        }, Math.max(1, expiry - Date.now()));
+      }
     };
     // A kept row's button outlives this render, so it fills through the latest one.
     container.agFill = fill;
     const collect = (out) => {
       const q = S.search.trim().toLowerCase();
+      if (container.agRecent) {
+        let recent = recentThreads();
+        if (q) recent = rankedThreads(recent, q).map((row) => row.thread).sort((a, b) => b.interactedAt - a.interactedAt);
+        const head = el("div", "ag-list-group");
+        head.dataset.key = "recent-heading";
+        head.append(el("span", "ag-list-group-kind", "Recent"));
+        const body = el("div", "ag-list-group-body ag-list-recent");
+        body.dataset.key = "recent-body";
+        for (const t of recent) body.append(threadRow(t, t.id === currentId, onPick));
+        if (!recent.length) body.append(el("div", "ag-list-empty", q ? "No matching recent threads" : "No threads interacted with in the last eight hours"));
+        out.push(head, body);
+      }
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
       const spaceId = spaceFilterId();
@@ -8265,7 +8318,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function threadRow(t, current, onPick, label) {
     // Working rows glow (rowGlow), waiting and unread ones get a gradient from the right: no status column.
     const state = t.status === "running" || (t.status === "idle" && t.background) ? " s-running" : t.status === "waiting" ? " s-waiting" : "";
-    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}${state}`, () => onPick(t.id));
+    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}${state}`, () => { interactWithThread(t.id); onPick(t.id); });
     row.dataset.id = t.id;
     const main = el("span", "ag-row-main");
     // Draft threads are all "New thread" until sent: tell them apart by what was written.
@@ -8599,6 +8652,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.root = root;
       this.history = history;
       this.view.root = root;
+      this.view.bindInteractions(root);
       window.addEventListener("scribe:orb-appearance", () => this.renderSweep());
       this.view.root.addEventListener("click", (event) => onLinkClick(event));
       this.view.root.addEventListener("auxclick", (event) => onLinkClick(event));
@@ -8830,9 +8884,22 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       items.push({ label: "New thread", fixed: true, icon: "plus", run: () => { if (tab) setDockPick(tab.id, null); this.view.startDraft(tab ? { kind: "page", ref: tab.id } : { kind: "global", ref: null }, {}, true); this.renderTitle(); } });
       if (pageThreads.length) items.push({ header: "This page" });
       for (const t of pageThreads) add(t, threadWhenText(t));
-      if (others.length) items.push({ header: "Recent" });
+      if (others.length) items.push({ header: "Other threads" });
       for (const t of others) add(t, `${scopeLabel(t.scope).text} · ${threadWhenText(t)}`);
-      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10, className: `ag-thread-menu${dockCompact() ? " compact" : ""}`, tools: (refresh) => {
+      const ordinary = [...items];
+      let expiryTimer;
+      let refreshRecent = () => {};
+      const fillRecent = () => {
+        const recent = this.recent ? recentThreads() : [];
+        const entries = recent.map((t) => ({ label: t.title, detail: `${modelLabel(t.provider, t.model)} · ${scopeLabel(t.scope).text}`, lead: lead(t), checked: t.id === currentId, run: () => this.pick(t.id) }));
+        items.splice(0, items.length, ordinary[0], ...(this.recent ? [{ header: "Recent" }, ...(entries.length ? entries : [{ label: "No threads interacted with in the last eight hours", disabled: true }])] : []), ...ordinary.slice(1));
+        clearTimeout(expiryTimer);
+        const expiry = Math.min(...recent.map((t) => t.interactedAt + RECENT_THREAD_MS));
+        if (Number.isFinite(expiry)) expiryTimer = setTimeout(() => { fillRecent(); refreshRecent(); }, Math.max(1, expiry - Date.now()));
+      };
+      fillRecent();
+      openMenu(anchor, items, { search: true, width: 320, placeholder: "Search all threads", pageSize: 10, onClose: () => clearTimeout(expiryTimer), className: `ag-thread-menu${dockCompact() ? " compact" : ""}`, tools: (refresh) => {
+        refreshRecent = refresh;
         const tools = el("div", "ag-list-tools ag-menu-tools");
         // Its own Compact switch: titles and provider marks only. A search still matches the hidden details.
         const compact = listSwitch("Compact", dockCompact(), () => {
@@ -8841,11 +8908,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           compact.closest(".ag-menu")?.classList.toggle("compact", on);
           return on;
         }, "Each thread shows only its title and provider");
-        tools.append(showWorkersToggle(refresh, true), compact);
+        const recent = listSwitch("Recent", Boolean(this.recent), () => {
+          this.recent = !this.recent;
+          fillRecent();
+          refresh();
+          return this.recent;
+        }, RECENT_TIP);
+        tools.append(showWorkersToggle(refresh, true), compact, recent);
         return tools;
       } });
     },
-    pick(id) {
+    pick(id, { interact = true } = {}) {
+      if (interact) interactWithThread(id);
       this.remember(id);
       this.view.setThread(id);
       this.renderTitle();
@@ -11996,6 +12070,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
    * Without it (background starts and sends) nothing the user has open is closed.
    */
   function showPageThread(id, where, { reveal = false } = {}) {
+    if (reveal) interactWithThread(id);
     if (CHAT) {
       if (reveal) {
         closeMenu();
@@ -12022,7 +12097,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       sidebar.view.setThread(id);
       if (reveal && sidebar.listOpen) sidebar.toggleList();
     } else if (where === "dock") {
-      if (id !== dock.view.threadId) dock.pick(id);
+      if (id !== dock.view.threadId) dock.pick(id, { interact: reveal });
       if (!S.dockShown) dock.setShown(true);
     }
   }
@@ -12031,6 +12106,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function openThread(id) {
     const thread = S.threads.get(id);
     if (!thread || thread.archived) return false;
+    interactWithThread(id);
     showPageThread(id, "sidebar", { reveal: true });
     return true;
   }
