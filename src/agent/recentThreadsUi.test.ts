@@ -105,7 +105,9 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     assert.equal(await full.locator('.ag-list-recent [data-id="saved-draft"] .ag-row-title').textContent(), "Unsent idea");
     // Let the clock reach the exact cutoff: entries expire without another thread update.
     await page.clock.fastForward(8 * 3600000);
-    assert.equal(await full.locator(".ag-list-recent .ag-row").count(), 0);
+    // An empty Recent section is left out, heading and all.
+    assert.equal(await full.locator(".ag-list-recent").count(), 0);
+    assert.equal(await full.locator(".ag-list-group-kind", { hasText: "Recent" }).count(), 0);
     assert.deepEqual(errors, []);
     // Opening a chat, clicking and scrolling in it do not count; a draft counts only while it has text.
     await page.evaluate(() => {

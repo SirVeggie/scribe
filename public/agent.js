@@ -8115,8 +8115,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const body = el("div", "ag-list-group-body ag-list-recent");
         body.dataset.key = "recent-body";
         for (const t of recent) body.append(threadRow(t, t.id === currentId, onPick));
-        if (!recent.length) body.append(el("div", "ag-list-empty", q ? "No matching recent threads" : "No threads interacted with in the last eight hours"));
-        out.push(head, body);
+        // Nothing recent (or nothing matching the search): leave the section out.
+        if (recent.length) out.push(head, body);
       }
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
@@ -8907,7 +8907,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const fillRecent = () => {
         const recent = recentOn("dock") ? recentThreads() : [];
         const entries = recent.map((t) => ({ label: t.title, detail: `${modelLabel(t.provider, t.model)} · ${scopeLabel(t.scope).text}`, lead: lead(t), checked: t.id === currentId, run: () => this.pick(t.id) }));
-        items.splice(0, items.length, ordinary[0], ...(recentOn("dock") ? [{ header: "Recent" }, ...(entries.length ? entries : [{ label: "No threads interacted with in the last eight hours", disabled: true }])] : []), ...ordinary.slice(1));
+        items.splice(0, items.length, ordinary[0], ...(entries.length ? [{ header: "Recent" }, ...entries] : []), ...ordinary.slice(1));
         clearTimeout(expiryTimer);
         const expiry = Math.min(...recent.map((t) => recentInteractionAt(t) + RECENT_THREAD_MS));
         if (Number.isFinite(expiry)) expiryTimer = setTimeout(() => { fillRecent(); refreshRecent(); }, Math.max(1, expiry - Date.now()));
