@@ -16,7 +16,7 @@
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1], glow: [.6, 1.1] };
-  const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch", echo: "Echo" };
+  const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch", echo: "Echo" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
   // CSS backgrounds for the composer, drawn behind the chat surface effect.
   const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", deepenColor: "Colour fade", deepenColorWork: "Colour fade while working", tint: "Palette wash", rim: "Glowing rim while working" };
@@ -49,6 +49,7 @@
     if (typeof value.iconSize === "number" && Number.isFinite(value.iconSize)) base.iconSize = Math.max(.5, Math.min(1.1, value.iconSize));
     // Keep saved choices meaningful after moving flares from shapes to surface effects.
     if (value.style === "flares") { base.style = "mesh"; base.bleed = "flares"; }
+    if (value.symbol === "traced") base.symbol = "glow";
     if (value.symbol === "dotsClear") base.symbol = "dots";
     if (value.bleed === "breathing") base.bleed = "glow";
     if (value.bleed === "circuit" && value.style !== "flares") base.bleed = "none";
@@ -146,11 +147,9 @@ float bevel(vec2 p){return smoothstep(0.,.08,-sym(p/u_iconSize)*u_iconSize);}
 vec4 mark(vec2 uv,float t){
 float d=sym(uv/u_iconSize)*u_iconSize;float inside=aaIn(d);float a=0.;vec3 c=mix(u_i0,u_i1,.7);
 if(u_symbol<1.5){a=inside*.95+exp(-max(d,0.)*20.)*.3;c=mix(u_i0,u_i1,liqT(uv,t*.5));}
-else if(u_symbol<2.5){float angle=atan(uv.y,uv.x)-t*2.2;float band=pow(.5+.5*cos(angle),10.)+pow(.5-.5*cos(angle),10.);
-a=inside*.3+exp(-abs(d)*40.)*(.75+.25*band);c=mix(u_i0,u_i1,clamp(band,0.,1.));}
-else if(u_symbol<3.5){float scan=.65+.35*sin(uv.y*45.);float roll=1.+.2*exp(-abs(fract(uv.y*.35-t*.25)-.5)*30.);
+else if(u_symbol<2.5){float scan=.65+.35*sin(uv.y*45.);float roll=1.+.2*exp(-abs(fract(uv.y*.35-t*.25)-.5)*30.);
 a=(inside+exp(-max(d,0.)*20.)*.25)*scan*roll;}
-else if(u_symbol<4.5){
+else if(u_symbol<3.5){
 // Larger dots lit by how much of the cell the icon covers, so thin strokes still read.
 // Unlit LEDs stay faintly visible; while working a bright row sweeps down.
 float n=7.;float cell=1./n;vec2 g=uv*n,id=floor(g)+.5;
@@ -159,14 +158,14 @@ float dotmask=1.-smoothstep(.4-px*n,.4+px*n,length(g-id));
 float sweep=exp(-pow(id.y/n+1.2-fract(t*.35)*2.6,2.)*40.)*u_work;
 float lit=clamp(cov*(1.+.5*sweep)+.25*sweep,0.,1.);
 a=dotmask*max(lit,.1);c=mix(u_i0*.5,u_i1,lit);}
-else if(u_symbol<5.5){
+else if(u_symbol<4.5){
 // Bevelled relief: lit from the top left when idle; the light circles the icon while working.
 vec2 ex=vec2(.03,0.),ey=vec2(0.,.03);
 float hx=bevel(uv-ex)-bevel(uv+ex),hy=bevel(uv-ey)-bevel(uv+ey);
 vec3 nrm=normalize(vec3(hx,hy,.35));
 vec3 L=normalize(mix(vec3(-.7,.7,.8),vec3(cos(t*1.2),sin(t*1.2),.8),u_work));float lit=clamp(dot(nrm,L),0.,1.);
 c=mix(u_i0*.45,u_i1,lit)+vec3(pow(lit,24.)*.5);a=inside;}
-else if(u_symbol<6.5){
+else if(u_symbol<5.5){
 // Rows slip sideways with a colour split: now and then when idle, often while working.
 float slot=floor(t*7.);float g=step(mix(.93,.6,u_work),h1(slot));
 float off=(h1(floor(uv.y*7.)+slot*3.1)-.5)*.3*g;float sp=.06*g;
