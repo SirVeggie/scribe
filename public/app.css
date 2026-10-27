@@ -1465,7 +1465,7 @@ button.lib-lens-all:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 0 18px;
+  padding: 0 18px 18px;
 }
 
 .lens-fields p.help {
