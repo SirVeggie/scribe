@@ -8,13 +8,15 @@
     sky: ["#0d2a5c", "#3b82f6", "#93c5fd", "#fff7d6"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", none: "None" };
+  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy" };
   // Shape animation speed while idle and working; others use [.6, 2].
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes", embers: "Embers" };
+  // CSS backgrounds for the composer, drawn behind the chat surface effect.
+  const BACKGROUNDS = { none: "None", deepen: "Deep fade", deepenWork: "Deep fade while working", tint: "Palette wash", rim: "Glowing rim while working", sheen: "Sheen while working" };
   const ICON_PALETTES = {
     white: ["#e0eaff", "#ffffff"],
     ice: ["#7ee7ff", "#ffffff"],
@@ -31,12 +33,12 @@
   };
   const defaults = (provider) => {
     const base = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.pi;
-    return { ...base, iconColors: [...base.iconColors], colors: [...base.colors] };
+    return { background: "none", ...base, iconColors: [...base.iconColors], colors: [...base.colors] };
   };
   function clean(value, provider) {
     const base = defaults(provider);
     if (!value || typeof value !== "object") return base;
-    for (const [key, options] of [["style", STYLES], ["symbol", SYMBOLS], ["bleed", BLEEDS]]) {
+    for (const [key, options] of [["style", STYLES], ["symbol", SYMBOLS], ["bleed", BLEEDS], ["background", BACKGROUNDS]]) {
       if (Object.hasOwn(options, value[key])) base[key] = value[key];
     }
     if (Array.isArray(value.colors) && value.colors.length === 4 && value.colors.every(c => /^#[0-9a-f]{6}$/i.test(c))) base.colors = [...value.colors];
@@ -132,9 +134,9 @@ float n=fbm(uv*3.+vec2(t*.1));float dens=clamp(arm*(.4+.8*n)*exp(-r*1.4)*1.8+exp
 vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1,r));}
 
 vec4 base(vec2 uv,float t){
-if(u_style<.5)return liquid3d(uv,t);if(u_style<1.5)return mesh(uv,t);if(u_style<2.5)return meshquick(uv,t);if(u_style<3.5)return ring(uv,t);
-if(u_style<4.5)return ink(uv,t);if(u_style<5.5)return plasma(uv,t);if(u_style<6.5)return halftone(uv,t);
-if(u_style<7.5)return galaxy(uv*1.6,t);return vec4(0.);
+if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
+if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
+return galaxy(uv*1.6,t);
 }
 vec4 mark(vec2 uv,float t){
 float d=sym(uv/u_iconSize)*u_iconSize;float inside=aaIn(d);float a=0.;vec3 c=mix(u_i0,u_i1,.7);
@@ -208,7 +210,7 @@ gl_FragColor=u_bleedmode<.5?vec4(0.):surface(uv,u_surfaceTime);return;}
 vec2 uv=(gl_FragCoord.xy-.5*u_res)/s*u_bleed;px=u_bleed/s;
 vec4 c=base(uv,u_shapeTime);
 float r=length(uv);
-if(u_style<6.5){
+if(u_style>.5&&u_style<7.5){
 c*=1.-smoothstep(.9,1.05,r);
 float edge=exp(-abs(r-.97)*15.)*(1.-smoothstep(1.,1.26,r))*.22;
 c=over(c,pm(mix(u_c2,u_c3,.35),edge));}
@@ -244,6 +246,13 @@ gl_FragColor=c;
     });
     const spill = fx && window.scribeGL.lazy(surface, FRAG, opts);
     if (!fx) { canvas.remove(); surface.remove(); return null; }
+    // The background sits under the surface canvas; inline styles so it needs no stylesheet.
+    const backdrop = document.createElement("div");
+    backdrop.className = "dock-orb-backdrop";
+    backdrop.setAttribute("aria-hidden", "true");
+    Object.assign(backdrop.style, { position: "absolute", inset: "0", borderRadius: "inherit", pointerEvents: "none", transition: "opacity .8s ease" });
+    container.prepend(backdrop);
+    let sheen = null;
     if (!spill) surface.remove();
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
@@ -274,9 +283,33 @@ gl_FragColor=c;
       work += ((busy ? 1 : 0) - work) * Math.min(1, dt * 3);
       if (!draw()) loop.stop();
     }, { element: btn });
+    function paintBackdrop(moving) {
+      const id = current.background || "none";
+      const [c0, c1, c2, c3] = current.colors;
+      const mix = (c, pct, to = "transparent") => `color-mix(in srgb, ${c} ${pct}%, ${to})`;
+      // Scale the stops with the surface strip (160px in the app, zoomed in the lab).
+      const k = (surface.getBoundingClientRect().width || 160) / 160;
+      const deep = `linear-gradient(90deg, ${mix(c0, 85, "black")} 0px, ${mix(c0, 50)} ${110 * k}px, transparent ${210 * k}px)`;
+      const looks = {
+        deepen: { background: deep, on: true },
+        deepenWork: { background: deep, on: busy },
+        tint: { background: `linear-gradient(90deg, ${mix(c1, 24)}, ${mix(c2, 8)} 55%, transparent)`, on: true },
+        rim: { boxShadow: `inset 0 0 0 1px ${mix(c2, 55)}, inset 0 0 ${14 * k}px ${mix(c1, 45)}`, on: busy },
+        sheen: { background: `linear-gradient(100deg, transparent 35%, ${mix(c3, 14)} 50%, transparent 65%) 0 0 / 300% 100%`, on: busy },
+      };
+      const look = looks[id] || { on: false };
+      backdrop.style.background = look.background || "none";
+      backdrop.style.boxShadow = look.boxShadow || "none";
+      backdrop.style.opacity = look.on ? "1" : "0";
+      const animate = id === "sheen" && moving;
+      if (animate && !sheen) sheen = backdrop.animate([{ backgroundPosition: "100% 0" }, { backgroundPosition: "0% 0" }], { duration: 2800, iterations: Infinity });
+      if (!animate && sheen) { sheen.cancel(); sheen = null; }
+    }
     function update() {
-      if (disposed || broken) return;
+      if (disposed) return;
       const moving = !still.matches && !document.documentElement.classList.contains("fx-off");
+      paintBackdrop(moving);
+      if (broken) return;
       btn.classList.toggle("fx-live", moving);
       if (moving) loop.start();
       else { loop.stop(); draw(); }
@@ -301,6 +334,7 @@ gl_FragColor=c;
         window.removeEventListener("scribe:orb-appearance", refresh);
         still.removeEventListener("change", update);
         canvas.removeEventListener("webglcontextlost", lost);
+        sheen?.cancel(); backdrop.remove();
         fx.destroy(); spill?.destroy(); canvas.remove(); surface.remove(); btn.classList.remove("gl", "fx-live");
       },
     };
@@ -408,6 +442,8 @@ gl_FragColor=c;
       (name) => { draft[provider].colors = [...PALETTES[name]]; paint(); }));
     const surfaceSec = section("Chat surface");
     const bleed = row(surfaceSec, "Effect", select(BLEEDS));
+    const backgroundSec = section("Background");
+    const background = row(backgroundSec, "Fill", select(BACKGROUNDS));
     const iconSec = section("Provider icon");
     const symbol = row(iconSec, "Display", select(SYMBOLS));
     const iconPalette = row(iconSec, "Colours", swatches(ICON_PALETTES, ["Icon base colour", "Icon highlight"],
@@ -421,7 +457,7 @@ gl_FragColor=c;
 
     function paint() {
       const c = draft[provider];
-      providers.sync(provider); style.value = c.style; symbol.value = c.symbol; bleed.value = c.bleed;
+      providers.sync(provider); style.value = c.style; symbol.value = c.symbol; bleed.value = c.bleed; background.value = c.background || "none";
       palette.sync(c.colors);
       iconPalette.sync(c.iconColors);
       size.value = String(Math.round(c.iconSize * 100)); sizeValue.textContent = size.value + "%";
@@ -430,7 +466,7 @@ gl_FragColor=c;
       selects.forEach(s => s.syncSelect());
       previewFx?.setConfig(c, provider);
     }
-    for (const [sel,key] of [[style,"style"],[symbol,"symbol"],[bleed,"bleed"]]) sel.addEventListener("change", () => { draft[provider][key] = sel.value; paint(); });
+    for (const [sel,key] of [[style,"style"],[symbol,"symbol"],[bleed,"bleed"],[background,"background"]]) sel.addEventListener("change", () => { draft[provider][key] = sel.value; paint(); });
     palette.inputs.forEach((input,i) => input.addEventListener("input", () => { draft[provider].colors[i] = input.value; paint(); }));
     iconPalette.inputs.forEach((input,i) => input.addEventListener("input", () => { draft[provider].iconColors[i] = input.value; paint(); }));
     size.addEventListener("input", () => { draft[provider].iconSize = Number(size.value) / 100; paint(); });
