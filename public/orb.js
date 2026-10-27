@@ -175,10 +175,11 @@ else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
 // Motes cross the surface up and to the right at about 55 degrees, each on a fresh lane per pass.
 vec2 dir=vec2(.574,.819),side=vec2(-.819,.574),c=vec2(3.8,.5*(yb+yt));float w=10.6,h=yt-yb;
 float W=w*.819+h*.574,L=w*.574+h*.819+3.;
-for(int i=0;i<28;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
+// Twelve more motes fade in while working.
+for(int i=0;i<40;i++){float fi=float(i);float on=fi<28.?1.:u_work;if(on<.01)break;float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
 vec2 p=c+side*((h1(fi*7.3+seed*13.1)-.5)*W+.15*sin(t*.7+fi))+dir*(phase-.5)*L;
 float d=length(uv-p);
-a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65;}}
+a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65*on;}}
 a*=1.-smoothstep(5.,8.,uv.x);
 vec3 color=u_bleedmode>3.5?mix(u_c2,u_c3,.45):pal(.4+.5*n);
 return pm(color,clamp(a*(.65+.35*u_energy),0.,1.));
