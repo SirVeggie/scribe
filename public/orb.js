@@ -291,7 +291,9 @@ gl_FragColor=c;
       const k = (surface.getBoundingClientRect().width || 160) / 160;
       const fade = (from, mid) => `linear-gradient(90deg, ${from} 0px, ${mid} ${110 * k}px, transparent ${210 * k}px)`;
       const deep = fade("rgba(0, 0, 0, .74)", "rgba(0, 0, 0, .36)");
-      const tinted = fade(mix(c0, 85, "black"), mix(c0, 50));
+      // Half the palette's deep colour, half near-black grey: darker and less saturated.
+      const muted = mix(c0, 50, "rgb(10 11 13)");
+      const tinted = fade(muted, mix(muted, 50));
       const looks = {
         deepen: { background: deep, on: true },
         deepenWork: { background: deep, on: busy },
