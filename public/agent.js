@@ -1066,6 +1066,7 @@
         customMode: s.custom?.id ?? null,
         approval: s.approval,
         web: s.web,
+        skills: s.skills || [],
         cwd: s.cwd,
         useWorktree: Boolean(s.useWorktree),
         scope: s.scope,
@@ -5553,6 +5554,11 @@
       this.input.addEventListener("focus", () => {
         this.renderContext();
         this.warm();
+        // Returning from Manage skills also updates a previously hidden Skills pill.
+        const before = JSON.stringify(S.scribeSkills || null);
+        void loadScribeSkills(true).then(() => {
+          if (JSON.stringify(S.scribeSkills || null) !== before) this.renderComposerBar();
+        });
       });
       this.bar = el("div", "ag-bar");
       window.scribeAudio.notice = notice;
@@ -6086,6 +6092,16 @@
         web.setAttribute("aria-label", `${wm.label}: ${detail}`);
         bar.append(web);
       }
+      if ((S.scribeSkills || []).some((skill) => !skill.builtin) || s.skills?.length) {
+        const effective = effectiveScribeSkills(s);
+        const detail = effective.map((skill) => skill.name).join(", ") || "No active skills";
+        const skills = button("", "ag-pill ag-skills", (event) => this.skillsMenu(event.currentTarget));
+        skills.append(icon("sparkle"), el("span", null, this.variant === "dock" ? String(effective.length) : `${effective.length} ${effective.length === 1 ? "skill" : "skills"}`));
+        skills.setAttribute("aria-label", `Skills: ${effective.length}`);
+        skills.setAttribute("aria-description", detail);
+        bindHoverTip(skills, () => noteTip(detail));
+        bar.append(skills);
+      }
       const meter = usageChip(s.provider, this.variant !== "full", s.model, this.thread());
       const mic = button("", "ag-pill ag-mic", () => this.audioComposer.toggle(), "Dictate (Ctrl+Shift+Space)", false);
       mic.append(icon("mic"), el("span", "ag-mic-status"));
@@ -6248,6 +6264,34 @@
       openMenu(anchor, items, { width: 300 });
     }
 
+    async skillsMenu(anchor) {
+      const threadId = this.threadId;
+      await loadScribeSkills(true);
+      if (this.threadId !== threadId) return;
+      const s = this.settings();
+      const effective = new Set(effectiveScribeSkills(s).map((skill) => skill.id));
+      const picks = s.skills || [];
+      const drop = (id) => this.updateSettings({ skills: (this.settings().skills || []).filter((pick) => pick !== id) });
+      const items = (S.scribeSkills || []).map((skill) => {
+        const excluded = s.noTools || (skill.builtin && s.scope?.kind === "workspace");
+        return {
+          label: skill.name,
+          detail: skill.missing ? "Unavailable skill" : excluded ? (s.noTools ? "Tools are off for this chat" : "No page access") : skill.enabled ? "On for every chat" : skill.description,
+          checked: effective.has(skill.id),
+          disabled: Boolean(skill.enabled || skill.missing || excluded),
+          run: () => this.updateSettings({ skills: effective.has(skill.id) ? picks.filter((id) => id !== skill.id) : [...picks, skill.id] }),
+        };
+      });
+      for (const id of picks) {
+        const skill = (S.scribeSkills || []).find((skill) => skill.id === id);
+        if (skill && !skill.missing) continue;
+        if (!skill) items.push({ label: "Unavailable skill", detail: id, disabled: true });
+        items.push({ label: `Remove ${skill?.name || "unavailable skill"}`, detail: id, run: () => drop(id) });
+      }
+      items.push({ separator: true }, { label: "Manage skills…", icon: "gear", run: () => window.scribeHarness?.open("skills") });
+      openMenu(anchor, items, { width: 300 });
+    }
+
     webMenu(anchor) {
       const s = this.settings();
       const cur = webMode(s.web);
@@ -6375,6 +6419,7 @@
     async showSlash(typed) {
       const gen = this.mentionGen;
       const s = this.settings();
+      await loadScribeSkills();
       let list = S.commands.get(s.provider);
       if (this.threadId || !list) {
         try {
@@ -6396,10 +6441,15 @@
       const page = pageActions(activeTab(), "slash")
         .filter((a) => !LOCAL_SLASH.some((c) => c.name === a.id) && (a.id.includes(q) || a.label.toLowerCase().includes(q)))
         .map((a) => ({ name: a.id, description: a.description ? `${a.label}: ${a.description}` : a.label }));
-      const remote = (list || []).filter(
-        (c) => c.name.toLowerCase().includes(q) && !LOCAL_SLASH.some((s) => s.name === c.name.toLowerCase()) && !page.some((a) => a.name === c.name.toLowerCase())
-      );
-      const hits = [...local, ...page, ...remote].slice(0, 40);
+      const names = new Set([...LOCAL_SLASH.map((c) => c.name.toLowerCase()), ...page.map((c) => c.name.toLowerCase())]);
+      const skills = (s.noTools ? [] : S.scribeSkills || []).filter((skill) => {
+        const name = skill.name.toLowerCase();
+        if (skill.missing || (skill.builtin && s.scope?.kind === "workspace") || !name.includes(q) || names.has(name)) return false;
+        names.add(name);
+        return true;
+      }).map((skill) => ({ name: skill.name, description: `Scribe skill${skill.description ? ` · ${skill.description}` : ""}`, skill }));
+      const remote = (list || []).filter((c) => c.name.toLowerCase().includes(q) && !names.has(c.name.toLowerCase()));
+      const hits = [...local, ...page, ...skills, ...remote].slice(0, 40);
       this.slash.replaceChildren();
       if (!hits.length) {
         this.slash.hidden = true;
@@ -6411,6 +6461,22 @@
           const current = slashAt(value, this.input.selectionStart ?? value.length);
           if (!current || current.start !== token.start || current.end !== token.end || current.query !== typed) return;
           const remaining = value.slice(0, current.start) + value.slice(current.end);
+          if (c.skill) {
+            const instruction = `Use the Scribe skill "${c.name}": read it with skill_read and follow it. `;
+            this.input.value = value.slice(0, current.start) + instruction + value.slice(current.end);
+            const caret = current.start + instruction.length;
+            this.input.setSelectionRange(caret, caret);
+            this.syncInline();
+            this.hidePicker();
+            this.autosize();
+            this.syncComposerDraft();
+            this.focus();
+            if (!effectiveScribeSkills(this.settings()).some((skill) => skill.id === c.skill.id)) {
+              const picks = this.settings().skills || [];
+              if (!picks.includes(c.skill.id)) await this.updateSettings({ skills: [...picks, c.skill.id] });
+            }
+            return;
+          }
           if (c.local) {
             this.input.value = remaining;
             this.input.setSelectionRange(current.start, current.start);
@@ -6888,6 +6954,7 @@
             customMode: cur.custom?.id ?? null,
             approval: cur.approval,
             web: cur.web,
+            skills: cur.skills || [],
             cwd: cur.cwd,
             useWorktree: Boolean(cur.useWorktree),
             scope: cur.scope,
@@ -12062,6 +12129,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     );
     const provider = providerAvailable(p.provider) ? p.provider : available[0]?.id || null;
     const defaultChoice = provider ? modelChoice(provider, p.models?.[provider] || "default", p) : null;
+    const skills = await loadScribeSkills(true);
     return {
       ok: true,
       providers: S.config.providers.map((x) => ({ id: x.id, label: x.label, available: Boolean(x.available) })),
@@ -12090,6 +12158,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       ],
       // The user's own modes: start a thread in one with customMode; base is its highest rung.
       customModes: customModes().map((m) => ({ id: m.id, label: m.name, detail: m.description || customDetail(m, m.base), base: m.base })),
+      // Scribe skills a chat can be given on top of the ones on for every chat (#239).
+      skills: skills.filter((k) => !k.missing).map((k) => ({ id: k.id, label: k.name, detail: k.description, enabled: Boolean(k.enabled), builtin: Boolean(k.builtin) })),
       approvals: APPROVALS.map((a) => ({ id: a.id, label: a.label, detail: a.detail, needsFolder: !READ_RUNGS.has(a.id) })),
       defaults: provider
         ? {
@@ -12181,6 +12251,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       // The old plan mode: the page's first message is a plan turn (#721).
       ...(data.mode === "plan" ? { planNext: true } : {}),
       ...(data.helpers === true ? { helpersAllowed: true } : {}),
+      ...(Array.isArray(data.skills) ? { skills: data.skills.filter((id) => typeof id === "string" && id).slice(0, 100) } : {}),
     };
   }
 
@@ -12599,6 +12670,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       customMode: s.custom?.id ?? null,
       approval: s.approval,
       web: webMode(s.web),
+      skills: [...(s.skills || [])],
       cwd: homeDir(s),
       useWorktree: Boolean(s.useWorktree),
     };

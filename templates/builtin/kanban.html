@@ -1049,6 +1049,7 @@
   .worker-form.compact { grid-template-columns: 78px minmax(0, 1fr); gap: 7px 10px; padding: 4px 0 0; overflow: visible; }
   .worker-form.compact textarea.field { min-height: 70px; }
   .worker-form .check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+  .worker-form .skill-picks { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   .worker-note { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
   .worker-note.warn { color: var(--agent); }
   .confirm-row .spacer { flex: 1; }
@@ -5368,6 +5369,7 @@
     if (w.fast === "true") parts.push("fast");
     parts.push(RUNG_LABELS[workerRung(w)]);
     if (str(w.customMode)) parts.push("custom mode");
+    if (Array.isArray(w.skills) && w.skills.length) parts.push(w.skills.length === 1 ? "1 skill" : w.skills.length + " skills");
     if (FOLDER_MODES[mode] && w.cwd) parts.push(str(w.cwd).split(/[\\/]/).filter(Boolean).pop() || w.cwd);
     if (FOLDER_MODES[mode] && w.worktree) parts.push("worktree");
     if (w.web === "limited") parts.push("web limited");
@@ -5619,6 +5621,7 @@
     else if (w.fast === "false") opts.fast = false;
     else if (str(w.fast)) { delete opts.fast; opts.modelParams = { fast: str(w.fast) }; }
     if (str(w.customMode)) opts.customMode = w.customMode;
+    if (Array.isArray(w.skills) && w.skills.length) opts.skills = w.skills.slice();
     if (FOLDER_MODES[mode]) {
       opts.cwd = w.cwd;
       if (w.worktree) opts.worktree = true;
@@ -6595,6 +6598,35 @@
       if (str(w.customMode) && customIds.indexOf(str(w.customMode)) < 0) customList.push([str(w.customMode), "Deleted mode"]);
       row("Custom mode", enhanced(workerSelect(customList, str(w.customMode), "Custom mode", function (v) { set({ customMode: v }); })),
         "One of your own modes from Agent settings: it caps the rung, takes tools away from the agent and adds its instructions.");
+    }
+    // Scribe skills (#239): picks on top of the ones on for every chat. Shown once the user has any of their own.
+    var skillList = (opts.skills || []).filter(function (k) { return !k.builtin; });
+    var picked = Array.isArray(w.skills) ? w.skills.slice() : [];
+    if (skillList.length || picked.length) {
+      var skillBox = el("div", "skill-picks");
+      skillList.forEach(function (k) {
+        var label = el("label", "check");
+        var box = el("input", "switch");
+        box.type = "checkbox";
+        box.checked = k.enabled || picked.indexOf(k.id) >= 0;
+        box.disabled = k.enabled;
+        box.addEventListener("change", function () {
+          var cur = (Array.isArray(worker(id).skills) ? worker(id).skills : []).filter(function (s) { return s !== k.id; });
+          if (box.checked) cur.push(k.id);
+          set({ skills: cur });
+        });
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(k.enabled ? k.label + " (on for every chat)" : k.label));
+        skillBox.appendChild(label);
+      });
+      var gone = picked.filter(function (p) { return !skillList.some(function (k) { return k.id === p; }); });
+      if (gone.length) {
+        var drop = el("button", "ghost", gone.length === 1 ? "Drop 1 unavailable skill" : "Drop " + gone.length + " unavailable skills");
+        drop.type = "button";
+        drop.addEventListener("click", function () { set({ skills: picked.filter(function (p) { return gone.indexOf(p) < 0; }) }); rebuild(); });
+        skillBox.appendChild(drop);
+      }
+      row("Skills", skillBox);
     }
     if (FOLDER_MODES[mode]) {
       var folderRow = el("div", "row");
