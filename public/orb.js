@@ -175,7 +175,7 @@ return pm(c,clamp(a,0.,1.)*(1.-smoothstep(1.,1.2,length(uv))));
 }
 vec4 surface(vec2 uv,float t){
 float r=length(uv);float reach=exp(-r*.55);float n=liqT(uv*.7,t*.4);float a=0.;
-if(u_bleedmode<1.5){a=smoothstep(.25,.8,n)*reach*.42;}
+if(u_bleedmode<1.5){a=smoothstep(.25,.8,n)*reach*.42*(1.+.5*u_work);}
 else if(u_bleedmode<2.5){vec2 dir=uv/max(r,.001);
 float f=.6*fbm(dir*2.2+vec2(t*.35,t*.2))+.4*fbm(dir*5.+vec2(-t*.6,t*.4));
 float h=.18+1.2*pow(f,2.4)*(.6+.8*u_energy);
