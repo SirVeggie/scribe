@@ -32,7 +32,7 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     await page.clock.install({ time: new Date("2026-10-27T12:00:00Z") });
     for (const name of ["app.css", "agent.css"]) await page.addStyleTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
     const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
-    await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.recentTest = { S, renderThreadList, dock, sidebar, full, recentThreads, interactWithThread, showPageThread };"));
+    await loadChatFixture(page, source.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.recentTest = { S, renderThreadList, dock, sidebar, full, recentThreads, showPageThread };"));
     await page.evaluate(() => {
       const { S, renderThreadList, dock } = (window as any).recentTest;
       S.filter = "here";
@@ -86,12 +86,11 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
       dock.pick("t2");
     });
     assert.equal(await page.evaluate(() => (window as any).recentTest.recentThreads()[0].id), "t0");
-    // Requests arrive in order, so once t4's lands, opening has had its chance to send any.
-    await Promise.all([
-      page.waitForResponse(response => response.url().endsWith("/t4/interact")),
-      page.evaluate(() => (window as any).recentTest.interactWithThread("t4")),
-    ]);
-    assert.deepEqual(interactions.map(url => url.split("/").at(-2)), ["t4"]);
+    // A send or answer (stamped by the server) moves a thread to the top.
+    await page.evaluate(() => {
+      const { S } = (window as any).recentTest;
+      S.threads.get("t4").interactedAt = Date.now();
+    });
     assert.equal(await page.evaluate(() => (window as any).recentTest.recentThreads()[0].id), "t4");
     // Previously saved drafts count too, even without an interaction timestamp.
     await page.evaluate(() => {
@@ -108,7 +107,7 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     await page.clock.fastForward(8 * 3600000);
     assert.equal(await full.locator(".ag-list-recent .ag-row").count(), 0);
     assert.deepEqual(errors, []);
-    // Opening a chat, clicking and scrolling in it do not count; typing a draft in its composer does.
+    // Opening a chat, clicking and scrolling in it do not count; a draft counts only while it has text.
     await page.evaluate(() => {
       const { S, sidebar } = (window as any).recentTest;
       const view = sidebar.view;
@@ -120,12 +119,27 @@ test("Recent crosses scopes, expires, and has independent switches in every chat
     await page.locator(".ag-scroll").first().click({ force: true }).catch(() => {});
     await page.mouse.wheel(0, 200);
     await page.keyboard.press("PageDown");
-    assert.equal(await page.evaluate(() => (window as any).recentTest.S.threads.get("worker").interactedAt), undefined);
-    await Promise.all([
-      page.waitForRequest(request => request.url().endsWith("/worker/interact")),
-      page.getByPlaceholder("Message the agent…", { exact: true }).pressSequentially("Hello"),
-    ]);
-    assert.equal(await page.evaluate(() => (window as any).recentTest.recentThreads()[0].id), "worker");
+    const recentIds = () => page.evaluate(() => (window as any).recentTest.recentThreads().map((t: { id: string }) => t.id));
+    assert.ok(!(await recentIds()).includes("worker"));
+    const composer = page.getByPlaceholder("Message the agent…", { exact: true });
+    await composer.pressSequentially("Hello");
+    await page.waitForFunction(() => (window as any).recentTest.S.threads.get("worker").draft?.text === "Hello");
+    assert.equal((await recentIds())[0], "worker");
+    // Deleting what was typed takes the intent back.
+    await composer.fill("");
+    await page.waitForFunction(() => !(window as any).recentTest.S.threads.get("worker").draft);
+    assert.ok(!(await recentIds()).includes("worker"));
+    // An earlier send still counts once its draft is emptied, at its own time.
+    await page.evaluate(() => { (window as any).recentTest.S.threads.get("worker").interactedAt = Date.now() - 60000; });
+    await composer.pressSequentially("Again");
+    await page.waitForFunction(() => (window as any).recentTest.S.threads.get("worker").draft?.text === "Again");
+    await composer.fill("");
+    await page.waitForFunction(() => !(window as any).recentTest.S.threads.get("worker").draft);
+    assert.equal(await page.evaluate(() => {
+      const { recentThreads } = (window as any).recentTest;
+      return recentThreads().find((t: { id: string }) => t.id === "worker").interactedAt;
+    }), await page.evaluate(() => (window as any).recentTest.S.threads.get("worker").interactedAt));
+    assert.deepEqual(interactions, []);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

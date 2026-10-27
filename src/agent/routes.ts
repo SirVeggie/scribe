@@ -576,14 +576,6 @@ export function agentRouter(host: AgentHost): express.Router {
   );
 
   router.post(
-    "/threads/:id/interact",
-    wrap((req) => {
-      host.interact(req.params.id);
-      return { ok: true };
-    })
-  );
-
-  router.post(
     "/threads/:id/read",
     wrap((req) => {
       host.markRead(req.params.id);
@@ -1113,7 +1105,9 @@ function threadPatch(body: Record<string, unknown>): ThreadPatch {
   if (body.draft === null) patch.draft = null;
   else if (isPlainRecord(body.draft) && typeof body.draft.text === "string") {
     const context = Array.isArray(body.draft.context) ? (body.draft.context.filter(isPlainRecord) as ContextChip[]) : [];
-    patch.draft = { text: body.draft.text.slice(0, MAX_DRAFT_TEXT), ...(context.length ? { context } : {}) };
+    const text = body.draft.text.slice(0, MAX_DRAFT_TEXT);
+    // The page only saves a draft the user changed, so this is when they last wrote in it.
+    patch.draft = { text, ...(context.length ? { context } : {}), ...(text.trim() || context.length ? { at: Date.now() } : {}) };
   }
   return patch;
 }

@@ -1034,9 +1034,8 @@
     const was = t.draft ? JSON.stringify({ text: t.draft.text, context: t.draft.context || [] }) : null;
     if (was === (draft && JSON.stringify(draft))) return;
     const unsentOnly = Boolean(t.draft) && !draft && t.stats.turns === 0 && !t.queued && t.status === "idle";
-    t.draft = draft;
-    // Writing or changing a draft is the user's own interaction; parking an unchanged one returned above.
-    if (draft) interactWithThread(t.id);
+    // Recent counts the draft from this edit (the server stamps its own copy); emptying it takes that back.
+    t.draft = draft && { ...draft, at: Date.now() };
     // Coalesce edits that overtake a request, and keep the final delete after any earlier save.
     let write = draftWrites.get(t.id);
     if (!write) {
@@ -1076,7 +1075,6 @@
         remember: false,
       });
       S.threads.set(thread.id, thread);
-      interactWithThread(thread.id);
       S.composers.set(thread.id, content);
       // The floating chat comes back to it on that page, unless it has moved on to another thread there.
       if (tab && !S.dockPicks.get(tab)?.id && !(dock.view.draft && dock.view.draftTab === tab)) setDockPick(tab, thread.id);
@@ -7955,13 +7953,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   renderWorkingFxSetting();
 
   const RECENT_THREAD_MS = 8 * 60 * 60 * 1000;
-  const RECENT_TIP = "Up to five threads you sent to, answered or wrote a draft in during the last eight hours, from every scope. Opening a thread does not count. This switch applies only to this list.";
+  const RECENT_TIP = "Up to five threads you sent to, answered or have an unsent draft in from the last eight hours, from every scope. Opening a thread does not count, and an emptied draft no longer does. This switch applies only to this list.";
 
+  /** The later of the user's last send or answer and their current draft's last edit. */
   function recentInteractionAt(t) {
-    // An unsent thread saved before interaction tracking: its update time is when the draft was saved.
-    // Threads with turns move updatedAt on agent activity, so they wait for a real interaction.
-    const savedDraft = !t.stats?.turns && (t.draft?.text?.trim() || t.draft?.context?.length);
-    return t.interactedAt || (savedDraft ? t.updatedAt || t.createdAt : 0);
+    const hasDraft = t.draft?.text?.trim() || t.draft?.context?.length;
+    // A draft saved before drafts kept their time: an unsent thread's update time is when it was saved.
+    // Threads with turns move updatedAt on agent activity, so their old drafts do not count.
+    const draftAt = !hasDraft ? 0 : t.draft.at || (!t.stats?.turns ? t.updatedAt || t.createdAt : 0);
+    return Math.max(t.interactedAt || 0, draftAt || 0);
   }
 
   /** Each list keeps its own Recent switch: "sidebar", "full" or "dock". */
@@ -7978,16 +7978,6 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       .filter((t) => !t.archived && recentInteractionAt(t) && now - recentInteractionAt(t) < RECENT_THREAD_MS)
       .sort((a, b) => recentInteractionAt(b) - recentInteractionAt(a))
       .slice(0, 5);
-  }
-
-  function interactWithThread(id) {
-    const thread = S.threads.get(id);
-    if (!thread) return;
-    const now = Date.now();
-    // Coalesce typing and wheel events, while switching between threads still reorders them.
-    if (thread.interactedAt && now - thread.interactedAt < 15000 && recentThreads(now)[0]?.id === id) return;
-    thread.interactedAt = now;
-    void api("POST", `/threads/${encodeURIComponent(id)}/interact`).catch(() => undefined);
   }
 
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn, recentList }) {

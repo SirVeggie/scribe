@@ -246,7 +246,8 @@ export type Thread = {
   skills?: string[];
 };
 
-export type ComposerDraft = { text: string; context?: ContextChip[] };
+/** at: when the user last changed it. A draft with content counts for the Recent thread lists until it is sent or emptied. */
+export type ComposerDraft = { text: string; context?: ContextChip[]; at?: number };
 
 export type ThreadFork = {
   /** The thread it was forked from, as it was then. */
