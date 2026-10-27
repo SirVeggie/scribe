@@ -81,8 +81,7 @@ test("Lens editor autosaves controls and pending text on outside click or Escape
     await open();
     const dialog = page.locator(".lens-editor");
     assert.equal(await dialog.getByRole("button", { name: /^(Save|Cancel)$/ }).count(), 0);
-    await dialog.getByRole("switch").click();
-    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.on === true);
+    assert.equal(await dialog.getByRole("switch").count(), 0);
     assert.equal(await dialog.isVisible(), true);
     await dialog.getByRole("button", { name: "Not", exact: true }).click();
     await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.conditions[0]?.not === true);
@@ -101,6 +100,9 @@ test("Lens editor autosaves controls and pending text on outside click or Escape
     await page.keyboard.press("Escape");
     await dialog.waitFor({ state: "detached" });
     await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.conditions[0]?.text === "design");
+    assert.equal((await latest()).lens.on, false, "editing conditions preserves the icon's off state");
+    await page.locator("#library-lens").click();
+    await page.waitForFunction(() => (window as any).requests.at(-1)?.lens.on === true);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

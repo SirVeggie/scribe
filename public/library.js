@@ -664,24 +664,6 @@ window.createLibrary = function createLibrary(host) {
     const fields = document.createElement("div");
     fields.className = "lens-fields";
 
-    const onRow = document.createElement("div");
-    onRow.className = "setting-row";
-    const onLabel = document.createElement("span");
-    onLabel.id = "lens-on-label";
-    onLabel.textContent = "Show only matching pages";
-    const onToggle = document.createElement("button");
-    onToggle.type = "button";
-    onToggle.className = "pill-toggle";
-    onToggle.role = "switch";
-    onToggle.setAttribute("aria-labelledby", onLabel.id);
-    // Setting a lens up for the first time is asking to see it.
-    onToggle.setAttribute("aria-checked", lens.on || !space.lens ? "true" : "false");
-    onToggle.addEventListener("click", () => {
-      onToggle.setAttribute("aria-checked", onToggle.getAttribute("aria-checked") === "true" ? "false" : "true");
-      save();
-    });
-    onRow.append(onLabel, onToggle);
-
     const homeField = document.createElement("div");
     homeField.className = "template-field";
     const homeLabel = document.createElement("label");
@@ -710,7 +692,7 @@ window.createLibrary = function createLibrary(host) {
     addWrap.className = "lens-add";
     addWrap.appendChild(add);
 
-    fields.append(onRow, homeField, matchField, list, addWrap);
+    fields.append(homeField, matchField, list, addWrap);
     form.append(title, fields);
     dialog.appendChild(form);
     document.body.appendChild(dialog);
@@ -734,7 +716,7 @@ window.createLibrary = function createLibrary(host) {
       const patch = {
         home: homeSelect.value || null,
         lens: {
-          on: onToggle.getAttribute("aria-checked") === "true",
+          on: lens.on,
           match: matchSelect.value,
           conditions: [...list.children].map((row) => row.read()).filter(Boolean),
         },
