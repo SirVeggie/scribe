@@ -6,6 +6,9 @@
     ember: ["#2a0a06", "#a8321a", "#f08a2c", "#ffe1a6"],
     moonstone: ["#15171c", "#3c4250", "#a3abb9", "#f4f6fa"],
     sky: ["#0d2a5c", "#3b82f6", "#93c5fd", "#fff7d6"],
+    forest: ["#0a1f14", "#1f6b45", "#5cc48a", "#e3f8e8"],
+    dusk: ["#160c2e", "#5b2a86", "#c45bd6", "#ffd6f5"],
+    aurora: ["#081a24", "#0f7a6c", "#7ad9a8", "#e9e2ff"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
   const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy" };
