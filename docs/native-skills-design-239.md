@@ -1,5 +1,5 @@
 # Native in-app skills — #239
-Updated 2026-10-27 against 6618ef5 (previous version: 2026-10-11, 15f9f13). Design only; nothing implemented.
+Updated 2026-10-27 against 6618ef5 (previous version: 2026-10-11, 15f9f13). Design final (all questions answered 2026-10-27); nothing implemented.
 
 ## Decisions (from the user, 2026-10)
 - Storage: skill folders on disk plus database metadata.
@@ -7,6 +7,9 @@ Updated 2026-10-27 against 6618ef5 (previous version: 2026-10-11, 15f9f13). Desi
 - Scope in v1: global skills plus picks per thread and per worker. Workspace assignments later.
 - External (provider/project) skills: read-only from the Scribe-skill side, with Copy to Scribe.
 - Scribe's own skill: a versioned, read-only built-in that can be copied for customizing.
+- The harness keeps editing provider and workspace skills in place; Scribe skills just never write into those folders.
+- A new Scribe skill is off until enabled globally or picked for a thread or worker.
+- The built-in scribe skill is in every chat's list by default and can be switched off; it replaces the prompt's "scribe skill when available, else scribe_docs" line.
 
 ## What changed since the 11 Oct snapshot
 The app now has much of the groundwork, so this plan builds on it instead of adding a second skill manager.
@@ -53,11 +56,6 @@ Extend the harness page's Skills tab rather than adding an Agent settings sectio
 - Pi: `additionalSkillPaths` with the selected folders.
 - Codex: materialize into the Scribe CODEX_HOME skills folder only after probing how the app-server picks up changes; keep MCP for it until then.
 - Cursor: MCP only.
-
-## Open questions
-1. The harness already edits provider and workspace skills in place (#495). Does "external: read-only" mean only that Scribe skills never write back into those folders (recommended), or should the harness's in-place editing be removed?
-2. Should the built-in scribe skill be in every thread's index by default, replacing the prompt's "follow the scribe skill when it is available, else scribe_docs" line? Recommended: yes, as a built-in that can be disabled.
-3. Default for a new Scribe skill: enabled globally, or off until picked? Recommended: off, since each enabled skill adds to every chat's prompt.
 
 ## Build order
 1. Storage, table, scan, CRUD routes, trash/restore, import/export with containment checks.
