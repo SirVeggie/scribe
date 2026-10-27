@@ -5954,6 +5954,8 @@
     activeTab,
     findAnyTab: (id) => findAnyTab(id) || (state.draft?.id === id ? state.draft : null),
     tabs: () => state.tabs,
+    /** Ids of the pages on screen in this window: the focused one, split panes and the peek. */
+    shownIds: () => [...views.shownIds()],
     closed: () => state.closed,
     folders: () => state.folders,
     /** The active space, with its home folder (#260); null before spaces are used. */

@@ -699,8 +699,15 @@
   });
   window.addEventListener("scribe:render", () => {
     const active = app()?.activeTab?.()?.id || null;
+    // The list's group order also follows the split panes and the peek (#855).
+    const shown = (app()?.shownIds?.() || []).join(",");
+    if (active === S.lastActiveId && shown !== S.lastShownIds) {
+      S.lastShownIds = shown;
+      renderLists();
+    }
     if (active !== S.lastActiveId) {
       S.lastActiveId = active;
+      S.lastShownIds = shown;
       dock.syncThread();
       renderLists();
       for (const view of views()) {
@@ -7401,6 +7408,49 @@
     return `${s.kind}:${s.ref}`;
   }
 
+  /** A page's folder and the folders above it, nearest first. */
+  function folderChain(folderId) {
+    const byId = new Map((app()?.folders?.() || []).map((f) => [f.id, f]));
+    const ids = [];
+    for (let cur = folderId ? byId.get(folderId) : null; cur && ids.length < 50; cur = cur.parentId ? byId.get(cur.parentId) : null) ids.push(cur.id);
+    return ids;
+  }
+
+  /**
+   * Rank of a list group by what the user is looking at (#855), the same on every filter:
+   * the focused page, its workspace, other pages on screen (split, peek), their workspaces,
+   * the focused page's folders, the others' folders, Global, pages in the tab strip,
+   * then the remaining workspaces, pages and folders. Ties keep the list's own order.
+   */
+  function groupRanker() {
+    const focused = activeTab();
+    const findTab = app()?.findAnyTab || (() => null);
+    const shown = (app()?.shownIds?.() || []).filter((id) => id !== focused?.id).map(findTab).filter(Boolean);
+    const shownIds = new Set(shown.map((t) => t.id));
+    const stripIds = new Set((app()?.tabs?.() || []).map((t) => t.id));
+    const wsOf = (tabs) => new Set(tabs.map((t) => t.workspace).filter(Boolean).map(dirKey));
+    const focusWs = wsOf(focused ? [focused] : []);
+    const shownWs = wsOf(shown);
+    const focusFolders = folderChain(focused?.folderId);
+    const shownFolders = new Set(shown.flatMap((t) => folderChain(t.folderId)));
+    return (key) => {
+      if (key === "global") return 7;
+      const at = key.indexOf(":");
+      const kind = at === -1 ? key : key.slice(0, at);
+      const ref = at === -1 ? "" : key.slice(at + 1);
+      if (kind === "page") return ref === focused?.id ? 1 : shownIds.has(ref) ? 3 : stripIds.has(ref) ? 8 : 10;
+      // The page's own folder before the ones above it.
+      if (kind === "folder") return focusFolders.includes(ref) ? 5 + focusFolders.indexOf(ref) / 100 : shownFolders.has(ref) ? 6 : 11;
+      if (kind === "ws" || kind === "workspace") {
+        // "ws" alone is No workspace, and an empty workspace ref is No scope: both go last.
+        if (!ref || ref === "null") return 12;
+        const dk = dirKey(ref);
+        return focusWs.has(dk) ? 2 : shownWs.has(dk) ? 4 : 9;
+      }
+      return 12;
+    };
+  }
+
   function groupTitle(thread) {
     if (S.filter === "workspaces") {
       const dir = workspaceDir(thread);
@@ -7933,9 +7983,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         }
         groups.get(key).push(t);
       }
-      const kindRank = { page: 0, folder: 1, workspace: 2, global: 3 };
-      const keyKind = (key) => (key.startsWith("ws:") ? "workspace" : key.split(":")[0]);
-      if (S.filter === "here") order.sort((a, b) => kindRank[keyKind(a)] - kindRank[keyKind(b)]);
+      const rank = groupRanker();
+      const ranks = new Map(order.map((key, i) => [key, rank(key) * 1e6 + i]));
+      order.sort((a, b) => ranks.get(a) - ranks.get(b));
       const now = Date.now();
       let shown = 0;
       for (const key of order) {
