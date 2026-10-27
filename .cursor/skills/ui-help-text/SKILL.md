@@ -29,3 +29,9 @@ Help text is for the few people who need it, so it must not cost everyone else r
 
 - Say what it does and what changes for the user, in one to three sentences. No marketing, no repeating the label.
 - Don't explain the obvious ("Turn this on to enable X").
+
+
+## Checkboxes and toggles
+
+- Use a plain `<input type="checkbox">` inside `label.check` for choices in dialogs and lists. `app.css` supplies the shared Track style automatically; do not add a custom checkbox drawing. Existing `.ag-check`, `.ag-ws-remember` and `.template-check` labels are layout aliases.
+- Use the shared `pill-toggle` for settings that switch something on. Pages and chat forms get the matching checkbox style from `kit.css`.

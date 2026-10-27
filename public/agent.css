@@ -5644,34 +5644,6 @@ body.resizing-split main.has-split .agent-dock {
   color: var(--muted);
 }
 
-.ag-ws-remember input[type="checkbox"],
-.ag-check input[type="checkbox"] {
-  appearance: none;
-  flex: none;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--muted);
-  cursor: pointer;
-  transition: box-shadow var(--dur-fast) ease, background var(--dur-fast) ease;
-}
-
-.ag-ws-remember input[type="checkbox"]:checked,
-.ag-check input[type="checkbox"]:checked {
-  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat;
-  box-shadow: none;
-}
-
-.ag-ws-remember input[type="checkbox"]:focus-visible,
-.ag-check input[type="checkbox"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .ag-ws-row {
   display: flex;
   gap: 8px;
@@ -6143,14 +6115,6 @@ body.resizing-split main.has-split .agent-dock {
   min-height: 100px;
   max-height: 45vh;
   resize: vertical;
-}
-
-.ag-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  cursor: pointer;
 }
 
 /* Model source editor for Pi (Agent settings → Model sources). */

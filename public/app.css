@@ -1103,27 +1103,22 @@ body.resizing-side .side-pane {
 .lib-row.lib-covered { opacity: 0.42; }
 .lib-check {
   display: inline-flex;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--accent);
-  align-items: center;
-  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(var(--lift-rgb), .12);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, .28);
 }
-.lib-check[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); }
-.lib-check[aria-checked="true"]::after {
-  content: "";
-  width: 7px;
-  height: 4px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translateY(-1px) rotate(-45deg);
+.lib-check:hover:not([aria-disabled="true"]):not([aria-checked="true"]) { background-color: rgba(var(--lift-rgb), .18); }
+.lib-check[aria-checked="true"] {
+  background: var(--accent) var(--check-tick) center / 12px no-repeat;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
 }
-.lib-check[aria-disabled="true"] { cursor: default; }
+.lib-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lib-check[aria-disabled="true"] { opacity: .45; cursor: default; }
 
 .lib-page {
   padding-left: calc(27px + var(--depth, 0) * 14px);
@@ -2663,16 +2658,17 @@ button.settings-close svg {
   box-shadow: 0 0 0 1px var(--accent-ring);
 }
 
+label.check,
+.ag-check,
+.ag-ws-remember,
 .template-check {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
 }
-
-.template-check input {
-  width: auto;
-  height: auto;
-}
+:where(label.check, .ag-check, .ag-ws-remember, .template-check):has(input:disabled) { cursor: default; }
 
 .template-agent-hidden {
   margin: 0 0 12px;
@@ -3404,10 +3400,10 @@ body .orb-settings-help {
 .background-grid canvas { display: block; width: 100%; height: 90px; background: var(--bg); transition: opacity var(--dur-fast) ease; }
 .background-grid span { padding: 8px 10px; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .background-grid button[aria-pressed="true"] span { color: var(--heading); }
-/* Same look as the app's checkboxes (.ag-check in agent.css), in the name strip. */
+/* Shared checkbox mark in the name strip. */
 .background-grid span { padding-right: 32px; }
-.background-grid button::after { content: ""; position: absolute; right: 10px; bottom: 10px; width: 14px; height: 14px; border-radius: 4px; opacity: 0; transition: opacity var(--dur-fast) ease; }
-.background-grid button[aria-pressed="true"]::after { background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat; opacity: 1; }
+.background-grid button::after { content: ""; position: absolute; right: 10px; bottom: 10px; width: 16px; height: 16px; border-radius: 5px; opacity: 0; transition: opacity var(--dur-fast) ease; }
+.background-grid button[aria-pressed="true"]::after { background: var(--accent) var(--check-tick) center / 12px no-repeat; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18); opacity: 1; }
 .background-picker .confirm-actions { padding: 14px 20px 18px; }
 .audio-sources-link { margin-top: 12px; }
 .settings-hint-after {
@@ -5453,3 +5449,28 @@ html[data-theme="cream"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Shared Track checkbox: plain inputs get the app style without an opt-in class. */
+:root { --check-tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+:where(input[type="checkbox"]) {
+  appearance: none;
+  box-sizing: border-box;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(var(--lift-rgb, 255, 255, 255), .12);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, .28);
+  cursor: pointer;
+  transition: box-shadow .12s ease, background .12s ease;
+}
+:where(input[type="checkbox"]):hover:not(:disabled):not(:checked) { background-color: rgba(var(--lift-rgb, 255, 255, 255), .18); }
+:where(input[type="checkbox"]):checked {
+  background: var(--accent) var(--check-tick) center / 12px no-repeat;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
+}
+:where(input[type="checkbox"]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:where(input[type="checkbox"]):disabled { opacity: .45; cursor: default; }
