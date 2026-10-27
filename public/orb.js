@@ -12,7 +12,7 @@
   // Animation speed per style while idle and working; others use [.6, 2].
   const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
-  const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", breathing: "Animated glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
+  const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
   const ICON_PALETTES = {
     white: ["#e0eaff", "#ffffff"],
     ice: ["#7ee7ff", "#ffffff"],
@@ -42,6 +42,7 @@
     if (typeof value.iconSize === "number" && Number.isFinite(value.iconSize)) base.iconSize = Math.max(.5, Math.min(1.1, value.iconSize));
     // Keep saved choices meaningful after moving flares from shapes to surface effects.
     if (value.style === "flares") { base.style = "mesh"; base.bleed = "flares"; }
+    if (value.bleed === "breathing") base.bleed = "glow";
     if (value.bleed === "circuit" && value.style !== "flares") base.bleed = "none";
     return base;
   }
@@ -154,13 +155,13 @@ float h=.18+1.2*pow(f,2.4)*(.6+.8*u_energy);
 a=pow(clamp(1.-max(r-.92,0.)/h,0.,1.),1.5)*smoothstep(.72,1.,r)*.75;}
 else if(u_bleedmode<3.5){float arm=pow(.5+.5*sin(atan(uv.y,uv.x)*2.-log(r+.01)*5.+t*.6),5.);
 a=arm*reach*.55;}
-else if(u_bleedmode<4.5){a=exp(-r*r*.35)*.36;}
-else if(u_bleedmode<5.5){float breath=.5+.5*sin(t*1.8);a=exp(-r*r/(2.2+2.2*breath))*(.18+.28*breath);}
-else if(u_bleedmode<6.5){vec2 g=uv*3.,id=floor(g)+.5;
+else if(u_bleedmode<4.5){float breath=.5+.5*sin(t*1.8);
+a=mix(exp(-r*r*.35)*.36,exp(-r*r/(2.2+2.2*breath))*(.18+.28*breath),u_work);}
+else if(u_bleedmode<5.5){vec2 g=uv*3.,id=floor(g)+.5;
 float dotmask=1.-smoothstep(.2,.36,length(g-id));
 float wave=pow(.5+.5*cos(length(id/3.)*3.3-t*3.3),3.);
 a=dotmask*exp(-length(id/3.)*.42)*(.08+.8*wave);}
-else if(u_bleedmode<7.5){float phase=fract(t*.35);float R=.8+phase*6.;
+else if(u_bleedmode<6.5){float phase=fract(t*.35);float R=.8+phase*6.;
 a=exp(-pow((r-R)/(.55+phase*.7),2.))*(1.-phase)*.5+exp(-r*r*.6)*.1;}
 else {for(int i=0;i<12;i++){float fi=float(i);float phase=fract(t*(.12+.06*h1(fi))+h1(fi+2.));
 vec2 p=vec2(.7+phase*7.,(h1(fi+8.)-.5)*2.+.2*sin(t*.7+fi));
