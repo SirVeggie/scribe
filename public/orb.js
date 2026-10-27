@@ -14,7 +14,7 @@
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
-  const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
+  const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes", motesRise: "Rising motes" };
   const ICON_PALETTES = {
     white: ["#e0eaff", "#ffffff"],
     ice: ["#7ee7ff", "#ffffff"],
@@ -165,10 +165,18 @@ float wave=pow(.5+.5*cos(length(id/3.)*3.3-t*3.3),3.);
 a=dotmask*exp(-length(id/3.)*.42)*(.08+.8*wave);}
 else if(u_bleedmode<6.5){float phase=fract(t*.35);float R=.8+phase*6.;
 a=exp(-pow((r-R)/((.55+phase*.7)*mix(1.7,1.,u_work)),2.))*smoothstep(0.,.3,phase)*(1.-phase)*.5+exp(-r*r*.6)*.1;}
-else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
+else if(u_bleedmode<7.5){float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
 // Motes enter from beyond the left edge at a fresh height each pass and drift right across the full height.
 for(int i=0;i<14;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
 vec2 p=vec2(-2.5+phase*11.,mix(yb+.3,yt-.3,h1(fi*7.3+seed*13.1))+.2*sin(t*.7+fi));
+float d=length(uv-p);
+a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65;}}
+else {float yb=-23./15.,yt=(u_res.y*160./u_res.x-23.)/15.;
+// Motes cross the surface up and to the right at about 55 degrees, each on a fresh lane per pass.
+vec2 dir=vec2(.574,.819),side=vec2(-.819,.574),c=vec2(3.8,.5*(yb+yt));float w=10.6,h=yt-yb;
+float W=w*.819+h*.574,L=w*.574+h*.819+3.;
+for(int i=0;i<16;i++){float fi=float(i);float cyc=t*(.1+.05*h1(fi))+h1(fi+2.);float phase=fract(cyc);float seed=floor(cyc);
+vec2 p=c+side*((h1(fi*7.3+seed*13.1)-.5)*W+.15*sin(t*.7+fi))+dir*(phase-.5)*L;
 float d=length(uv-p);
 a+=(exp(-d*24.)+exp(-d*7.)*.15)*.65;}}
 a*=1.-smoothstep(5.,8.,uv.x);
