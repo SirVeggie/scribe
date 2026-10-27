@@ -65,7 +65,7 @@ test("a worktree branches from HEAD, links node_modules, and keeps the link out 
   await assert.rejects(mergeWorktree(wt), /uncommitted/);
   assert.ok(await commitAll(wt, "change a"));
   assert.deepEqual(await worktreeProgress(wt), { ahead: 1, dirty: false });
-  assert.deepEqual(await mergeWorktree(wt), { commits: 1 });
+  assert.deepEqual(await mergeWorktree(wt), { commits: 1, base: "main" });
   assert.deepEqual(await worktreeProgress(wt), { ahead: 0, dirty: false }, "merged commits stop counting against the original starting commit (#709)");
   assert.equal(fs.readFileSync(path.join(repo, "src", "a.txt"), "utf8"), "two\n");
   await removeWorktree(wt);
@@ -255,7 +255,7 @@ test("dirty changes already committed on base are recognized without changing ei
     fs.writeFileSync(path.join(wt.path, "untracked-landed.txt"), "a new local edit\n");
     assert.equal((await worktreeRemaining(wt)).dirty, true);
     fs.writeFileSync(path.join(wt.path, "untracked-landed.txt"), "recovered untracked\n");
-    assert.deepEqual(await mergeWorktree(wt), { commits: 0 }, "Merge can close a dirty worktree once all of its changes landed");
+    assert.deepEqual(await mergeWorktree(wt), { commits: 0, base: "main" }, "Merge can close a dirty worktree once all of its changes landed");
   } finally {
     sh(repo, "reset", "-q", "HEAD", "--", "main-uncommitted.txt");
     fs.rmSync(path.join(repo, "main-uncommitted.txt"), { force: true });
@@ -389,7 +389,7 @@ test("merge rebases a branch the base has moved past, and leaves a conflicting o
   fs.writeFileSync(path.join(repo, "theirs.txt"), "theirs\n");
   sh(repo, "add", "-A");
   sh(repo, "commit", "-q", "-m", "theirs");
-  assert.deepEqual(await mergeWorktree(wt), { commits: 1 });
+  assert.deepEqual(await mergeWorktree(wt), { commits: 1, base: "main" });
   assert.equal(sh(repo, "rev-list", "--merges", "--count", "HEAD~1..HEAD"), "0", "a fast-forward, no merge commit");
   assert.equal(sh(repo, "log", "-1", "--format=%s"), "add mine");
   await removeWorktree(wt);
@@ -407,6 +407,28 @@ test("merge rebases a branch the base has moved past, and leaves a conflicting o
   assert.equal(sh(repo, "status", "--porcelain"), "");
   await removeWorktree(clash);
   sh(repo, "branch", "-D", clash.branch);
+});
+
+test("a worktree with no recorded base merges into the main checkout's branch only when it holds the starting commit", async () => {
+  const { worktree: made } = await createWorktree(repo, repo, "no base");
+  const wt = { ...made, base: null };
+  fs.writeFileSync(path.join(wt.path, "nobase.txt"), "x\n");
+  await commitAll(wt, "add nobase");
+
+  sh(repo, "checkout", "-q", "--orphan", "unrelated");
+  sh(repo, "commit", "-q", "--allow-empty", "-m", "unrelated");
+  await assert.rejects(mergeWorktree(wt), /does not hold its starting commit/);
+  sh(repo, "checkout", "-q", "-f", "main");
+  sh(repo, "branch", "-D", "unrelated");
+
+  sh(repo, "checkout", "-q", "--detach");
+  await assert.rejects(mergeWorktree(wt), /detached HEAD/);
+  sh(repo, "checkout", "-q", "main");
+
+  assert.deepEqual(await mergeWorktree(wt), { commits: 1, base: "main" });
+  assert.equal(sh(repo, "log", "-1", "--format=%s"), "add nobase");
+  await removeWorktree(wt);
+  await dropBranchIfEmpty(wt);
 });
 
 test("reverting a worktree turn undoes its commits too", async () => {

@@ -10,7 +10,8 @@ import type { FileChange } from "./types.js";
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_PATCH_BYTES = 4 * 1024 * 1024;
 
-export type GitResult = { stdout: string; stderr: string; code: number };
+/** error: why git gave no exit code of its own (a timeout, or it could not start). */
+export type GitResult = { stdout: string; stderr: string; code: number; error?: string };
 
 export function git(args: string[], cwd: string, options: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number; maxBuffer?: number } = {}): Promise<GitResult> {
   return new Promise((resolve) => {
@@ -26,8 +27,10 @@ export function git(args: string[], cwd: string, options: { env?: NodeJS.Process
         encoding: "utf8",
       },
       (err, stdout, stderr) => {
-        const code = err ? (typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : 1) : 0;
-        resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), code });
+        const exited = !err || typeof (err as { code?: unknown }).code === "number";
+        const code = err ? (exited ? (err as unknown as { code: number }).code : 1) : 0;
+        const error = exited ? undefined : (err as { killed?: boolean }).killed ? `git timed out after ${options.timeoutMs ?? 30_000} ms` : err!.message;
+        resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), code, ...(error ? { error } : {}) });
       }
     );
     if (options.input !== undefined) {

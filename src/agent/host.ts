@@ -5154,9 +5154,9 @@ export class AgentHost {
     const sharers = this.sharers(threadId, wt);
     let message: string;
     if (how === "merge") {
-      const { commits } = await mergeWorktree(wt);
+      const { commits, base } = await mergeWorktree(wt);
       message = commits
-        ? `Merged ${commits} commit${commits === 1 ? "" : "s"} from ${wt.branch} into ${wt.base}.`
+        ? `Merged ${commits} commit${commits === 1 ? "" : "s"} from ${wt.branch} into ${base}.`
         : `${wt.branch} had no new commits, so there was nothing to merge.`;
       // Worktrees link the main checkout's node_modules, so a merged dependency change has to be installed there.
       if (commits) {

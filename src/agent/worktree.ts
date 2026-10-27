@@ -43,9 +43,31 @@ export async function headCommit(dir: string): Promise<string | null> {
   return res.code === 0 && res.stdout.trim() ? res.stdout.trim() : null;
 }
 
+type BranchRead = { branch: string | null; error?: string };
+
+/**
+ * The checkout's branch. branch null without error is a detached HEAD; with error, git failed
+ * (a timeout, or it could not start) and the branch is unknown. Failures are retried and logged.
+ */
+async function readBranch(dir: string): Promise<BranchRead> {
+  const errors: string[] = [];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const res = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], dir, { timeoutMs: 10_000 });
+    const branch = res.code === 0 ? res.stdout.trim() : "";
+    // With --quiet, a detached HEAD exits 1 and prints nothing.
+    const detached = res.code === 1 && !res.error && !res.stderr.trim();
+    if (branch || detached) {
+      if (errors.length) log(`worktree: read the branch of ${dir} on attempt ${attempt} after: ${errors.join("; ")}`);
+      return { branch: branch || null };
+    }
+    errors.push(res.error || res.stderr.trim() || `exit code ${res.code}`);
+  }
+  log(`worktree: could not read the branch of ${dir}: ${errors.join("; ")}`);
+  return { branch: null, error: errors[errors.length - 1] };
+}
+
 async function currentBranch(dir: string): Promise<string | null> {
-  const res = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], dir, { timeoutMs: 5000 });
-  return res.code === 0 && res.stdout.trim() ? res.stdout.trim() : null;
+  return (await readBranch(dir)).branch;
 }
 
 /** Changed or untracked files, from `git status --porcelain`. */
@@ -141,10 +163,13 @@ export async function reopenWorktree(old: ThreadWorktree, title: string): Promis
 async function addWorktree(home: string, repo: string, branch: string, dir: string, reset: boolean): Promise<CreatedWorktree> {
   const baseCommit = await headCommit(repo);
   if (!baseCommit) throw new Error("The repository has no commits yet, so there is nothing to branch a worktree from.");
-  const base = await currentBranch(repo);
+  const read = await readBranch(repo);
+  const base = read.branch;
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   const add = await git([...LONG, "worktree", "add", reset ? "-B" : "-b", branch, dir, baseCommit], repo, { timeoutMs: 300_000 });
   if (add.code !== 0) throw new Error(`git worktree add failed: ${add.stderr.trim() || add.stdout.trim()}`);
+  const from = base ? `base ${base}` : read.error ? "no base (its branch could not be read)" : "no base (detached HEAD)";
+  log(`worktree: made ${branch} at ${baseCommit.slice(0, 8)} with ${from}, in ${dir}`);
   const links = await linkFolders(repo, dir);
   const notes: string[] = [];
   if ((await dirtyFiles(repo)).length) {
@@ -354,19 +379,21 @@ async function rebaseOntoBase(wt: ThreadWorktree, base: string): Promise<boolean
  * Merge the worktree's branch into its base in the main checkout, rebasing it onto the base first
  * when it can. Leaves everything as it was if the merge fails.
  */
-export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: number }> {
-  if (!wt.base) throw new Error("The worktree was made from a detached HEAD, so there is no branch to merge into. Use Leave branch instead.");
+export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: number; base: string }> {
+  const main = await readBranch(wt.repo);
+  if (main.error) throw new Error(`Could not read the main checkout's branch, so nothing was merged: ${main.error}`);
+  const base = wt.base ?? (await recoverBase(wt, main.branch));
   let status = await worktreeStatus(wt);
   if (status.dirty.length && !(await dirtyAlreadyLanded(wt))) {
     throw new Error(`The worktree has ${status.dirty.length} uncommitted file${status.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch, which commits them for you.`);
   }
-  if (status.mainBranch !== wt.base) {
-    throw new Error(`The main checkout is on ${status.mainBranch ?? "a detached HEAD"}, not ${wt.base}. Switch it to ${wt.base} to merge.`);
+  if (main.branch !== base) {
+    throw new Error(`The main checkout is on ${main.branch ?? "a detached HEAD"}, not ${base}. Switch it to ${base} to merge.`);
   }
-  if (!status.ahead) return { commits: 0 };
-  if (await rebaseOntoBase(wt, wt.base)) {
+  if (!status.ahead) return { commits: 0, base };
+  if (await rebaseOntoBase(wt, base)) {
     status = await worktreeStatus(wt);
-    if (!status.ahead) return { commits: 0 };
+    if (!status.ahead) return { commits: 0, base };
   }
   const res = await git(["merge", "--no-edit", wt.branch], wt.repo, { timeoutMs: 120_000 });
   if (res.code !== 0) {
@@ -374,7 +401,24 @@ export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: numb
     if (mergeHead.code === 0) await git(["merge", "--abort"], wt.repo, { timeoutMs: 30_000 });
     throw new Error(`The merge did not go through, so nothing changed: ${(res.stdout + res.stderr).trim().split("\n").slice(-4).join(" ")}`);
   }
-  return { commits: status.ahead };
+  return { commits: status.ahead, base };
+}
+
+/**
+ * A base for a worktree that has none recorded: the main checkout's branch, when it holds the commit
+ * the worktree started from. Its branch may have been unreadable when the worktree was made.
+ */
+async function recoverBase(wt: ThreadWorktree, mainBranch: string | null): Promise<string> {
+  const start = wt.baseCommit.slice(0, 8);
+  if (!mainBranch) {
+    throw new Error("The worktree has no base branch recorded, and the main checkout is on a detached HEAD, so there is no branch to merge into. Use Leave branch instead.");
+  }
+  const holds = await git(["merge-base", "--is-ancestor", wt.baseCommit, `refs/heads/${mainBranch}`], wt.repo, { timeoutMs: 10_000 });
+  if (holds.code !== 0) {
+    throw new Error(`The worktree has no base branch recorded, and the main checkout is on ${mainBranch}, which does not hold its starting commit ${start}. Switch the main checkout to the branch it came from, or use Leave branch.`);
+  }
+  log(`worktree: ${wt.branch} has no base recorded; merging into ${mainBranch}, which holds its starting commit ${start}`);
+  return mainBranch;
 }
 
 /** Undo a worktree turn's commits: move the branch back to `head`, keeping the files as they are. */

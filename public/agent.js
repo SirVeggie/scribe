@@ -2795,22 +2795,24 @@
         notice(`The worktree has ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? "" : "s"}. Ask the agent to commit them, or use Leave branch.`);
         return false;
       }
-      if (st.mainBranch !== wt.base) {
+      // Without a recorded base the server checks that the main checkout's branch holds the starting commit.
+      if (wt.base && st.mainBranch !== wt.base) {
         notice(`The main checkout is on ${st.mainBranch || "a detached HEAD"}. Switch it to ${wt.base} to merge.`);
         return false;
       }
     }
+    const into = wt.base || st?.mainBranch || "the main checkout's branch";
     const question =
       how === "merge"
         ? st?.ahead
-          ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${wt.base} in the main checkout, and remove the worktree folder?`
+          ? `Merge ${st.ahead} commit${st.ahead === 1 ? "" : "s"} from ${wt.branch} into ${into} in the main checkout, and remove the worktree folder?`
           : `${wt.branch} has no new commits. Remove the worktree folder and the branch?`
         : how === "discard"
           ? `Discard all committed and uncommitted work on ${wt.branch}, delete the branch, and remove its worktree folder? This cannot be undone. The main checkout is unchanged.`
           : `Remove the worktree folder and keep the work on ${wt.branch}?${st?.dirty.length ? ` Its ${st.dirty.length} uncommitted file${st.dirty.length === 1 ? " is" : "s are"} committed there first.` : ""}`;
     const after =
       how === "merge"
-        ? `A new message to the thread then opens a worktree again from ${wt.base} as it is then, and goes on in the same agent session.`
+        ? `A new message to the thread then opens a worktree again from ${into} as it is then, and goes on in the same agent session.`
         : "This thread and any other threads sharing the worktree then continue in the main checkout, in fresh agent sessions.";
     if (!(await app().confirm(`${question}\n\n${after}`, how === "merge" ? "Merge" : how === "discard" ? "Discard worktree" : "Leave"))) return false;
     try {
@@ -3753,9 +3755,9 @@
           { separator: true },
           {
             label: wt.base ? `Merge into ${wt.base}` : "Merge",
-            detail: wt.base ? "In the main checkout, then remove the worktree" : "Made from a detached HEAD; nothing to merge into",
+            detail: wt.base ? "In the main checkout, then remove the worktree" : "Into the main checkout's branch, if it holds this branch's starting commit",
             icon: "git",
-            disabled: !wt.base || t.status !== "idle",
+            disabled: t.status !== "idle",
             run: () => this.finishWorktree("merge"),
           },
           { label: "Leave branch", detail: "Keep the work on the branch, remove the folder", disabled: t.status !== "idle", run: () => this.finishWorktree("leave") },
@@ -10083,7 +10085,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const add = (label, value, cls) => {
       rows.append(el("dt", null, label), el("dd", cls, value));
     };
-    add("From", wt.base || "detached HEAD");
+    add("From", wt.base || "No branch recorded");
     const state = [wt.ahead ? `${wt.ahead} commit${wt.ahead === 1 ? "" : "s"} ahead` : "No new commits"];
     if (wt.dirty) state.push("uncommitted changes");
     add("State", state.join(" · "));

@@ -235,7 +235,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     const wt = thread.worktree && !thread.worktree.closed ? thread.worktree : null;
     if (wt) {
       lines.push(
-        `This is a git worktree of its own for this thread, on branch ${wt.branch} (from ${wt.base ?? "a detached HEAD"}). The main checkout is ${wt.repo}; do not edit files there. Commit your work on this branch as you go, in small commits with clear messages. The user merges the branch from Scribe when it is done. Never remove a Scribe worktree with \`git worktree remove\` or by deleting its folder: linked folders such as node_modules are junctions to the main checkout, and removing the worktree that way deletes through them. Scribe removes the worktree when the branch is merged or left.`
+        `This is a git worktree of its own for this thread, on branch ${wt.branch} (from ${wt.base ?? `commit ${wt.baseCommit.slice(0, 8)}, with no branch recorded`}). The main checkout is ${wt.repo}; do not edit files there. Commit your work on this branch as you go, in small commits with clear messages. The user merges the branch from Scribe when it is done. Never remove a Scribe worktree with \`git worktree remove\` or by deleting its folder: linked folders such as node_modules are junctions to the main checkout, and removing the worktree that way deletes through them. Scribe removes the worktree when the branch is merged or left.`
       );
       if (wt.links.includes("node_modules")) {
         // Even --package-lock-only can unlink node_modules/.package-lock.json in the main checkout (#482).
