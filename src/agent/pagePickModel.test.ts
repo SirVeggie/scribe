@@ -36,6 +36,27 @@ const close = (context: any, entry: any) => {
   entry.onClose();
 };
 
+test("menus accept page rectangle anchors and retain modal dialog placement", () => {
+  const body: any[] = [];
+  const dialog: any[] = [];
+  const context: any = vm.createContext({
+    openMenuEl: null, openMenuAnchor: null, openMenuOnClose: null,
+    closeMenu() {}, onMenuOutside() {}, setTimeout() {},
+    window: { innerHeight: 800, innerWidth: 1280 },
+    document: { body: { append: (menu: any) => body.push(menu) } },
+    el: () => ({ style: {}, offsetHeight: 100, append() {}, replaceChildren() {}, querySelectorAll: () => [] }),
+  });
+  vm.runInContext(fn(chat, "openMenu"), context);
+  const anchor = { isConnected: true, getBoundingClientRect: () => ({ left: 10, top: 20, bottom: 60 }) };
+  const menu = context.openMenu(anchor, []);
+  assert.equal(body[0], menu);
+  assert.equal(menu.style.top, "66px");
+  context.openMenuEl = null;
+  const modalMenu = context.openMenu({ ...anchor, closest: () => ({ append: (m: any) => dialog.push(m) }) }, []);
+  assert.equal(dialog[0], modalMenu);
+  assert.equal(body.length, 1);
+});
+
 test("a pick resolves with the model and its label, below the page's element", async () => {
   const { context, opened } = pickContext();
   const result = context.pageRequest({ id: "p" }, { op: "pickModel", rect: { left: 10, top: 20, width: 30, height: 40 }, provider: "claude", model: "sonnet" });

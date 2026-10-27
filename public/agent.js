@@ -1659,7 +1659,7 @@
     menu.append(list);
     renderItems();
     // Inside a modal dialog the menu must sit in its top layer, or the dialog covers it and makes it inert.
-    (anchor.closest("dialog[open]") || document.body).append(menu);
+    (anchor.closest?.("dialog[open]") || document.body).append(menu);
     function positionMenu() {
       menu.style.maxHeight = `${window.innerHeight - 24}px`;
       const rect = anchor.isConnected ? anchor.getBoundingClientRect() : anchorRect;
