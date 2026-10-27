@@ -37,6 +37,10 @@ test("Claude meters share current quota across old threads and distinguish spend
       const routine = { ...subscription, windows: [{ ...subscription.windows[0], resetsAt: now + 3600000 }],
         extraUsage: { enabled: false, at: now - 600000 }, overage: false, overageAt: now };
       const routineTip = showTip(routine);
+      const paced = (pace: any) => { const tip = usageTip("claude", { claudeLimits: S.config.limits.claude = { ...routine, windows: [{ ...routine.windows[0], pace }] } }); return { text: tip.textContent, tick: !!tip.querySelector(".ag-meter-even") }; };
+      const runsOut = paced({ durationMs: 5 * 3600000, runsOutAt: now + 1800000 });
+      const lasts = paced({ durationMs: 5 * 3600000, lasts: true });
+      const noPace = paced(undefined);
       const compact = usageChip("claude", true, null, { claudeLimits: routine });
       const staleChip = usageChip("claude", true, null, { claudeLimits: subscription });
       const zeroTip = showTip({ ...routine, extraUsage: { usedCredits: 0, currency: "USD" } });
@@ -45,7 +49,7 @@ test("Claude meters share current quota across old threads and distinguish spend
       const footer = ChatView.prototype.renderTurnFooter.call({}, { status: "done", threadId: "fixture", model: "sonnet", usage: { costUsd: 0.5, estimatedCostUsd: 0.5, billingSource: api.claudeLimits.billingSource } }, []);
       document.body.append(cloudChip, apiChip, footer);
       return { cloud: cloudChip.textContent, api: apiChip.textContent, tip, staleTip, liveTip, paidTip, routineTip, zeroTip, capTip,
-        compact: compact.textContent, staleChip: staleChip.textContent,
+        runsOut, lasts, noPace, compact: compact.textContent, staleChip: staleChip.textContent,
         expired: planLimits("claude", { claudeLimits: subscription }).windows[0].utilization,
         unknown: planLimits("claude", {}), footer: footer.textContent, estimate: footer.querySelector("[aria-description]")?.getAttribute("aria-description"),
         settings: usageMeters("claude").textContent };
@@ -61,6 +65,11 @@ test("Claude meters share current quota across old threads and distinguish spend
     assert.doesNotMatch(result.liveTip, /Last request:/);
     assert.match(result.paidTip, /Last request: using subscription extra usage/);
     assert.doesNotMatch(result.routineTip, /Anthropic|Token|sub@example|extra usage|paid-credit|Console|snapshot is stale/);
+    assert.match(result.runsOut.text, /resets in .+ · runs out \d\d:\d\d (AM |PM )?at this pace/);
+    assert.equal(result.runsOut.tick, true);
+    assert.match(result.lasts.text, /lasts until reset at this pace/);
+    assert.doesNotMatch(result.noPace.text, /at this pace/);
+    assert.equal(result.noPace.tick, false);
     assert.equal(result.compact, "60%");
     // The composer chip has no stale label; the tip says so instead.
     assert.equal(result.staleChip, "60%");

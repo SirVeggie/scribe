@@ -58,6 +58,7 @@ import type {
 } from "./providers/provider.js";
 import { unifiedDiff } from "./textDiff.js";
 import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type ForkMaterial } from "./fork.js";
+import { trackPace, withPace, type PaceState } from "./planPace.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, usageLimitResetsAt } from "./planLimits.js";
 import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
 import { isPlainRecord } from "./types.js";
@@ -633,6 +634,7 @@ export class AgentHost {
     this.planLimits = this.db.getSetting<Partial<Record<ProviderId, PlanLimits>>>("limits", {});
     // Keep source-tagged observations across restarts, without reviving legacy unscoped meters.
     if (this.planLimits.claude?.source !== "claude") delete this.planLimits.claude;
+    this.planPace = this.db.getSetting<PaceState>("limitPace", {});
     this.claudeThreadLimits = new Map(Object.entries(this.db.getSetting<Record<string, PlanLimits>>("claudeThreadLimits", {}))
       .filter(([id]) => this.threads.get(id)?.provider === "claude"));
     this.usageWindowStarts = new UsageWindowStarts({
@@ -791,6 +793,8 @@ export class AgentHost {
   }
 
   private planLimits: Partial<Record<ProviderId, PlanLimits>> = {};
+  /** Recent provider readings per window, for the burn rate. */
+  private planPace: PaceState = {};
   private claudeThreadLimits = new Map<string, PlanLimits>();
 
   private claudeUsageSnapshot(value: unknown): PlanLimits {
@@ -818,7 +822,8 @@ export class AgentHost {
     let out = this.planLimits;
     for (const [provider, limits] of Object.entries(this.planLimits) as Array<[ProviderId, PlanLimits]>) {
       const live = livePlanLimits(limits);
-      if (live !== limits) out = { ...out, [provider]: live };
+      const paced = withPace(this.planPace, provider, live);
+      if (paced !== limits) out = { ...out, [provider]: paced };
     }
     for (const provider of ["claude", "codex"] as const) {
       const entry = this.usageWindowStarts?.view(provider);
@@ -920,6 +925,11 @@ export class AgentHost {
   private commitLimits(provider: ProviderId, next: PlanLimits, fromTurn: boolean): void {
     this.planLimits = { ...this.planLimits, [provider]: next };
     this.db.setSetting("limits", this.planLimits);
+    const pace = trackPace(this.planPace, provider, next);
+    if (pace !== this.planPace) {
+      this.planPace = pace;
+      this.db.setSetting("limitPace", pace);
+    }
     this.emit({ type: "agent_limits", limits: this.liveLimits() });
     if (fromTurn) this.applyPlanCost(provider, next);
     if (provider === "claude") this.scheduleClaudeUsageRefresh();

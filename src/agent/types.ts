@@ -314,7 +314,7 @@ export type PlanLimits = {
   /** "allowed", "allowed_warning" or "rejected" (Claude). */
   status?: string;
   /** expired: resetsAt has passed and the provider has not reported the next window yet. */
-  windows: Array<{ id: string; label: string; utilization: number; resetsAt?: number; expired?: true }>;
+  windows: PlanWindow[];
   /** Requests are being billed as extra usage beyond the plan. */
   overage?: boolean;
   /** Identifies snapshots whose observed percentages must survive a passed reset. */
@@ -324,6 +324,12 @@ export type PlanLimits = {
   ordinaryUsageAllowed?: boolean | null;
   permissionAt?: number;
   buckets?: Array<{ id: string; label: string; planType?: string; credits?: { hasCredits: boolean; unlimited: boolean; balance?: string } }>;
+};
+
+export type PlanWindow = {
+  id: string; label: string; utilization: number; resetsAt?: number; expired?: true;
+  /** Daemon-computed from successive provider readings (planPace.ts); sent to the UI, not stored. */
+  pace?: { durationMs: number; runsOutAt?: number; lasts?: true };
 };
 
 export type ClaudeBillingSource = {

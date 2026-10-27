@@ -4934,10 +4934,21 @@ body.resizing-split main.has-split .agent-dock {
 }
 
 .ag-meter-bar {
+  position: relative;
   height: 6px;
   border-radius: 3px;
   background: rgba(var(--lift-rgb), 0.08);
   overflow: hidden;
+}
+
+/* Where an even pace through the window would be now. */
+.ag-meter-even {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: rgba(var(--lift-rgb), 0.55);
 }
 
 .ag-meter-fill {

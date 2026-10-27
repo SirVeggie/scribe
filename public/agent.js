@@ -10137,6 +10137,36 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return at && at <= Date.now() ? provider === "codex" ? "Reset passed · awaiting update" : "Reset passed" : resetText(at);
   }
 
+  /** The reset text with the recent burn rate's projection, from the daemon's successive provider readings. */
+  function quotaResetPace(provider, w) {
+    const reset = quotaReset(provider, w.resetsAt);
+    const now = Date.now();
+    const pace = w.pace;
+    if (!reset || !pace || !w.resetsAt || w.resetsAt <= now) return reset;
+    if (pace.lasts) return `${reset} · lasts until reset at this pace`;
+    if (!(pace.runsOutAt > now)) return reset;
+    const at = new Date(pace.runsOutAt);
+    const sameDay = at.toDateString() === new Date(now).toDateString();
+    const time = at.toLocaleString(undefined, sameDay ? { hour: "2-digit", minute: "2-digit" } : { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    return `${reset} · runs out ${time} at this pace`;
+  }
+
+  /** A usage bar, with a tick where an even pace through the window would be now. */
+  function quotaBar(w) {
+    const bar = el("div", "ag-meter-bar");
+    const fill = el("div", "ag-meter-fill");
+    fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
+    bar.append(fill);
+    const d = w.pace?.durationMs;
+    const elapsed = d && w.resetsAt ? 1 - (w.resetsAt - Date.now()) / d : 0;
+    if (elapsed > 0 && elapsed < 1) {
+      const tick = el("div", "ag-meter-even");
+      tick.style.left = `${(elapsed * 100).toFixed(1)}%`;
+      bar.append(tick);
+    }
+    return bar;
+  }
+
   function codexQuotaNotes(limits) {
     if (limits.detail) return [limits.detail];
     const notes = [];
@@ -10265,12 +10295,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
     for (const w of detailWindows(limits)) {
       const row = el("div", `ag-usage-tip-row lvl-${usageLevel(w.utilization)}`);
-      const bar = el("div", "ag-meter-bar");
-      const fill = el("div", "ag-meter-fill");
-      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
-      bar.append(fill);
-      row.append(el("span", "ag-usage-tip-label", w.label), bar, el("span", "ag-usage-tip-pct", quotaPercent(provider, w.utilization)));
-      if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaReset(provider, w.resetsAt)));
+      row.append(el("span", "ag-usage-tip-label", w.label), quotaBar(w), el("span", "ag-usage-tip-pct", quotaPercent(provider, w.utilization)));
+      if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaResetPace(provider, w)));
       tip.append(row);
     }
     if (provider === "claude") for (const note of claudeQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
@@ -10527,11 +10553,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     }
     for (const w of detailWindows(limits)) {
       const row = el("div", `ag-meter lvl-${usageLevel(w.utilization)}`);
-      const bar = el("div", "ag-meter-bar");
-      const fill = el("div", "ag-meter-fill");
-      fill.style.width = `${Math.min(100, Math.round(w.utilization * 100))}%`;
-      bar.append(fill);
-      row.append(el("span", "ag-meter-label", w.label), bar, el("span", "ag-meter-pct", quotaPercent(provider, w.utilization)), el("span", "ag-meter-reset", quotaReset(provider, w.resetsAt)));
+      row.append(el("span", "ag-meter-label", w.label), quotaBar(w), el("span", "ag-meter-pct", quotaPercent(provider, w.utilization)), el("span", "ag-meter-reset", quotaResetPace(provider, w)));
       box.append(row);
     }
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
