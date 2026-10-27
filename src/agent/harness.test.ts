@@ -123,6 +123,72 @@ test("harness keeps content while filters load and ignores superseded responses"
   } finally { await browser.close(); }
 });
 
+test("harness manages Scribe skills and keeps the built-in read-only", async (t) => {
+  let browser;
+  try { browser = await launchChromium({ headless: true, args: [], purpose: "Scribe skills harness test" }); }
+  catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    const builtin = { id: "builtin:scribe", name: "scribe", builtin: true, enabled: true, file: "C:/builtin/SKILL.md", indexTokens: 12, bodyTokens: 30, files: 2 };
+    const copy = { ...builtin, id: "copy", name: "scribe-copy", builtin: false, enabled: false, file: "C:/copy/SKILL.md" };
+    const removed = { ...copy, id: "removed", name: "removed-skill" };
+    const skills = [builtin];
+    const trash = [removed];
+    const writes: Array<{ endpoint: string; body: any }> = [];
+    await page.route("http://scribe-skills.test/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const endpoint = decodeURIComponent(url.pathname);
+      let data: any = {};
+      if (request.method() !== "GET") writes.push({ endpoint, body: request.postDataJSON() });
+      if (endpoint.endsWith("/enabled")) builtin.enabled = request.postDataJSON().enabled;
+      if (endpoint.endsWith("/copy")) { skills.push(copy); data = { skill: copy }; }
+      else if (endpoint.endsWith("/restore")) { skills.push(removed); trash.pop(); }
+      else if (endpoint.endsWith("/scribe-skills")) data = { skills, trash, root: "C:/skills" };
+      else if (endpoint.endsWith("/harness/file")) data = { text: "# Skill body", readOnly: url.searchParams.get("path") === builtin.file };
+      else if (endpoint.endsWith("/context")) data = { thread: request.postDataJSON() };
+      else if (endpoint.endsWith("/skills")) data = { skills: [{ ...copy, name: "scribe", providers: ["claude"], scope: "user" }], folders: [] };
+      else if (endpoint.endsWith("/stats")) data = { totals: {}, toolKinds: [], tools: [], skills: [] };
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto("http://scribe-skills.test/");
+    await page.addScriptTag({ content: `
+      window.scribeChat = { modal: () => {
+        const panel = document.createElement("div");
+        panel.setAttribute("role", "dialog");
+        document.body.append(panel);
+        return { panel, close: () => panel.remove() };
+      } };
+    ` });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../../public/harness.js", import.meta.url), "utf8") });
+    await page.evaluate(() => (window as any).scribeHarness.open("skills"));
+    const card = page.locator(".hx-card").filter({ has: page.getByRole("heading", { name: "Scribe skills", exact: true }) });
+    await card.getByText("Built-in", { exact: true }).waitFor();
+    assert.equal(await card.getByText("Provider name clash").count(), 1);
+    await card.getByRole("switch", { name: "On for every chat: scribe", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[role="switch"]')?.getAttribute("aria-checked") === "false");
+    assert.equal(await page.locator("textarea").count(), 0, "switch does not open the editor");
+    assert.deepEqual(writes.find(row => row.endpoint.endsWith("builtin:scribe/enabled"))?.body, { enabled: false });
+    await card.getByText("scribe", { exact: true }).click();
+    await page.locator("textarea[readonly]").waitFor();
+    assert.equal(await page.getByRole("button", { name: "Save", exact: true }).count(), 0);
+    await page.getByText("Copy to Scribe to customize this built-in skill.").waitFor();
+    await page.getByRole("button", { name: "Copy to Scribe", exact: true }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).waitFor();
+    assert.equal(await page.locator("textarea").evaluate(node => (node as HTMLTextAreaElement).readOnly), false);
+    assert.deepEqual(writes.find(row => row.endpoint.endsWith("/copy"))?.body, { file: builtin.file, cwd: null });
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await page.getByRole("heading", { name: "Removed skills", exact: true }).waitFor({ state: "detached" });
+    await page.getByText("removed-skill", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("heading", { name: "Removed skills", exact: true }).count(), 0);
+  } finally { await browser.close(); }
+});
+
 const thread = (id: string, over: Partial<Thread> = {}): Thread =>
   ({ id, title: id, provider: "claude", model: "opus", mode: "code", scope: { kind: "global", ref: null }, ...over }) as Thread;
 

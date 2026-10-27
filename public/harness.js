@@ -38,6 +38,10 @@
     context: null,
     skills: null,
     skillFolders: [],
+    scribeSkills: [],
+    scribeTrash: [],
+    scribeRoot: "",
+    scribeSkillsError: "",
     config: null,
     threads: [],
     measure: null,
@@ -824,6 +828,64 @@
 
   function renderSkills() {
     const out = [pickers()];
+    const shared = card("Scribe skills", "Scribe gives these to chats on every provider; a skill is off until switched on here or picked for a thread or worker.");
+    const actions = el("div", "hx-chips");
+    actions.append(button("New skill…", "hx-btn", newScribeSkill), scribeAction("Import folder…", async () => {
+      const path = await chat().pickWorkspace(S.pick.cwd || S.scribeRoot, { title: "Import skill folder", hint: "Choose a folder containing SKILL.md.", action: "Import", used: false });
+      if (!path) return;
+      const { skill } = await api("POST", "/scribe-skills/import", { path });
+      notice(`Imported ${skill.name}.`);
+      await loadContext();
+    }, "hx-btn"));
+    shared.append(actions);
+    const providerNames = new Set((S.skills || []).map((skill) => skill.name));
+    if (S.scribeSkillsError) shared.append(empty(`Could not load Scribe skills: ${S.scribeSkillsError}`));
+    shared.append(S.scribeSkills.length ? table([
+      { label: "Skill", get: (skill) => {
+        const name = el("span", "hx-chips");
+        name.append(el("strong", null, skill.name));
+        if (skill.builtin) name.append(el("span", "ag-tag tiny", "Built-in"));
+        if (skill.missing) name.append(el("span", "ag-tag tiny", "Missing"));
+        if (providerNames.has(skill.name)) name.append(el("span", "ag-tag tiny", "Provider name clash"));
+        return name;
+      } },
+      { label: "On for every chat", get: (skill) => {
+        const toggle = switchButton(skill.enabled, `On for every chat: ${skill.name}`, async () => {
+          try {
+            await api("POST", `/scribe-skills/${encodeURIComponent(skill.id)}/enabled`, { enabled: !skill.enabled });
+            await loadContext();
+          } catch (err) { notice(err.message); }
+          finally { toggle.disabled = false; }
+        });
+        toggle.addEventListener("click", (event) => event.stopPropagation());
+        toggle.addEventListener("keydown", (event) => event.stopPropagation());
+        return toggle;
+      } },
+      { label: "In every chat", num: true, get: (r) => `≈ ${tokens(r.indexTokens)}` },
+      { label: "When used", num: true, get: (r) => `≈ ${tokens(r.bodyTokens)}` },
+      { label: "Files", num: true, get: (r) => count(r.files + 1) },
+      { label: "Description", get: (r) => el("span", "hx-desc", r.description || "No description") },
+    ], S.scribeSkills, { onRow: (skill) => void openScribeSkill(skill) }) : empty("No Scribe skills found."));
+    out.push(shared);
+    if (S.scribeTrash.length) {
+      const trash = card("Removed skills");
+      trash.append(table([
+        { label: "Skill", get: (skill) => skill.name },
+        { label: "Actions", get: (skill) => {
+          const row = el("span", "hx-chips");
+          row.append(scribeAction("Restore", async () => {
+            await api("POST", `/scribe-skills/${encodeURIComponent(skill.id)}/restore`);
+            await loadContext();
+          }), scribeAction("Delete", async () => {
+            if (!await window.scribeApp?.confirm?.(`Delete ${skill.name} for good?`, "Delete")) return;
+            await api("POST", `/scribe-skills/${encodeURIComponent(skill.id)}/purge`);
+            await loadContext();
+          }, "ag-btn ghost danger"));
+          return row;
+        } },
+      ], S.scribeTrash));
+      out.push(trash);
+    }
     if (!S.skills) return [...out, empty(S.error || "Loading…")];
     const uses = new Map((S.stats?.skills || []).map((row) => [row.name, row.calls]));
     const node = card(
@@ -919,9 +981,10 @@
     const text = el("textarea", "ag-input ag-source-models hx-file-text");
     text.spellcheck = false;
     text.value = file.text;
+    text.readOnly = !!file.readOnly;
     text.setAttribute("aria-label", title);
     text.addEventListener("input", () => {
-      dirty = true;
+      if (!text.readOnly) dirty = true;
     });
     const save = button("Save", "ag-btn primary", async () => {
       save.disabled = true;
@@ -935,8 +998,10 @@
       }
     });
     const row = el("div", "ag-modal-actions");
-    row.append(...(extra?.(leave) ?? []), el("span", "ag-grow"), button("Cancel", "ag-btn", leave), save);
-    panel.replaceChildren(...heading(), ...(hint ? [el("p", "ag-modal-hint", hint)] : []), text, error, row);
+    row.append(...(extra?.(leave) ?? []), el("span", "ag-grow"), button(file.readOnly ? "Close" : "Cancel", "ag-btn", leave));
+    if (!file.readOnly) row.append(save);
+    const help = file.readOnly ? "Copy to Scribe to customize this built-in skill." : hint;
+    panel.replaceChildren(...heading(), ...(help ? [el("p", "ag-modal-hint", help)] : []), text, error, row);
     setTimeout(() => text.focus(), 0);
   }
 
@@ -962,9 +1027,91 @@
         const targets = S.skillFolders.filter((folder) => dirKey(folder.dir) !== dirKey(skill.folder));
         const copy = button("Copy to…", "ag-btn ghost", () => copySkill(skill, targets));
         copy.disabled = !targets.length;
-        return [remove, copy];
+        return [remove, copy, scribeAction("Copy to Scribe", async () => {
+          await copyToScribe(skill);
+          leave();
+        })];
       },
     });
+  }
+
+  function scribeAction(label, run, cls = "ag-btn ghost") {
+    const control = button(label, cls, async () => {
+      control.disabled = true;
+      try { await run(); }
+      catch (err) { notice(err.message); }
+      finally { control.disabled = false; }
+    });
+    return control;
+  }
+
+  async function copyToScribe(skill) {
+    const result = await api("POST", "/scribe-skills/copy", { file: skill.file, cwd: S.pick.cwd });
+    notice(`Copied ${skill.name} to Scribe.`);
+    await loadContext();
+    return result.skill;
+  }
+
+  function openScribeSkill(skill) {
+    const path = `/scribe-skills/${encodeURIComponent(skill.id)}`;
+    return editFile({
+      title: skill.name,
+      path: skill.file,
+      onSaved: () => void loadContext(),
+      extra: (leave) => skill.builtin ? [scribeAction("Copy to Scribe", async () => {
+        const copy = await copyToScribe(skill);
+        leave();
+        void openScribeSkill(copy);
+      })] : [
+        scribeAction("Remove", async () => {
+          if (!await window.scribeApp?.confirm?.(`Remove ${skill.name}? You can restore it from Removed skills.`, "Remove")) return;
+          await api("POST", `${path}/remove`);
+          leave();
+          await loadContext();
+        }, "ag-btn ghost danger"),
+        scribeAction("Duplicate", async () => {
+          const { skill: copy } = await api("POST", `${path}/duplicate`);
+          leave();
+          await loadContext();
+          void openScribeSkill(copy);
+        }),
+        scribeAction("Export folder…", async () => {
+          const destination = await chat().pickWorkspace(S.pick.cwd || S.scribeRoot, { title: "Export skill folder", hint: "Choose the parent folder for the exported skill.", action: "Export", used: false });
+          if (!destination) return;
+          const { dir } = await api("POST", `${path}/export`, { path: destination });
+          notice(`Exported ${skill.name} to ${dir}.`);
+        }),
+      ],
+    });
+  }
+
+  function newScribeSkill() {
+    const { panel, close } = chat().modal("ag-source");
+    const name = el("input", "ag-input");
+    name.placeholder = "e.g. release-notes";
+    name.spellcheck = false;
+    const description = el("textarea", "ag-input ag-mem-input");
+    description.rows = 3;
+    description.placeholder = "What it is for and when an agent should use it.";
+    const error = el("p", "ag-source-error");
+    error.hidden = true;
+    const run = button("Create", "ag-btn primary", async () => {
+      run.disabled = true;
+      try {
+        const { skill } = await api("POST", "/scribe-skills", { name: name.value.trim(), description: description.value });
+        close();
+        await loadContext();
+        void openScribeSkill(skill);
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+        run.disabled = false;
+      }
+    });
+    const row = el("div", "ag-modal-actions");
+    row.append(el("span", "ag-grow"), button("Cancel", "ag-btn", close), run);
+    panel.append(el("h2", "ag-modal-title", "New Scribe skill"), field("Name", name, "Use lowercase letters, digits, hyphens or underscores."), field("Description", description), error, row);
+    setTimeout(() => name.focus(), 0);
   }
 
   /** Providers read different folders, so a skill reaches another one as a copy. */
@@ -1198,14 +1345,21 @@
     S.contextLoading = request;
     render();
     try {
-      const [context, skills] = await Promise.all([
+      const [context, skills, scribe] = await Promise.all([
         api("POST", "/harness/context", { provider: pick.provider, mode: pick.mode, cwd: pick.cwd, scope: { kind: "global", ref: null } }),
         api("GET", `/harness/skills${pick.cwd ? `?cwd=${encodeURIComponent(pick.cwd)}` : ""}`),
+        api("GET", "/scribe-skills").catch((err) => ({ error: err.message })),
       ]);
       if (request !== contextRequest) return;
       S.context = context;
       S.skills = skills.skills;
       S.skillFolders = skills.folders || [];
+      S.scribeSkillsError = scribe.error || "";
+      if (!scribe.error) {
+        S.scribeSkills = scribe.skills || [];
+        S.scribeTrash = scribe.trash || [];
+        S.scribeRoot = scribe.root || "";
+      }
     } finally {
       if (S.contextLoading === request) S.contextLoading = 0;
     }
