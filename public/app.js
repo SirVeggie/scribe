@@ -3969,7 +3969,8 @@
 
   // ---------- dropped files and folders (#654) ----------
   // A Scribe export still imports its pages; any other file opens as a file page (a copy, since a
-  // browser gives the bytes, not the path), and a folder as a Library folder of them.
+  // browser gives the bytes, not the path), and a folder as a Library folder of them. In the
+  // desktop app a dropped folder's path is known, so it opens linked to the disk folder instead.
   const DROP_MAX_FILES = 1000;
   const DROP_SKIPPED = new Set(["node_modules", ".git", ".hg", ".svn", "__pycache__", ".venv", "venv"]);
 
@@ -4011,10 +4012,41 @@
     return all.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
   }
 
+  /**
+   * Disk paths for dropped File objects, in order (null where unknown). Only the desktop app can
+   * tell (desktop/src/drops.rs); a browser resolves to all nulls.
+   */
+  let dropPathsAsked = 0;
+  function dropPaths(files) {
+    const webview = window.chrome?.webview;
+    if (!files.length || typeof webview?.postMessageWithAdditionalObjects !== "function") return Promise.resolve(files.map(() => null));
+    const id = String(++dropPathsAsked);
+    return new Promise((resolve) => {
+      const done = (paths) => {
+        webview.removeEventListener("message", onMessage);
+        clearTimeout(timer);
+        resolve(files.map((_, index) => (typeof paths?.[index] === "string" ? paths[index] : null)));
+      };
+      const onMessage = (event) => {
+        if (event.data?.type === "scribe-drop-paths" && event.data.id === id) done(event.data.paths);
+      };
+      // An older desktop build does not answer: upload as before.
+      const timer = setTimeout(() => done(null), 1500);
+      webview.addEventListener("message", onMessage);
+      try {
+        webview.postMessageWithAdditionalObjects(`scribe-drop-paths:${id}`, files);
+      } catch {
+        done(null);
+      }
+    });
+  }
+
   async function dropFiles(event, destination) {
     const items = [...(event.dataTransfer.items || [])].filter((item) => item.kind === "file");
     // Entries must be taken while the drop event lasts; without them, plain files.
     const entries = items.map((item) => item.webkitGetAsEntry?.() || null);
+    // A dropped folder's File stands for the folder itself; the desktop app can tell its path.
+    const dirFiles = entries.map((entry, index) => (entry?.isDirectory ? items[index].getAsFile() : null));
     const files = [...event.dataTransfer.files];
     const library = destination === "closed";
     const folderId = library ? dropFolderOf(event.target) : null;
@@ -4057,9 +4089,24 @@
         }
       }
     };
+    // A folder with a known path opens as a Library folder linked to it (#707), not as copies.
+    const openLinked = async (dirPath, parentId) => {
+      const res = await fetch("/api/files/open-folder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: dirPath, folderId: parentId }) }).catch(() => null);
+      const data = res ? await res.json().catch(() => ({})) : {};
+      if (!res?.ok || !data.folder) return false;
+      tally.folders += 1;
+      tally.files += (data.pages || 0) + (data.reused || 0);
+      if (data.truncated) tally.truncated = true;
+      return true;
+    };
     if (entries.length && entries.every(Boolean)) {
-      for (const entry of entries) {
+      const withFile = dirFiles.filter(Boolean);
+      const found = await dropPaths(withFile);
+      const pathOf = new Map(withFile.map((file, index) => [file, found[index]]));
+      for (const [index, entry] of entries.entries()) {
         if (entry.isDirectory) {
+          const dirPath = dirFiles[index] && pathOf.get(dirFiles[index]);
+          if (dirPath && (await openLinked(dirPath, folderId))) continue;
           await openDir(entry, folderId);
         } else {
           const file = await entryFile(entry).catch(() => null);

@@ -6,6 +6,8 @@ mod board;
 mod docking;
 mod downloads;
 #[cfg(windows)]
+mod drops;
+#[cfg(windows)]
 mod embeds;
 #[cfg(windows)]
 mod keys;
@@ -189,6 +191,7 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>) ->
     {
         keys::install(&window);
         embeds::install(&window, board::port());
+        drops::install(&window);
     }
     Ok(())
 }
@@ -325,6 +328,7 @@ fn main() {
             {
                 keys::install(&window);
                 embeds::install(&window, board::port());
+                drops::install(&window);
             }
             // Started with the OS and kept in the tray: stay there until opened.
             let autostart = args.iter().any(|arg| arg == startup::ARG);
