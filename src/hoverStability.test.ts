@@ -225,7 +225,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const MODES = [{ id: 'plan', label: 'Plan' }], WEB_MODES = [{ id: 'off', label: 'Off' }];
       const APPROVALS = [{ id: 'readonly', label: 'Read-only' }, { id: 'board', label: 'Board' }, { id: 'edits', label: 'Edits' }], approvalDetail = (a) => a.label, customDetail = () => '';
       const webMode = () => 'off', webEnforced = () => true;
-      const openWorktree = () => null, usageChip = () => null, contextMeter = () => el('span', 'context', 'Context');
+      const openWorktree = () => null, S = { scribeSkills: [] }, usageChip = () => null, planProvider = (provider) => provider, contextMeter = () => el('span', 'context', 'Context');
       const bindHoverTip = () => {}, worktreePendingTip = value => String(value), sendKey = () => 'enter';
       const settings = { provider: 'test', model: 'test', mode: 'code', approval: 'edits', cwd: 'workspace', useWorktree: false };
       const view = {
