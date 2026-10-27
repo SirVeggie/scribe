@@ -11,9 +11,9 @@
     aurora: ["#081a24", "#0f7a6c", "#7ad9a8", "#e9e2ff"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy" };
+  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", trio: "Three dots" };
   // Shape animation speed while idle and working; others use [.6, 2].
-  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
+  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1], trio: [.6, 1.4] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1], glow: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch" };
@@ -138,10 +138,19 @@ vec4 galaxy(vec2 uv,float t){float r=length(uv)+.001;float ang=atan(uv.y,uv.x);f
 float n=fbm(uv*3.+vec2(t*.1));float dens=clamp(arm*(.4+.8*n)*exp(-r*1.4)*1.8+exp(-r*6.)*1.2,0.,1.);
 vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1,r));}
 
+// Three dots wander on their own when idle; while working they line up and ripple in a wave.
+vec4 trio(vec2 uv,float t){vec4 c=vec4(0.);float rad=.23;
+for(int i=0;i<3;i++){float fi=float(i);
+vec2 drift=.33*vec2(sin(t*.53+fi*2.1)+.5*sin(t*1.17+fi*4.3),cos(t*.61+fi*3.7)+.5*sin(t*.89+fi*1.9));
+vec2 wave=vec2((fi-1.)*.58,.3*sin(t*3.5-fi*1.2));vec2 p=mix(drift,wave,u_work);
+vec2 q=(uv-p)/rad;float d=length(uv-p)-rad;float a=aaIn(d);
+vec3 col=lit(pal(.45+.25*fi),q*min(1.,1./max(length(q),.001)),.6);
+c=over(c,pm(col,a));c=over(c,pm(pal(.6+.2*fi),exp(-max(d,0.)*14.)*.25*(1.-a)));}
+return c;}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
-return galaxy(uv*1.6,t);
+if(u_style<8.5)return galaxy(uv*1.6,t);return trio(uv,t);
 }
 float bevel(vec2 p){return smoothstep(0.,.08,-sym(p/u_iconSize)*u_iconSize);}
 vec4 mark(vec2 uv,float t){
