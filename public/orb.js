@@ -290,11 +290,11 @@ gl_FragColor=c;
       // Scale the stops with the surface strip (160px in the app, zoomed in the lab).
       const k = (surface.getBoundingClientRect().width || 160) / 160;
       const fade = (from, mid) => `linear-gradient(90deg, ${from} 0px, ${mid} ${110 * k}px, transparent ${210 * k}px)`;
-      const deep = fade("rgba(0, 0, 0, .88)", "rgba(0, 0, 0, .45)");
+      const deep = fade("rgba(0, 0, 0, .74)", "rgba(0, 0, 0, .36)");
       const tinted = fade(mix(c0, 85, "black"), mix(c0, 50));
       const looks = {
         deepen: { background: deep, on: true },
-        deepenWork: { background: fade("rgba(0, 0, 0, .74)", "rgba(0, 0, 0, .36)"), on: busy },
+        deepenWork: { background: deep, on: busy },
         deepenColor: { background: tinted, on: true },
         deepenColorWork: { background: tinted, on: busy },
         tint: { background: `linear-gradient(90deg, ${mix(c1, 24)}, ${mix(c2, 8)} 55%, transparent)`, on: true },
