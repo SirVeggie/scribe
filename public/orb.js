@@ -101,12 +101,16 @@ float w0=exp(-4.*dot(uv-p0,uv-p0)),w1=exp(-4.*dot(uv-p1,uv-p1)),w2=exp(-4.*dot(u
 vec3 col=(u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05)/(w0+w1+w2+w3+.05);return pm(col,a);}
 vec4 meshquick(vec2 uv,float t){float r=length(uv);float a=aaIn(r-1.);if(a<=0.)return vec4(0.);t*=.5;float k=mix(4.,10.,u_work);
 vec2 p0=.6*vec2(sin(t*.7),cos(t*.9)),p1=.6*vec2(sin(t*.8+2.),cos(t*.6+1.)),p2=.6*vec2(sin(t*.5+4.),cos(t*.75+3.)),p3=.6*vec2(sin(t*.65+1.),cos(t*.85+5.));
-float w0=exp(-k*dot(uv-p0,uv-p0)),w1=exp(-k*dot(uv-p1,uv-p1)),w2=exp(-k*dot(uv-p2,uv-p2)),w3=exp(-k*dot(uv-p3,uv-p3));
-vec3 cs=u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05;float ws=w0+w1+w2+w3+.05;
-if(u_work>.01){vec2 p4=.55*vec2(sin(t*.9+3.),cos(t*.7+2.)),p5=.55*vec2(sin(t*.6+5.),cos(t*.95+4.)),p6=.55*vec2(sin(t*.85+1.5),cos(t*.55+6.)),p7=.55*vec2(sin(t*.75+.5),cos(t*.8+3.5));
-float w4=u_work*exp(-k*dot(uv-p4,uv-p4)),w5=u_work*exp(-k*dot(uv-p5,uv-p5)),w6=u_work*exp(-k*dot(uv-p6,uv-p6)),w7=u_work*exp(-k*dot(uv-p7,uv-p7));
-cs+=u_c2*w4+u_c3*w5+u_c0*w6+u_c1*w7;ws+=w4+w5+w6+w7;}
-return pm(cs/ws,a);}
+vec2 p4=.55*vec2(sin(t*.9+3.),cos(t*.7+2.)),p5=.55*vec2(sin(t*.6+5.),cos(t*.95+4.)),p6=.55*vec2(sin(t*.85+1.5),cos(t*.55+6.)),p7=.55*vec2(sin(t*.75+.5),cos(t*.8+3.5));
+float off=(1.-u_work)*3.;
+float d0=dot(uv-p0,uv-p0),d1=dot(uv-p1,uv-p1),d2=dot(uv-p2,uv-p2),d3=dot(uv-p3,uv-p3);
+float d4=dot(uv-p4,uv-p4)+off,d5=dot(uv-p5,uv-p5)+off,d6=dot(uv-p6,uv-p6)+off,d7=dot(uv-p7,uv-p7)+off;
+// Measure from the nearest blob so some colour always fills every pixel.
+float dm=min(min(min(d0,d1),min(d2,d3)),min(min(d4,d5),min(d6,d7)));
+float w0=exp(-k*(d0-dm)),w1=exp(-k*(d1-dm)),w2=exp(-k*(d2-dm)),w3=exp(-k*(d3-dm));
+float w4=exp(-k*(d4-dm)),w5=exp(-k*(d5-dm)),w6=exp(-k*(d6-dm)),w7=exp(-k*(d7-dm));
+vec3 cs=u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c2*w4+u_c3*w5+u_c0*w6+u_c1*w7;
+return pm(cs/(w0+w1+w2+w3+w4+w5+w6+w7),a);}
 vec4 ring(vec2 uv,float t){float r=length(uv);float w=.17;float d=abs(r-.8)-w;float a=aaIn(d);if(a<=0.)return vec4(0.);
 float ang=atan(uv.y,uv.x)/TAU;float k=fract(ang+t*.12+.25*fbm(uv*2.5+vec2(t*.3,0.)));vec3 col=pal(abs(k*2.-1.));
 float x=clamp((r-.8)/w,-1.,1.);float z=sqrt(1.-x*x);col*=.6+.5*z;col+=vec3(.6)*pow(z,12.)*smoothstep(0.,.5,uv.y+.3)*.5;return pm(col,a);}
@@ -228,7 +232,7 @@ gl_FragColor=c;
       return fx.draw({ ...uniforms, u_surface: 0 });
     }
     const loop = window.scribeGL.loop(dt => {
-      time += dt * (busy ? 2 : current.style === "meshquick" ? 1 : .6);
+      time += dt * (current.style === "meshquick" ? (busy ? 1.3 : 1) : busy ? 2 : .6);
       work += ((busy ? 1 : 0) - work) * Math.min(1, dt * 3);
       if (!draw()) loop.stop();
     }, { element: btn });
