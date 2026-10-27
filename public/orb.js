@@ -86,7 +86,7 @@ vec4 over(vec4 a,vec4 b){return a+b*(1.-a.a);}
 float sphZ(vec2 uv){return sqrt(max(0.,1.-dot(uv,uv)));}
 vec3 lit(vec3 col,vec2 uv,float rim){float z=sphZ(uv);vec3 n=vec3(uv,z);vec3 L=normalize(vec3(-.5,.6,.8));
 col*=.55+.6*max(dot(n,L),0.);col+=vec3(1.)*pow(max(dot(reflect(-L,n),vec3(0.,0.,1.)),0.),20.)*.5;
-col+=mix(u_c3,vec3(1.),.3)*pow(1.-z,2.6)*rim*(.6+.4*u_energy);return col;}
+col=mix(col,u_c0*.25,clamp(pow(1.-z,2.6)*rim*(.75+.25*u_energy),0.,1.));return col;}
 float liquid(vec2 uv,float t,out vec2 q){float a=t*.5+(1.-length(uv))*1.8;vec2 p=rot(a)*uv;
 q=vec2(fbm(p*1.7+vec2(t*.6,0.)),fbm(p*1.7+vec2(3.1,-t*.5)));return fbm(p*1.9+2.6*q+vec2(-t*.3,t*.25));}
 float liqT(vec2 uv,float t){vec2 q;float f=liquid(uv,t,q);return clamp(f*1.25-.2+(q.x-.5)*.6,0.,1.);}
@@ -236,7 +236,8 @@ float r=length(uv);
 if(u_style>.5&&u_style<7.5){
 c*=1.-smoothstep(.9,1.05,r);
 float edge=exp(-abs(r-.97)*15.)*(1.-smoothstep(1.,1.26,r))*.22;
-c=over(c,pm(mix(u_c2,u_c3,.35),edge));}
+// The liquid sphere gets a dark rim; the other shapes a light one.
+c=over(c,pm(u_style<1.5?u_c0*.25:mix(u_c2,u_c3,.35),u_style<1.5?edge*2.:edge));}
 if(u_symbol>.5){
 // Give bright icons a dark underlay, and dark icons a light one.
 float d=sym(uv/u_iconSize)*u_iconSize;
