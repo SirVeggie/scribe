@@ -237,7 +237,8 @@ if(u_style>.5&&u_style<7.5){
 c*=1.-smoothstep(.9,1.05,r);
 float edge=exp(-abs(r-.97)*15.)*(1.-smoothstep(1.,1.26,r))*.22;
 // The liquid sphere gets a dark rim; the other shapes a light one.
-c=over(c,pm(u_style<1.5?u_c0*.25:mix(u_c2,u_c3,.35),u_style<1.5?edge*2.:edge));}
+if(u_style<1.5)edge=exp(-abs(r-.97)*9.)*(1.-smoothstep(1.,1.3,r))*.28;
+c=over(c,pm(u_style<1.5?u_c0*.25:mix(u_c2,u_c3,.35),edge));}
 if(u_symbol>.5){
 // Give bright icons a dark underlay, and dark icons a light one.
 float d=sym(uv/u_iconSize)*u_iconSize;
