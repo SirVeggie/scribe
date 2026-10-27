@@ -66,6 +66,7 @@ import { threadStats, type ThreadStats } from "./threadStats.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanApprovals, cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
+import { ScribeSkills } from "./scribeSkills.js";
 import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, READ_SHELL_WAIT_MS, readShell, settleNoTools, threadCustom } from "./customModes.js";
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
@@ -533,8 +534,17 @@ export class AgentHost {
     log,
   });
 
+  /** Scribe's own skills (#239). */
+  readonly scribeSkills: ScribeSkills;
+
   constructor(private emit: (event: AgentEvent) => void, private readCodexUsage: () => Promise<unknown> = fetchCodexPlanUsage) {
     this.db = new AgentDb();
+    this.scribeSkills = new ScribeSkills(this.db);
+    try {
+      this.scribeSkills.scan();
+    } catch (err) {
+      log(`skills scan failed: ${(err as Error).message}`);
+    }
     this.providers = { claude: new ClaudeProvider(), cursor: new CursorProvider(), codex: new CodexProvider(), pi: new PiProvider(() => this.modelSources()) };
     if (FAKE_AGENTS) {
       const deps = {
@@ -1332,6 +1342,7 @@ export class AgentHost {
         title: s.title,
         scope: { kind: "page", ref: pageId },
         ...(s.helpers ? { helpersAllowed: true } : {}),
+        ...(s.skills?.length ? { skills: s.skills } : {}),
       },
       { remember: false }
     );
@@ -1521,6 +1532,7 @@ export class AgentHost {
     if (spareId && !this.threads.has(spareId)) thread.id = spareId;
     if (input.draft) thread.draft = input.draft;
     if (input.helpersAllowed && !thread.noTools) thread.helpersAllowed = true;
+    if (input.skills?.length && !thread.noTools) thread.skills = [...new Set(input.skills)];
     const space = this.startSpace(thread.scope);
     if (space) thread.space = space;
     // A New page becomes a real page once it has a thread, even one that has not sent anything.
@@ -1699,6 +1711,10 @@ export class AgentHost {
     if (typeof patch.hooksOff === "boolean") {
       if (patch.hooksOff) next.hooksOff = true;
       else delete next.hooksOff;
+    }
+    if (Array.isArray(patch.skills)) {
+      if (patch.skills.length) next.skills = [...new Set(patch.skills)];
+      else delete next.skills;
     }
     if (patch.draft !== undefined) next.draft = patch.draft;
     // A thread without tools keeps none, whatever the pickers asked for (#729).
@@ -2032,6 +2048,12 @@ export class AgentHost {
       info.plugins=catalog;
     }
     if (this.prefs().searxngUrl) info.webSearch = true;
+    try {
+      const skills = this.scribeSkills.effective(thread);
+      if (skills.length) info.skills = skills.map(({ id, name, description, builtin }) => ({ id, name, description, ...(builtin ? { builtin } : {}) }));
+    } catch (err) {
+      log(`skills for ${thread.id}: ${(err as Error).message}`);
+    }
     if (this.prefs().instructionsOff.length) info.instructionsOff = this.prefs().instructionsOff;
     if (this.prefs().helpers && !thread.helperOf && !modeOff(thread, "helpers")) info.helpers = true;
     if (this.prefs().memory) info.memories = memoriesFor(this.memories(), this.memoryWorkspace(thread), this.runs.get(thread.id)?.memoryOwner ?? memoryOwner(thread));

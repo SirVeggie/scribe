@@ -240,6 +240,8 @@ export type Thread = {
   draft?: ComposerDraft | null;
   /** Detection off: Scribe's hooks (Agent settings, Hooks) neither watch nor hold anything in this thread. */
   hooksOff?: boolean;
+  /** Scribe skills picked for this thread (scribeSkills.ts ids), on top of the ones enabled for every chat. A worker's picks are copied here. */
+  skills?: string[];
 };
 
 export type ComposerDraft = { text: string; context?: ContextChip[] };

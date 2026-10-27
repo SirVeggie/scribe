@@ -50,6 +50,13 @@ function requireEditable(file: string, roots: Roots): "skill" | "instructions" {
   return kind;
 }
 
+/** A text file small enough to edit in the view. */
+export function readSmallText(file: string): string {
+  const text = fs.readFileSync(file, "utf8");
+  if (text.length > MAX_TEXT_CHARS) throw new Error("This file is too large to edit here.");
+  return text;
+}
+
 export function readHarnessFile(file: string, roots: Roots): { path: string; kind: "skill" | "instructions"; text: string } {
   const kind = requireEditable(file, roots);
   const text = fs.readFileSync(file, "utf8");

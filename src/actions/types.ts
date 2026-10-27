@@ -141,6 +141,8 @@ export type LaunchSettings = {
   cwd?: string;
   worktree?: boolean;
   helpers: boolean;
+  /** Scribe skill ids the worker picked, copied onto its thread. */
+  skills?: string[];
 };
 
 /** What Scribe needs to see a page's chat through (see agent/pageRuns.ts RunInput). */

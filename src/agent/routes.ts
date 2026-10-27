@@ -17,7 +17,7 @@ import { parseWebAccess } from "./webAccess.js";
 import { applyImport, removeCursorImports, cleanLayer, DEFAULT_MODES, importCandidates, mcpFilePath, readMcpFile, setServerEnabled, writeMcpFile, type McpFile, type McpImportCandidate } from "./mcpConfig.js";
 import { workspaceKey, type ThreadPatch } from "./prefs.js";
 import { hookCoverage } from "./hooks.js";
-import { copySkill, createSkill, readHarnessFile, removeSkill, writeHarnessFile } from "./harnessFiles.js";
+import { copySkill, createSkill, editableKind, readHarnessFile, readSmallText, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
 import { componentHost, PORT } from "../config.js";
 import { plugins } from "../plugins/current.js";
@@ -348,6 +348,68 @@ export function agentRouter(host: AgentHost): express.Router {
   );
   router.get("/harness/skills", wrap((req) => host.skills(typeof req.query.cwd === "string" && req.query.cwd ? req.query.cwd : null)));
 
+  // Scribe's own skills (#239): folders in dataDir/skills, given to chats through skill_read.
+  const skillsOf = () => host.scribeSkills;
+  /** "builtin" for a file of the built-in skill, a skill id for one of a Scribe skill's, else null. */
+  const scribeSkillFile = (file: string): string | null => {
+    if (!path.isAbsolute(file)) return null;
+    if (skillsOf().isBuiltinFile(file)) return "builtin";
+    return skillsOf().ownerOf(file);
+  };
+  router.get("/scribe-skills", wrap(() => ({ skills: skillsOf().list(), trash: skillsOf().list({ trash: true }), root: skillsOf().root })));
+  router.post(
+    "/scribe-skills",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return { skill: skillsOf().create(body.name, body.description) };
+    })
+  );
+  router.post(
+    "/scribe-skills/copy",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const file = String(body.file ?? "");
+      // Only a skill in a folder a provider reads (or the built-in): not any SKILL.md on disk.
+      if (!skillsOf().isBuiltinFile(file) && editableKind(file, workspaceOf(body.cwd)) !== "skill") throw new Error("Not a skill in one of the providers' folders.");
+      return { skill: skillsOf().copyFrom(file) };
+    })
+  );
+  router.post(
+    "/scribe-skills/import",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      return { skill: skillsOf().import(body.path) };
+    })
+  );
+  router.post(
+    "/scribe-skills/:id/:op",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      const id = String(req.params.id);
+      const skills = skillsOf();
+      switch (req.params.op) {
+        case "enabled":
+          if (typeof body.enabled !== "boolean") throw new Error("enabled is required");
+          skills.setEnabled(id, body.enabled);
+          return { ok: true };
+        case "duplicate":
+          return { skill: skills.duplicate(id) };
+        case "export":
+          return skills.export(id, body.path);
+        case "remove":
+          skills.remove(id);
+          return { ok: true };
+        case "restore":
+          return { skill: skills.restore(id) };
+        case "purge":
+          skills.purge(id);
+          return { ok: true };
+        default:
+          throw new Error(`Unknown skill action: ${req.params.op}`);
+      }
+    })
+  );
+
   // What the view changes (#495): skills in the providers' folders, and the instruction files they load.
   const workspaceOf = (value: unknown) => ({ workspace: typeof value === "string" && value ? value : null });
   router.post(
@@ -371,12 +433,31 @@ export function agentRouter(host: AgentHost): express.Router {
       return removeSkill(String(body.file ?? ""), workspaceOf(body.cwd));
     })
   );
-  router.get("/harness/file", wrap((req) => readHarnessFile(String(req.query.path ?? ""), workspaceOf(req.query.cwd))));
+  router.get(
+    "/harness/file",
+    wrap((req) => {
+      const file = String(req.query.path ?? "");
+      // A Scribe skill's files are edited here too; the built-in's are only shown.
+      const scribe = scribeSkillFile(file);
+      if (scribe) return { path: file, kind: "skill", text: readSmallText(file), ...(scribe === "builtin" ? { readOnly: true } : {}) };
+      return readHarnessFile(file, workspaceOf(req.query.cwd));
+    })
+  );
   router.put(
     "/harness/file",
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
-      return writeHarnessFile(String(body.path ?? ""), body.text as string, workspaceOf(body.cwd));
+      const file = String(body.path ?? "");
+      const scribe = scribeSkillFile(file);
+      if (scribe === "builtin") throw new Error("The built-in skill is read-only. Copy it to Scribe to change it.");
+      if (scribe) {
+        if (typeof body.text !== "string") throw new Error("text is required");
+        if (!fs.existsSync(file)) throw new Error(`File not found: ${file}`);
+        fs.writeFileSync(file, body.text);
+        host.scribeSkills.refresh(scribe);
+        return { path: file };
+      }
+      return writeHarnessFile(file, body.text as string, workspaceOf(body.cwd));
     })
   );
   router.post(
@@ -968,6 +1049,7 @@ function threadPatch(body: Record<string, unknown>): ThreadPatch {
   if (typeof body.pinned === "boolean") patch.pinned = body.pinned;
   if (typeof body.archived === "boolean") patch.archived = body.archived;
   if (typeof body.hooksOff === "boolean") patch.hooksOff = body.hooksOff;
+  if (Array.isArray(body.skills)) patch.skills = [...new Set(body.skills.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length < 100))].slice(0, 100);
   if (body.draft === null) patch.draft = null;
   else if (isPlainRecord(body.draft) && typeof body.draft.text === "string") {
     const context = Array.isArray(body.draft.context) ? (body.draft.context.filter(isPlainRecord) as ContextChip[]) : [];

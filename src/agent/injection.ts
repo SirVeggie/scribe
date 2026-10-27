@@ -71,6 +71,7 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "page_wait",
   "library_folders",
   "scribe_docs",
+  "skill_read",
   "template_list",
   "template_get",
   "plugin_list",

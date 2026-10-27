@@ -1054,6 +1054,19 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  /** skill_read (#239): a Scribe skill this thread may use, in every mode. */
+  app.post("/api/skill-read", (req, res) => {
+    const id = threadOf(req);
+    const thread = id && agentHost ? agentHost.getThread(id) : null;
+    if (!thread || !agentHost) { res.status(403).json({ error: "skill_read requires a current Scribe chat thread." }); return; }
+    try {
+      const body = isPlainObject(req.body) ? req.body : {};
+      res.json(agentHost.scribeSkills.read(thread, body.name, body.file));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   for (const grep of [false, true]) {
     app.post(grep ? "/api/grep-files" : "/api/list-files", async (req, res) => {
       const id = threadOf(req);

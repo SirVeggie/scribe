@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS thread_stats (
   workspace TEXT,
   data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 `;
 
 export const AGENT_SCHEMA_VERSION = 1;
@@ -180,6 +181,20 @@ export class AgentDb {
   maxItemSeq(threadId: string): number {
     const row = this.db.prepare("SELECT MAX(seq) AS m FROM items WHERE thread_id = ?").get(threadId) as { m: number | null };
     return row.m ?? 0;
+  }
+
+  /** Scribe skills' metadata (scribeSkills.ts); their files live in dataDir/skills. */
+  listSkillRows<T>(): T[] {
+    const rows = this.db.prepare("SELECT data FROM skills ORDER BY id").all() as Array<{ data: string }>;
+    return rows.map((row) => JSON.parse(row.data) as T);
+  }
+
+  saveSkillRow(id: string, row: unknown): void {
+    this.db.prepare("INSERT INTO skills (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(id, JSON.stringify(row));
+  }
+
+  deleteSkillRow(id: string): void {
+    this.db.prepare("DELETE FROM skills WHERE id = ?").run(id);
   }
 
   getSetting<T>(key: string, fallback: T): T {

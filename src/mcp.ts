@@ -1495,6 +1495,7 @@ export async function startMcp(): Promise<void> {
     if (!off.has("threads")) registerThreadTools(server);
     if (!off.has("helpers")) registerHelperTools(server);
     registerMemoryTools(server);
+    registerSkillRead(server);
   }
 
   const transport = new StdioServerTransport();
@@ -1840,6 +1841,36 @@ function registerThreadTools(server: McpServer): void {
     },
     { readOnlyHint: true },
     async ({ thread, from, limit, q, kinds, full, importance }, extra) => call("read", { thread, from, limit, q, kinds, full, importance }, extra)
+  );
+}
+
+/**
+ * skill_read (#239): the Scribe skills listed in a chat's instructions. Every mode has it, including
+ * chats without file reads; the host limits it to the thread's own skills and each skill's folder.
+ */
+function registerSkillRead(server: McpServer): void {
+  server.tool(
+    "skill_read",
+    "Read one of the Scribe skills listed in your instructions: its SKILL.md (with a list of its other files) or, with file, one of those files. Read a skill before the task it covers and follow it.",
+    {
+      name: z.string().describe("The skill's name as listed (or its id when two share a name)."),
+      file: z.string().optional().describe("A file inside the skill's folder, like references/api.md. Omit for SKILL.md."),
+    },
+    { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    async ({ name, file }, extra) => {
+      try {
+        const { status, data } = await api("POST", "/api/skill-read", { name, file }, { signal: extra.signal });
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        const out = data as { skill: string; file: string; text: string; files?: string[]; truncated?: boolean };
+        const notes = [
+          ...(out.files?.length ? [`Other files in this skill (read with file): ${out.files.join(", ")}`] : []),
+          ...(out.truncated ? ["The file was cut at 512 KB."] : []),
+        ];
+        return { content: [{ type: "text" as const, text: notes.length ? `${out.text}\n\n---\n${notes.join("\n")}` : out.text }] };
+      } catch (err) {
+        return errorResult((err as Error).message || "skill_read failed");
+      }
+    }
   );
 }
 

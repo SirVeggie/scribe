@@ -256,7 +256,13 @@ export function workerSettings(w: Worker, c: Card): LaunchSettings {
     modelParams,
     ...(folder ? { cwd: str(w.cwd).trim(), ...(w.worktree ? { worktree: true } : {}) } : {}),
     helpers: w.helpers !== false,
+    ...(skillIds(w.skills).length ? { skills: skillIds(w.skills) } : {}),
   };
+}
+
+/** A worker's picked Scribe skills, as saved on the board. */
+function skillIds(value: unknown): string[] {
+  return arr(value).filter((id): id is string => typeof id === "string" && id.length > 0 && id.length < 100).slice(0, 100);
 }
 
 /**

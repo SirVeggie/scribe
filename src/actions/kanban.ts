@@ -142,6 +142,8 @@ export type Worker = {
   web?: string;
   show?: string;
   helpers?: boolean;
+  /** Scribe skill ids picked for this worker's chats (#239). */
+  skills?: string[];
   threadId?: string;
   stop?: boolean;
   run?: { since?: number; card?: number; startedAt?: number } | null;
