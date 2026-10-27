@@ -26,11 +26,11 @@ test("content origin serves the injected tooltip script while rejecting other sh
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type")!, /javascript/);
     assert.equal(await response.text(), fs.readFileSync(path.join(publicDir, "tooltip.js"), "utf8"));
-    const kitCss = await fetch(base + "/kit.css?v=2");
+    const kitCss = await fetch(base + "/kit.css?v=3");
     assert.equal(kitCss.status, 200);
     assert.match(kitCss.headers.get("content-type")!, /css/);
     assert.equal(await kitCss.text(), fs.readFileSync(path.join(publicDir, "kit.css"), "utf8"));
-    const kitJs = await fetch(base + "/kit.js?v=2");
+    const kitJs = await fetch(base + "/kit.js?v=3");
     assert.equal(kitJs.status, 200);
     assert.match(kitJs.headers.get("content-type")!, /javascript/);
     assert.equal(await kitJs.text(), fs.readFileSync(path.join(publicDir, "kit.js"), "utf8"));
@@ -47,8 +47,8 @@ test("content origin serves the injected tooltip script while rejecting other sh
     }
     for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {
       assert.equal((await fetch(base + "/tooltip.js?v=3", { method })).status, 403, method);
-      assert.equal((await fetch(base + "/kit.css?v=2", { method })).status, 403, method);
-      assert.equal((await fetch(base + "/kit.js?v=2", { method })).status, 403, method);
+      assert.equal((await fetch(base + "/kit.css?v=3", { method })).status, 403, method);
+      assert.equal((await fetch(base + "/kit.js?v=3", { method })).status, 403, method);
     }
     // Pages run on their own origins (#660); the shared one sends a page there.
     const moved = await fetch(base + "/view/t_ab12cd34?viewer=v1", { redirect: "manual" });

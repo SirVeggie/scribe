@@ -206,64 +206,64 @@ Fragment pages (no `<!DOCTYPE html>` / `<html`) are wrapped in a **dark** theme.
 
 Do not hardcode light-theme colors (`#222`, `#333`, `black`) and do not fall back to them (`color: var(--fg, #222)`): `--fg` is not defined, so the fallback is dark text on `--bg`. A full document skips this wrapper — copy the same `:root` block, or set both background and color yourself so they contrast.
 
-### Page kit: form wiring and building blocks
+### Page kit: elements and form wiring
+
+Fragment pages get Scribe's page kit: form wiring with no script, themed fields and buttons, and a few elements for the parts that need behavior: `<s-question>` for questions, `<s-options>` to compare options and let the user pick one, `<s-mock>` for UI mock-ups, and `<s-code>` for code with a Copy button. Use them for those parts. The kit has no boxes, cards or badges: give the page its own look with your own `<style>`.
+
+The elements render their parts into the page itself (no shadow DOM, no frame), and every kit rule sits in `:where()`, so your CSS restyles them like your own markup: `s-option { border-radius: 4px }`, `s-question .opt { background: none }`. Match them to the rest of your page. The kit's colors are `--kit-*` variables on `:root` (tones, surfaces, `--kit-radius`, `--kit-mono`); override those to retheme every element at once.
+
+The kit is not a way to save tokens: a page's HTML is a small share of a chat's cost, so never make a page plainer to keep it short. A short report or a form needs little more. A design doc, investigation or comparison should be easy to scan: color-code categories and options (your own tags and toned sections, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG for anything richer), and show proposed UI as a mock-up rather than describing it. A plain page of headings and default tables reads much worse.
 
 **One-click replies.** `<button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button>` sends the optional JSON object as answers and `data-reply` as the summary through `scribe.reply`. An empty `data-reply` uses the button text. No form or script is needed. All reply buttons in the page are disabled after choosing, and the chosen button is marked; failed delivery allows retry. Invalid `data-context` shows an error without sending. Without `replyTo`, it logs `submitted` with `{ answers, summary }`, like a reply form. The wiring also works in any component host that provides `window.scribe.reply`; that host determines reply routing.
-
-Fragment pages also get Scribe's page kit: form wiring with no script, themed fields, and building blocks for reports (boxes, cards, tags, flows, mock-ups). Always use it for forms and questions. The rest is optional: use the blocks that help, restyle them with your own `<style>` (it always wins over the kit), and write your own markup where they don't fit.
-
-The kit is a baseline, not a look, and it is not a way to save tokens: a page's HTML is a small share of a chat's cost, so never make a page plainer to keep it short. A short report or a form needs little more. A design doc, investigation or comparison should be easy to scan: color-code categories and options (tags, toned boxes and cards, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG for anything richer), and show proposed UI as a mock-up rather than describing it. Add your own CSS or SVG wherever the kit falls short; a plain page of headings and default tables reads much worse.
 
 <!-- kit-catalog:start -->
 | Write | Gives | Example |
 |---|---|---|
+| ` form[data-reply] ` | Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo. | ` <form data-reply><textarea name="notes"></textarea><button type="submit">Send answers</button></form> ` |
+| ` <s-question name label type?> / <s-choice value checked?> ` | A question set apart from the text around it, inside a form[data-reply]. With s-choice children it is one choice (type="many" for check boxes); without, a text box (type="line" for one line); type="scale" with min, max, low and high. required and value (the default) work too. | ` <s-question name="approach" label="Which approach?"><s-choice value="a" checked>Patch <small>an hour</small></s-choice><s-choice value="b">Rewrite</s-choice></s-question> ` |
+| ` <s-options name? style="--min:…"> / <s-option value label recommended?> ` | Options side by side, each with its own content. With a name, inside a form[data-reply] the user picks one like a radio; outside a form each gets a Choose button that replies at once. Without a name it only compares. | ` <s-options name="plan"><s-option value="a" label="Patch" recommended><p>An hour, low risk.</p></s-option><s-option value="b" label="Rewrite"><p>A day.</p></s-option></s-options> ` |
+| ` button[data-reply][data-context] ` | Sends the summary (button text when empty) and an optional JSON answers object through the host's scribe.reply. | ` <button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button> ` |
+| ` <s-mock label> / <s-mock-row label hint?> / <s-switch on?> ` | A window frame for a UI mock-up, setting rows with the control on the right, and a drawn switch. | ` <s-mock label="Settings"><s-mock-row label="Sync" hint="Every 5 minutes"><s-switch on></s-switch></s-mock-row></s-mock> ` |
+| ` [data-new] ` | A dashed outline marking a new or changed part of a mock-up. | ` <s-mock-row label="Theme" data-new><select><option>Dark</option></select></s-mock-row> ` |
+| ` <s-code language? file? diff?> ` | A code block with a Copy button, highlighted when language is set, with + and - lines marked when diff is set. Escape < and & in the code, or put it in a <script type="text/plain"> child. | ` <s-code language="ts" file="src/a.ts">const total = items.length;</s-code> ` |
 | ` <scribe-component plugin="…" name="…" props='{}'></scribe-component> ` | Embeds a plugin_guide component in an isolated frame on a page; props follow its schema, calls and live state/events use the page's plugin permission, and replies use the page's replyTo or a reply event. | ` <scribe-component plugin="git-history" name="activity" props='{}'></scribe-component> ` |
 | ` .lead / .small ` | A muted intro line under the title, or smaller text. | ` <p class="lead">What we found</p><p class="small">Details</p> ` |
-| ` .grid; --min ` | Responsive columns; --min sets the minimum column width (240px by default). | ` <div class="grid" style="--min:320px"><div class="card">Option A</div><div class="card">Option B</div></div> ` |
-| ` .card / .card.rec ` | A padded box; rec marks the recommended option; a tone adds a colored top edge. | ` <div class="card rec ok"><h3>Recommended</h3>Option A</div> ` |
-| ` .row ` | A wrapping row of buttons or badges. | ` <div class="row"><button>Back</button><button class="primary">Next</button></div> ` |
-| ` .callout ` | A toned note box; info by default. | ` <div class="callout warn"><b>Note</b> Review the limits.</div> ` |
-| ` .badge ` | A small toned label. | ` <span class="badge ok">Recommended</span> ` |
-| ` .tag ` | A colored pill with a dot for categories. | ` <span class="tag purple">Storage</span> ` |
-| ` .box ` | A toned section with a colored edge and heading; info by default. | ` <section class="box teal"><h2>Findings</h2>Details</section> ` |
-| ` .ask ` | A question box with a dashed border and a question mark before its heading. | ` <div class="ask"><h3>Which option?</h3><textarea name="choice"></textarea></div> ` |
+| ` .grid; --min ` | Responsive columns; --min sets the minimum column width (240px by default). | ` <div class="grid" style="--min:320px"><section>Findings</section><section>Risks</section></div> ` |
+| ` .row ` | A wrapping row of buttons. | ` <div class="row"><button>Back</button><button class="primary">Next</button></div> ` |
 | ` .flow ` | A diagram row of toned boxes joined by arrows. | ` <div class="flow"><div>Agent</div><div class="ok">Daemon <small>port 7420</small></div></div> ` |
 | ` ol.steps ` | A numbered list with round markers. | ` <ol class="steps"><li>Inspect</li><li>Implement</li></ol> ` |
-| ` .mock / .mock-bar / .mock-body / .mock-row ` | A window frame and setting rows for a UI mock-up. | ` <div class="mock"><div class="mock-bar">Settings</div><div class="mock-body"><div class="mock-row"><span>Enabled</span><span class="switch on"></span></div></div></div> ` |
-| ` .switch / .switch.on ` | A drawn switch for mock-ups; on shows its enabled state. | ` <span class="switch on"></span> ` |
-| ` .mark-new ` | A dashed outline marking a new or changed part of a mock-up. | ` <div class="mark-new">New control</div> ` |
-| ` .ok / .warn / .error / .info / .purple / .teal / .orange / .pink; --tone ` | Shared tones for boxes, cards, tags, badges, flows and table cells or rows; --tone accepts any custom color. | ` <table><tr class="warn"><td>Pending</td><td class="ok">Ready</td></tr></table><span class="tag" style="--tone:#7fc8c0">Custom</span> ` |
+| ` .ok / .warn / .error / .info / .purple / .teal / .orange / .pink; --tone ` | Shared tones for table cells or rows and flow boxes; --tone accepts any custom color. | ` <table><tr class="warn"><td>Pending</td><td class="ok">Ready</td></tr></table><div class="flow"><div style="--tone:#7fc8c0">Custom</div></div> ` |
 | ` dl.kv ` | Key-value rows. | ` <dl class="kv"><dt>Files</dt><dd>12</dd></dl> ` |
 | ` ul.pros / ul.cons ` | Lists with plus and minus markers. | ` <ul class="pros"><li>Fast</li></ul><ul class="cons"><li>Limited</li></ul> ` |
 | ` button / button.primary / a.button ` | App-style buttons; primary highlights the main action. | ` <button class="primary">Save</button><a class="button" href="https://example.com">Open</a> ` |
 | ` input / textarea / select ` | Themed fields, radios and check boxes. | ` <input type="text" name="title"><textarea name="notes"></textarea> ` |
-| ` .q ` | Spacing for a question and its fields. | ` <div class="q"><h3>Anything else?</h3><textarea name="notes"></textarea></div> ` |
-| ` label.opt ` | A selectable option row with an optional small description. | ` <label class="opt"><input type="radio" name="approach" value="A">Patch <small>Low risk</small></label> ` |
-| ` .scale / .scale-ends ` | A radio scale with labels at its ends. | ` <div class="scale"><label><input type="radio" name="urgency" value="1">1</label><label><input type="radio" name="urgency" value="2">2</label></div><div class="scale-ends"><span>Later</span><span>Now</span></div> ` |
-| ` form[data-reply] ` | Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo. | ` <form data-reply><textarea name="notes"></textarea><button type="submit">Send answers</button></form> ` |
-| ` button[data-reply][data-context] ` | Sends the summary (button text when empty) and an optional JSON answers object through the host's scribe.reply. | ` <button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button> ` |
 <!-- kit-catalog:end -->
 
-**Forms.** `<form data-reply>` needs no script: Scribe keeps what the user types as their draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card), check boxes as lists, empty fields left out. On a page without `replyTo` it logs a `submitted` event with `{ answers, summary }` for `page_wait` instead. Radios, check boxes, inputs and textareas are styled like the chat's own question cards.
+**Forms.** `<form data-reply>` needs no script: Scribe keeps what the user types as their draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card), check boxes as lists, empty fields left out. On a page without `replyTo` it logs a `submitted` event with `{ answers, summary }` for `page_wait` instead. The questions inside it are `<s-question>` elements (each gives its `name` to the answers); plain inputs with a `name` work too.
 
 ```html
 <form data-reply>
-  <div class="q"><h3>Which approach?</h3>
-    <label class="opt"><input type="radio" name="approach" value="A" checked> Patch the parser <small>an hour, low risk</small></label>
-    <label class="opt"><input type="radio" name="approach" value="B"> Rewrite it <small>a day</small></label>
-  </div>
-  <div class="q"><h3>How urgent?</h3>
-    <div class="scale"><label><input type="radio" name="urgency" value="1">1</label><label><input type="radio" name="urgency" value="2">2</label><label><input type="radio" name="urgency" value="3">3</label></div>
-    <div class="scale-ends"><span>whenever</span><span>now</span></div>
-  </div>
-  <div class="q"><h3>Anything else?</h3><textarea name="notes"></textarea></div>
+  <p>…the finding the first question is about…</p>
+  <s-question name="approach" label="Which approach?">
+    <s-choice value="patch" checked>Patch the parser <small>an hour, low risk</small></s-choice>
+    <s-choice value="rewrite">Rewrite it <small>a day</small></s-choice>
+  </s-question>
+  <s-options name="layout">
+    <s-option value="tabs" label="Tabs" recommended><p>…mock-up or notes…</p></s-option>
+    <s-option value="list" label="One list"><p>…</p></s-option>
+  </s-options>
+  <s-question name="blocks" type="many" label="Which parts?">
+    <s-choice value="api">API</s-choice><s-choice value="ui">UI</s-choice>
+  </s-question>
+  <s-question name="urgency" type="scale" min="1" max="5" low="whenever" high="now" label="How urgent?"></s-question>
+  <s-question name="notes" label="Anything else?" placeholder="Optional"></s-question>
   <button type="submit">Send answers</button>
 </form>
 ```
 
-Put each question next to the part of the page it is about (an `ask` box sets it apart); one form can wrap the whole page. Check boxes use `<label class="opt"><input type="checkbox" name="blocks" value="…">`.
+Put each question next to the part of the page it is about; one form can wrap the whole page. An `<s-question>` without `<s-choice>` children is a text box (`type="line"` for one line).
 
-**Full documents.** A page with its own look can still use the kit: put `<link rel="stylesheet" href="/kit.css">` and `<script src="/kit.js" defer></script>` in its `<head>`. It brings the theme variables (your own `:root` wins), the classes above and the `<form data-reply>` wiring; set the body's own background, color and font.
+**Full documents.** A page with its own look can still use the kit: put `<link rel="stylesheet" href="/kit.css">` and `<script src="/kit.js" defer></script>` in its `<head>`. It brings the theme variables (your own `:root` wins), the elements and classes above and the `<form data-reply>` wiring; set the body's own background, color and font.
 
 **Starter pages.** When the user points you at a page to build from (their own layout or style), pass its key as `base` to `page_show`: your `html` goes into its element marked `data-slot` (else its `<main>`, else its `<body>`), so you write only the content. Its state and assets are not copied.
 
@@ -857,7 +857,7 @@ In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the pa
 
 ## Inline UI in chat: component_show
 
-For a small choice or table inside the reply itself (not a page), call `component_show` with `html`: a fragment that uses the Page kit (kit.css and kit.js are included, so `<button data-reply>` and `<form data-reply>` work). Or pass `plugin`, `component` and `props` from `plugin_guide`. Always add `fallback` markdown: history, `thread_read` and exports show it (or the `setSummary` text) in place of the widget.
+For a small choice or table inside the reply itself (not a page), call `component_show` with `html`: a fragment that uses the Page kit (kit.css and kit.js are included, so its elements, `<button data-reply>` and `<form data-reply>` work). Or pass `plugin`, `component` and `props` from `plugin_guide`. Always add `fallback` markdown: history, `thread_read` and exports show it (or the `setSummary` text) in place of the widget.
 
 - The frame has its own sandboxed origin with no network and no page API. Its `window.scribe` has only `props`, `local`/`setLocal` (view state for this item), `reply(data, { summary })`, `setSummary(text)` and `open(link)` (`scribe:` keys or external websites). Plugin components also get `scribe.plugin.call/state/on` for their declared methods, state and events.
 - `wait: true` blocks until the user clicks a reply (the result has `data` and `summary`) or Skip. Without `wait`, a reply sends its summary as a chat message.

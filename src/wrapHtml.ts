@@ -31,8 +31,8 @@ const PAGE_THEME_CSS = Object.entries(PAGE_THEME)
   .join("\n");
 
 /** Linked after DEFAULT_CSS on fragment pages. Downloads replace these (and a full document's own kit tags) with file contents. */
-export const KIT_CSS_TAG = `<link rel="stylesheet" href="/kit.css?v=2">`;
-export const KIT_JS_TAG = `<script src="/kit.js?v=2" defer></script>`;
+export const KIT_CSS_TAG = `<link rel="stylesheet" href="/kit.css?v=3">`;
+export const KIT_JS_TAG = `<script src="/kit.js?v=3" defer></script>`;
 
 const DEFAULT_CSS = `
 :root {

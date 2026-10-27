@@ -55,11 +55,12 @@ test("every kit class, data attribute and page-set property is public or explici
   for (const name of new Set([...cssAttributes, ...jsAttributes])) assert.ok(attributes.has(name), name + ": add to kit.catalog.json");
   // Element defaults and descendant tags are ordinary HTML, not kit opt-in selectors.
   // --kit-* are implementation theme tokens; wrapper theme variables have their own docs test.
-  const theme = new Set(["--bg", "--text", "--muted", "--border", "--accent", "--code-bg"]);
+  // --lift-rgb is the app's checkbox lift color, shared with the Track checkbox and defaulted in place.
+  const theme = new Set(["--bg", "--text", "--muted", "--border", "--accent", "--code-bg", "--lift-rgb"]);
   const properties = new Set(catalog.entries.flatMap((entry) => entry.properties ?? []));
   for (const match of css.matchAll(/var\((--[\w-]+)/g)) {
     const name = match[1];
-    if (!name.startsWith("--kit-") && !theme.has(name)) assert.ok(properties.has(name), name + ": add to kit.catalog.json");
+    if (!name.startsWith("--kit-") && !theme.has(name) && !css.includes(name + ":")) assert.ok(properties.has(name), name + ": add to kit.catalog.json");
   }
 });
 
@@ -71,7 +72,12 @@ test("the skill and scribe_docs serve the same generated kit catalog", () => {
   assert.equal(docs.error, undefined);
   assert.ok(docs.text.includes(generated));
   assert.ok(skillDocs("all").text.includes(generated));
-  for (const entry of catalog.internal) assert.ok(!generated.includes(entry.class), entry.class + " is internal");
+  // An internal class must not show up as a selector or in an example's class attribute.
+  const classAttributes = [...generated.matchAll(/class="([^"]*)"/g)].flatMap((match) => match[1].split(/\s+/));
+  const selectorClasses = [...generated.matchAll(/\.([a-zA-Z_][\w-]*)/g)].map((match) => match[1]);
+  for (const entry of catalog.internal) {
+    assert.ok(!selectorClasses.includes(entry.class) && !classAttributes.includes(entry.class), entry.class + " is internal");
+  }
 });
 
 test("kit doc generation escapes table cells and rejects missing or duplicate markers", () => {

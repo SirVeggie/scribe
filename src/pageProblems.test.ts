@@ -67,7 +67,7 @@ window.__scribeWatchProblems();
 <script>Promise.reject(new Error('rejected page')); scribe.fail().then(function(){}); try {scribe.throwing()} catch(e) {}</script>
 <img src='/bad.png'>
 <form id='reply' data-reply><input><textarea name='valid'></textarea></form>
-<input form='reply'><div class='tag warning'>warning</div><div class='tag success'>valid custom tone</div><div class='tag custom-class'>valid</div>
+<input form='reply'><div class='flow'><div class='warning'>warning</div><div class='success'>valid custom tone</div><div class='custom-class'>valid</div></div>
 <a data-scribe-open='scribe:missing#anchor'>link</a>
 </body>`});
     });

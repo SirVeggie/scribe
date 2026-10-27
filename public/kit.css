@@ -1,5 +1,6 @@
 /*
- * Page kit (#630): ready-made components for fragment pages, so an agent writes only the content.
+ * Page kit (#630, #860): form wiring, a few elements with behavior (<s-question>, <s-options>,
+ * <s-mock>, <s-code>) and layout helpers for fragment pages. Pages style the rest themselves.
  * The fragment wrapper (src/wrapHtml.ts) links it; the scribe skill's "Page kit" section lists the
  * classes. Add public features to public/kit.catalog.json and run npm run gen:kit-docs.
  * Selectors sit in :where() so a page's own CSS always wins over the kit.
@@ -18,6 +19,7 @@
   --code-bg: #131315;
 }
 
+/* Kit tokens, matching the UI Style Guide (Graphite). Override any of them on :root to restyle. */
 :root {
   --kit-surface: #202024;
   --kit-sunken: rgba(0, 0, 0, 0.3);
@@ -27,15 +29,26 @@
   --kit-ok: #9db8a4;
   --kit-warn: #d9b66f;
   --kit-error: #ff8a8a;
-  --kit-purple: #b9a3e3;
+  --kit-purple: #c49bd8;
   --kit-teal: #7fc8c0;
-  --kit-orange: #e5a27a;
+  --kit-orange: #d0a578;
   --kit-pink: #e39fc4;
   --kit-ask: #9fb0f0;
   --kit-radius: 10px;
+  --kit-control-radius: 7px;
+  --kit-control-h: 30px;
+  --kit-panel-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --kit-mono: "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
   --kit-btn-bg: rgba(255, 255, 255, 0.05);
   --kit-btn-bg-hover: rgba(255, 255, 255, 0.1);
   --kit-btn-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+  --kit-hl-keyword: #c792ea;
+  --kit-hl-string: #c3e88d;
+  --kit-hl-number: #f78c6c;
+  --kit-hl-comment: #7d8796;
+  --kit-hl-title: #82aaff;
+  --kit-hl-type: #ffcb6b;
+  --kit-hl-attr: #89ddff;
 }
 
 /* ---------- text ---------- */
@@ -52,87 +65,6 @@
   margin: 0.9rem 0;
 }
 :where(.row) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0.65rem 0; }
-
-/* ---------- card: a box; .rec marks the recommended one ---------- */
-
-:where(.card) {
-  background: var(--kit-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--kit-radius);
-  padding: 14px 16px;
-  min-width: 0;
-}
-:where(.card) > :first-child { margin-top: 0; }
-:where(.card) > :last-child { margin-bottom: 0; }
-:where(.card.rec) { border-color: var(--kit-border-strong); box-shadow: inset 0 0 0 1px var(--kit-border-strong); }
-:where(.card) :where(h3, h4) { margin: 0 0 0.5rem; }
-
-/* ---------- callout: info (default), .ok, .warn, .error ---------- */
-
-:where(.callout) {
-  --tone: var(--kit-info);
-  margin: 0.9rem 0;
-  padding: 10px 14px;
-  border-radius: var(--kit-radius);
-  border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
-  background: color-mix(in srgb, var(--tone) 8%, transparent);
-}
-:where(.callout) > :first-child { margin-top: 0; }
-:where(.callout) > :last-child { margin-bottom: 0; }
-:where(.callout) :where(b, strong):first-child { color: var(--tone); }
-
-/* ---------- badge: a small tag, toned like callouts ---------- */
-
-:where(.badge) {
-  --tone: var(--muted);
-  display: inline-block;
-  padding: 0 7px;
-  border-radius: 99px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  line-height: 1.6;
-  vertical-align: 0.1em;
-  color: var(--tone);
-  background: color-mix(in srgb, var(--tone) 14%, transparent);
-}
-
-/* ---------- tag: a colored pill for categories and color coding ---------- */
-
-:where(.tag) {
-  --tone: var(--muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 1px 10px;
-  border-radius: 99px;
-  font-size: 0.84rem;
-  line-height: 1.5;
-  vertical-align: 0.05em;
-  color: color-mix(in srgb, var(--tone) 70%, var(--text));
-  background: color-mix(in srgb, var(--tone) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--tone) 32%, transparent);
-}
-:where(.tag)::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--tone); }
-
-/* ---------- box: a toned section, <section class="box warn"><h2>…</h2>…</section> ---------- */
-
-:where(.box) {
-  --tone: var(--kit-info);
-  margin: 1.1rem 0;
-  padding: 14px 18px;
-  border-radius: var(--kit-radius);
-  background: linear-gradient(color-mix(in srgb, var(--tone) 7%, transparent), color-mix(in srgb, var(--tone) 2%, transparent));
-  border: 1px solid color-mix(in srgb, var(--tone) 22%, transparent);
-  border-left: 3px solid var(--tone);
-}
-:where(.box) > :first-child { margin-top: 0; }
-:where(.box) > :last-child { margin-bottom: 0; }
-:where(.box) > :where(h2, h3, h4):first-child { color: color-mix(in srgb, var(--tone) 60%, var(--kit-heading)); }
-
-/* A toned card: a colored top edge. */
-:where(.card.ok, .card.warn, .card.error, .card.info, .card.purple, .card.teal, .card.orange, .card.pink) {
-  border-top: 3px solid var(--tone);
-}
 
 /* ---------- ask: a question to the user, set apart from the text around it ---------- */
 
@@ -210,7 +142,8 @@
 
 /* ---------- mock: a window frame for UI mock-ups ---------- */
 
-:where(.mock) {
+:where(.mock, s-mock) {
+  display: block;
   margin: 1rem 0;
   border-radius: var(--kit-radius);
   border: 1px solid var(--kit-border-strong);
@@ -218,7 +151,7 @@
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
-:where(.mock) > :where(.mock-bar) {
+:where(.mock, s-mock) > :where(.mock-bar) {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -228,7 +161,7 @@
   background: var(--kit-surface);
   border-bottom: 1px solid var(--border);
 }
-:where(.mock) > :where(.mock-bar)::before {
+:where(.mock, s-mock) > :where(.mock-bar)::before {
   content: "";
   width: 8px;
   height: 8px;
@@ -237,11 +170,11 @@
   box-shadow: 13px 0 0 #6b6b72, 26px 0 0 #6b6b72;
   margin-right: 30px;
 }
-:where(.mock) > :where(.mock-body) { padding: 14px 16px; }
-:where(.mock) > :where(.mock-body) > :first-child { margin-top: 0; }
-:where(.mock) > :where(.mock-body) > :last-child { margin-bottom: 0; }
+:where(.mock, s-mock) > :where(.mock-body) { padding: 14px 16px; }
+:where(.mock, s-mock) > :where(.mock-body) > :first-child { margin-top: 0; }
+:where(.mock, s-mock) > :where(.mock-body) > :last-child { margin-bottom: 0; }
 /* A setting row in a mock: <div class="mock-row"><span>Label <small>hint</small></span> control</div> */
-:where(.mock-row) {
+:where(.mock-row, s-mock-row) {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -249,10 +182,11 @@
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
 }
-:where(.mock-row):last-child { border-bottom: 0; }
-:where(.mock-row) small { display: block; color: var(--muted); font-size: 0.8rem; }
+:where(.mock-row, s-mock-row):last-child { border-bottom: 0; }
+:where(.mock-row, s-mock-row) small { display: block; color: var(--muted); font-size: 0.8rem; }
+:where(s-mock-row) > :where(.kit-row-control) { display: flex; align-items: center; gap: 8px; }
 /* A drawn switch: <span class="switch on"></span> */
-:where(.switch) {
+:where(.switch, s-switch) {
   flex: none;
   display: inline-block;
   position: relative;
@@ -263,7 +197,7 @@
   box-shadow: inset 0 0 0 1px var(--kit-border-strong);
   vertical-align: middle;
 }
-:where(.switch)::after {
+:where(.switch, s-switch)::after {
   content: "";
   position: absolute;
   top: 3px;
@@ -273,10 +207,10 @@
   border-radius: 50%;
   background: var(--muted);
 }
-:where(.switch.on) { background: var(--accent); box-shadow: none; }
-:where(.switch.on)::after { left: 16px; background: var(--bg); }
+:where(.switch.on, s-switch[on]) { background: var(--accent); box-shadow: none; }
+:where(.switch.on, s-switch[on])::after { left: 16px; background: var(--bg); }
 /* Marks a new or changed part of a mock-up. */
-:where(.mark-new) { outline: 2px dashed color-mix(in srgb, var(--kit-ask) 70%, transparent); outline-offset: 3px; border-radius: 4px; }
+:where(.mark-new, [data-new]) { outline: 2px dashed color-mix(in srgb, var(--kit-ask) 70%, transparent); outline-offset: 3px; border-radius: 4px; }
 
 /* ---------- toned table cells: <td class="ok">, <tr class="warn"> ---------- */
 
@@ -316,6 +250,102 @@
 :where(ul.pros) li::before { content: "+"; color: var(--kit-ok); }
 :where(ul.cons) li::before { content: "\2212"; color: var(--kit-error); }
 
+/* ---------- elements: kit.js renders their parts in the light DOM, so page CSS restyles them ---------- */
+
+/* <s-question name="x" label="Which one?"> with <s-choice value="a">…</s-choice> children, or a field. */
+:where(s-question) {
+  --tone: var(--kit-ask);
+  display: block;
+  margin: 1.1rem 0 1.4rem;
+  padding: 12px 16px 14px;
+  border-radius: var(--kit-radius);
+  background: color-mix(in srgb, var(--tone) 7%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--tone) 45%, transparent);
+}
+:where(s-question) > :first-child { margin-top: 0; }
+:where(s-question) > :last-child { margin-bottom: 0; }
+:where(s-question) > :where(.kit-q-label) { display: block; margin: 0 0 0.5rem; font-size: 1.05rem; font-weight: 650; line-height: 1.3; color: var(--kit-heading); }
+:where(s-question) > :where(.kit-q-label)::before {
+  content: "?";
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  margin-right: 8px;
+  border-radius: 50%;
+  font-size: 0.85em;
+  color: var(--bg);
+  background: var(--tone);
+  vertical-align: 0.05em;
+}
+:where(s-question) > :where(p) { margin: 0.3rem 0 0.6rem; color: var(--muted); }
+:where(s-choice) { display: block; }
+
+/* <s-options name="x"> with <s-option value="a" label="Patch" recommended>…</s-option>: compare and pick. */
+:where(s-options) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--min, 240px)), 1fr));
+  gap: 12px;
+  margin: 1rem 0;
+}
+:where(s-option) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: var(--kit-radius);
+  background: var(--kit-surface);
+  box-shadow: var(--kit-panel-shadow);
+}
+:where(s-option[recommended]) { box-shadow: inset 0 0 0 1px var(--kit-border-strong), var(--kit-panel-shadow); }
+:where(s-option.kit-pickable) { cursor: pointer; }
+:where(s-option):has(> .kit-option-head input:checked) {
+  background: color-mix(in srgb, var(--accent) 6%, var(--kit-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), var(--kit-panel-shadow);
+}
+:where(s-option) > :where(.kit-option-head) { display: flex; align-items: center; gap: 10px; margin: 0; cursor: inherit; }
+:where(s-option) > :where(.kit-option-head) :where(h3) { margin: 0; font-size: 1.05rem; }
+:where(s-option) > :where(.kit-option-head) :where(input) { margin: 0; }
+:where(.kit-option-mark) { margin-left: auto; font-size: 0.78rem; font-weight: 600; color: var(--kit-ok); white-space: nowrap; }
+:where(s-option) > :where(.kit-option-body) > :first-child { margin-top: 0; }
+:where(s-option) > :where(.kit-option-body) > :last-child { margin-bottom: 0; }
+:where(s-option) > :where(.kit-option-foot) { margin-top: auto; padding-top: 4px; }
+
+/* <s-code lang="ts" file="src/a.ts">…</s-code>; diff marks + and - lines. */
+:where(s-code) {
+  display: block;
+  margin: 1rem 0;
+  border-radius: var(--kit-radius);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+:where(s-code) > :where(.kit-code-head) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 5px 3px 12px;
+  font: 0.78rem/1.3 var(--kit-mono);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+:where(s-code) > :where(.kit-code-head) > :where(button) { margin-left: auto; min-height: 22px; padding: 0 9px; font-size: 0.76rem; }
+:where(s-code) > :where(pre) { margin: 0; padding: 10px 14px; overflow: auto; background: none; border: 0; border-radius: 0; font: 12.5px/1.55 var(--kit-mono); tab-size: 2; }
+:where(s-code) > :where(pre) > :where(code) { display: block; padding: 0; background: none; font: inherit; }
+:where(s-code) :where(.kit-add, .kit-del, .kit-hunk) { display: block; margin: 0 -14px; padding: 0 14px; }
+:where(s-code) :where(.kit-add) { background: color-mix(in srgb, var(--kit-ok) 13%, transparent); }
+:where(s-code) :where(.kit-del) { background: color-mix(in srgb, var(--kit-error) 13%, transparent); }
+:where(s-code) :where(.kit-hunk) { color: var(--kit-info); }
+:where(s-code) :where(.hljs-keyword, .hljs-tag) { color: var(--kit-hl-keyword); }
+:where(s-code) :where(.hljs-string, .hljs-regexp) { color: var(--kit-hl-string); }
+:where(s-code) :where(.hljs-number, .hljs-literal) { color: var(--kit-hl-number); }
+:where(s-code) :where(.hljs-comment) { color: var(--kit-hl-comment); font-style: italic; }
+:where(s-code) :where(.hljs-title, .hljs-name, .hljs-section) { color: var(--kit-hl-title); }
+:where(s-code) :where(.hljs-type, .hljs-built_in) { color: var(--kit-hl-type); }
+:where(s-code) :where(.hljs-attr, .hljs-attribute, .hljs-property, .hljs-variable, .hljs-meta) { color: var(--kit-hl-attr); }
+
 /* ---------- buttons ---------- */
 
 :where(button, .button) {
@@ -326,8 +356,8 @@
   background: var(--kit-btn-bg);
   box-shadow: var(--kit-btn-shadow);
   border: 0;
-  border-radius: 7px;
-  min-height: 32px;
+  border-radius: var(--kit-control-radius);
+  min-height: var(--kit-control-h);
   padding: 0 14px;
   cursor: pointer;
   text-decoration: none;
@@ -358,11 +388,11 @@
   color: var(--text);
   background: var(--kit-sunken);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--kit-control-radius);
   padding: 6px 10px;
   max-width: 100%;
 }
-:where(textarea) { width: 100%; min-height: 90px; resize: vertical; line-height: 1.45; }
+:where(textarea) { box-sizing: border-box; width: 100%; min-height: 90px; resize: vertical; line-height: 1.45; }
 :where(input, textarea, select):focus-visible { outline: none; border-color: var(--kit-border-strong); }
 :where(textarea, input)::placeholder { color: var(--muted); opacity: 0.8; }
 
@@ -414,7 +444,7 @@
   display: grid;
   place-items: center;
   height: 32px;
-  border-radius: 7px;
+  border-radius: var(--kit-control-radius);
   background: var(--kit-sunken);
   box-shadow: inset 0 0 0 1px var(--border);
   cursor: pointer;
@@ -461,3 +491,5 @@
 }
 :where(input[type="checkbox"]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 :where(input[type="checkbox"]):disabled { opacity: .45; cursor: default; }
+/* In an option row, line the check box up with the first line of text, like the radio. */
+:where(label.opt) > :where(input[type="checkbox"]) { margin-top: 0.2em; }

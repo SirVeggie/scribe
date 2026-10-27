@@ -109,7 +109,7 @@
     }); }
     Array.from(document.styleSheets).forEach(function (sheet) { try { readRules(sheet.cssRules); } catch (e) { readable = false; } });
     var kit = document.querySelector('link[href*="/kit.css"]');
-    if (kit && readable) document.querySelectorAll(".callout, .badge, .tag, .box, .card, .flow > *, td, tr, [class*='tone-']").forEach(function (el) {
+    if (kit && readable) document.querySelectorAll(".flow > *, td, tr, [class*='tone-']").forEach(function (el) {
       Array.from(el.classList).forEach(function (name) {
         if ((/^tone-/.test(name) || ["success", "warning", "danger", "failure", "critical", "note", "tip", "red", "green", "yellow", "blue"].includes(name)) &&
           !rules.some(function (rule) { return new RegExp("\\." + name.replace(/[^a-zA-Z0-9_-]/g, "") + "(?![a-zA-Z0-9_-])").test(rule); })) {

@@ -30,7 +30,7 @@ test("fills a slot inside a stored fragment page that wrapHtml already wrapped",
   const stored = wrapHtml("Starter", "<header>H</header>\n<div data-slot>old</div>");
   const result = spliceHtmlSlot(stored, "<p>new</p>");
   assert.match(result, /<header>H<\/header>\n<div data-slot><p>new<\/p><\/div>/);
-  assert.match(result, /<link rel="stylesheet" href="\/kit\.css\?v=2">/);
+  assert.match(result, /<link rel="stylesheet" href="\/kit\.css\?v=3">/);
   assert.equal(wrapHtml("Other title", result), result);
 });
 
