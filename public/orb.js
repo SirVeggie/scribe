@@ -8,7 +8,7 @@
     sky: ["#0d2a5c", "#3b82f6", "#93c5fd", "#fff7d6"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", none: "None" };
+  const STYLES = { liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", none: "None" };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", traced: "Traced outline", crt: "CRT", dots: "LED matrix" };
   const BLEEDS = { none: "None", dye: "Dye in the surface", flares: "Solar flares", galaxy: "Spiral wake", glow: "Glow", breathing: "Animated glow", waveDots: "Dot waves", pulse: "Gradient pulse", motes: "Drifting motes" };
   const ICON_PALETTES = {
@@ -92,12 +92,16 @@ float symPi(vec2 p){float d=sdSeg(p,vec2(-.52,.36),vec2(.52,.4));d=min(d,sdSeg(p
 d=min(d,sdSeg(p,vec2(.2,.38),vec2(.2,-.34)));d=min(d,sdSeg(p,vec2(.2,-.34),vec2(.36,-.46)));return d-.08;}
 float sym(vec2 p){if(u_prov<.5)return symClaude(p);if(u_prov<1.5)return symCursor(p);if(u_prov<2.5)return symCodex(p);return symPi(p);}
 
-uniform float u_style;uniform float u_symbol;uniform float u_surface;uniform float u_bleedmode;
+uniform float u_style;uniform float u_work;uniform float u_symbol;uniform float u_surface;uniform float u_bleedmode;
 vec4 liquid3d(vec2 uv,float t){float r=length(uv);float a=aaIn(r-1.);if(a<=0.)return vec4(0.);float z=sphZ(uv);
 vec3 col=pal(liqT(uv*(1.1+.4*(1.-z)),t*.4));col=mix(u_c0,col,.45+.55*z);return pm(lit(col,uv,1.),a);}
 vec4 mesh(vec2 uv,float t){float r=length(uv);float a=aaIn(r-1.);if(a<=0.)return vec4(0.);t*=.5;
 vec2 p0=.6*vec2(sin(t*.7),cos(t*.9)),p1=.6*vec2(sin(t*.8+2.),cos(t*.6+1.)),p2=.6*vec2(sin(t*.5+4.),cos(t*.75+3.)),p3=.6*vec2(sin(t*.65+1.),cos(t*.85+5.));
 float w0=exp(-4.*dot(uv-p0,uv-p0)),w1=exp(-4.*dot(uv-p1,uv-p1)),w2=exp(-4.*dot(uv-p2,uv-p2)),w3=exp(-4.*dot(uv-p3,uv-p3));
+vec3 col=(u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05)/(w0+w1+w2+w3+.05);return pm(col,a);}
+vec4 meshquick(vec2 uv,float t){float r=length(uv);float a=aaIn(r-1.);if(a<=0.)return vec4(0.);t*=.5;float k=mix(4.,10.,u_work);
+vec2 p0=.6*vec2(sin(t*.7),cos(t*.9)),p1=.6*vec2(sin(t*.8+2.),cos(t*.6+1.)),p2=.6*vec2(sin(t*.5+4.),cos(t*.75+3.)),p3=.6*vec2(sin(t*.65+1.),cos(t*.85+5.));
+float w0=exp(-k*dot(uv-p0,uv-p0)),w1=exp(-k*dot(uv-p1,uv-p1)),w2=exp(-k*dot(uv-p2,uv-p2)),w3=exp(-k*dot(uv-p3,uv-p3));
 vec3 col=(u_c0*w0+u_c1*w1+u_c2*w2+u_c3*w3+u_c1*.05)/(w0+w1+w2+w3+.05);return pm(col,a);}
 vec4 ring(vec2 uv,float t){float r=length(uv);float w=.17;float d=abs(r-.8)-w;float a=aaIn(d);if(a<=0.)return vec4(0.);
 float ang=atan(uv.y,uv.x)/TAU;float k=fract(ang+t*.12+.25*fbm(uv*2.5+vec2(t*.3,0.)));vec3 col=pal(abs(k*2.-1.));
@@ -115,9 +119,9 @@ float n=fbm(uv*3.+vec2(t*.1));float dens=clamp(arm*(.4+.8*n)*exp(-r*1.4)*1.8+exp
 vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1,r));}
 
 vec4 base(vec2 uv,float t){
-if(u_style<.5)return liquid3d(uv,t);if(u_style<1.5)return mesh(uv,t);if(u_style<2.5)return ring(uv,t);
-if(u_style<3.5)return ink(uv,t);if(u_style<4.5)return plasma(uv,t);if(u_style<5.5)return halftone(uv,t);
-if(u_style<6.5)return galaxy(uv*1.6,t);return vec4(0.);
+if(u_style<.5)return liquid3d(uv,t);if(u_style<1.5)return mesh(uv,t);if(u_style<2.5)return meshquick(uv,t);if(u_style<3.5)return ring(uv,t);
+if(u_style<4.5)return ink(uv,t);if(u_style<5.5)return plasma(uv,t);if(u_style<6.5)return halftone(uv,t);
+if(u_style<7.5)return galaxy(uv*1.6,t);return vec4(0.);
 }
 vec4 mark(vec2 uv,float t){
 float d=sym(uv/u_iconSize)*u_iconSize;float inside=aaIn(d);float a=0.;vec3 c=mix(u_i0,u_i1,.7);
@@ -163,7 +167,7 @@ gl_FragColor=u_bleedmode<.5?vec4(0.):surface(uv,u_time);return;}
 vec2 uv=(gl_FragCoord.xy-.5*u_res)/s*u_bleed;px=u_bleed/s;
 vec4 c=base(uv,u_time);
 float r=length(uv);
-if(u_style<5.5){
+if(u_style<6.5){
 c*=1.-smoothstep(.9,1.05,r);
 float edge=exp(-abs(r-.97)*15.)*(1.-smoothstep(1.,1.26,r))*.22;
 c=over(c,pm(mix(u_c2,u_c3,.35),edge));}
@@ -202,9 +206,9 @@ gl_FragColor=c;
     if (!spill) surface.remove();
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
-    let time = 12, busy = false, disposed = false, broken = false;
+    let time = 12, work = 0, busy = false, disposed = false, broken = false;
     const values = () => ({
-      u_time: time, u_energy: busy ? 1 : 0,
+      u_time: time, u_energy: busy ? 1 : 0, u_work: work,
       u_prov: Math.max(0, Object.keys(PROVIDERS).indexOf(provider)),
       u_style: Object.keys(STYLES).indexOf(current.style),
       u_symbol: Object.keys(SYMBOLS).indexOf(current.symbol),
@@ -220,7 +224,8 @@ gl_FragColor=c;
       return fx.draw({ ...uniforms, u_surface: 0 });
     }
     const loop = window.scribeGL.loop(dt => {
-      time += dt * (busy ? 2 : .6);
+      time += dt * (busy ? 2 : current.style === "meshquick" ? 1 : .6);
+      work += ((busy ? 1 : 0) - work) * Math.min(1, dt * 3);
       if (!draw()) loop.stop();
     }, { element: btn });
     function update() {
