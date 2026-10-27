@@ -147,8 +147,8 @@ vec2 wave=vec2((fi-1.)*.58,.17*sin(t*3.5-fi*1.2));vec2 p=mix(drift,wave,u_work);
 float dd=length(uv-p);float core=exp(-dd*dd*90.);float halo=exp(-dd*6.)*.6;
 vec3 col=mix(pal(.45+.25*fi),u_c3,core);
 c=over(c,pm(col,clamp(core+halo,0.,1.)));}
-// A dark, soft-edged disc behind the dots so they stand out from the effects around them.
-float r=length(uv);return over(c,pm(u_c0*.25,.8*(1.-smoothstep(.7,1.,r))));}
+// A dark shade behind the dots so they stand out; it fades out softly before the canvas edge (r≈1.27).
+float r=length(uv);return over(c,pm(u_c0*.25,.8*(1.-smoothstep(.5,1.24,r))));}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
