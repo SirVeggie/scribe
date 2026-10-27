@@ -294,7 +294,7 @@ gl_FragColor=c;
       const tinted = fade(mix(c0, 85, "black"), mix(c0, 50));
       const looks = {
         deepen: { background: deep, on: true },
-        deepenWork: { background: deep, on: busy },
+        deepenWork: { background: fade("rgba(0, 0, 0, .74)", "rgba(0, 0, 0, .36)"), on: busy },
         deepenColor: { background: tinted, on: true },
         deepenColorWork: { background: tinted, on: busy },
         tint: { background: `linear-gradient(90deg, ${mix(c1, 24)}, ${mix(c2, 8)} 55%, transparent)`, on: true },
