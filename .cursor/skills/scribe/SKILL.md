@@ -15,7 +15,7 @@ If you only see `board_*` tools, or `page_list` exists but `page_action` does no
 
 The **Library** holds every page in Scribe, organized by the user into folders and a manual order. The tab strip is just the pages that are currently **open**. Closing a tab keeps the page in the Library; only a delete removes it. The user owns the organization: never move pages between folders or reorder them.
 
-A page titled **Instructions**, or marked **Use as folder instructions** in its tab menu, is standing instructions for agent threads scoped to that folder or to a page in it (parent folders too). Edits apply on the next turn. Global and workspace threads do not get them.
+Right-click a Library folder and choose **Agent instructions** to edit its **Description** and **Instructions**. Both fields are included in agent threads scoped to that folder or a page in it; parent folders apply first, nearest last. Edits apply on the next turn. Global and workspace threads do not get them. Pages titled **Instructions** are ordinary pages and do not supply folder instructions.
 
 ## When to use it
 
