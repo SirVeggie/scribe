@@ -7828,7 +7828,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     window.scribeSyncChildren(top, [search, seg, newBtn, oldTools || tools, ...movedBanners()]);
     // The list and its unchanged rows stay in the page: a rebuilt row loses its hover and blinks (#407).
     const list = container.querySelector(":scope > .ag-list") || el("div", "ag-list");
-    list.className = `ag-list${compactThreads() ? " compact" : ""}`;
+    // Keep the floating scrollbar's surface class when refreshing the existing list.
+    list.classList.toggle("compact", compactThreads());
     window.scribeSyncChildren(container, [top, list, ...rowGlow.nodes(container)]);
     const fill = () => {
       for (const row of list.querySelectorAll(".ag-row-active")) row.classList.remove("ag-row-active");
