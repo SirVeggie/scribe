@@ -252,6 +252,7 @@ gl_FragColor=c;
     backdrop.setAttribute("aria-hidden", "true");
     Object.assign(backdrop.style, { position: "absolute", inset: "0", borderRadius: "inherit", pointerEvents: "none", transition: "opacity .8s ease" });
     container.prepend(backdrop);
+    let shownBackdrop = null;
     if (!spill) surface.remove();
     const still = matchMedia("(prefers-reduced-motion: reduce)");
     let provider = initialProvider, current = config || settings[provider] || defaults(provider);
@@ -304,7 +305,13 @@ gl_FragColor=c;
       const look = looks[id] || { on: false };
       backdrop.style.background = look.background || "none";
       backdrop.style.boxShadow = look.boxShadow || "none";
+      // Only ease when working starts or stops; a new background (or colours) takes over at once.
+      const key = id + current.colors.join();
+      const instant = key !== shownBackdrop;
+      shownBackdrop = key;
+      if (instant) backdrop.style.transition = "none";
       backdrop.style.opacity = look.on ? "1" : "0";
+      if (instant) { void backdrop.offsetWidth; backdrop.style.transition = "opacity .8s ease"; }
     }
     function update() {
       if (disposed) return;
