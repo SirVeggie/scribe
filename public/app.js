@@ -3666,7 +3666,7 @@
     let box = null;
     if (opts.check) {
       const label = document.createElement("label");
-      label.className = "template-check choice-check";
+      label.className = "ag-check choice-check";
       box = document.createElement("input");
       box.type = "checkbox";
       box.checked = Boolean(opts.check.checked);
