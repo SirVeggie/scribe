@@ -3970,7 +3970,7 @@
   // ---------- dropped files and folders (#654) ----------
   // A Scribe export still imports its pages; any other file opens as a file page (a copy, since a
   // browser gives the bytes, not the path), and a folder as a Library folder of them. In the
-  // desktop app a dropped folder's path is known, so it opens linked to the disk folder instead.
+  // desktop app dropped paths are known, so files and folders open linked to disk instead.
   const DROP_MAX_FILES = 1000;
   const DROP_SKIPPED = new Set(["node_modules", ".git", ".hg", ".svn", "__pycache__", ".venv", "venv"]);
 
@@ -4045,19 +4045,20 @@
     const items = [...(event.dataTransfer.items || [])].filter((item) => item.kind === "file");
     // Entries must be taken while the drop event lasts; without them, plain files.
     const entries = items.map((item) => item.webkitGetAsEntry?.() || null);
-    // A dropped folder's File stands for the folder itself; the desktop app can tell its path.
-    const dirFiles = entries.map((entry, index) => (entry?.isDirectory ? items[index].getAsFile() : null));
+    // Each dropped item's File (a folder's stands for the folder); the desktop app can tell their paths.
+    const topFiles = items.map((item) => item.getAsFile());
     const files = [...event.dataTransfer.files];
     const library = destination === "closed";
     const folderId = library ? dropFolderOf(event.target) : null;
     const tally = { files: 0, folders: 0, imported: 0, plugins:0, focusedId: null, error: null, truncated: false };
-    const openFile = async (file, parentId, activate) => {
+    const openFile = async (file, parentId, activate, filePath = null) => {
       if (tally.files >= DROP_MAX_FILES) {
         tally.truncated = true;
         return;
       }
       try {
-        const data = await uploadDropped(file, parentId, activate);
+        // A file with a known path opens the file itself; an export still imports.
+        const data = (filePath && !/\.(scribeplugin|scribe\.zip)$/i.test(file.name) && (await openOnDisk(filePath, parentId, activate))) || (await uploadDropped(file, parentId, activate));
         if (data.kind === "export") {
           tally.imported += (data.opened || 0) + (data.closed || 0);
           tally.plugins+=data.pluginsInstalled||0;
@@ -4089,6 +4090,11 @@
         }
       }
     };
+    const openOnDisk = async (filePath, parentId, activate) => {
+      const res = await fetch("/api/files/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: filePath, folderId: parentId, activate }) }).catch(() => null);
+      const data = res ? await res.json().catch(() => ({})) : {};
+      return res?.ok && data.tab ? data : null;
+    };
     // A folder with a known path opens as a Library folder linked to it (#707), not as copies.
     const openLinked = async (dirPath, parentId) => {
       const res = await fetch("/api/files/open-folder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: dirPath, folderId: parentId }) }).catch(() => null);
@@ -4099,22 +4105,22 @@
       if (data.truncated) tally.truncated = true;
       return true;
     };
+    const withFile = topFiles.filter(Boolean);
+    const found = await dropPaths(withFile);
+    const pathOf = new Map(withFile.map((file, index) => [file, found[index]]));
     if (entries.length && entries.every(Boolean)) {
-      const withFile = dirFiles.filter(Boolean);
-      const found = await dropPaths(withFile);
-      const pathOf = new Map(withFile.map((file, index) => [file, found[index]]));
       for (const [index, entry] of entries.entries()) {
+        const entryPath = (topFiles[index] && pathOf.get(topFiles[index])) || null;
         if (entry.isDirectory) {
-          const dirPath = dirFiles[index] && pathOf.get(dirFiles[index]);
-          if (dirPath && (await openLinked(dirPath, folderId))) continue;
+          if (entryPath && (await openLinked(entryPath, folderId))) continue;
           await openDir(entry, folderId);
         } else {
           const file = await entryFile(entry).catch(() => null);
-          if (file) await openFile(file, folderId, !library);
+          if (file) await openFile(file, folderId, !library, entryPath);
         }
       }
     } else {
-      for (const file of files) await openFile(file, folderId, !library);
+      for (const [index, file] of files.entries()) await openFile(file, folderId, !library, (topFiles[index] && pathOf.get(topFiles[index])) || null);
     }
     if (tally.focusedId) focusWhenOpened(tally.focusedId);
     if (tally.folders && !library) {
