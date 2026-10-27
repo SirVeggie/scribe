@@ -7222,6 +7222,12 @@
   /** Threads whose earlier helpers the list shows in full. */
   const helpersShown = new Set();
 
+  /** Folds back what Show more opened, once those rows are out of sight (list closed, filter switched). */
+  function resetShowMore() {
+    S.groupExtra.clear();
+    helpersShown.clear();
+  }
+
   /** A helper the thread list shows under the thread that started it (archived together, so they share a list). */
   function nestsUnder(t) {
     const parent = t.helperOf ? S.threads.get(t.helperOf) : null;
@@ -8040,6 +8046,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       seg.append(
         button(label, `ag-seg-btn${S.filter === id ? " on" : ""}`, () => {
           S.filter = id;
+          resetShowMore();
           saveSpaceList();
           renderLists();
         })
@@ -8228,7 +8235,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         // The header is kept across renders, so its handlers read the fold as it is now.
         const fold = () => {
           if (S.collapsedGroups.has(key)) S.collapsedGroups.delete(key);
-          else S.collapsedGroups.add(key);
+          else {
+            S.collapsedGroups.add(key);
+            S.groupExtra.delete(key);
+          }
           localStorage.setItem(LS.collapsed, JSON.stringify([...S.collapsedGroups]));
           renderLists();
         };
@@ -8421,6 +8431,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         return;
       }
       S.sideOpen = open;
+      if (!open) resetShowMore();
       localStorage.setItem(LS.side, open ? "1" : "0");
       this.apply();
       if (open) {
@@ -8444,6 +8455,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
     toggleList() {
       this.listOpen = !this.listOpen;
+      if (!this.listOpen) resetShowMore();
       this.listEl.hidden = !this.listOpen;
       this.view.scroll.hidden = this.listOpen;
       this.view.queueDock.hidden = this.listOpen;
@@ -8548,6 +8560,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     /** Use leaveFull, which moves the chat back to the layout it came from. */
     close() {
       S.fullOpen = false;
+      resetShowMore();
       this.view.audioComposer?.cancel();
       this.root.hidden = true;
       document.body.classList.remove("agent-full-open");
