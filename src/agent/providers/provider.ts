@@ -90,6 +90,8 @@ export type PlanDecision = { accepted: boolean; note?: string };
 
 /** Callbacks a provider uses to report a run. All of them are cheap and synchronous except the ones that wait on the user. */
 export type RunSink = {
+  /** Binary output is saved by the host before any transcript item is emitted. */
+  images?(sourceId: string, images: import("../outputImages.js").OutputImage[], parentToolId?: string): void;
   nativeId(id: string): void;
   text(delta: string, parentToolId?: string): void;
   reasoning(delta: string, parentToolId?: string): void;

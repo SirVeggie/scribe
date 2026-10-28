@@ -253,8 +253,9 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits, isWorker: () => worker,
       ...(mcp ? { mcpServers: () => mcp.servers } : {}) } as SessionContext,
     () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); }, mcp?.bridge);
-  const seen = { text: "", steered: [] as string[], approvals: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
+  const seen = { images: [] as Array<{ source: string; images: import("./outputImages.js").OutputImage[] }>, text: "", steered: [] as string[], approvals: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
   const sink: RunSink = {
+    images(source, images) { if (images.length) seen.images.push({ source, images }); },
     nativeId() {}, text(delta) { seen.text += delta; }, reasoning() {}, breakBlock() {}, toolStart(tool) { seen.tools.push(tool.toolId); },
     toolUpdate(_id, patch) { if (patch.output !== undefined) seen.output = patch.output; }, beforeWrite: async () => {},
     approval: async (req) => { seen.approvals.push(req.tool); return { optionId: "decline" }; },
@@ -293,6 +294,32 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     f!.emit({ method: "turn/completed", params: { threadId: "native-thread", turn: { id: "turn-1", status } } });
   } };
 }
+
+test("Codex preserves native generation and mixed MCP/dynamic image results", async () => {
+  const f = sessionFixture();
+  const { run } = await f.start();
+  const image = "data:image/png;base64,aW1hZ2U=";
+  const emit = (type: string, id: string, rest: Record<string, unknown>, finished = true) => f.f.emit({ method: finished ? "item/completed" : "item/started", params: { threadId: "native-thread", turnId: "turn-1", item: { type, id, ...rest } } });
+  emit("imageGeneration", "native", { status: "in_progress" }, false);
+  await tick();
+  assert.equal(f.seen.images.length, 0);
+  emit("imageGeneration", "native", { status: "completed", result: "aW1hZ2U=" });
+  emit("imageGeneration", "saved", { status: "completed", fileId: "file-1", savedPath: "/temporary/generated.png" });
+  emit("mcpToolCall", "mcp", { server: "images", tool: "generate", status: "completed", result: { content: [{ type: "text", text: "caption" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] } });
+  emit("dynamicToolCall", "dynamic", { tool: "generate", status: "completed", success: true, contentItems: [{ type: "inputText", text: "dynamic caption" }, { type: "inputImage", imageUrl: image }, { type: "inputImage", imageUrl: image }] });
+  emit("imageGeneration", "failed", { status: "failed", failure: { type: "usageLimitExceeded" } });
+  await tick();
+  assert.deepEqual(f.seen.images, [
+    { source: "native", images: [{ data: "aW1hZ2U=" }] }, { source: "saved", images: [{ path: "/temporary/generated.png" }] },
+    { source: "mcp", images: [{ data: "aW1hZ2U=", mimeType: "image/png" }] },
+    { source: "dynamic", images: [{ data: image }, { data: image }] },
+  ]);
+  assert.match(f.seen.output, /dynamic caption/);
+  assert.ok(f.seen.notices.some((it) => it.text === "Image generation failed."));
+  f.complete();
+  assert.equal((await run).status, "done");
+  f.session.dispose();
+});
 
 test("Codex quota reader checks auth without forcing refresh and reads only account quota", async () => {
   const calls: Array<[string, unknown]> = [];

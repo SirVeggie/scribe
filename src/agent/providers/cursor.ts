@@ -30,6 +30,7 @@ import { McpBridge } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
+import { outputImages } from "../outputImages.js";
 
 /**
  * Cursor through @cursor/sdk, in this process: one local SDK agent per thread, kept in a store under
@@ -984,6 +985,7 @@ class CursorSession implements ProviderSession {
     const ok = result?.status === "success";
     const value = result && isPlainRecord(result.value) ? result.value : null;
     const out = this.toolOutput(type, value, result);
+    if (type === "mcp") sink.images?.(callId, outputImages(value?.content));
     sink.toolUpdate(callId, {
       title,
       ...(paths ? { paths } : {}),

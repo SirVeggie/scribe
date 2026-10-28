@@ -15,6 +15,7 @@ import { claudeServerConfig, serversKey, toolPolicy, type ResolvedMcpServer } fr
 import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
+import { outputImages } from "../outputImages.js";
 
 /**
  * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
@@ -1601,6 +1602,7 @@ class ClaudeSession implements ProviderSession {
       }
       if (block.is_error === true) exitCode = 1;
       sink.toolUpdate(block.tool_use_id, { status: block.is_error === true ? "error" : "done", output, ...(exitCode !== undefined ? { exitCode } : {}) });
+      sink.images?.(block.tool_use_id, outputImages(block.content));
     }
   }
 }

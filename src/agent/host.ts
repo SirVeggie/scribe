@@ -26,6 +26,7 @@ import { PageProblems } from "../pageProblems.js";
 import { probeComponent } from "../screenshot.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
+import { saveOutputImage } from "./outputImages.js";
 import { readSnapshot, removeThreadSnapshots, saveSnapshot } from "./fileSnapshots.js";
 import { findSvnRoot, svnEnd, svnStart, type SvnStart } from "./svn.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
@@ -4675,6 +4676,27 @@ export class AgentHost {
     const waitFor = <T>(kind: Pending["kind"], itemId: string, signal?: AbortSignal): Promise<T> => host.waitPending<T>(threadId, run, kind, itemId, signal);
 
     return {
+      images(sourceId, images, parentToolId) {
+        if (!thread() || !images.length) return;
+        host.closeBlocks(run);
+        const refs: FileRef[] = [];
+        if (images.length > 10) host.addItem(threadId, turnId, { kind: "notice", level: "warn", text: "Only the first 10 images from this result were saved." });
+        for (const image of images.slice(0, 10)) {
+          try { refs.push(saveOutputImage(threadId, image)); }
+          catch (err) { host.addItem(threadId, turnId, { kind: "notice", level: "warn", text: `Could not save agent image: ${(err as Error).message}` }); }
+        }
+        if (!refs.length) return;
+        run.turn.outputAt = Date.now();
+        const previous = host.loadItems(threadId).find((it) => it.turnId === turnId && it.kind === "images" && it.sourceId === sourceId);
+        if (previous?.kind === "images") {
+          previous.images = refs;
+          host.touch(previous);
+        } else {
+          const tool = run.tools.get(sourceId);
+          const parent = parentToolId ?? (tool?.kind === "tool" ? tool.parentToolId : undefined);
+          host.addItem(threadId, turnId, { kind: "images", sourceId, images: refs, ...(parent ? { parentToolId: parent } : {}) });
+        }
+      },
       nativeId(id) {
         const t = thread();
         if (t && t.nativeId !== id) {
@@ -6168,8 +6190,10 @@ export class AgentHost {
 
     const droppedIds = new Set(dropped.map((t) => t.id));
     const gone = items.filter((it) => it.turnId && droppedIds.has(it.turnId));
+    const keptImages = new Set(items.filter((it) => !gone.includes(it) && it.kind === "images").flatMap((it) => it.kind === "images" ? it.images.map((f) => f.id) : []));
     for (const item of gone) {
       if (item.kind === "user") removeFiles(threadId, [...(item.images ?? []), ...(item.files ?? [])].flatMap((f) => (f.id ? [f.id] : [])));
+      if (item.kind === "images") removeFiles(threadId, item.images.filter((f) => !keptImages.has(f.id)).map((f) => f.id));
       this.removeItem(item);
     }
     for (const turn of dropped) {

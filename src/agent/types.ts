@@ -605,6 +605,7 @@ export type ItemBody =
       plan?: boolean;
     }
   | { kind: "text"; text: string; parentToolId?: string }
+  | { kind: "images"; sourceId: string; images: FileRef[]; parentToolId?: string }
   | { kind: "reasoning"; text: string; startedAt: number; endedAt?: number; parentToolId?: string }
   | {
       kind: "tool";

@@ -12,7 +12,7 @@ import type {
   McpToolCallItem,
   ModelReasoningEffort,
   SandboxMode,
-  ThreadItem,
+  ThreadItem as SdkThreadItem,
   Usage as CodexUsage,
 } from "@openai/codex-sdk";
 import { dataDir } from "../../config.js";
@@ -24,6 +24,9 @@ import { CodexRpc, type RpcMessage, type RpcRecord } from "./codexRpc.js";
 import { McpBridge, type BridgeAsk, type BridgedTool } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { threadToken } from "../../callers.js";
+import { outputImages } from "../outputImages.js";
+
+type ThreadItem = SdkThreadItem | { type: "image_generation"; id: string; status: string; savedPath?: string; result?: string; failure?: unknown };
 
 /**
  * Codex interactive sessions use app-server; the SDK spawns `codex exec` for summaries. Sessions resume by
@@ -840,6 +843,7 @@ function mcpText(item: McpToolCallItem): string {
     .map((block) => {
       if (!isPlainRecord(block)) return "";
       if (block.type === "text" && typeof block.text === "string") return block.text;
+      if (block.type === "image" || String(block.type) === "inputImage") return "[image]";
       return "";
     })
     .filter(Boolean)
@@ -856,6 +860,9 @@ function compactReviewText(text: string, limit: number): string {
 export function appServerItem(item: RpcRecord): ThreadItem | null {
   const id = String(item.id ?? "");
   switch (item.type) {
+    case "imageGeneration": return { type: "image_generation", id, status: String(item.status ?? ""),
+      ...(typeof item.savedPath === "string" ? { savedPath: item.savedPath } : {}),
+      ...(typeof item.result === "string" ? { result: item.result } : {}), failure: item.failure };
     case "agentMessage": return { type: "agent_message", id, text: String(item.text ?? "") };
     case "plan": return { type: "agent_message", id, text: String(item.text ?? "") };
     case "reasoning": return { type: "reasoning", id, text: [...(Array.isArray(item.summary) ? item.summary : []), ...(Array.isArray(item.content) ? item.content : [])].join("\n") };
@@ -870,7 +877,7 @@ export function appServerItem(item: RpcRecord): ThreadItem | null {
     // A bridged MCP tool (Codex dynamic tool): no server here; the session titles it from its bridge.
     case "dynamicToolCall": {
       const content = (Array.isArray(item.contentItems) ? item.contentItems.filter(isPlainRecord) : [])
-        .flatMap((c) => (c.type === "inputText" && typeof c.text === "string" ? [{ type: "text", text: c.text }] : []));
+        .flatMap((c) => c.type === "inputText" && typeof c.text === "string" ? [{ type: "text", text: c.text }] : c.type === "inputImage" ? [c] : []);
       const status = item.status === "failed" || item.success === false ? "failed" : item.status === "completed" ? "completed" : "in_progress";
       return { type: "mcp_tool_call", id, server: "", tool: String(item.tool ?? ""), arguments: item.arguments,
         ...(status !== "in_progress" ? { result: { content, structured_content: null } as unknown as McpToolCallItem["result"] } : {}),
@@ -1618,6 +1625,20 @@ export class CodexSession implements ProviderSession {
 
   private onItem(item: ThreadItem, finished: boolean, sink: RunSink): void {
     switch (item.type) {
+      case "image_generation": {
+        if (!this.tools.has(item.id)) {
+          this.tools.add(item.id);
+          sink.toolStart({ toolId: item.id, name: "image_generation", tool: "other", title: "Generate image", status: "running" });
+        }
+        if (!finished) return;
+        const failed = item.status === "failed" || Boolean(item.failure);
+        sink.toolUpdate(item.id, { status: failed ? "error" : "done" });
+        if (failed) sink.notice("error", "Image generation failed.");
+        else if (item.result) sink.images?.(item.id, [{ data: item.result }]);
+        else if (item.savedPath) sink.images?.(item.id, [{ path: item.savedPath }]);
+        else sink.notice("warn", "The provider completed image generation without accessible image data.");
+        return;
+      }
       case "agent_message":
         if (!this.streamed.has(item.id)) sink.breakBlock();
         this.stream(item.id, item.text, "text", sink);
@@ -1693,6 +1714,7 @@ export class CodexSession implements ProviderSession {
       ...(!quiet && output ? { output } : {}),
       ...(item.type === "command_execution" && item.exit_code !== undefined ? { exitCode: item.exit_code } : {}),
     });
+    if (item.type === "mcp_tool_call") sink.images?.(item.id, outputImages(item.result?.content));
   }
 
   private toolTitle(item: ThreadItem): string {

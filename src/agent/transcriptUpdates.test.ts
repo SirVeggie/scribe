@@ -46,6 +46,35 @@ const items = [
   { id: "p", threadId: "t", turnId: "u1", seq: 4, kind: "approval", requestId: "p", title: "Run rm", status: "pending", options: [{ id: "allow", kind: "allow_once", label: "Allow" }, { id: "deny", kind: "reject_once", label: "Deny" }] },
 ];
 
+test("agent output images render live and from history with the shared image viewer", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    const images = { id: "images", threadId: "t", turnId: "u1", seq: 2, kind: "images", sourceId: "generation", images: [
+      { id: "image-1", name: "one.png", mimeType: "image/png", size: 100 }, { id: "image-2", name: "two.png", mimeType: "image/png", size: 200 },
+    ] };
+    const before = { id: "before", threadId: "t", turnId: "u1", seq: 1, kind: "text", text: "Before" };
+    const after = { ...before, id: "after", seq: 3, text: "After" };
+    await page.evaluate(([thread, turn, before, images, after]) => {
+      const { T } = window as any;
+      (window as any).scribePreview = { open(files: unknown[], at: number) { (window as any).previewed = { files, at }; } };
+      T.open(thread, [before], [turn]);
+      T.onEvent({ type: "agent_item", item: images });
+      T.onEvent({ type: "agent_item", item: after });
+      return T.frame();
+    }, [thread, turn, before, images, after] as const);
+    assert.equal(await page.locator(".ag-output-image img").count(), 2);
+    await page.locator(".ag-output-image").nth(1).click();
+    assert.deepEqual(await page.evaluate(() => {
+      const p = (window as any).previewed;
+      return { at: p.at, names: p.files.map((f: any) => f.name), url: p.files[1].url };
+    }), { at: 1, names: ["one.png", "two.png"], url: "/api/agent/threads/t/files/image-2" });
+    await page.evaluate(([thread, turn, before, images, after]) => (window as any).T.open(thread, [before, images, after], [turn]), [thread, turn, before, images, after] as const);
+    assert.equal(await page.locator(".ag-output-image img").count(), 2);
+    assert.deepEqual(await page.locator(".ag-turn-body > [data-item-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-item-id"))), ["before", "images", "after"]);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test("component summary and local updates keep the live iframe through transcript reconciliation", async () => {
   const { browser, page, errors } = await chatPage();
   try {

@@ -4392,6 +4392,22 @@
       switch (it.kind) {
         case "user":
           return this.renderUser(it, false);
+        case "images": {
+          const node = el("div", "ag-output-images");
+          const previews = it.images.map((file) => ({ ...file, url: sentFileUrl(it.threadId, file.id) }));
+          previews.forEach((file, at) => {
+            const open = () => window.scribePreview?.open(previews, at);
+            const preview = button("", "ag-output-image", open);
+            preview.setAttribute("aria-label", `Open ${file.name}`);
+            const image = el("img");
+            image.src = file.url;
+            image.alt = file.name;
+            image.loading = "lazy";
+            preview.append(image);
+            node.append(preview);
+          });
+          return node;
+        }
         case "text": {
           const node = el("div", "ag-md");
           node.dataset.itemId = it.id;

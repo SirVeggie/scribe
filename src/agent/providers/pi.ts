@@ -17,6 +17,7 @@ import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
+import { outputImages } from "../outputImages.js";
 
 type Model = PiModel<Api>;
 
@@ -1317,6 +1318,7 @@ class PiSession implements ProviderSession {
         const quiet = !event.isError && (event.toolName === "read" || event.toolName === "edit" || event.toolName === "write");
         const output = quiet ? undefined : textOf(result.content);
         sink.toolUpdate(event.toolCallId, { status: event.isError ? "error" : "done", ...(output ? { output } : {}) });
+        sink.images?.(event.toolCallId, outputImages(result.content), event.parentToolCallId);
         return;
       }
       case "compaction_end":
