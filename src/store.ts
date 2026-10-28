@@ -2084,15 +2084,25 @@ export class BoardStore extends EventEmitter {
     return this.pagePermissions(tab.id);
   }
 
+  /** The folders pages start their chats in. */
+  pageWorkspaces(): string[] {
+    return this.allTabs().flatMap((tab) => (tab.workspace ? [tab.workspace] : []));
+  }
+
   /**
-   * A workspace folder moved (#338): rewrite the paths pages keep to it, which are the folders approved
-   * for a page's agents and the folders of Kanban workers. move returns a path's new place, or null
+   * A workspace folder moved (#338): rewrite the paths pages keep to it, which are the page's workspace, the
+   * folders approved for its agents and the folders of Kanban workers. move returns a path's new place, or null
    * when it is not in the moved folder. Returns how many pages changed.
    */
   moveWorkspacePaths(move: (dir: string) => string | null): number {
     let pages = 0;
     for (const tab of this.allTabs()) {
       let changed = false;
+      const workspace = tab.workspace ? move(tab.workspace) : null;
+      if (workspace) {
+        this.setWorkspace(tab.id, workspace);
+        changed = true;
+      }
       if (this.db) {
         for (const [perm, grant] of this.pagePermissions(tab.id)) {
           const folders = (grant.folders ?? []).map((folder) => ({ ...folder, path: move(folder.path) ?? folder.path }));

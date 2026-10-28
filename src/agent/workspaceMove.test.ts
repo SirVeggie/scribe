@@ -90,6 +90,7 @@ test("a renamed workspace is detected and every stored path follows it", async (
   writeMcpFile({ mcpServers: {}, workspaces: { [workspaceKey(old)]: { path: old, mcpServers: { x: { command: "x" } } } } });
   const page = store.upsert({ title: "Board", html: "<p>b</p>", key: "ws-move-board", state: { settings: { workers: { w1: { name: "A", cwd: sub }, w2: { name: "B", cwd: parent } } } } }).tab;
   store.setPagePermission(page.id, "agent.workspace", "ask", [{ path: old, approval: "auto" }]);
+  store.setWorkspace(page.id, sub);
   fs.mkdirSync(claudeProjectDir(old), { recursive: true });
   fs.writeFileSync(path.join(claudeProjectDir(old), "s.jsonl"), "{}");
 
@@ -115,6 +116,7 @@ test("a renamed workspace is detected and every stored path follows it", async (
   assert.deepEqual(prefs.worktrees, { [workspaceKey(moved)]: true });
   assert.deepEqual(Object.values(readMcpFile().workspaces).map((layer) => layer.path), [moved]);
   assert.deepEqual(store.pagePermissions(page.id).get("agent.workspace")!.folders, [{ path: moved, approval: "auto" }]);
+  assert.equal(store.get(page.id)!.workspace, path.join(moved, "packages", "web"));
   const workers = (store.get(page.id)!.state as { settings: { workers: Record<string, { cwd: string }> } }).settings.workers;
   assert.equal(workers.w1.cwd, path.join(moved, "packages", "web"));
   assert.equal(workers.w2.cwd, parent);

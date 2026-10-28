@@ -5653,7 +5653,7 @@ export class AgentHost {
   workspaceFolders(): Map<string, string> {
     const prefs = this.prefs();
     const out = new Map<string, string>();
-    for (const dir of [...[...this.threads.values()].map((t) => this.threadFolder(t)), ...prefs.recentWorkspaces, ...Object.values(prefs.scopeWorkspaces)]) {
+    for (const dir of [...[...this.threads.values()].map((t) => this.threadFolder(t)), ...prefs.recentWorkspaces, ...Object.values(prefs.scopeWorkspaces), ...store.pageWorkspaces()]) {
       if (dir && path.isAbsolute(dir) && !out.has(workspaceKey(dir))) out.set(workspaceKey(dir), dir);
     }
     return out;
@@ -5709,7 +5709,7 @@ export class AgentHost {
 
   /**
    * The folder `from` is now `to`: rewrite every path Scribe keeps to it or into it (threads, their
-   * worktrees and grants, prefs, MCP layers, page folder grants, Kanban worker folders), repair the
+   * worktrees and grants, prefs, MCP layers, page workspaces and folder grants, Kanban worker folders), repair the
    * git links of open worktrees, and move Claude Code's sessions so Claude threads resume.
    */
   async relocateWorkspace(fromRaw: string, toRaw: string, opts: { claudeSessions?: boolean } = {}): Promise<{ threads: number; notes: string[]; prefs: Prefs }> {
