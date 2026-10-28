@@ -1492,6 +1492,7 @@ export async function startHttp(): Promise<http.Server> {
         return;
       }
       try {
+        store.noteFocus(req.body?.focused);
         run(req);
         res.json(store.spacesView());
       } catch (err) {

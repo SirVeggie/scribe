@@ -2437,6 +2437,20 @@ export class BoardStore extends EventEmitter {
     };
   }
 
+  /**
+   * The tab the user has in front. Clicking a tab only tells the viewer list, so space requests
+   * pass it along; otherwise a switch would save whichever tab was last opened (#74).
+   */
+  noteFocus(id: unknown): void {
+    if (typeof id !== "string") {
+      return;
+    }
+    const tab = this.tabs.get(id);
+    if (tab && !isAppTab(tab)) {
+      this.activeId = id;
+    }
+  }
+
   /** The first use turns the current strip into a space, so nothing is lost. */
   ensureSpaces(): void {
     if (this.spaces.list.length) {

@@ -78,6 +78,21 @@ test("switching swaps the strip and comes back with order, pins, and focus", () 
   store.closeDb();
 });
 
+test("a switch keeps the tab the viewer has in front, not the last opened one (#74)", () => {
+  const store = loaded();
+  const a = page(store, "A");
+  page(store, "B");
+  const work = store.createSpace({ name: "Work" });
+  const main = store.spacesView().activeId!;
+  store.noteFocus(a);
+  store.noteFocus("missing");
+  assert.equal(store.spacesView().spaces[0].activeId, a);
+  store.switchSpace(work.id);
+  store.switchSpace(main);
+  assert.equal(store.getActiveId(), a);
+  store.closeDb();
+});
+
 test("a page can be a tab in two spaces", () => {
   const store = loaded();
   const a = page(store, "A");

@@ -445,6 +445,7 @@
     folderPath: (id) => library.pathOf(id),
     setHomeFolder: (space) => library.openHomeFolderPicker(space),
     showNotice,
+    focusedTab: () => (childId ? null : state.activeId),
     beforeOpen: () => {
       closePalette();
       closeSettings();

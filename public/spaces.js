@@ -100,6 +100,11 @@ window.createSpaces = function createSpaces(host) {
   }
 
   async function call(method, url, body) {
+    // The server only hears of tab clicks through this: a switch saves the tab in front (#74).
+    const focused = host.focusedTab?.();
+    if (focused) {
+      body = { ...body, focused };
+    }
     const res = await fetch(url, {
       method,
       headers: body ? { "content-type": "application/json" } : undefined,
