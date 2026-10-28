@@ -9299,92 +9299,33 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   /* ---------- activity flyout and needs-you toasts ---------- */
 
-  const FLYOUT_HOLD_MS = 5 * 60 * 1000;
-  const FLYOUT_SOFT_CAP = 10;
-  const FLYOUT_CAP = 10;
+  const FLYOUT_RECENT_MS = 60 * 60 * 1000;
+  const FLYOUT_RECENT_CAP = 5;
   const TOAST_CAP = 3;
   const FINISH_TOAST_MS = 8000;
-  /** Keep in sync with src/agent/flyoutList.ts */
-  const flyoutHold = { checkedAt: new Map(), listed: new Set() };
-  let flyoutHoldTimer = 0;
 
-  function flyoutLive(t) {
-    if (t.archived) return false;
-    if (t.status === "waiting" || t.status === "running") return true;
-    return t.status === "idle" && t.unread && !t.fromPage;
-  }
-
-  /** Stamp checkedAt when an unread idle thread is read. Returns the next expiry, or null. */
-  function syncFlyoutHold(threads, now) {
-    const known = new Set();
-    for (const t of threads) {
-      known.add(t.id);
-      if (t.archived) {
-        flyoutHold.listed.delete(t.id);
-        flyoutHold.checkedAt.delete(t.id);
-        continue;
-      }
-      if (flyoutLive(t)) {
-        flyoutHold.checkedAt.delete(t.id);
-        if (t.status === "idle") flyoutHold.listed.add(t.id);
-        else flyoutHold.listed.delete(t.id);
-        continue;
-      }
-      if (flyoutHold.listed.has(t.id)) {
-        if (!flyoutHold.checkedAt.has(t.id)) flyoutHold.checkedAt.set(t.id, now);
-        flyoutHold.listed.delete(t.id);
-      }
-    }
-    for (const id of [...flyoutHold.listed]) if (!known.has(id)) flyoutHold.listed.delete(id);
-    for (const [id, at] of flyoutHold.checkedAt) {
-      if (!known.has(id) || now - at >= FLYOUT_HOLD_MS) flyoutHold.checkedAt.delete(id);
-    }
-    let next = null;
-    for (const at of flyoutHold.checkedAt.values()) {
-      const until = at + FLYOUT_HOLD_MS;
-      if (next == null || until < next) next = until;
-    }
-    return next;
+  /** Keep in sync with src/agent/flyoutList.ts: a finished turn (not page chats) or a draft edit. */
+  function flyoutRecentAt(t) {
+    const hasDraft = t.draft?.text?.trim() || t.draft?.context?.length;
+    return Math.max(t.fromPage ? 0 : t.activityAt || 0, hasDraft ? t.draft.at || 0 : 0);
   }
 
   /**
-   * Waiting, running and unread, plus checked threads held for five minutes.
-   * Orb (opens up): checked at the top, newest/running/waiting at the bottom, nearest the pointer.
-   * The top-bar button opens down, so that order is reversed.
+   * Active (running), Waiting and Recent (finished or drafted in the last hour, unseen replies of any age, five at most).
+   * Newest first in each. Keep in sync with src/agent/flyoutList.ts.
    */
-  function flyoutSnapshot(from) {
+  function flyoutSnapshot() {
     const now = Date.now();
-    const threads = activeThreads();
-    const next = syncFlyoutHold(threads, now);
-    clearTimeout(flyoutHoldTimer);
-    if (next != null) flyoutHoldTimer = setTimeout(() => renderBadge(), Math.max(0, next - now) + 30);
-    const all = threads.filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
-    const live = [
-      ...all.filter((t) => t.status === "waiting"),
-      ...all.filter((t) => t.status === "running"),
-      ...all.filter((t) => t.status === "idle" && t.unread && !t.fromPage),
-    ];
-    const liveIds = new Set(live.map((t) => t.id));
-    let held = all.filter((t) => {
-      const at = flyoutHold.checkedAt.get(t.id);
-      return !liveIds.has(t.id) && at != null && now - at < FLYOUT_HOLD_MS;
-    });
-    held.sort((a, b) => (flyoutHold.checkedAt.get(a.id) || 0) - (flyoutHold.checkedAt.get(b.id) || 0));
-    if (live.length + held.length > FLYOUT_SOFT_CAP) {
-      const room = Math.max(0, FLYOUT_SOFT_CAP - live.length);
-      held = [...held].sort((a, b) => (flyoutHold.checkedAt.get(b.id) || 0) - (flyoutHold.checkedAt.get(a.id) || 0)).slice(0, room);
-      held.sort((a, b) => (flyoutHold.checkedAt.get(a.id) || 0) - (flyoutHold.checkedAt.get(b.id) || 0));
-    }
-    const orb = [...held.map((thread) => ({ thread, checked: true })), ...[...live].reverse().map((thread) => ({ thread, checked: false }))];
-    const ordered = from === "button" ? [...orb].reverse() : orb;
-    const hidden = Math.max(0, ordered.length - FLYOUT_CAP);
-    const rows = from === "button" ? ordered.slice(0, FLYOUT_CAP) : ordered.slice(Math.max(0, ordered.length - FLYOUT_CAP));
+    const all = activeThreads().filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
+    const unseen = (t) => Boolean(t.unread) && !t.fromPage;
+    const recent = all
+      .filter((t) => t.status === "idle" && (unseen(t) || now - flyoutRecentAt(t) < FLYOUT_RECENT_MS))
+      .sort((a, b) => Number(unseen(b)) - Number(unseen(a)) || flyoutRecentAt(b) - flyoutRecentAt(a))
+      .slice(0, FLYOUT_RECENT_CAP);
     return {
-      rows,
-      hidden,
-      waiting: live.filter((t) => t.status === "waiting").length,
-      running: live.filter((t) => t.status === "running").length,
-      ready: live.filter((t) => t.status === "idle").length,
+      active: all.filter((t) => t.status === "running"),
+      waiting: all.filter((t) => t.status === "waiting"),
+      recent,
     };
   }
 
@@ -9425,12 +9366,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const kind = { approval: "Approve", question: "Question", plan: "Plan" }[t.asking?.kind] || "Waiting";
       return t.asking ? `${kind}: ${t.asking.title}` : "Needs your answer";
     }
-    return t.activity?.line || (t.status === "running" ? "Working…" : "Reply ready");
+    if (t.status === "idle") {
+      if (t.unread) return "Reply ready";
+      const draft = t.draft?.text?.trim();
+      if (draft || t.draft?.context?.length) return draft ? `Draft: ${draft.split("\n")[0]}` : "Draft";
+      return "Finished";
+    }
+    return t.activity?.line || "Working…";
   }
 
   /**
-   * Hover the island orb or the top-bar agent button: waiting, running and unread threads,
-   * plus recently checked ones (dim, no status dot) for five minutes.
+   * Hover the island orb or the top-bar agent button: Active, Waiting and Recent threads,
+   * each section shown only when it has threads.
    * Right-click opens the same list at once, without the hover delay.
    * The anchor, the panel and its peek are one hover group, so the pointer can move onto the list.
    */
@@ -9487,13 +9434,14 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
     open(anchor, from) {
       if (openMenuEl || !anchor.isConnected || anchor.offsetParent === null) return;
-      if (!flyoutSnapshot(from).rows.length) return;
       this.close();
       this.anchor = anchor;
       this.from = from;
-      // Keep the plain tip out of the flyout.
-      anchor.dataset.flyTitle = anchor.dataset.tooltip;
-      anchor.removeAttribute("data-tooltip");
+      // Keep the plain tip out of the flyout. The orb has none: leave it that way.
+      if (anchor.dataset.tooltip !== undefined) {
+        anchor.dataset.flyTitle = anchor.dataset.tooltip;
+        anchor.removeAttribute("data-tooltip");
+      }
       hideHoverTip();
       this.node = el("div", `ag-fly from-${from}`);
       this.hold(this.node);
@@ -9514,28 +9462,23 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
     render() {
       if (!this.node) return;
-      const { rows, hidden, waiting, running, ready } = flyoutSnapshot(this.from);
-      if (!rows.length) return this.close();
+      const sections = flyoutSnapshot();
+      const groups = [
+        ["Active", sections.active],
+        ["Waiting", sections.waiting],
+        ["Recent", sections.recent],
+      ].filter(([, list]) => list.length);
       // Running threads resend every second or so; rebuild only when a row would change.
-      const sig = JSON.stringify(rows.map((r) => [r.thread.id, r.checked, r.thread.status, r.thread.title, activityLine(r.thread), r.thread.activity?.lastText, r.thread.asking?.detail]).concat(hidden, waiting, running, ready));
+      const sig = JSON.stringify(groups.map(([name, list]) => [name, ...list.map((t) => [t.id, t.status, t.unread, t.title, activityLine(t), t.activity?.lastText, t.asking?.detail])]));
       if (sig === this.sig && this.node.childElementCount) return;
       this.sig = sig;
-      const counts = [];
-      if (waiting) counts.push(`${waiting} need${waiting === 1 ? "s" : ""} you`);
-      if (running) counts.push(`${running} running`);
-      if (ready) counts.push(`${ready} ready`);
-      const head = el("div", "ag-fly-head");
-      head.append(el("b", null, "Active"), el("span", null, counts.join(" · ")));
-      this.node.replaceChildren(head);
-      for (const entry of rows) this.node.append(this.row(entry));
-      if (hidden && !SOLO) {
-        this.node.append(
-          button(`+${hidden} in the sidebar`, "ag-fly-more", () => {
-            this.close();
-            sidebar.setOpen(true);
-            if (!sidebar.listOpen) sidebar.toggleList();
-          })
-        );
+      this.node.replaceChildren();
+      if (!groups.length) this.node.append(el("div", "ag-fly-empty", "No recent threads"));
+      for (const [name, list] of groups) {
+        const head = el("div", "ag-fly-head");
+        head.append(el("b", null, name), el("span", null, String(list.length)));
+        this.node.append(head);
+        for (const t of list) this.node.append(this.row(t));
       }
       this.place();
       if (this.peekId) {
@@ -9545,15 +9488,16 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         else this.hidePeek();
       }
     },
-    row(entry) {
-      const t = entry.thread;
-      const row = el("div", `ag-fly-row s-${entry.checked ? "checked" : t.status}`);
+    row(t) {
+      // A finished thread whose reply was seen is dim, with no status dot.
+      const seen = t.status === "idle" && !t.unread;
+      const row = el("div", `ag-fly-row s-${seen ? "checked" : t.status}`);
       row.dataset.thread = t.id;
       row.tabIndex = 0;
       row.role = "button";
       const meta = el("span", "ag-fly-meta");
       meta.append(el("span", "ag-fly-title", t.title), el("span", "ag-fly-line", activityLine(t)));
-      row.append(el("span", entry.checked ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
+      row.append(el("span", seen ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
       if (t.status === "waiting" && t.asking?.kind === "approval") row.append(approvalButtons(t));
       else if (t.status === "waiting") {
         row.append(
@@ -9584,7 +9528,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.peekId = t.id;
       for (const r of this.node.querySelectorAll(".ag-fly-row")) r.classList.toggle("on", r === rowEl);
       const peek = el("div", "ag-fly-peek");
-      const state = rowEl.classList.contains("s-checked") ? "Seen" : t.status === "waiting" ? "Waiting" : t.status === "running" ? "Running" : "Reply ready";
+      const state = rowEl.classList.contains("s-checked") ? "Finished" : t.status === "waiting" ? "Waiting" : t.status === "running" ? "Running" : "Reply ready";
       peek.append(el("p", "ag-fly-peek-head", `${state} · ${t.title}`));
       if (t.status === "waiting" && t.asking) {
         peek.append(el("p", "ag-fly-peek-title", t.asking.title));

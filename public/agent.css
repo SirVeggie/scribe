@@ -6434,6 +6434,10 @@ body.resizing-split main.has-split .agent-dock {
   color: var(--muted);
 }
 
+.ag-fly-row + .ag-fly-head {
+  margin-top: 6px;
+}
+
 .ag-fly-head b {
   color: var(--heading);
   font-size: 12px;
@@ -6503,21 +6507,10 @@ body.resizing-split main.has-split .agent-dock {
   flex-shrink: 0;
 }
 
-.ag-fly-more {
-  display: block;
-  width: 100%;
-  margin-top: 2px;
+.ag-fly-empty {
   padding: 6px 8px;
-  border-radius: 8px;
-  background: transparent;
   color: var(--muted);
-  font-size: 11.5px;
-  text-align: left;
-}
-
-.ag-fly-more:hover {
-  color: var(--text);
-  background: rgba(var(--lift-rgb), 0.05);
+  font-size: 12px;
 }
 
 .ag-fly-peek {
