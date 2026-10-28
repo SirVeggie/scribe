@@ -425,6 +425,7 @@ scribe.revision                   // the state revision this page has seen
 scribe.template                   // { id, values, revision, compatible } on a template page, else null
 scribe.file                       // a file page's own file: read(), image(), save(text, opts), saveAs(text, opts); Scribe's file viewer uses it
 scribe.ide                        // a file in the page's workspace in the user's IDE: check(file) → { project }, open(file, { line }) on a click; <s-code file line> uses it
+scribe.browser                    // a thread's browser view page only: info(), watch(onEvent) → stop, navigate, tabs, input, control, fit, close; Scribe's browser page uses it
 scribe.title                      // this page's title (its tab and Library name)
 scribe.setTitle("Trip plan")      // rename the page, e.g. from a heading the user edits in place; resolves with the new title
 scribe.onTitle((title) => …)      // the title changed (setTitle here, or a rename in the tab strip or Library)
