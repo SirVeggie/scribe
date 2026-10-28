@@ -623,6 +623,19 @@ test("a template with pin false opens its pages unpinned", () => {
   again.closeDb();
 });
 
+test("a template update re-renders its pages without marking them unseen", () => {
+  const store = loaded();
+  const { template } = store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc</p>" });
+  const page = store.openFromTemplate(template.key, {}).tab;
+  const notices: UpsertNotice[] = [];
+  store.on("tab_upserted", (tab, _index, notice) => { if (tab.id === page.id) notices.push(notice); });
+  store.upsertTemplate({ key: "doc", title: "Doc", html: "<p>doc 2</p>" });
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].template, true);
+  assert.equal(notices[0].markUnread, false);
+  store.closeDb();
+});
+
 test("patchHtml with html replaces the body but keeps state and events", () => {
   const store = loaded();
   const { tab } = store.upsert({ key: "page", title: "Page", html: "<!DOCTYPE html><p>old</p>", state: { n: 1 } });

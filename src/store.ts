@@ -4459,7 +4459,8 @@ export class BoardStore extends EventEmitter {
         : tab.templateIncompatibleReason;
       this.applyTemplateRender(tab, template, values, compatible, reason);
       this.markDirty(tab.id);
-      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true, template: true });
+      // A template edit isn't news on the page itself: reload its frame without the unseen blip.
+      this.emit("tab_upserted", toMeta(tab), undefined, { activate: false, structural: true, template: true, markUnread: false });
     }
   }
 
