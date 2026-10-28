@@ -5013,7 +5013,7 @@
     }
 
     renderApproval(it) {
-      const node = el("div", `ag-card ag-approval s-${it.status}`);
+      const node = el("div", `ag-card ag-approval${it.tone === "harness" ? " ag-approval-harness" : ""} s-${it.status}`);
       node.dataset.itemId = it.id;
       if (it.status !== "pending") {
         cardNotes.delete(`approval:${it.id}`);
@@ -5025,7 +5025,7 @@
         return node;
       }
       const head = el("div", "ag-card-head");
-      head.append(icon("shield"), el("span", "ag-card-title", it.title));
+      head.append(icon(it.tone === "harness" ? "gear" : "shield"), el("span", "ag-card-title", it.title));
       node.append(head);
       if (it.detail) node.append(el("pre", "ag-pre small", it.detail));
       if(/^\/api\/plugins\/reviews\/[0-9a-f-]+$/.test(it.sourceUrl||""))node.append(button("View source","ag-btn small",()=>window.scribePreview.open({url:it.sourceUrl,name:"plugin-source.txt",mimeType:"text/plain"})));

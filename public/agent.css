@@ -1892,6 +1892,23 @@ html[data-theme="cream"] .ag-md {
   color: var(--ag-warn);
 }
 
+/* A change to the user's agent setup (#79): violet, so it reads as different from a tool approval. */
+.ag-approval.ag-approval-harness.s-pending {
+  border-color: rgba(167, 139, 250, 0.6);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.1);
+  background: linear-gradient(rgba(167, 139, 250, 0.06), rgba(167, 139, 250, 0.06)), var(--ag-card);
+}
+
+.ag-approval.ag-approval-harness.s-pending .ag-card-head {
+  color: #b9a4fb;
+}
+
+.ag-approval-harness.s-pending .ag-btn.primary {
+  background: #8b6cf0;
+  border-color: #8b6cf0;
+  color: #fff;
+}
+
 .ag-card-title {
   flex: 1;
   min-width: 0;

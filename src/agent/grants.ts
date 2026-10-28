@@ -6,9 +6,9 @@ import type { Thread } from "./types.js";
  * What the user granted a thread while it ran (web requests, thread access), as rows the chat
  * can list and take back one by one. key names the grant for a revoke.
  */
-export type GrantRow = { kind: "web" | "threads" | "helpers" | "pages" | "plugins" | "tools"; key: string; label: string };
+export type GrantRow = { kind: "web" | "threads" | "helpers" | "harness" | "pages" | "plugins" | "tools"; key: string; label: string };
 
-type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants" | "pluginGrants" | "toolGrants">;
+type GrantThread = Pick<Thread, "cwd" | "worktree" | "scope" | "webGrants" | "threadGrants" | "helpersAllowed" | "harnessAllowed" | "pageGrants" | "pluginGrants" | "toolGrants">;
 
 /** Names for page grants: a page's title, a folder's path. */
 export type PageNames = { page(id: string): string | null; folder(id: string): string | null };
@@ -36,12 +36,13 @@ export function grantRows(thread: GrantThread, lookup?: ScopeLookup, names?: Pag
   }
   for (const grant of thread.toolGrants ?? []) rows.push({ kind: "tools", key: toolGrantKey(grant), label: toolGrantLabel(grant) });
   if (thread.helpersAllowed) rows.push({ kind: "helpers", key: "helpers", label: "Start helpers without asking" });
+  if (thread.harnessAllowed) rows.push({ kind: "harness", key: "harness", label: "Change the agent setup without asking" });
   for(const id of thread.pluginGrants??[])rows.push({kind:"plugins",key:`plugins:${id}`,label:id});
   return rows;
 }
 
 /** The thread's grant fields without the one key names; null when nothing matches. */
-export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed" | "pageGrants" | "pluginGrants" | "toolGrants"> | null {
+export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "webGrants" | "threadGrants" | "helpersAllowed" | "harnessAllowed" | "pageGrants" | "pluginGrants" | "toolGrants"> | null {
   if (key.startsWith("tools:")) {
     const grants = thread.toolGrants ?? [];
     const kept = grants.filter((g) => toolGrantKey(g) !== key);
@@ -55,6 +56,9 @@ export function revokeGrant(thread: GrantThread, key: string): Pick<Thread, "web
     const grants = thread.pageGrants ?? [];
     const kept = grants.filter((g) => `pages:${g.kind}:${g.id}` !== key);
     return kept.length === grants.length ? null : { webGrants: thread.webGrants, threadGrants: thread.threadGrants, pageGrants: kept };
+  }
+  if (key === "harness") {
+    return thread.harnessAllowed ? { webGrants: thread.webGrants, threadGrants: thread.threadGrants, harnessAllowed: false } : null;
   }
   if (key === "helpers") {
     return thread.helpersAllowed ? { webGrants: thread.webGrants, threadGrants: thread.threadGrants, helpersAllowed: false } : null;

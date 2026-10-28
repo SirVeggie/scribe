@@ -147,6 +147,7 @@ export function settleNoTools(thread: Thread): void {
   delete thread.custom;
   delete thread.planNext;
   delete thread.helpersAllowed;
+  delete thread.harnessAllowed;
 }
 
 /**

@@ -117,6 +117,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     lines.push(
       `Questions: when you need the user's decision or details to carry on, ask with ask_user on the \`${server}\` server rather than your own built-in question tool. It takes choices (single or multi-select), free text, numbers and scales, shows a few questions as a card in the chat and more as a form, and returns the answers.`,
       `Scribe settings: when the user asks where one of Scribe's own settings is or wants one changed, look it up with settings_find and show the rows that fit with settings_show. They appear in the chat as in the settings dialog and the user changes them there.`,
+      `Agent setup: to help the user set up or change Scribe's agent harness beyond a settings click (their MCP servers, hook rules, skills, instruction files), read harness_docs and make the change with harness_change; the user approves it in the chat.`,
       `Inline UI: component_show displays kit HTML in the chat, with no network or page API access. Include fallback text for history; wait:true returns a kit button or form's reply.`
     );
   }

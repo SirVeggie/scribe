@@ -69,6 +69,7 @@ import { threadStats, type ThreadStats } from "./threadStats.js";
 import { threadOrigin, usageCsv, usageHistory, type UsageHistory, type UsageSource } from "./usageHistory.js";
 import { turnLatency } from "./latency.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
+import { harnessDocs, parseHarnessOps, planHarnessChange, writeHarnessPlan } from "./harnessSetup.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
 import { cleanApprovals, cleanDisabledModes, cleanForkSummarizers, DEFAULT_PREFS, summaryChoice, modelChoice, prefsPatchFromChoices, seedForkSummarizers, seedModelSettings, settingPatch, workspaceKey, type Prefs, type ThreadPatch } from "./prefs.js";
 import { ScribeSkills } from "./scribeSkills.js";
@@ -1893,6 +1894,7 @@ export class AgentHost {
     if(next.pluginGrants)thread.pluginGrants=next.pluginGrants;
     if (next.toolGrants) thread.toolGrants = next.toolGrants;
     if (next.helpersAllowed === false) delete thread.helpersAllowed;
+    if (next.harnessAllowed === false) delete thread.harnessAllowed;
     this.db.saveThread(thread);
     this.sessions.get(id)?.update(this.sessionThread(thread));
     const view = this.view(thread);
@@ -3584,6 +3586,67 @@ export class AgentHost {
         this.db.saveThread(t);
       }
     }
+  }
+
+  /** harness_docs (#79): how Scribe's harness works and what is set for this thread's workspace. */
+  harnessDocs(threadId: string): string {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("harness_docs only works in Scribe chat threads.");
+    const { rules, classifier } = this.hookSettings();
+    return harnessDocs({ mcp: readMcpFile(), hookRules: rules, classifier }, { workspace: threadWorkspace(thread) });
+  }
+
+  /**
+   * harness_change (#79): change the user's MCP servers, hook rules, skills or instruction files.
+   * The user approves it in a violet card, whatever the thread's approval rung, unless they allowed
+   * it for the thread. Everything is checked before the card shows and before anything is written.
+   */
+  async harnessChange(threadId: string, input: unknown, signal?: AbortSignal): Promise<{ applied: string[]; note: string }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("harness_change only works in Scribe chat threads.");
+    if (thread.helperOf) throw new Error("A helper cannot change the agent setup. Say in your report what should change.");
+    const ops = parseHarnessOps(input);
+    const roots = { workspace: threadWorkspace(thread) };
+    const reason = isPlainRecord(input) && typeof input.reason === "string" ? input.reason.trim().slice(0, 1000) : "";
+    const read = () => {
+      const { error, ...mcp } = readMcpFile();
+      if (error && ops.some((op) => op.op.startsWith("mcp_"))) throw new Error(`Scribe's mcp.json does not parse, so it is left alone: ${error}`);
+      return { mcp, hookRules: this.prefs().hookRules };
+    };
+    const plan = planHarnessChange(ops, read(), roots);
+    if (!thread.harnessAllowed) {
+      const run = this.runs.get(thread.id);
+      if (!run) throw new Error("With no turn running the user cannot be asked to allow a setup change.");
+      const options: ApprovalOption[] = [
+        { id: "once", label: "Allow once", kind: "allow_once" },
+        { id: "thread", label: "Allow for this thread", kind: "allow_always", description: "This chat may change MCP servers, hook rules, skills and instruction files without asking again. Take it back under the thread's permissions." },
+        { id: "deny", label: "Deny", kind: "reject_once" },
+      ];
+      this.closeBlocks(run);
+      const detail = `${reason ? `${reason}\n\n` : ""}${plan.lines.map((l) => `• ${l}`).join("\n")}\n\nThis changes Scribe's agent setup for every thread, from each thread's next session.`;
+      const item = this.addItem(thread.id, run.turn.id, { kind: "approval", requestId: "", tool: "other", tone: "harness", title: `Change the agent setup (${plan.lines.length} change${plan.lines.length === 1 ? "" : "s"})`, detail: clip(detail, 6000), options, status: "pending" });
+      let decision: ApprovalDecision;
+      try {
+        decision = await this.waitPending<ApprovalDecision>(thread.id, run, "approval", item.id, signal);
+      } catch {
+        throw new Error("The request to change the agent setup was cancelled.");
+      }
+      if (decision.optionId === "deny") throw new Error(decision.note ? `The user denied the setup change: ${decision.note}` : "The user denied the setup change. Leave it as it is, or ask them what they want.");
+      if (decision.optionId === "thread") {
+        const t = this.threads.get(thread.id);
+        if (t) {
+          t.harnessAllowed = true;
+          this.db.saveThread(t);
+          this.emit({ type: "agent_thread", thread: this.view(t) });
+        }
+      }
+    }
+    // Planned again on what is there now, in case the setup changed while the user was deciding.
+    const final = planHarnessChange(ops, read(), roots);
+    writeHarnessPlan(final, roots);
+    if (final.mcp) writeMcpFile(final.mcp);
+    if (final.hookRules) this.setPrefs({ hookRules: final.hookRules });
+    return { applied: final.lines, note: "Saved. Threads get the new setup from their next session; this turn keeps the tools it started with." };
   }
 
   /**

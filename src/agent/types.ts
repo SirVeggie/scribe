@@ -199,6 +199,8 @@ export type Thread = {
   helperOf?: string;
   /** The user let this thread's agent start helpers (agent_run) without asking again: Allow for this thread, or a board worker set to use helpers unasked. */
   helpersAllowed?: boolean;
+  /** The user let this thread's agent change the agent setup (harness_change, #79) without asking again. */
+  harnessAllowed?: boolean;
   scope: ThreadScope;
   /**
    * The space the thread was started in (#260). Pages it makes are made in that space and go to its
@@ -634,6 +636,8 @@ export type ItemBody =
       title: string;
       detail?: string;
       sourceUrl?: string;
+      /** harness: a change to the user's agent setup (#79), shown in violet so it stands apart from tool approvals. */
+      tone?: "harness";
       options: ApprovalOption[];
       status: "pending" | "resolved" | "expired";
       decision?: string;

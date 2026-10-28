@@ -1206,6 +1206,45 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  /** harness_docs from a Scribe chat's MCP (#79): how the agent setup works and what is set now. */
+  app.get("/api/harness/docs", (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "harness_docs only works in Scribe chat threads." });
+      return;
+    }
+    try {
+      res.json({ text: agentHost.harnessDocs(thread) });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  /** harness_change from a Scribe chat's MCP (#79): asks the user in the chat, then changes the agent setup. */
+  app.post("/api/harness/change", (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "harness_change only works in Scribe chat threads." });
+      return;
+    }
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .harnessChange(thread, req.body, abort.signal)
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
   /**
    * A Scribe chat's MCP asks before it runs one of its own tools (gateTools in mcp.ts): the thread's
    * hooks may deny the call or have the user approve it first. Anything that goes wrong lets it run.

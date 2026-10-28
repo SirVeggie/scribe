@@ -1489,6 +1489,7 @@ export async function startMcp(): Promise<void> {
     if (pages) registerAsk(server);
     registerQuestion(server);
     registerSettings(server);
+    registerHarness(server);
     registerComponent(server);
     registerWebRequest(server);
     registerThreadUpdate(server);
@@ -1595,6 +1596,74 @@ function registerSettings(server: McpServer): void {
         return { content: [{ type: "text" as const, text: String((data as { text?: string }).text ?? "") }] };
       } catch (err) {
         return errorResult((err as Error).message || "settings_show failed");
+      }
+    }
+  );
+}
+
+/**
+ * harness_docs and harness_change (#79): how Scribe sets up every chat, and agent-assisted changes
+ * to the user's MCP servers, hook rules, skills and instruction files, each approved in the chat.
+ */
+function registerHarness(server: McpServer): void {
+  server.tool(
+    "harness_docs",
+    "How Scribe's agent harness works (the user's MCP servers, hook rules, skills, instruction files), the ops harness_change takes, and what is set now for this thread's workspace. Read it before you help the user set something up or change it.",
+    {},
+    { readOnlyHint: true },
+    async () => {
+      try {
+        const { status, data } = await api("GET", "/api/harness/docs");
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return { content: [{ type: "text" as const, text: String((data as { text?: string }).text ?? "") }] };
+      } catch (err) {
+        return errorResult((err as Error).message || "harness_docs failed");
+      }
+    }
+  );
+  const op = z
+    .object({
+      op: z.enum(["mcp_set", "mcp_remove", "mcp_enable", "hook_set", "hook_remove", "skill_create", "file_write"]),
+      name: z.string().optional().describe("mcp_*: the server's name. skill_create: the skill's folder name."),
+      scope: z.enum(["global", "workspace"]).optional().describe("mcp_set, mcp_remove: global (every workspace, the default) or this thread's workspace."),
+      server: z.record(z.string(), z.unknown()).optional().describe("mcp_set: the server's fields (command, args, env, url, headers, type, enabled, modes, approve, tools, description, timeout). Merged into the one there; null removes a field."),
+      replace: z.boolean().optional().describe("mcp_set: write server as the whole entry instead of merging."),
+      on: z.boolean().optional().describe("mcp_enable: on or off."),
+      rule: z.record(z.string(), z.unknown()).optional().describe("hook_set: the rule (id to change one, match, pattern, event, action, text, threshold, enabled)."),
+      id: z.string().optional().describe("hook_remove: the rule's id."),
+      folder: z.string().optional().describe("skill_create: one of the skill folders harness_docs lists."),
+      description: z.string().optional().describe("skill_create: when an agent should use the skill."),
+      path: z.string().optional().describe("file_write: absolute path of an instruction file or a file in a skill's folder."),
+      text: z.string().optional().describe("file_write: the file's whole new content. skill_create: SKILL.md's content, frontmatter included."),
+    })
+    .passthrough();
+  server.tool(
+    "harness_change",
+    "Change the user's agent setup in Scribe: MCP servers, hook rules, skills and instruction files (read harness_docs first for the fields and what is there). The user is asked in the chat first, unless they allowed setup changes for this thread; all the changes in one call are shown and approved together, and none is written if one of them cannot work. For a simple switch in Scribe's settings use settings_show instead. Threads get the new setup from their next session. Returns what was changed.",
+    {
+      changes: z.array(op).min(1).max(20).describe("The changes, applied in order."),
+      reason: z.string().optional().describe("One or two lines on why, shown to the user."),
+    },
+    async (input, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `Waiting for the user to allow the setup change (${seconds}s)` } })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api("POST", "/api/harness/change", input, { signal: extra.signal });
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "harness_change failed");
+      } finally {
+        clearInterval(heartbeat);
       }
     }
   );
