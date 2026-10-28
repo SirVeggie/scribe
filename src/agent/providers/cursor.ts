@@ -985,13 +985,13 @@ class CursorSession implements ProviderSession {
     const ok = result?.status === "success";
     const value = result && isPlainRecord(result.value) ? result.value : null;
     const out = this.toolOutput(type, value, result);
-    if (type === "mcp") sink.images?.(callId, outputImages(value?.content));
     sink.toolUpdate(callId, {
       title,
       ...(paths ? { paths } : {}),
       status: ok ? "done" : "error",
       ...out,
     });
+    if (type === "mcp") sink.images?.(callId, outputImages(value?.content));
   }
 
   /** The host shell shows as a shell call, not as a board tool. */

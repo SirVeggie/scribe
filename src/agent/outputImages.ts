@@ -24,18 +24,16 @@ const extensions: Record<string, string> = { "image/png": "png", "image/jpeg": "
 /** Content-addressed per thread: repeated provider completion events reuse the same asset. */
 export function saveOutputImage(threadId: string, image: OutputImage): FileRef {
   let bytes: Buffer;
-  let mime: string;
   if ("path" in image) {
     const stat = fs.statSync(image.path);
     if (!stat.isFile() || stat.size > MAX_FILE_BYTES) throw new Error("Image file is missing or exceeds 20 MB.");
     bytes = fs.readFileSync(image.path);
-    mime = "";
   } else {
     let data = image.data;
-    mime = image.mimeType ?? "";
     const url = /^data:([^;,]+);base64,([\s\S]*)$/.exec(data);
-    if (url) { mime = url[1]; data = url[2]; }
+    if (url) data = url[2];
     if (data.length > Math.ceil(MAX_FILE_BYTES / 3) * 4) throw new Error("Image exceeds 20 MB.");
+    data = data.replace(/\s/g, "");
     if (!data || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 === 1) throw new Error("Unsupported image payload (expected base64 image data).");
     bytes = Buffer.from(data, "base64");
   }
@@ -44,13 +42,13 @@ export function saveOutputImage(threadId: string, image: OutputImage): FileRef {
     : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? "image/jpeg"
     : /^GIF8[79]a/.test(bytes.subarray(0, 6).toString("ascii")) ? "image/gif"
     : bytes.subarray(0,4).toString() === "RIFF" && bytes.subarray(8,12).toString() === "WEBP" ? "image/webp" : "";
-  if (!detected || (mime && mime !== detected) || !bytes.length || bytes.length > MAX_FILE_BYTES) throw new Error("Unsupported or invalid image data.");
-  mime = detected;
+  if (!detected || !bytes.length || bytes.length > MAX_FILE_BYTES) throw new Error("Unsupported or invalid image data.");
+  const mime = detected;
   const id = `out-${createHash("sha256").update(bytes).digest("hex")}`;
   const name = `image.${extensions[mime]}`;
   const dir = path.join(threadFilesDir(threadId), id);
   fs.mkdirSync(dir, { recursive: true });
   const full = path.join(dir, name);
-  fs.writeFileSync(full, bytes);
+  if (!fs.existsSync(full)) fs.writeFileSync(full, bytes);
   return { id, name, mimeType: mime, size: bytes.length };
 }
