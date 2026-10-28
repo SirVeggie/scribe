@@ -6331,13 +6331,19 @@
     loadAgentOptions().then(function () { renderBoardLimits(); });
   }
   function workerQuotaWindow(provider, w) {
-    var expired = w.resetsAt && w.resetsAt <= Date.now();
+    var ms = w.resetsAt ? w.resetsAt - Date.now() : null;
+    var expired = ms != null && ms <= 0;
     var observed = provider === "codex";
     var used = expired && !observed ? 0 : Number(w.utilization);
     var percent = Number.isFinite(used) ? Math.round(clamp(used, 0, 1) * 100) : null;
     var reset = !w.resetsAt ? "" : expired
       ? observed ? "Reset passed · awaiting update" : "Reset passed"
       : "Resets " + new Date(w.resetsAt).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    if (ms > 0 && ms < 24 * 3600 * 1000) {
+      var h = Math.floor(ms / 3600000);
+      var m = Math.round((ms % 3600000) / 60000);
+      reset = "Resets in " + (h ? h + " h " : "") + m + " min";
+    }
     return { percent: percent, reset: reset };
   }
   function renderBoardLimits() {
