@@ -5919,6 +5919,10 @@ body.resizing-split main.has-split .agent-dock {
   border-bottom: 1px solid var(--border);
 }
 
+.ag-diff-section-head:has(> .ag-diff-toggle[aria-expanded="false"]) {
+  border-bottom: 0;
+}
+
 .ag-empty-diff {
   color: var(--muted);
   padding: 40px;
