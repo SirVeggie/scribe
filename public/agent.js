@@ -12887,6 +12887,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
    * Close the full window into the chat it was opened from (the floating chat, else the sidebar), taking the chat along.
    * Pass "side" to land in the sidebar even if it was closed (Ctrl+L). Leaving fullscreen itself does not open it.
    */
+  /** A space switch is a change of view: dialogs (a diff) and the full-window chat close, as Esc would (#68). */
+  function leaveForSpace() {
+    for (const close of [...modalStack].reverse()) close();
+    if (S.fullOpen) leaveFull();
+  }
+
   function leaveFull(to) {
     // The chat window is nothing but the full window.
     if (CHAT) return;
@@ -13312,7 +13318,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), leaveForSpace, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

@@ -675,6 +675,11 @@
       }
       unread.clear();
       unreadLibrary.clear();
+      if (msg.reset && !childId) {
+        // Another space: what was open over the old one's tabs goes (#68).
+        window.scribeHarness?.close();
+        window.scribeChat?.leaveForSpace?.();
+      }
       syncHash();
       const firstSnapshot = !state.restored;
       state.restored = true;

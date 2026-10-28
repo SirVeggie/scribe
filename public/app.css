@@ -4410,6 +4410,12 @@ html.spaces-open .workspace {
   pointer-events: none;
 }
 
+/* The overview covers the whole window: the harness, the full-window chat and agent dialogs (a diff)
+   wait under it, and come back if no other space is picked (#68). */
+html.spaces-open :is(.agent-harness, .agent-full, .ag-modal) {
+  visibility: hidden;
+}
+
 .spaces {
   position: fixed;
   inset: 48px 0 0;
