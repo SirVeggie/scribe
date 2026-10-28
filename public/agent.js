@@ -7522,7 +7522,18 @@
     return input;
   }
 
-  const mdCtx = { resolvePages: (targets) => app()?.resolvePages?.(targets) || {} };
+  const mdCtx = {
+    resolvePages: (targets) => app()?.resolvePages?.(targets) || {},
+    codeRef: (head, ref) => window.scribeIntegrations?.decorateRef(head, () => codeRefSource(head), ref, notice),
+  };
+
+  /** The chat a code reference is shown in: its paths are relative to that thread's workspace. */
+  function codeRefSource(node) {
+    if (!node.isConnected) return null;
+    const shown = views().filter((view) => view.root?.contains(node));
+    const view = shown.find((v) => !shown.some((o) => o !== v && v.root.contains(o.root)));
+    return view?.threadId ? { threadId: view.threadId, workspace: true } : null;
+  }
 
   function onLinkClick(event) {
     if (event.defaultPrevented || (event.type === "auxclick" ? event.button !== 1 : event.button !== 0)) return;

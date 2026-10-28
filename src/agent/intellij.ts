@@ -142,3 +142,31 @@ export async function intellijExportDiff(file: string, before: Buffer, after: Bu
   await Promise.all([fs.writeFile(left, before), fs.writeFile(right, after)]);
   return ["diff", left, right];
 }
+
+/**
+ * Which files belong to an IntelliJ project: an .idea folder between the file's folder and the
+ * workspace root. Chats show IntelliJ actions only for those. A deleted file counts by its folder.
+ */
+export async function intellijProjectFiles(repo: string, files: string[]): Promise<Record<string, boolean>> {
+  const result: Record<string, boolean> = Object.fromEntries(files.map(f => [f, false]));
+  const root = await fs.realpath(repo).catch(() => null);
+  if (!root) return result;
+  const seen = new Map<string, Promise<boolean>>();
+  const hasIdea = (dir: string) => {
+    let found = seen.get(dir);
+    if (!found) {
+      found = fs.stat(path.join(dir, ".idea")).then(s => s.isDirectory(), () => false);
+      seen.set(dir, found);
+    }
+    return found;
+  };
+  await Promise.all(files.map(async file => {
+    const target = path.resolve(root, file);
+    if (!inside(root, target)) return;
+    for (let dir = path.dirname(target); ; dir = path.dirname(dir)) {
+      if (await hasIdea(dir)) { result[file] = true; return; }
+      if (!inside(root, dir)) return;
+    }
+  }));
+  return result;
+}

@@ -1957,6 +1957,20 @@ ${POINTER_DRAG_JS}
     }
   };
 
+  /**
+   * Opening code in the user's IDE (IntelliJ for now), for a file in the page's workspace: a path
+   * relative to it, or absolute inside it. check(file) resolves { ok, project }: project is true when
+   * the file is in an IntelliJ project and the integration is on. open(file, { line }) needs a click.
+   */
+  var ideApi = {
+    check: function (file) { return askBoard({ type: "scribe-ide", op: "check", file: String(file || "") }, 15000); },
+    open: function (file, opts) {
+      if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
+      opts = opts || {};
+      return askBoard({ type: "scribe-ide", op: "open", file: String(file || ""), line: Number(opts.line) || 1 }, 30000);
+    }
+  };
+
   window.scribe = {
     id: tabId,
     template: template,
@@ -1987,6 +2001,7 @@ ${POINTER_DRAG_JS}
     action: action,
     reply: reply,
     file: fileApi,
+    ide: ideApi,
     browser: browserApi,
     open: open,
     resolve: resolve,

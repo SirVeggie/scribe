@@ -180,6 +180,27 @@
     });
   }
 
+  /**
+   * A code block that names a file offers to open it in the IDE when the file is in an IntelliJ
+   * project in the page's workspace: at line, else a diff's first new line, else line 1.
+   */
+  function ideButton(head, copy, file, line, diffText) {
+    var ide = window.scribe && window.scribe.ide;
+    if (!ide) return;
+    var hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/m.exec(diffText);
+    var at = Number(line) || (hunk ? Number(hunk[1]) : 1);
+    var open = el("button", "kit-code-open", "Open in IntelliJ");
+    open.type = "button";
+    open.hidden = true;
+    open.addEventListener("click", function () {
+      ide.open(file, { line: at }).then(function (result) {
+        if (result && result.ok === false && result.error !== "no_gesture") open.title = result.error;
+      });
+    });
+    head.insertBefore(open, copy);
+    ide.check(file).then(function (result) { open.hidden = !(result && result.project); });
+  }
+
   define("s-code", function (block) {
     // <script type="text/plain"> keeps markup in the code from being parsed.
     var raw = block.querySelector(':scope > script[type="text/plain"]');
@@ -194,7 +215,9 @@
       copyText(text).then(function () { copy.textContent = "Copied"; }, function () { copy.textContent = "Copy failed"; })
         .then(function () { setTimeout(function () { copy.textContent = "Copy"; }, 1500); });
     });
-    head.append(el("span", null, block.getAttribute("file") || language || (diff ? "diff" : "")), copy);
+    var file = block.getAttribute("file") || "";
+    head.append(el("span", null, file || language || (diff ? "diff" : "")), copy);
+    if (file) ideButton(head, copy, file, block.getAttribute("line"), diff ? text : "");
     var code = el("code");
     var pre = el("pre");
     pre.append(code);

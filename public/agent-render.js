@@ -305,7 +305,7 @@
         /* resolve is best effort */
       }
     }
-    for (const pre of root.querySelectorAll("pre")) codeBlock(pre, opts.highlight !== false);
+    for (const pre of root.querySelectorAll("pre")) codeBlock(pre, opts.highlight !== false, ctx);
     for (const table of root.querySelectorAll("table")) {
       const wrap = el("div", "ag-table-wrap");
       table.replaceWith(wrap);
@@ -324,9 +324,9 @@
     if (ref) {
       const file = ref[1];
       const ext = /\.([\w+-]+)$/.exec(file)?.[1] || "";
-      return { lang: ext.toLowerCase(), label: basename(file), title: file };
+      return { lang: ext.toLowerCase(), label: basename(file), title: file, ref: { file, line: Number(info.split(":")[0]) || 1 } };
     }
-    return { lang: info.toLowerCase(), label: "", title: "" };
+    return { lang: info.toLowerCase(), label: "", title: "", ref: null };
   }
 
   /** Fence tags highlight.js does not alias, mapped to a loaded grammar. */
@@ -340,9 +340,9 @@
     return mapped && hljs.getLanguage(mapped) ? mapped : "";
   }
 
-  function codeBlock(pre, highlight = true) {
+  function codeBlock(pre, highlight = true, ctx) {
     const code = pre.querySelector("code");
-    const { lang, label, title } = fenceInfo(code);
+    const { lang, label, title, ref } = fenceInfo(code);
     const hljs = window.hljs;
     const resolved = highlightLang(lang);
     const grammar = resolved && hljs?.getLanguage(resolved);
@@ -372,6 +372,8 @@
     }, "Copy to clipboard");
     copy.append(copyLabel);
     head.append(name, copy);
+    // A code reference offers to open its file in the IDE once the fence is closed.
+    if (ref && highlight) ctx?.codeRef?.(head, ref);
     pre.replaceWith(block);
     block.append(head, pre);
   }

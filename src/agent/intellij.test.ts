@@ -6,7 +6,7 @@ import { test } from "node:test";
 import express from "express";
 import type { AgentHost } from "./host.js";
 import { git, snapshotTree } from "./git.js";
-import { intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProject, launchIntelliJ, intellijSettings, openIntelliJProjects } from "./intellij.js";
+import { intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProject, intellijProjectFiles, launchIntelliJ, intellijSettings, openIntelliJProjects } from "./intellij.js";
 
 test("IntelliJ exports exact historical blobs, renames, additions, deletions and binary bytes", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-idea-test-"));
@@ -184,4 +184,18 @@ test("IntelliJ prefers the open project over a nested module's .idea, else the o
     assert.equal(open.size, 1);
     assert.equal(await intellijProject(root, src, open), root);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("intellijProjectFiles finds an .idea between a file and the workspace root, never above it", async () => {
+  const top = await fs.mkdtemp(path.join(os.tmpdir(), "scribe-idea-files-"));
+  try {
+    const root = path.join(top, "ws");
+    await fs.mkdir(path.join(top, ".idea"), { recursive: true });
+    await fs.mkdir(path.join(root, "app", ".idea"), { recursive: true });
+    await fs.mkdir(path.join(root, "app", "src"), { recursive: true });
+    await fs.mkdir(path.join(root, "other"), { recursive: true });
+    assert.deepEqual(await intellijProjectFiles(root, ["app/src/A.java", "app/gone/B.java", path.join(root, "app", "C.java"), "other/D.ts", "../ws2/E.ts"]), {
+      "app/src/A.java": true, "app/gone/B.java": true, [path.join(root, "app", "C.java")]: true, "other/D.ts": false, "../ws2/E.ts": false,
+    });
+  } finally { await fs.rm(top, { recursive: true, force: true }); }
 });

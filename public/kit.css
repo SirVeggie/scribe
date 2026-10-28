@@ -332,6 +332,8 @@
   border-bottom: 1px solid var(--border);
 }
 :where(s-code) > :where(.kit-code-head) > :where(button) { margin-left: auto; min-height: 22px; padding: 0 9px; font-size: 0.76rem; }
+:where(s-code) > :where(.kit-code-head) > :where(.kit-code-open:not([hidden])) + :where(button) { margin-left: 0; }
+:where(s-code) > :where(.kit-code-head) > :where(.kit-code-open[hidden]) { display: none; }
 :where(s-code) > :where(pre) { margin: 0; padding: 10px 14px; overflow: auto; background: none; border: 0; border-radius: 0; font: 12.5px/1.55 var(--kit-mono); tab-size: 2; }
 :where(s-code) > :where(pre) > :where(code) { display: block; padding: 0; background: none; font: inherit; }
 :where(s-code) :where(.kit-add, .kit-del, .kit-hunk) { display: block; margin: 0 -14px; padding: 0 14px; }

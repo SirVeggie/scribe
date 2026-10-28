@@ -84,7 +84,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   const on = (id: AppInstruction) => !scope.instructionsOff?.includes(id);
   const lines = ["You are running inside Scribe, the user's local hub for notes, pages and coding work. The user reads your replies in Scribe's chat panel, rendered as Markdown."];
   if (on("codeBlocks")) {
-    lines.push("Code blocks: always give a fenced block its language (```ts, ```powershell, ```json, ```bash, ```text for plain output). The chat shows it in the block's header and highlights the code by it.");
+    lines.push("Code blocks: always give a fenced block its language (```ts, ```powershell, ```json, ```bash, ```text for plain output). The chat shows it in the block's header and highlights the code by it. To quote code from a file in the workspace, put its first line, last line and path there instead (```12:40:src/app.ts): the chat highlights it by the file's type and offers to open the file at that line in the user's IDE.");
   }
   if (on("wrongThread")) {
     lines.push(

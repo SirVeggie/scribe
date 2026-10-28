@@ -28,7 +28,7 @@ import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
 import { checkSdkUpdates } from "./sdkUpdates.js";
 import { cardContext } from "./cardContext.js";
-import { DEFAULT_INTELLIJ, intellijSettings, intellijLauncher, intellijDiffArgs, intellijExportDiff, intellijFileArgs, launchIntelliJ } from "./intellij.js";
+import { DEFAULT_INTELLIJ, intellijSettings, intellijLauncher, intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProjectFiles, launchIntelliJ } from "./intellij.js";
 
 type AiPassage = { id: string; digest: string; kind: string; anchor: string | null; headingId: string | null; label: string };
 
@@ -99,6 +99,7 @@ export function agentRouter(host: AgentHost): express.Router {
         });
     };
 
+  const pageWorkspace = (id: string) => (store.get(id) ?? store.getDraft(id))?.workspace || null;
   router.get("/integrations", wrap(() => ({ intellij: intellijSettings(host.db.getSetting("integration.intellij", DEFAULT_INTELLIJ)) })));
   router.put("/integrations", wrap((req) => {
     const settings = intellijSettings(req.body?.intellij);
@@ -133,7 +134,15 @@ export function agentRouter(host: AgentHost): express.Router {
     let from = typeof body.from === "string" ? body.from : "";
     let to = typeof body.to === "string" ? body.to : "";
     let versions: { before: Buffer; after: Buffer } | null = null;
-    if (typeof body.threadId === "string" && !repo) {
+    if (typeof body.pageId === "string" && !repo) {
+      // A code reference on a page: its path is relative to the page's workspace.
+      repo = pageWorkspace(body.pageId);
+      if (!repo) throw new Error("This page has no workspace to open the file from.");
+    } else if (typeof body.threadId === "string" && !repo && body.workspace === true) {
+      // A code reference in a chat: its path is relative to the thread's workspace.
+      repo = host.getThread(body.threadId)?.cwd || null;
+      if (!repo) throw new Error("This chat has no workspace to open the file from.");
+    } else if (typeof body.threadId === "string" && !repo) {
       const thread = host.getThread(body.threadId);
       if (!thread) throw new Error("Thread not found.");
       const turnId = typeof body.turnId === "string" ? body.turnId : undefined;
@@ -151,6 +160,25 @@ export function agentRouter(host: AgentHost): express.Router {
       : await intellijFileArgs(repo, body.path, body.line, body.column);
     await launchIntelliJ(launcher, args);
     return { ok: true };
+  }));
+
+  /** Which of a diff's or a chat's files are in an IntelliJ project, so only those offer IntelliJ actions. */
+  router.post("/integrations/intellij/projects", wrap(async (req) => {
+    const body = isPlainRecord(req.body) ? req.body : {};
+    const paths = Array.isArray(body.paths) ? body.paths.filter((p): p is string => typeof p === "string" && !!p).slice(0, 500) : [];
+    const settings = intellijSettings(host.db.getSetting("integration.intellij", DEFAULT_INTELLIJ));
+    if (!settings.enabled || !paths.length) return { files: Object.fromEntries(paths.map(p => [p, false])) };
+    let root: string | null = null;
+    if (typeof body.svn === "string" && body.svn) root = findSvnRoot(body.svn) ? body.svn : null;
+    else if (typeof body.repo === "string" && body.repo) root = await findRepo(body.repo);
+    else if (typeof body.pageId === "string") root = pageWorkspace(body.pageId);
+    else if (typeof body.threadId === "string") {
+      const thread = host.getThread(body.threadId);
+      if (!thread) throw new Error("Thread not found.");
+      const turnId = typeof body.turnId === "string" ? body.turnId : undefined;
+      root = body.workspace === true ? thread.cwd || null : (await host.changes(thread.id, turnId)).repo || thread.cwd || null;
+    }
+    return { files: root ? await intellijProjectFiles(root, paths) : Object.fromEntries(paths.map(p => [p, false])) };
   }));
 
   router.get(

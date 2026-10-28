@@ -5148,6 +5148,20 @@
   }
 
   /** scribe.setTitle in a page: rename that page (the one the message came from) and tell it the title it got. */
+  /** A page's code block asks whether its file can open in the IDE, or opens it (scribe.ide). */
+  async function onPageIde(event) {
+    const data = event.data;
+    const reply = (result) => event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
+    const id = frameIdByWindow(event.source);
+    const file = typeof data.file === "string" ? data.file : "";
+    if (!id || !file || !window.scribeIntegrations?.pageFile) {
+      reply({ ok: false, error: id ? "unavailable" : "unknown_page" });
+      return;
+    }
+    const op = data.op === "open" ? "open" : "check";
+    reply(await window.scribeIntegrations.pageFile(id, op, file, Number(data.line) || 1));
+  }
+
   async function onPageTitle(event) {
     const data = event.data;
     const reply = (result) => {
@@ -6094,6 +6108,8 @@
       void onPageBrowser(event);
     } else if (event.data?.type === "scribe-file") {
       void onPageFile(event);
+    } else if (event.data?.type === "scribe-ide") {
+      void onPageIde(event);
     } else if (event.data?.type === "scribe-title") {
       onPageTitle(event);
     } else if (event.data?.type === "scribe-preview") {

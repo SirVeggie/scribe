@@ -25,7 +25,67 @@
     toggle.setAttribute("aria-checked", String(settings.enabled));
     launcher.value = settings.launcher;
     section.querySelector("#intellij-launcher-row").hidden = !settings.enabled;
-    document.querySelectorAll("[data-intellij-actions]").forEach(node => { node.hidden = !settings.enabled; });
+    checks.clear();
+    document.querySelectorAll("[data-intellij-actions]").forEach(node => { if (node.intellijGate) node.intellijGate(); else node.hidden = !settings.enabled; });
+  }
+
+  /** Whether a file is in an IntelliJ project (an .idea folder above it), asked in batches per source. */
+  const checks = new Map();
+  const batches = new Map();
+  function inProject(source, file) {
+    const sourceKey = JSON.stringify(source);
+    const key = `${sourceKey}
+${file}`;
+    if (!checks.has(key)) {
+      if (checks.size > 2000) checks.clear();
+      checks.set(key, new Promise(resolve => {
+        let batch = batches.get(sourceKey);
+        if (!batch) {
+          batch = { source, waits: new Map() };
+          batches.set(sourceKey, batch);
+          setTimeout(() => flush(sourceKey), 30);
+        }
+        if (!batch.waits.has(file)) batch.waits.set(file, []);
+        batch.waits.get(file).push(resolve);
+      }));
+    }
+    return checks.get(key);
+  }
+  async function flush(sourceKey) {
+    const batch = batches.get(sourceKey);
+    batches.delete(sourceKey);
+    let files = {};
+    try { files = (await request("POST", "/intellij/projects", { ...batch.source, paths: [...batch.waits.keys()] })).files || {}; }
+    catch { for (const file of batch.waits.keys()) checks.delete(`${sourceKey}
+${file}`); }
+    for (const [file, waits] of batch.waits) for (const resolve of waits) resolve(files[file] === true);
+  }
+
+  /**
+   * Shows IntelliJ actions only while the integration is on and the file is in an IntelliJ project.
+   * source may be a function: a chat's code block learns its thread once it is in the feed.
+   */
+  function gate(actions, source, file) {
+    actions.dataset.intellijActions = "";
+    actions.hidden = true;
+    let tries = 0;
+    actions.intellijGate = () => {
+      if (!settings.enabled) { actions.hidden = true; return; }
+      const from = typeof source === "function" ? source() : source;
+      if (!from) {
+        if (tries++ < 20) requestAnimationFrame(actions.intellijGate);
+        return;
+      }
+      inProject(from, file).then(ok => { actions.hidden = !(ok && settings.enabled); });
+    };
+    ready.then(actions.intellijGate);
+  }
+
+  async function open(button, body, notify) {
+    button.disabled = true;
+    try { await request("POST", "/intellij/open", body); }
+    catch (err) { notify(err.message); }
+    finally { button.disabled = false; }
   }
   async function refresh() {
     try { render(await request("GET")); report(null); } catch (err) { report(err); }
@@ -45,9 +105,7 @@
   function decorateDiff(head, diff, source, file, notify) {
     const actions = document.createElement("span");
     actions.className = "ag-intellij-actions";
-    actions.dataset.intellijActions = "";
-    actions.hidden = !settings.enabled;
-    ready.then(() => { actions.hidden = !settings.enabled; });
+    gate(actions, source, file.path);
     const first = file.lines?.find(line => line.newNo && line.kind === "add") || file.lines?.find(line => line.newNo);
     let line = first?.newNo || 1, column = 1;
     diff?.addEventListener("mouseup", event => {
@@ -71,16 +129,42 @@
       button.type = "button";
       button.className = "ag-btn tiny";
       button.textContent = label;
-      button.addEventListener("click", async event => {
+      button.addEventListener("click", event => {
         event.stopPropagation();
-        button.disabled = true;
-        try { await request("POST", "/intellij/open", { ...source, path: file.path, mode, line, column }); }
-        catch (err) { notify(err.message); }
-        finally { button.disabled = false; }
+        open(button, { ...source, path: file.path, mode, line, column }, notify);
       });
       actions.append(button);
     }
     head.append(actions);
   }
-  window.scribeIntegrations = { sections: [section], refresh, decorateDiff };
+
+  /** A code reference in a chat (```12:40:src/app.ts): open the file at its first line. */
+  function decorateRef(head, source, ref, notify) {
+    const actions = document.createElement("span");
+    actions.className = "ag-intellij-actions ag-code-open";
+    gate(actions, source, ref.file);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ag-copy";
+    button.textContent = "Open in IntelliJ";
+    button.addEventListener("click", event => {
+      event.stopPropagation();
+      const from = typeof source === "function" ? source() : source;
+      if (from) open(button, { ...from, path: ref.file, mode: "file", line: ref.line, column: 1 }, notify);
+    });
+    actions.append(button);
+    head.insertBefore(actions, head.querySelector(".ag-copy"));
+  }
+
+  /** For pages: whether a file in the page's workspace can open in IntelliJ, and opening it. */
+  async function pageFile(pageId, op, file, line) {
+    await ready;
+    if (!settings.enabled) return { ok: false, error: "disabled" };
+    if (op === "check") return { ok: true, project: await inProject({ pageId }, file) };
+    try {
+      await request("POST", "/intellij/open", { pageId, path: file, mode: "file", line, column: 1 });
+      return { ok: true };
+    } catch (err) { return { ok: false, error: err.message }; }
+  }
+  window.scribeIntegrations = { sections: [section], refresh, decorateDiff, decorateRef, pageFile };
 })();

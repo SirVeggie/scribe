@@ -101,8 +101,8 @@
     },
     {
       "id": "code",
-      "write": "<s-code language? file? diff?>",
-      "gives": "A code block with a Copy button, highlighted when language is set, with + and - lines marked when diff is set. Escape < and & in the code, or put it in a <script type=\"text/plain\"> child.",
+      "write": "<s-code language? file? line? diff?>",
+      "gives": "A code block with a Copy button, highlighted when language is set, with + and - lines marked when diff is set. With file (relative to the page's workspace), it offers Open in IntelliJ when that file is in an IntelliJ project, at line or a diff's first new line. Escape < and & in the code, or put it in a <script type=\"text/plain\"> child.",
       "example": "<s-code language=\"ts\" file=\"src/a.ts\">const total = items.length;</s-code>",
       "hooks": [
         {
@@ -291,6 +291,10 @@
     {
       "class": "kit-code-head",
       "why": "Header <s-code> renders: file or language, and Copy."
+    },
+    {
+      "class": "kit-code-open",
+      "why": "Open in IntelliJ button <s-code file> adds when the file is in an IntelliJ project."
     },
     {
       "class": "kit-add",

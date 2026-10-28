@@ -225,7 +225,7 @@ The kit is not a way to save tokens: a page's HTML is a small share of a chat's 
 | ` button[data-reply][data-context] ` | Sends the summary (button text when empty) and an optional JSON answers object through the host's scribe.reply. | ` <button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button> ` |
 | ` <s-mock label> / <s-mock-row label hint?> / <s-switch on?> ` | A window frame for a UI mock-up, setting rows with the control on the right, and a drawn switch. | ` <s-mock label="Settings"><s-mock-row label="Sync" hint="Every 5 minutes"><s-switch on></s-switch></s-mock-row></s-mock> ` |
 | ` [data-new] ` | A dashed outline marking a new or changed part of a mock-up. | ` <s-mock-row label="Theme" data-new><select><option>Dark</option></select></s-mock-row> ` |
-| ` <s-code language? file? diff?> ` | A code block with a Copy button, highlighted when language is set, with + and - lines marked when diff is set. Escape < and & in the code, or put it in a <script type="text/plain"> child. | ` <s-code language="ts" file="src/a.ts">const total = items.length;</s-code> ` |
+| ` <s-code language? file? line? diff?> ` | A code block with a Copy button, highlighted when language is set, with + and - lines marked when diff is set. With file (relative to the page's workspace), it offers Open in IntelliJ when that file is in an IntelliJ project, at line or a diff's first new line. Escape < and & in the code, or put it in a <script type="text/plain"> child. | ` <s-code language="ts" file="src/a.ts">const total = items.length;</s-code> ` |
 | ` <scribe-component plugin="…" name="…" props='{}'></scribe-component> ` | Embeds a plugin_guide component in an isolated frame on a page; props follow its schema, calls and live state/events use the page's plugin permission, and replies use the page's replyTo or a reply event. | ` <scribe-component plugin="git-history" name="activity" props='{}'></scribe-component> ` |
 | ` .lead / .small ` | A muted intro line under the title, or smaller text. | ` <p class="lead">What we found</p><p class="small">Details</p> ` |
 | ` .grid; --min ` | Responsive columns; --min sets the minimum column width (240px by default). | ` <div class="grid" style="--min:320px"><section>Findings</section><section>Risks</section></div> ` |
@@ -424,6 +424,7 @@ scribe.id                         // this page's tab id (t_…)
 scribe.revision                   // the state revision this page has seen
 scribe.template                   // { id, values, revision, compatible } on a template page, else null
 scribe.file                       // a file page's own file: read(), image(), save(text, opts), saveAs(text, opts); Scribe's file viewer uses it
+scribe.ide                        // a file in the page's workspace in the user's IDE: check(file) → { project }, open(file, { line }) on a click; <s-code file line> uses it
 scribe.title                      // this page's title (its tab and Library name)
 scribe.setTitle("Trip plan")      // rename the page, e.g. from a heading the user edits in place; resolves with the new title
 scribe.onTitle((title) => …)      // the title changed (setTitle here, or a rename in the tab strip or Library)
