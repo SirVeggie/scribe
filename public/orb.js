@@ -376,6 +376,8 @@ gl_FragColor=c;
   function openSettings() {
     if (document.querySelector(".orb-settings")) return;
     let draft = read(), provider = "claude", previewFx;
+    const initial = JSON.stringify(draft);
+    const hasChanges = () => JSON.stringify(draft) !== initial;
     const dialog = document.createElement("dialog");
     dialog.className = "orb-settings";
     dialog.setAttribute("aria-labelledby", "orb-settings-title");
@@ -519,7 +521,8 @@ gl_FragColor=c;
     }, "primary");
     dialog.append(actions);
     dialog.addEventListener("close", () => { previewFx?.destroy(); dialog.remove(); }, { once: true });
-    dialog.addEventListener("click", e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
+    dialog.addEventListener("cancel", e => { if (hasChanges()) e.preventDefault(); });
+    dialog.addEventListener("click", e => { if (e.target === dialog && !hasChanges()) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
     document.body.append(dialog); dialog.showModal();
     previewFx = create(orb, preview, provider, draft[provider]); paint();
     // Start on the provider choice, not the ? button (focus would pop its tooltip).

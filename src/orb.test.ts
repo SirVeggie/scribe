@@ -4,6 +4,61 @@ import { test } from "node:test";
 import { chromium, type Locator } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 
+test("appearance dismiss preserves unsaved changes until Cancel or Save", async (t) => {
+  let browser;
+  try {
+    browser = process.env.SCRIBE_TEST_CHROMIUM
+      ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
+      : await launchChromium({ headless: true, args: [], purpose: "Appearance dismiss test" });
+  } catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    await page.route("http://orb.local/**", route => route.fulfill({ contentType: "text/html", body: '<button id="dock-appearance">Customize</button>' }));
+    await page.goto("http://orb.local/");
+    for (const name of ["app.css", "agent.css", "orb.css"]) await page.addStyleTag({ content: fs.readFileSync(new URL("../public/" + name, import.meta.url), "utf8") });
+    for (const name of ["select.js", "orb.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL("../public/" + name, import.meta.url), "utf8") });
+    const open = () => page.getByRole("button", { name: "Customize", exact: true }).click();
+    const dialog = page.locator("dialog.orb-settings");
+    const outside = () => page.mouse.click(1, 1);
+    await open();
+    await page.getByRole("button", { name: "Codex", exact: true }).click();
+    await page.getByRole("switch", { name: "Preview while working" }).click();
+    await outside();
+    await dialog.waitFor({ state: "detached" }); // Preview controls do not edit saved appearance.
+
+    await open();
+    const size = page.getByRole("slider", { name: "Icon size" });
+    await size.focus();
+    await size.press("ArrowRight");
+    await page.getByRole("button", { name: "Codex", exact: true }).click();
+    await outside();
+    assert.equal(await dialog.isVisible(), true, "changes on another provider remain protected");
+    await page.keyboard.press("Escape");
+    assert.equal(await dialog.isVisible(), true);
+    await page.getByRole("button", { name: "Claude", exact: true }).click();
+    await size.focus();
+    await size.press("ArrowLeft");
+    await outside();
+    await dialog.waitFor({ state: "detached" }); // Reverting all edits allows dismissal again.
+
+    await open();
+    await size.focus();
+    await size.press("ArrowRight");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => localStorage.getItem("scribe.dock-appearance.v1")), null);
+    await open();
+    await size.focus();
+    await size.press("ArrowRight");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("scribe.dock-appearance.v1")!).claude.iconSize), .75);
+  } finally { await browser.close(); }
+});
+
 test("dock shaders animate while visible, pause when hidden, and save provider appearance", async (t) => {
   let browser;
   try {
