@@ -5925,6 +5925,21 @@ body.resizing-split main.has-split .agent-dock {
   text-align: center;
 }
 
+.ag-diff-toggle {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.ag-diff-toggle > .agi { flex-shrink: 0; }
+.ag-diff-toggle[aria-expanded="true"] > .agi { transform: rotate(90deg); }
+.ag-diff-section-body[hidden] { display: none; }
+
 .ag-intellij-actions { display: inline-flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
 .ag-intellij-actions[hidden] { display: none; }
 .ag-dl-selected { outline: 1px solid var(--accent); outline-offset: -1px; }

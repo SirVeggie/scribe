@@ -2974,9 +2974,27 @@
         return;
       }
       const sections = new Map();
+      const setExpanded = (section, expanded) => {
+        section.querySelector(".ag-diff-section-body").hidden = !expanded;
+        const toggle = section.querySelector(".ag-diff-toggle");
+        toggle.setAttribute("aria-expanded", String(expanded));
+        const label = `${expanded ? "Collapse" : "Expand"} ${section.dataset.path}`;
+        toggle.setAttribute("aria-label", label);
+        toggle.dataset.tooltip = label;
+      };
+      const allCollapsed = () => [...sections.values()].every((section) => section.querySelector(".ag-diff-section-body").hidden);
+      const updateCollapseAll = () => { collapseAll.textContent = allCollapsed() ? "Expand all" : "Collapse all"; };
+      const collapseAll = button("Collapse all", "ag-btn small", () => {
+        const expanded = allCollapsed();
+        for (const section of sections.values()) setExpanded(section, expanded);
+        updateCollapseAll();
+      });
+      actions.append(collapseAll);
       for (const f of files) {
         const row = button("", "ag-diff-filebtn", () => {
           const target = sections.get(f.path);
+          if (target) setExpanded(target, true);
+          updateCollapseAll();
           target?.scrollIntoView({ block: "start" });
           for (const b of side.querySelectorAll(".ag-diff-filebtn")) b.classList.toggle("on", b === row);
         });
@@ -2987,15 +3005,23 @@
       for (const f of files) {
         const pf = parsed.find((p) => p.path === f.path) || parsed.find((p) => p.path.endsWith(f.path));
         const section = el("section", "ag-diff-section");
+        section.dataset.path = f.path;
         const sh = el("div", "ag-diff-section-head");
-        sh.append(el("span", `ag-fstat s-${f.status || "M"}`, f.status || "M"), el("span", "ag-fpath", f.oldPath ? `${f.oldPath} → ${f.path}` : f.path), R.counts(f.added, f.removed));
-        section.append(sh);
+        const content = el("div", "ag-diff-section-body");
+        const toggle = button("", "ag-diff-toggle", () => {
+          setExpanded(section, content.hidden);
+          updateCollapseAll();
+        });
+        toggle.append(icon("chevron"), el("span", `ag-fstat s-${f.status || "M"}`, f.status || "M"), el("span", "ag-fpath", f.oldPath ? `${f.oldPath} → ${f.path}` : f.path), R.counts(f.added, f.removed));
+        sh.append(toggle);
+        section.append(sh, content);
+        setExpanded(section, true);
         if (pf) {
           const diff = R.renderDiffFile(pf);
           window.scribeIntegrations?.decorateDiff(sh, diff, intellijSource, { ...pf, path: f.path }, notice);
-          section.append(diff);
+          content.append(diff);
         }
-        else section.append(el("div", "ag-muted ag-pad", f.binary ? "Binary file" : "No text diff"));
+        else content.append(el("div", "ag-muted ag-pad", f.binary ? "Binary file" : "No text diff"));
         if (!pf) window.scribeIntegrations?.decorateDiff(sh, null, intellijSource, f, notice);
         sections.set(f.path, section);
         main.append(section);
