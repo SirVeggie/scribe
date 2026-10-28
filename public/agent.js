@@ -8652,6 +8652,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         this.scopeBtn,
         el("span", "dock-top-sep"),
         button(icon("list"), "ag-icon-btn small dock-toggle", () => this.setExpanded(!S.dockExpanded), "Show conversation (Ctrl+↑)"),
+        button(icon("fullscreen"), "ag-icon-btn small", () => enterFull("dock"), "Full chat"),
         button(icon("expand"), "ag-icon-btn small", () => {
           const id = this.view.threadId;
           if (SOLO) {
