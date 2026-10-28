@@ -1,6 +1,7 @@
 import type { ApprovalPolicy, Item, ProviderId, ScopeKind, Thread, ThreadMode, ThreadUsage, ToolKind, Turn, Usage, WebAccess } from "./types.js";
 import { estimateTokens } from "./harness.js";
 import { sumThreadUsage } from "./usage.js";
+import { threadOrigin } from "./usageHistory.js";
 
 /** The server and tool of an MCP call. Claude names it mcp__server__tool; the others title it "Server: tool". */
 export function mcpCall(item: { name: string; title: string }): { server: string; tool: string } | null {
@@ -125,6 +126,9 @@ export type ThreadStats = {
   forked: boolean;
   /** Every user message came from a page (a board worker's chat). */
   fromPage: boolean;
+  /** The board worker that ran it and the board and card number it worked (usageHistory.ts); no card title. */
+  worker?: string;
+  card?: { board: string; num: number };
   pinned: boolean;
   archived: boolean;
   createdAt: number;
@@ -188,6 +192,7 @@ export function threadStats(thread: Thread, turns: Turn[], items: Item[], worksp
     else if (item.kind === "notice") messages.notices += 1;
   }
   const usage = sumThreadUsage(turns);
+  const origin = threadOrigin(items, thread.scope.kind === "page" ? thread.scope.ref : null);
   return {
     id: thread.id,
     ...(thread.helperOf ? { helperOf: thread.helperOf } : {}),
@@ -203,6 +208,8 @@ export function threadStats(thread: Thread, turns: Turn[], items: Item[], worksp
     worktree: Boolean(thread.worktree),
     forked: Boolean(thread.fork),
     fromPage: messages.sent.count > 0 && messages.user.count === 0,
+    ...(origin.worker ? { worker: origin.worker } : {}),
+    ...(origin.card ? { card: { board: origin.card.board, num: origin.card.num } } : {}),
     pinned: thread.pinned,
     archived: thread.archived,
     createdAt: thread.createdAt,

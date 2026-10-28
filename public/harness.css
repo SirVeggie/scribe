@@ -451,6 +451,44 @@ i.hx-p-pi { background: var(--hx-pi); }
 .hx-chart rect.hx-p-codex { fill: var(--hx-codex); }
 .hx-chart rect.hx-p-pi { fill: var(--hx-pi); }
 
+/* Usage history series (#867): the same palette's slots after the providers' four, then two of them again for Other. */
+.agent-harness {
+  --hx-s1: #3987e5;
+  --hx-s2: #d95926;
+  --hx-s3: #199e70;
+  --hx-s4: #c98500;
+  --hx-s5: #d55181;
+  --hx-s6: #9085e9;
+  --hx-s7: #e66767;
+}
+
+html[data-theme="cream"] .agent-harness {
+  --hx-s1: #2a78d6;
+  --hx-s2: #eb6834;
+  --hx-s3: #1baf7a;
+  --hx-s4: #eda100;
+  --hx-s5: #e87ba4;
+  --hx-s6: #6250d6;
+  --hx-s7: #e34948;
+}
+
+i.hx-s1 { background: var(--hx-s1); }
+i.hx-s2 { background: var(--hx-s2); }
+i.hx-s3 { background: var(--hx-s3); }
+i.hx-s4 { background: var(--hx-s4); }
+i.hx-s5 { background: var(--hx-s5); }
+i.hx-s6 { background: var(--hx-s6); }
+i.hx-s7 { background: var(--hx-s7); }
+i.hx-s-other { background: var(--muted); }
+.hx-chart rect.hx-s1 { fill: var(--hx-s1); }
+.hx-chart rect.hx-s2 { fill: var(--hx-s2); }
+.hx-chart rect.hx-s3 { fill: var(--hx-s3); }
+.hx-chart rect.hx-s4 { fill: var(--hx-s4); }
+.hx-chart rect.hx-s5 { fill: var(--hx-s5); }
+.hx-chart rect.hx-s6 { fill: var(--hx-s6); }
+.hx-chart rect.hx-s7 { fill: var(--hx-s7); }
+.hx-chart rect.hx-s-other { fill: var(--muted); opacity: 0.6; }
+
 .hx-chart .hx-hit {
   fill: transparent;
 }

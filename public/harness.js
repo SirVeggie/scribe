@@ -27,14 +27,18 @@
     { id: "hooks", label: "Hooks" },
     { id: "memories", label: "Memories" },
     { id: "threads", label: "Heaviest threads" },
+    { id: "usage", label: "Usage history" },
   ];
-  const LS = { days: "scribe.harness.days", section: "scribe.harness.section", pick: "scribe.harness.pick" };
+  const LS = { days: "scribe.harness.days", section: "scribe.harness.section", pick: "scribe.harness.pick", usage: "scribe.harness.usage" };
 
   const S = {
     section: localStorage.getItem(LS.section) || "overview",
     days: Number(localStorage.getItem(LS.days) ?? 30),
     pick: { provider: "claude", mode: "code", cwd: null },
     stats: null,
+    /** Usage history (#867) and how it is drawn. */
+    usage: null,
+    usageView: { group: "day", split: "provider", metric: "costUsd" },
     context: null,
     skills: null,
     skillFolders: [],
@@ -56,6 +60,7 @@
   };
   try {
     Object.assign(S.pick, JSON.parse(localStorage.getItem(LS.pick) || "{}"));
+    Object.assign(S.usageView, JSON.parse(localStorage.getItem(LS.usage) || "{}"));
   } catch {
     /* keep the defaults */
   }
@@ -1242,6 +1247,280 @@
     return [node];
   }
 
+  /* ---------- usage history (#867) ---------- */
+
+  const USAGE_GROUPS = [{ id: "day", label: "Day" }, { id: "week", label: "Week" }];
+  const USAGE_SPLITS = [{ id: "provider", label: "Provider" }, { id: "model", label: "Model" }, { id: "worker", label: "Worker" }, { id: "workspace", label: "Workspace" }];
+  const USAGE_METRICS = [{ id: "costUsd", label: "Cost" }, { id: "prompt", label: "Sent" }, { id: "output", label: "Written" }];
+  /** Series colors past the providers' own (harness.css); a split with more keys folds the rest into Other. */
+  const SERIES = 7;
+
+  const usageKey = (row, split) => (split === "provider" ? row.provider : split === "model" ? row.model || "(unknown)" : split === "worker" ? row.worker || "(no worker)" : row.workspace || "(no workspace)");
+  const usageLabel = (key, split) => (split === "provider" ? PROVIDER_LABEL[key] || key : split === "workspace" && key !== "(no workspace)" ? key.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || key : key);
+
+  /** The Monday a day falls in, as YYYY-MM-DD. */
+  function weekOf(day) {
+    const [y, m, d] = day.split("-").map(Number);
+    const at = new Date(y, m - 1, d);
+    at.setDate(d - ((at.getDay() + 6) % 7));
+    return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+  }
+
+  const blankUsage = () => ({ turns: 0, prompt: 0, fresh: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0, costUsd: 0, estimatedCostUsd: 0, reportedCostUsd: 0, unpricedTurns: 0, helperTurns: 0 });
+  function addInto(into, row) {
+    for (const key of Object.keys(into)) if (typeof row[key] === "number") into[key] += row[key];
+    return into;
+  }
+
+  /** "+" marks a sum that leaves out turns without a cost. */
+  function usageCost(u) {
+    if (u.unpricedTurns >= u.turns) return "Unknown";
+    return costText(u.costUsd) + (u.unpricedTurns ? "+" : "");
+  }
+
+  function renderUsage() {
+    const usage = S.usage;
+    if (!usage) return [empty("Loading…")];
+    if (!usage.rows.length) return [empty(`No turns in ${rangeText()}.`)];
+    const { group, split, metric } = S.usageView;
+    const setView = (patch) => {
+      Object.assign(S.usageView, patch);
+      localStorage.setItem(LS.usage, JSON.stringify(S.usageView));
+      render();
+    };
+    const out = [];
+
+    const total = usage.rows.reduce(addInto, blankUsage());
+    out.push(
+      tiles([
+        [
+          "Cost",
+          usageCost(total),
+          `${costText(total.reportedCostUsd)} reported · ${costText(total.estimatedCostUsd)} estimated`,
+          total.unpricedTurns ? `${count(total.unpricedTurns)} ${total.unpricedTurns === 1 ? "turn has" : "turns have"} no cost and are left out` : null,
+        ],
+        ["Sent", tokens(total.prompt), `${count(total.turns)} turns`],
+        ["Uncached input", tokens(total.fresh)],
+        ["Cache read", tokens(total.cacheRead), pct(total.cacheRead, total.prompt)],
+        ["Cache write", tokens(total.cacheWrite)],
+        ["Written", tokens(total.output), total.reasoning ? `${tokens(total.reasoning)} reasoning` : ""],
+      ])
+    );
+
+    // Periods, and the split's keys ranked over the whole range so a key keeps its color between periods.
+    const periodOf = (day) => (group === "week" ? weekOf(day) : day);
+    const periods = new Map();
+    const keys = new Map();
+    for (const row of usage.rows) {
+      const period = periodOf(row.day);
+      const key = usageKey(row, split);
+      let p = periods.get(period);
+      if (!p) periods.set(period, (p = { period, total: blankUsage(), parts: new Map(), plan: new Map() }));
+      addInto(p.total, row);
+      p.parts.set(key, addInto(p.parts.get(key) || blankUsage(), row));
+      keys.set(key, addInto(keys.get(key) || blankUsage(), row));
+    }
+    for (const entry of usage.plan) {
+      const p = periods.get(periodOf(entry.day));
+      if (p) p.plan.set(entry.label, (p.plan.get(entry.label) || 0) + entry.used);
+    }
+    const ranked = [...keys].sort((a, b) => b[1][metric] - a[1][metric] || b[1].prompt - a[1].prompt);
+    const named = ranked.slice(0, ranked.length > SERIES ? SERIES - 1 : SERIES).map(([key]) => key);
+    const colorOf = (key) => (split === "provider" ? `hx-p-${key}` : named.includes(key) ? `hx-s${named.indexOf(key) + 1}` : "hx-s-other");
+
+    const bar = el("div", "hx-pickers");
+    bar.append(
+      track(USAGE_GROUPS, group, (id) => setView({ group: id }), "Group by"),
+      track(USAGE_SPLITS, split, (id) => setView({ split: id }), "Split by"),
+      track(USAGE_METRICS, metric, (id) => setView({ metric: id }), "Show"),
+      button("Export CSV", "hx-btn", () => {
+        const link = el("a");
+        link.href = `/api/agent/harness/usage.csv${S.days ? `?days=${S.days}` : ""}`;
+        link.download = "";
+        document.body.append(link);
+        link.click();
+        link.remove();
+      })
+    );
+    out.push(bar);
+
+    const list = [...periods.values()].sort((a, b) => a.period.localeCompare(b.period));
+    const legend = [];
+    for (const [key] of ranked) {
+      const cls = colorOf(key);
+      if (!legend.some((item) => item.cls === cls)) legend.push({ cls, label: cls === "hx-s-other" ? "Other" : usageLabel(key, split) });
+    }
+    const chart = card(`${metric === "costUsd" ? "Cost" : metric === "prompt" ? "Tokens sent" : "Tokens written"} by ${group}`);
+    chart.append(
+      stackChart(
+        list.map((p) => ({
+          label: p.period,
+          total: p.total[metric],
+          parts: ranked.map(([key]) => ({ key, cls: colorOf(key), value: p.parts.get(key)?.[metric] || 0 })).filter((part) => part.value > 0),
+          tip: `${group === "week" ? `Week of ${p.period}` : p.period} · ${count(p.total.turns)} turns\nCost ${usageCost(p.total)} · Sent ${tokens(p.total.prompt)} · Written ${tokens(p.total.output)}`,
+        })),
+        { format: metric === "costUsd" ? costText : tokens, legend, name: `${USAGE_METRICS.find((m) => m.id === metric).label} by ${group} and ${split}`, partLabel: (key) => usageLabel(key, split) }
+      )
+    );
+    out.push(chart);
+
+    const planLabels = [...new Set(usage.plan.map((entry) => entry.label))];
+    const periodCard = card(`By ${group}`, planLabels.length ? "Plan columns add up how much of each Claude plan window the turns used." : null);
+    periodCard.append(
+      table(
+        [
+          { label: group === "week" ? "Week of" : "Day", get: (r) => r.period },
+          { label: "Turns", num: true, get: (r) => count(r.total.turns) },
+          { label: "Uncached", num: true, get: (r) => tokens(r.total.fresh) },
+          { label: "Cache read", num: true, get: (r) => tokens(r.total.cacheRead) },
+          { label: "Cache write", num: true, get: (r) => tokens(r.total.cacheWrite) },
+          { label: "Written", num: true, get: (r) => tokens(r.total.output) },
+          { label: "Reasoning", num: true, get: (r) => tokens(r.total.reasoning) },
+          { label: "Reported", num: true, get: (r) => costText(r.total.reportedCostUsd) },
+          { label: "Estimated", num: true, get: (r) => costText(r.total.estimatedCostUsd) },
+          { label: "Cost", num: true, get: (r) => usageCost(r.total) },
+          ...planLabels.map((label) => ({ label, num: true, get: (r) => (r.plan.has(label) ? `${Math.round(r.plan.get(label) * 100)}%` : "–") })),
+        ],
+        [...list].reverse()
+      )
+    );
+    out.push(periodCard);
+
+    const splitName = USAGE_SPLITS.find((s) => s.id === split).label;
+    const splitCard = card(`By ${splitName.toLowerCase()}`, split === "worker" ? "Helper chats count under the worker whose chat started them." : null);
+    splitCard.append(
+      table(
+        [
+          {
+            label: splitName,
+            get: ([key]) => {
+              if (split === "provider") return providerChip(key);
+              const node = el("span", "hx-provider");
+              node.append(el("i", `hx-dot ${colorOf(key)}`), document.createTextNode(usageLabel(key, split)));
+              if (split === "workspace" && key !== "(no workspace)") node.dataset.tooltip = key;
+              return node;
+            },
+          },
+          { label: "Turns", num: true, get: ([, u]) => count(u.turns) },
+          { label: "Helper turns", num: true, get: ([, u]) => count(u.helperTurns) },
+          { label: "Sent", num: true, get: ([, u]) => tokens(u.prompt) },
+          { label: "Cached", num: true, get: ([, u]) => pct(u.cacheRead, u.prompt) },
+          { label: "Written", num: true, get: ([, u]) => tokens(u.output) },
+          { label: "Reported", num: true, get: ([, u]) => costText(u.reportedCostUsd) },
+          { label: "Estimated", num: true, get: ([, u]) => costText(u.estimatedCostUsd) },
+          { label: "Cost", num: true, get: ([, u]) => usageCost(u) },
+        ],
+        ranked
+      )
+    );
+    out.push(splitCard);
+
+    const cardName = (c) => `#${c.num}${c.title ? ` ${c.title}` : ""}`;
+    const cardsCard = card("Cards that cost the most", "Every chat that worked a card, its helpers included.");
+    cardsCard.append(
+      usage.cards.length
+        ? table(
+            [
+              { label: "Card", get: (r) => cardName(r) },
+              { label: "Board", get: (r) => r.boardTitle || "–" },
+              { label: "Workers", get: (r) => r.workers.join(", ") || "–" },
+              { label: "Chats", num: true, get: (r) => count(r.threads) },
+              { label: "Turns", num: true, get: (r) => count(r.turns) },
+              { label: "Sent", num: true, get: (r) => tokens(r.prompt) },
+              { label: "Written", num: true, get: (r) => tokens(r.output) },
+              { label: "Cost", num: true, get: (r) => usageCost(r) },
+            ],
+            usage.cards
+          )
+        : empty("No board chats in this range.")
+    );
+    out.push(cardsCard);
+
+    const threadsCard = card("Threads that cost the most", "Helper chats count in the thread that started them.");
+    threadsCard.append(
+      table(
+        [
+          { label: "Thread", get: (r) => r.title ?? "(deleted)" },
+          { label: "Provider", get: (r) => providerChip(r.provider) },
+          { label: "Worker", get: (r) => r.worker || "–" },
+          { label: "Card", get: (r) => (r.card ? cardName(r.card) : "–") },
+          { label: "Helpers", num: true, get: (r) => count(r.helpers) },
+          { label: "Turns", num: true, get: (r) => count(r.turns) },
+          { label: "Sent", num: true, get: (r) => tokens(r.prompt) },
+          { label: "Written", num: true, get: (r) => tokens(r.output) },
+          { label: "Cost", num: true, get: (r) => usageCost(r) },
+        ],
+        usage.threads,
+        {
+          onRow: (row) => {
+            if (row.title === undefined) return;
+            harness.close();
+            window.scribeChat?.openThread?.(row.id);
+          },
+        }
+      )
+    );
+    out.push(threadsCard);
+    return out;
+  }
+
+  /** Stacked columns, one per period: [{ label, total, parts: [{ key, cls, value }], tip }], with a hover tooltip each. */
+  function stackChart(columns, { format, legend, name, partLabel }) {
+    const wrap = el("div", "hx-chart");
+    const shown = columns.slice(-90);
+    const max = Math.max(1e-9, ...shown.map((c) => c.total));
+    const W = 960;
+    const H = 180;
+    const slot = W / Math.max(shown.length, 14);
+    const width = Math.max(3, Math.min(34, slot - 2));
+    const make = (tag, attrs) => {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+      return node;
+    };
+    const svg = make("svg", { viewBox: `0 0 ${W} ${H + 22}`, role: "img", "aria-label": name });
+    for (const share of [0.5, 1]) {
+      const y = H - H * share;
+      svg.append(make("line", { x1: 0, x2: W, y1: y + 0.5, y2: y + 0.5, class: "hx-grid" }));
+      const label = make("text", { x: W, y: y + 12, class: "hx-axis", "text-anchor": "end" });
+      label.textContent = format(max * share);
+      svg.append(label);
+    }
+    svg.append(make("line", { x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5, class: "hx-base" }));
+    shown.forEach((column, index) => {
+      const x = index * slot + (slot - width) / 2;
+      let y = H;
+      const group = make("g", { class: "hx-day" });
+      const lines = [];
+      for (const part of column.parts) {
+        const h = Math.max(1, (part.value / max) * H);
+        y -= h;
+        // A 2px gap of surface between stacked segments.
+        group.append(make("rect", { x, y, width, height: Math.max(1, h - 2), rx: 2, class: part.cls }));
+        lines.push(`${partLabel(part.key)} ${format(part.value)}`);
+      }
+      const hit = make("rect", { x: index * slot, y: 0, width: slot, height: H, class: "hx-hit" });
+      const more = lines.length > 10 ? `\n+${lines.length - 10} more` : "";
+      hit.dataset.tooltip = `${column.tip}${lines.length ? `\n${lines.slice(0, 10).join("\n")}${more}` : ""}`;
+      hit.setAttribute("aria-description", hit.dataset.tooltip);
+      group.append(hit);
+      svg.append(group);
+      if (index === 0 || index === shown.length - 1 || (shown.length > 8 && index === shown.length >> 1)) {
+        const label = make("text", { x: Math.min(W - 30, Math.max(30, x + width / 2)), y: H + 16, class: "hx-axis", "text-anchor": "middle" });
+        label.textContent = column.label.slice(5);
+        svg.append(label);
+      }
+    });
+    const keyRow = el("div", "hx-legend");
+    for (const item of legend) {
+      const chip = el("span", "hx-provider");
+      chip.append(el("i", `hx-dot ${item.cls}`), document.createTextNode(item.label));
+      keyRow.append(chip);
+    }
+    wrap.append(keyRow, svg);
+    return wrap;
+  }
+
   /** "2 tools allowed" from a server's per-tool settings (#824), or null. */
   function toolCount(tools, policy, word) {
     const n = Object.values(tools || {}).filter((p) => p === policy).length;
@@ -1267,9 +1546,9 @@
     return [hooksNode];
   }
 
-  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, hooks: renderHooks, memories: renderMemories, threads: renderThreads };
+  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, hooks: renderHooks, memories: renderMemories, threads: renderThreads, usage: renderUsage };
   /** Sections whose numbers depend on the range. */
-  const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills"]);
+  const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills", "usage"]);
 
   /** The user's own modes: presets with a highest rung. The editor is the chat's (agent.js). */
   function renderModes() {
@@ -1355,8 +1634,13 @@
   let statsRequest = 0, contextRequest = 0;
   const loadStats = () => load(async () => {
     const request = ++statsRequest;
-    const stats = await api("GET", `/harness/stats${S.days ? `?days=${S.days}` : ""}`);
-    if (request === statsRequest) S.stats = stats;
+    const range = S.days ? `?days=${S.days}` : "";
+    // The usage history reads every turn again, so only once its section has been opened.
+    const wantUsage = S.section === "usage" || S.usage;
+    const [stats, usage] = await Promise.all([api("GET", `/harness/stats${range}`), wantUsage ? api("GET", `/harness/usage${range}`) : null]);
+    if (request !== statsRequest) return;
+    S.stats = stats;
+    if (usage) S.usage = usage;
   });
 
   const loadContext = () => load(async () => {
@@ -1433,6 +1717,7 @@
         localStorage.setItem(LS.section, section.id);
         body.scrollTop = 0;
         render();
+        if (section.id === "usage" && !S.usage) void loadStats();
       });
       control.dataset.section = section.id;
       nav.append(control);

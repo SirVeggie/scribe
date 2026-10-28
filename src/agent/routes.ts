@@ -383,6 +383,20 @@ export function agentRouter(host: AgentHost): express.Router {
       return host.harnessStats(Number.isFinite(days) && days > 0 ? days : null);
     })
   );
+  const rangeDays = (req: express.Request) => {
+    const days = Number(req.query.days);
+    return Number.isFinite(days) && days > 0 ? days : null;
+  };
+  router.get("/harness/usage", wrap((req) => host.usageHistory(rangeDays(req))));
+  router.get(
+    "/harness/usage.csv",
+    wrap((req, res) => {
+      const days = rangeDays(req);
+      const csv = host.usageCsv(days);
+      res.attachment(`scribe-usage-${days ? `${days}d` : "all"}-${new Date().toISOString().slice(0, 10)}.csv`);
+      res.type("text/csv; charset=utf-8").send(csv);
+    })
+  );
   router.post(
     "/harness/context",
     wrap((req) => {

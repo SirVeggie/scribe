@@ -66,6 +66,7 @@ import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
+import { threadOrigin, usageCsv, usageHistory, type UsageHistory, type UsageSource } from "./usageHistory.js";
 import { turnLatency } from "./latency.js";
 import { boardTools, discoverSkills, estimateTokens, harnessStats, instructionSections, ownContext, probeServer, seedTokens, skillFolders, type HarnessStats, type SkillInfo, type ToolList } from "./harness.js";
 import { findMoved, folderExists, folderId, moveClaudeProject, movePath, type KnownWorkspace } from "./workspaceMove.js";
@@ -1493,6 +1494,46 @@ export class AgentHost {
   harnessStats(days: number | null): HarnessStats {
     const since = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
     return harnessStats([...this.threads.values()], (id) => this.loadTurns(id), (id) => this.loadItems(id), since, this.db.listThreadStats());
+  }
+
+  /** Every stored thread's turns with where they ran, for the usage history (#867); deleted threads' kept numbers included. */
+  private usageSources(): UsageSource[] {
+    return [
+      ...[...this.threads.values()].map((thread): UsageSource => ({
+        id: thread.id,
+        title: thread.title,
+        ...(thread.helperOf ? { helperOf: thread.helperOf } : {}),
+        provider: thread.provider,
+        workspace: this.threadFolder(thread),
+        origin: threadOrigin(this.loadItems(thread.id), thread.scope.kind === "page" ? thread.scope.ref : null),
+        turns: this.loadTurns(thread.id),
+      })),
+      ...this.db.listThreadStats().map((kept): UsageSource => ({
+        id: kept.id,
+        ...(kept.helperOf ? { helperOf: kept.helperOf } : {}),
+        provider: kept.provider,
+        workspace: kept.workspace,
+        origin: { ...(kept.worker ? { worker: kept.worker } : {}), ...(kept.card ? { card: kept.card } : {}) },
+        turns: kept.turns,
+      })),
+    ];
+  }
+
+  /** Tokens and cost over time by provider, model, workspace and worker, and the threads and cards that cost the most. */
+  usageHistory(days: number | null): UsageHistory {
+    const since = days ? Date.now() - days * 24 * 60 * 60 * 1000 : null;
+    const board = (id: string) => store.get(id);
+    const cardOf = (id: string, num: number) => {
+      const cards = board(id)?.state?.cards;
+      const card = Array.isArray(cards) ? cards.find((c) => isPlainRecord(c) && c.num === num) : undefined;
+      return isPlainRecord(card) && typeof card.title === "string" ? card.title : undefined;
+    };
+    return usageHistory(this.usageSources(), since, (id) => board(id)?.title, cardOf);
+  }
+
+  /** The same turns as CSV, one line each. */
+  usageCsv(days: number | null): string {
+    return usageCsv(this.usageSources(), days ? Date.now() - days * 24 * 60 * 60 * 1000 : null);
   }
 
   /** What a new thread with these settings starts with: Scribe's instructions, its tools, the user's MCP servers, and what the provider adds itself. */
