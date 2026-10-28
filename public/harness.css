@@ -624,6 +624,10 @@ body.agent-harness-open .settings {
   .agent-harness button.hx-nav-bottom ~ .hx-nav-link {
     display: none;
   }
+  .agent-harness button.hx-nav-bottom[data-section] {
+    display: flex;
+    margin-top: 0;
+  }
   .hx-bar-head {
     grid-template-columns: minmax(110px, 40%) minmax(0, 1fr) 64px;
   }

@@ -28,6 +28,7 @@
     { id: "memories", label: "Memories" },
     { id: "threads", label: "Heaviest threads" },
     { id: "usage", label: "Usage history" },
+    { id: "sdks", label: "Agent SDKs", bottom: true },
   ];
   const LS = { days: "scribe.harness.days", section: "scribe.harness.section", pick: "scribe.harness.pick", usage: "scribe.harness.usage" };
 
@@ -1546,7 +1547,53 @@
     return [hooksNode];
   }
 
-  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, hooks: renderHooks, memories: renderMemories, threads: renderThreads, usage: renderUsage };
+  const RENDER = { overview: renderOverview, context: renderContext, tools: renderTools, mcp: renderMcp, skills: renderSkills, modes: renderModes, hooks: renderHooks, memories: renderMemories, threads: renderThreads, usage: renderUsage, sdks: renderSdks };
+  let sdkNode, sdkStatus, sdkCheck;
+  function renderSdks() {
+    if (!sdkNode) {
+      sdkNode = card();
+      const heading = el("h3", null, "Agent SDKs ");
+      const hint = "Compares installed agent SDKs with npm's latest releases when you open this section. Results are cached for six hours; Check for updates retries now. To use an update, update Scribe's dependencies and restart Scribe.";
+      const help = button("?", "ag-help", () => { help.blur(); help.focus(); });
+      help.dataset.tooltip = hint;
+      help.setAttribute("aria-label", "About Agent SDKs");
+      help.setAttribute("aria-description", hint);
+      heading.append(help);
+      sdkStatus = el("div", "ag-settings-status");
+      sdkStatus.setAttribute("role", "status");
+      sdkCheck = button("Check for updates", "hx-btn", () => void checkSdkUpdates(true));
+      const actions = el("div", "settings-actions");
+      actions.append(sdkCheck);
+      sdkNode.append(heading, sdkStatus, actions);
+      void checkSdkUpdates();
+    }
+    return [sdkNode];
+  }
+
+  async function checkSdkUpdates(refresh = false) {
+    if (sdkCheck.disabled) return;
+    sdkCheck.disabled = true;
+    sdkStatus.replaceChildren(el("div", "ag-muted", "Checking SDK versions…"));
+    try {
+      const report = await api("GET", `/sdk-updates${refresh ? "?refresh=1" : ""}`);
+      sdkStatus.replaceChildren();
+      for (const sdk of report.sdks) {
+        const row = el("div", "setting-row");
+        const label = el("span");
+        label.append(el("strong", null, sdk.label), el("span", "ag-muted", ` · ${sdk.installed || "Version unknown"}${sdk.latest ? ` · latest ${sdk.latest}` : ""}`));
+        const text = sdk.error || (sdk.outdated ? "Update available" : "Up to date");
+        row.append(label, el("span", sdk.outdated === false ? "ag-tag ok" : "ag-tag", text));
+        sdkStatus.append(row);
+      }
+      sdkStatus.append(el("div", "ag-muted", `Checked ${new Date(report.checkedAt).toLocaleString()}`));
+      if (report.sdks.some((sdk) => sdk.outdated)) sdkStatus.append(el("div", "ag-muted", "Update Scribe’s dependencies, then restart Scribe to use the newer SDKs."));
+    } catch (err) {
+      sdkStatus.replaceChildren(el("div", "ag-muted", `SDK check failed: ${err.message}`));
+    } finally {
+      sdkCheck.disabled = false;
+    }
+  }
+
   /** Sections whose numbers depend on the range. */
   const RANGED = new Set(["overview", "tools", "mcp", "threads", "context", "skills", "usage"]);
 
@@ -1580,7 +1627,7 @@
   function render() {
     if (!root || root.hidden) return;
     const section = SECTIONS.find((s) => s.id === S.section) || SECTIONS[0];
-    for (const control of nav.querySelectorAll("button")) control.setAttribute("aria-pressed", String(control.dataset.section === section.id));
+    for (const control of root.querySelectorAll("button[data-section]")) control.setAttribute("aria-pressed", String(control.dataset.section === section.id));
     heading.textContent = section.label;
     controls.replaceChildren();
     if (RANGED.has(section.id)) {
@@ -1690,6 +1737,7 @@
 
   async function refresh() {
     S.probes.clear();
+    if (S.section === "sdks") void checkSdkUpdates();
     await Promise.all([
       loadStats(),
       load(async () => {
@@ -1711,25 +1759,30 @@
     side.append(el("p", "hx-hint", "What your chats are given, what they do with it, and where you change it."));
     nav = el("nav", "hx-nav");
     nav.setAttribute("aria-label", "Harness sections");
+    let sdkLink;
     for (const section of SECTIONS) {
       const control = button(section.label, "hx-nav-link", () => {
         S.section = section.id;
         localStorage.setItem(LS.section, section.id);
         body.scrollTop = 0;
         render();
+        if (section.id === "sdks") void checkSdkUpdates();
         if (section.id === "usage" && !S.usage) void loadStats();
       });
       control.dataset.section = section.id;
-      nav.append(control);
+      if (section.bottom) {
+        control.classList.add("hx-nav-bottom");
+        sdkLink = control;
+      } else nav.append(control);
     }
     side.append(nav);
     // The providers' own allow, ask and deny rules: their dialog opens over this panel.
-    const rules = button("Allowlists…", "hx-nav-link hx-nav-bottom", () => chat()?.openAllowlists?.());
+    const rules = button("Allowlists…", "hx-nav-link", () => chat()?.openAllowlists?.());
     const settings = button("Agent settings…", "hx-nav-link", () => {
       harness.close();
       chat()?.openSettings?.();
     });
-    side.append(rules, settings);
+    side.append(sdkLink, rules, settings);
     const main = el("div", "hx-main");
     const head = el("header", "hx-head");
     heading = el("h2", "hx-heading");
@@ -1773,7 +1826,7 @@
       render();
       void refresh();
       if (hooksNode) void chat()?.hooks?.render();
-      nav.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+      root.querySelector('button[data-section][aria-pressed="true"]')?.focus({ preventScroll: true });
     },
     close() {
       if (!harness.isOpen()) return false;
