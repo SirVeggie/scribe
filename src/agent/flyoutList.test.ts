@@ -49,3 +49,9 @@ test("archived threads are left out", () => {
   const s = flyoutSections([t("a", { archived: true, status: "running" }), t("b", { archived: true })], { now });
   assert.deepEqual([s.active.length, s.waiting.length, s.recent.length], [0, 0, 0]);
 });
+
+test("an idle thread with an unanswered usage limit card waits instead of sitting in Recent", () => {
+  const s = flyoutSections([t("limit", { limit: true }), t("done")], { now });
+  assert.deepEqual(ids(s.waiting), ["limit"]);
+  assert.deepEqual(ids(s.recent), ["done"]);
+});

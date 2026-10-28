@@ -62,7 +62,7 @@ import { trackPace, withPace, type PaceState } from "./planPace.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, usageLimitResetsAt } from "./planLimits.js";
 import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
 import { isPlainRecord } from "./types.js";
-import { PageRuns, runView, type PageRun, type RunInput } from "./pageRuns.js";
+import { DEFAULT_RESUME_PROMPT, PageRuns, RESUME_DELAY_MS, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
 import { threadStats, type ThreadStats } from "./threadStats.js";
@@ -528,6 +528,8 @@ export class AgentHost {
   /** Chats pages handed over to be seen through: limit waits, resumes, merges (#285). */
   private pageRuns: PageRuns;
   private pageRunTimer: NodeJS.Timeout | null = null;
+  /** User threads queued to go on once their usage limit resets (#78): thread id → its usage_limit item. */
+  private limitResumes = new Map<string, string>();
   /** Last turn that should receive the next plan-usage report for its provider. Survives the run ending. */
   private limitTurn: { provider: ProviderId; threadId: string; turnId: string; before: PlanLimits["windows"] } | null = null;
   /** Detectors beside the user's rules (hooks.ts). Features built on hooks add theirs here. */
@@ -708,7 +710,11 @@ export class AgentHost {
       },
       this.db.getSetting<PageRun[]>("pageRuns", [])
     );
-    this.pageRunTimer = setInterval(() => this.pageRuns.tick(), 30_000);
+    this.limitResumes = new Map(Object.entries(this.db.getSetting<Record<string, string>>("limitResumes", {})));
+    this.pageRunTimer = setInterval(() => {
+      this.pageRuns.tick();
+      this.checkLimitResumes();
+    }, 30_000);
     this.pageRunTimer.unref?.();
     this.scheduleClaudeUsageRefresh();
     if (!this.fakes) {
@@ -1275,7 +1281,7 @@ export class AgentHost {
       running: status !== "idle" || this.resuming.has(id),
       title: thread.title,
       ...(outputAt !== undefined ? { outputAt } : {}),
-      ...(asking ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
+      ...(asking && asking.kind !== "limit" ? { asking: { kind: asking.kind, title: asking.title, ...(asking.page ? { page: { key: asking.page.key, title: asking.page.title } } : {}) } } : {}),
       ...(last ? { lastTurn: { status: last.status, ...(last.endedAt ? { endedAt: last.endedAt } : {}), ...(last.error ? { error: last.error } : {}), ...(last.limitResetsAt ? { limitResetsAt: last.limitResetsAt } : {}), ...(recovery !== undefined ? { usageRecoveryAllowed: recovery } : {}) } } : {}),
       ...(usage ? { usage } : {}),
     };
@@ -2105,6 +2111,7 @@ export class AgentHost {
     if (this.runs.has(threadId)) return undefined;
     const last = [...this.loadItems(threadId)].reverse().find((it) => it.kind !== "notice");
     if (last?.kind === "plan" && last.status === "pending") return { kind: "plan", itemId: last.id, title: last.title || "Plan to review" };
+    if (last?.kind === "usage_limit" && last.status === "pending") return { kind: "limit", itemId: last.id, title: "Usage limit hit", resetsAt: last.resetsAt };
     return undefined;
   }
 
@@ -3856,6 +3863,7 @@ export class AgentHost {
       startedAt: Date.now(),
     };
     turns.push(turn);
+    this.settleLimitCards(threadId);
     if (userItem) {
       userItem.turnId = turn.id;
       if (userItem.kind === "user") delete userItem.steer;
@@ -4085,6 +4093,10 @@ export class AgentHost {
       if (!pageOwned(this.loadItems(threadId)) && !latest.helperOf) this.unread.add(threadId);
     }
     const implement = turn.plan && result.status === "done" && latest ? this.endPlanTurn(threadId, turn, run) : null;
+    // Page runs wait out the limit themselves; a user's own thread asks whether to go on after the reset.
+    if (turn.limitResetsAt && latest && !latest.helperOf && !this.pageRuns.get(threadId) && !pageOwned(this.loadItems(threadId))) {
+      this.addItem(threadId, turn.id, { kind: "usage_limit", resetsAt: turn.limitResetsAt, status: "pending" });
+    }
     this.emitThread(threadId);
     const moved = run.workspace && latest ? this.applyWorkspace(threadId, turn.id, run.workspace.cwd) : false;
 
@@ -5205,6 +5217,76 @@ export class AgentHost {
     if (decision.accepted) this.send(threadId, { text: implementText(note), from: "scribe", plan: false });
     else if (note) this.send(threadId, { text: `The user wants changes to the plan: ${note}`, from: "scribe", plan: true });
     else this.emitThread(threadId);
+  }
+
+  /**
+   * The user's answer to a usage limit card (#78). Continue queues the thread to go on once the
+   * limit resets (right away when it already has); dismiss leaves it, also after a Continue.
+   */
+  resolveUsageLimit(threadId: string, itemId: string, go: boolean): void {
+    this.requireThread(threadId);
+    const item = this.loadItems(threadId).find((it) => it.id === itemId);
+    if (!item || item.kind !== "usage_limit" || (item.status !== "pending" && !(item.status === "queued" && !go))) {
+      throw new Error("This usage limit is no longer waiting.");
+    }
+    item.status = go ? "queued" : "dismissed";
+    this.touch(item);
+    if (go) this.limitResumes.set(threadId, itemId);
+    else this.limitResumes.delete(threadId);
+    this.saveLimitResumes();
+    this.emitThread(threadId);
+    if (go) this.checkLimitResumes();
+  }
+
+  private saveLimitResumes(): void {
+    this.db.setSetting("limitResumes", Object.fromEntries(this.limitResumes));
+  }
+
+  /** A new turn started: limit cards still open are past (the thread went on without them). */
+  private settleLimitCards(threadId: string): void {
+    for (const item of this.loadItems(threadId)) {
+      if (item.kind !== "usage_limit" || (item.status !== "pending" && item.status !== "queued")) continue;
+      item.status = "expired";
+      this.touch(item);
+    }
+    if (this.limitResumes.delete(threadId)) this.saveLimitResumes();
+  }
+
+  /** Send queued threads on once their limit has reset and they are idle (#78). */
+  private checkLimitResumes(): void {
+    const now = Date.now();
+    for (const [threadId, itemId] of [...this.limitResumes]) {
+      const thread = this.threads.get(threadId);
+      const item = thread ? this.loadItems(threadId).find((it) => it.id === itemId) : undefined;
+      if (!thread || item?.kind !== "usage_limit" || item.status !== "queued") {
+        this.limitResumes.delete(threadId);
+        this.saveLimitResumes();
+        continue;
+      }
+      if (now < item.resetsAt + RESUME_DELAY_MS) continue;
+      if (this.runs.has(threadId) || this.resuming.has(threadId) || (this.status.get(threadId) ?? "idle") !== "idle" || this.queues.get(threadId)?.length) continue;
+      if (thread.provider === "codex") {
+        const last = this.db.listTurns(threadId).at(-1);
+        if (last && !codexUsageRecoveryAllowed(this.planLimits.codex, last.endedAt ?? last.startedAt)) {
+          void this.refreshCodexUsage();
+          continue;
+        }
+      }
+      item.status = "resumed";
+      this.touch(item);
+      this.limitResumes.delete(threadId);
+      this.saveLimitResumes();
+      try {
+        this.send(threadId, { text: DEFAULT_RESUME_PROMPT, from: "scribe" });
+      } catch (err) {
+        // Try again on the next check.
+        item.status = "queued";
+        this.touch(item);
+        this.limitResumes.set(threadId, itemId);
+        this.saveLimitResumes();
+        log(`Resuming ${threadId} after its usage limit failed: ${(err as Error).message}`);
+      }
+    }
   }
 
   /**

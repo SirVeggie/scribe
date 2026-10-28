@@ -363,7 +363,7 @@ export type ThreadView = Thread & {
   fromPage: boolean;
   /** While waiting: the first question, approval or plan the user has not answered yet. */
   asking?: {
-    kind: "approval" | "question" | "plan";
+    kind: "approval" | "question" | "plan" | "limit";
     /** Also the request id the answer goes to (POST /approvals/:id for approvals). */
     itemId: string;
     title: string;
@@ -373,6 +373,8 @@ export type ThreadView = Thread & {
     /** Approvals: the command or path it is about, and the answers it offers. */
     detail?: string;
     options?: ApprovalOption[];
+    /** Limit: when the plan's usage limit resets (the thread itself is idle meanwhile). */
+    resetsAt?: number;
   };
   /** Running, waiting or unread threads: the live step and the latest agent message, for the activity flyout and toasts. */
   activity?: { line: string; lastText?: string };
@@ -664,6 +666,11 @@ export type ItemBody =
   | { kind: "browser_handoff"; message: string; status: "pending" | "done" | "cancelled"; activity?: string[] }
   | { kind: "settings"; ids: string[]; title?: string }
   | { kind: "component"; html?: string; plugin?: string; component?: string; props?: unknown; title?: string; fallback?: string; summary?: string; local?: Record<string, unknown>; wait: boolean; status: "shown" | "pending" | "answered" | "skipped" | "expired" }
+  /**
+   * A plan usage limit stopped a user's turn (#78): Continue sends the thread on once the limit
+   * resets (queued until then), Dismiss leaves it. Expired: the thread went on another way.
+   */
+  | { kind: "usage_limit"; resetsAt: number; status: "pending" | "queued" | "resumed" | "dismissed" | "expired" }
   | { kind: "todos"; todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | { kind: "notice"; level: "info" | "warn" | "error"; text: string };
 

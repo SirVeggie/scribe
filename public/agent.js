@@ -4386,6 +4386,8 @@
           return this.renderBrowserHandoff(it);
         case "plan":
           return this.renderPlan(it);
+        case "usage_limit":
+          return this.renderUsageLimit(it);
         case "settings":
           return this.renderSettings(it);
         case "component":
@@ -5253,6 +5255,19 @@
         );
         node.append(note, actions);
       }
+      return node;
+    }
+
+    /** A plan usage limit stopped the turn (#78): go on once it resets, or leave it. */
+    renderUsageLimit(it) {
+      const node = el("div", `ag-card ag-limit s-${it.status}`);
+      node.dataset.itemId = it.id;
+      const head = el("div", "ag-card-head");
+      head.append(icon("clock"), el("span", "ag-card-title", "Usage limit hit"), el("span", "ag-muted", `Resets ${R.finishTime(it.resetsAt)}`));
+      const tag = { queued: "Continues after reset", resumed: "Continued", dismissed: "Dismissed", expired: "Went on" }[it.status];
+      if (tag) head.append(el("span", `ag-tag ${it.status === "resumed" ? "ok" : ""}`, tag));
+      node.append(head);
+      if (it.status === "pending" || it.status === "queued") node.append(limitButtons(it.threadId, it.id, it.status));
       return node;
     }
 
@@ -9128,7 +9143,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         else if (intent?.announced && item.threadId === intent.threadId && shownPageCall(item)) this.setPageIntent(null);
       }
       if (item.threadId !== this.view.threadId) return;
-      if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan" || item.kind === "component" || item.kind === "browser_handoff") && item.status === "pending") {
+      if ((item.kind === "approval" || item.kind === "question" || item.kind === "plan" || item.kind === "usage_limit" || item.kind === "component" || item.kind === "browser_handoff") && item.status === "pending") {
         if (!S.dockShown) this.setShown(true);
         this.setExpanded(true);
         return;
@@ -9258,9 +9273,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   /** Questions, approvals and plans the user still has to answer, newest thread first, for the palette. */
   function pendingAsks() {
-    const label = { approval: "Approval", question: "Question", plan: "Plan", browser_handoff: "Browser" };
+    const label = { approval: "Approval", question: "Question", plan: "Plan", limit: "Usage limit", browser_handoff: "Browser" };
     return [...S.threads.values()]
-      .filter((t) => t.status === "waiting" && !t.archived)
+      .filter((t) => waitingAsk(t) && !t.archived)
       .sort((a, b) => threadRank(b) - threadRank(a))
       .map((t) => ({
         kind: "ask",
@@ -9319,12 +9334,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const all = activeThreads().filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
     const unseen = (t) => Boolean(t.unread) && !t.fromPage;
     const recent = all
-      .filter((t) => t.status === "idle" && (unseen(t) || now - flyoutRecentAt(t) < FLYOUT_RECENT_MS))
+      .filter((t) => t.status === "idle" && !waitingAsk(t) && (unseen(t) || now - flyoutRecentAt(t) < FLYOUT_RECENT_MS))
       .sort((a, b) => Number(unseen(b)) - Number(unseen(a)) || flyoutRecentAt(b) - flyoutRecentAt(a))
       .slice(0, FLYOUT_RECENT_CAP);
     return {
       active: all.filter((t) => t.status === "running"),
-      waiting: all.filter((t) => t.status === "waiting"),
+      waiting: all.filter((t) => waitingAsk(t)),
       recent,
     };
   }
@@ -9332,6 +9347,34 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   /** The thread is open in the dock, the sidebar or the full window. */
   function threadOnScreen(id) {
     return (S.dockShown && dock.view.threadId === id) || (S.sideOpen && sidebar.view.threadId === id) || (S.fullOpen && full.view.threadId === id);
+  }
+
+  /**
+   * What the thread waits on the user for. A usage limit card (#78) asks while the thread is idle,
+   * so it counts here even though the thread's status is not "waiting".
+   */
+  function waitingAsk(t) {
+    if (!t.asking) return null;
+    return t.status === "waiting" || (t.asking.kind === "limit" && t.status === "idle") ? t.asking : null;
+  }
+
+  /** Continue after reset / Dismiss for a usage limit card, in the transcript, a toast or the flyout. */
+  function limitButtons(threadId, itemId, status, onDone) {
+    const box = el("span", "ag-act-btns");
+    const answer = (go) => async (event) => {
+      event.stopPropagation();
+      for (const b of box.querySelectorAll("button")) b.disabled = true;
+      try {
+        await api("POST", `/threads/${encodeURIComponent(threadId)}/limits/${encodeURIComponent(itemId)}`, { continue: go });
+        onDone?.();
+      } catch (err) {
+        notice(err.message);
+        for (const b of box.querySelectorAll("button")) b.disabled = false;
+      }
+    };
+    if (status === "pending") box.append(button("Continue after reset", "ag-btn tiny primary", answer(true), "Sends the chat on once usage is available again"));
+    box.append(button(status === "queued" ? "Cancel" : "Dismiss", "ag-btn tiny", answer(false)));
+    return box;
   }
 
   /** Allow / Deny for a waiting approval, through the same route as the transcript card. */
@@ -9362,6 +9405,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   /** One line on what the thread is doing, for flyout rows. */
   function activityLine(t) {
+    if (waitingAsk(t)?.kind === "limit") return `Usage limit hit · resets ${R.finishTime(t.asking.resetsAt)}`;
     if (t.status === "waiting") {
       const kind = { approval: "Approve", question: "Question", plan: "Plan" }[t.asking?.kind] || "Waiting";
       return t.asking ? `${kind}: ${t.asking.title}` : "Needs your answer";
@@ -9497,8 +9541,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       row.role = "button";
       const meta = el("span", "ag-fly-meta");
       meta.append(el("span", "ag-fly-title", t.title), el("span", "ag-fly-line", activityLine(t)));
-      row.append(el("span", seen ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
-      if (t.status === "waiting" && t.asking?.kind === "approval") row.append(approvalButtons(t));
+      const limit = waitingAsk(t)?.kind === "limit";
+      row.append(el("span", limit ? "ag-dot s-waiting" : seen ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
+      if (limit) row.append(limitButtons(t.id, t.asking.itemId, "pending"));
+      else if (t.status === "waiting" && t.asking?.kind === "approval") row.append(approvalButtons(t));
       else if (t.status === "waiting") {
         row.append(
           button("Open", "ag-btn tiny", (event) => {
@@ -9581,7 +9627,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   /** Open a thread from the flyout or a toast: in the dock (expanded), else in the sidebar at its question. */
   function openActive(t, inDock) {
-    const ask = t.status === "waiting" && t.asking ? t.asking : null;
+    const ask = waitingAsk(t);
     if (inDock) {
       showPageThread(t.id, "dock", { reveal: true });
       dock.setExpanded(true);
@@ -9610,7 +9656,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const live = new Set();
       for (const t of S.threads.values()) {
         const prev = this.seen.get(t.id);
-        const ask = t.status === "waiting" && t.asking ? t.asking.itemId : null;
+        const ask = waitingAsk(t)?.itemId || null;
         this.seen.set(t.id, { ask, finishedAt: t.finishedAt || 0 });
         if (t.archived) continue;
         // Threads seen for the first time (the list loading) do not toast.
@@ -9704,10 +9750,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const title = el("b", null, t.title);
       const actions = el("div", "ag-toast-actions");
       if (entry.kind === "ask") {
-        const what = { approval: "wants to:", question: "asks:", plan: "has a plan:" }[t.asking?.kind] || "needs you";
+        const what = { approval: "wants to:", question: "asks:", plan: "has a plan:", limit: "stopped:" }[t.asking?.kind] || "needs you";
         body.append(title, ` ${what} `, el("span", "ag-toast-what", t.asking?.title || ""));
+        if (t.asking?.kind === "limit") body.append(el("span", "ag-toast-text", `Resets ${R.finishTime(t.asking.resetsAt)}`));
         if (t.asking?.detail) body.append(el("code", "ag-toast-detail", t.asking.detail));
         if (t.asking?.kind === "approval") actions.append(approvalButtons(t, () => this.remove(entry.key)));
+        if (t.asking?.kind === "limit") actions.append(limitButtons(t.id, t.asking.itemId, "pending", () => this.remove(entry.key)));
       } else {
         body.append(title, " finished");
         if (t.activity?.lastText) body.append(el("span", "ag-toast-text", t.activity.lastText));

@@ -2260,6 +2260,14 @@ textarea.ag-q-input {
   color: var(--muted);
 }
 
+.ag-limit .ag-card-head .ag-muted {
+  font-size: 12px;
+}
+
+.ag-limit:not(.s-pending):not(.s-queued) {
+  opacity: 0.75;
+}
+
 .ag-plan-body {
   max-height: 420px;
   overflow: auto;

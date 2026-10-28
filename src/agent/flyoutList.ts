@@ -15,6 +15,8 @@ export type FlyoutThread = {
   fromPage?: boolean;
   archived?: boolean;
   pinned?: boolean;
+  /** An idle thread whose usage limit card still waits for an answer (#78): listed under Waiting. */
+  limit?: boolean;
   /** Last user message or finished turn. */
   activityAt: number;
   /** Last edit of an unsent draft with content, or 0. */
@@ -45,12 +47,12 @@ export function flyoutSections<T extends FlyoutThread>(
   const all = threads.filter((t) => !t.archived).sort((a, b) => rank(b) - rank(a));
   const unseen = (t: T) => Boolean(t.unread) && !t.fromPage;
   const recent = all
-    .filter((t) => t.status === "idle" && (unseen(t) || opts.now - recentAt(t) < recentMs))
+    .filter((t) => t.status === "idle" && !t.limit && (unseen(t) || opts.now - recentAt(t) < recentMs))
     .sort((a, b) => Number(unseen(b)) - Number(unseen(a)) || recentAt(b) - recentAt(a))
     .slice(0, recentCap);
   return {
     active: all.filter((t) => t.status === "running"),
-    waiting: all.filter((t) => t.status === "waiting"),
+    waiting: all.filter((t) => t.status === "waiting" || (t.status === "idle" && t.limit)),
     recent,
   };
 }

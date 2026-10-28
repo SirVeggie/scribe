@@ -960,6 +960,16 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  router.post(
+    "/threads/:id/limits/:itemId",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      host.interact(req.params.id);
+      host.resolveUsageLimit(req.params.id, req.params.itemId, body.continue === true);
+      return { ok: true };
+    })
+  );
+
   router.get(
     "/git",
     wrap(async (req) => {
