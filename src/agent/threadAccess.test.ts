@@ -115,8 +115,13 @@ test("thread_list asks first, then lists and searches threads in the workspace; 
   assert.match(asked.kind === "approval" ? asked.title : "", /workspace/);
   const listed = await listing;
   assert.deepEqual(listed.threads.map((row) => row.id), [other.id]);
-  assert.equal(listed.threads[0].hits, 1);
-  assert.match(String(listed.threads[0].match), /npm test/);
+  assert.deepEqual(listed.threads[0].hits, { other: 1 });
+  assert.equal(listed.threads[0].match, undefined);
+  assert.equal(listed.threads[0].model, undefined);
+  const detailed = await host.listReadableThreads(reader.id, { q: "npm test", details: true });
+  assert.match(String(detailed.threads[0].match), /npm test/);
+  assert.equal(detailed.threads[0].provider, "claude");
+  assert.equal((await host.listReadableThreads(reader.id, { q: "npm test", messages: true })).threads.length, 0);
 
   const read = await host.readOtherThread(reader.id, { thread: other.id, limit: 2 });
   assert.equal(read.total, 3);
@@ -176,4 +181,56 @@ test("page, helper and hook messages cannot grant thread access; missing and sel
     { kind: "thread", id: "missing", title: "Missing" },
   ] });
   assert.equal(host.threadDetail(target.id)!.thread.threadGrants?.length ?? 0, 0);
+});
+
+test("thread_list ranks message hits above tool output hits", async () => {
+  const root = path.resolve(dir, "rank");
+  const internals = host as unknown as Internals;
+  const tooly = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: root } });
+  const talky = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: root } });
+  internals.addItem(talky.id, null, { kind: "user", text: "Set up Playwright for the e2e tests" });
+  internals.addItem(tooly.id, null, { kind: "tool", toolId: "t", name: "Read", tool: "read", title: "package.json", status: "done", output: '"playwright": "^1.50"', startedAt: 0 } as ItemBody);
+  const reader = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: root } });
+  running(reader.id);
+  const listing = host.listReadableThreads(reader.id, { q: "playwright" });
+  await answer(reader.id, "all");
+  const listed = await listing;
+  assert.deepEqual(listed.threads.map((r) => r.id), [talky.id, tooly.id]);
+  assert.deepEqual(listed.threads[0].hits, { messages: 1 });
+});
+
+test("thread_list everywhere asks once to search, then shows outside hits as titles only; thread_access thread grants one", async () => {
+  const home = path.resolve(dir, "home");
+  const elsewhere = path.resolve(dir, "elsewhere");
+  const internals = host as unknown as Internals;
+  const far = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: elsewhere } });
+  internals.addItem(far.id, null, { kind: "text", text: "AG Grid editor focus border checked live with brave" });
+  const reader = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: home } });
+  running(reader.id);
+  const plain = host.listReadableThreads(reader.id, { q: "focus border" });
+  await answer(reader.id, "all");
+  assert.equal((await plain).threads.length, 0);
+
+  const listing = host.listReadableThreads(reader.id, { q: "focus border", everywhere: true, details: true });
+  const asked = await answer(reader.id, "all");
+  assert.match(asked.kind === "approval" ? asked.title : "", /Search all threads/);
+  const listed = await listing;
+  assert.equal(listed.threads.length, 1);
+  const row = listed.threads[0];
+  assert.equal(row.id, far.id);
+  assert.equal(row.outside, true);
+  assert.equal(row.match, undefined);
+  assert.equal(row.model, undefined);
+  assert.match(String(listed.note), /thread_access/);
+  await assert.rejects(host.readOtherThread(reader.id, { thread: far.id }), /outside the scopes/);
+  // Asked once: a second search goes straight through.
+  assert.equal((await host.listReadableThreads(reader.id, { q: "brave", everywhere: true })).threads.length, 1);
+  assert.equal(pendingApprovals(reader.id).length, 0);
+
+  const access = host.requestThreadAccess(reader.id, { thread: far.id });
+  await answer(reader.id, "all");
+  assert.equal((await access).allowed, true);
+  assert.match(JSON.stringify(await host.readOtherThread(reader.id, { thread: far.id })), /focus border/);
+  const again = await host.listReadableThreads(reader.id, { q: "focus border", everywhere: true });
+  assert.equal(again.threads[0].outside, undefined);
 });

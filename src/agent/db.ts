@@ -154,6 +154,18 @@ export class AgentDb {
     }
   }
 
+  /**
+   * Threads with an item whose stored JSON holds every word, for thread_list's search to read only
+   * those. words holds one list of LIKE patterns per word (its case variants), from likePatterns.
+   */
+  threadsMentioning(words: string[][]): Set<string> {
+    const groups = words.filter((w) => w.length);
+    if (!groups.length) return new Set();
+    const where = groups.map((g) => `(${g.map(() => "data LIKE ? ESCAPE '!'").join(" OR ")})`).join(" AND ");
+    const rows = this.db.prepare(`SELECT DISTINCT thread_id AS threadId FROM items WHERE ${where}`).all(...groups.flat()) as Array<{ threadId: string }>;
+    return new Set(rows.map((r) => r.threadId));
+  }
+
   saveItems(items: Item[]): void {
     if (!items.length) {
       return;

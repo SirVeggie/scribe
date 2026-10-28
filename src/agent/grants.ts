@@ -15,6 +15,7 @@ export type PageNames = { page(id: string): string | null; folder(id: string): s
 
 function scopeKey(scope: AccessScope): string {
   if (scope.kind === "all") return "threads:all";
+  if (scope.kind === "search") return "threads:search";
   if (scope.kind === "workspace") return `threads:workspace:${scope.path}`;
   return `threads:${scope.kind}:${scope.id}`;
 }

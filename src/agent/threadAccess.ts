@@ -5,10 +5,18 @@ import type { Item, Thread } from "./types.js";
  * Reading other threads (thread_list, thread_read). A thread can only ask for threads in its own
  * scopes: its workspace (the folder it works in) and its app scope (its page, or its folder with the
  * pages and folders inside it). A global thread can ask for any thread. Nothing is readable until
- * the user grants it; grants last for the rest of the thread. A user tag grants one specific
- * thread independently of these scopes.
+ * the user grants it; grants last for the rest of the thread. A user tag, or the user's answer to
+ * thread_access for one thread, grants that thread independently of these scopes. A search grant
+ * lets thread_list find threads anywhere but shows only their titles, folders and dates: it never
+ * makes a transcript readable.
  */
-export type AccessScope = { kind: "workspace"; path: string } | { kind: "page"; id: string } | { kind: "folder"; id: string } | { kind: "thread"; id: string } | { kind: "all" };
+export type AccessScope =
+  | { kind: "workspace"; path: string }
+  | { kind: "page"; id: string }
+  | { kind: "folder"; id: string }
+  | { kind: "thread"; id: string }
+  | { kind: "search" }
+  | { kind: "all" };
 
 /** What the user let a thread read. */
 export type ThreadGrants = AccessScope[];
@@ -43,7 +51,7 @@ function within(child: string, parent: string): boolean {
 
 function sameScope(a: AccessScope, b: AccessScope): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "all") return true;
+  if (a.kind === "all" || a.kind === "search") return true;
   if (a.kind === "workspace") return a.path === (b as { path: string }).path;
   return a.id === (b as { id: string }).id;
 }
@@ -62,6 +70,7 @@ export function requestableScopes(thread: Pick<Thread, "cwd" | "worktree" | "sco
 /** Whether a scope covers a thread. */
 export function scopeCovers(scope: AccessScope, target: Pick<Thread, "cwd" | "worktree" | "scope"> & { id?: string }, lookup: ScopeLookup): boolean {
   if (scope.kind === "all") return true;
+  if (scope.kind === "search") return false;
   if (scope.kind === "thread") return target.id === scope.id;
   if (scope.kind === "workspace") {
     const workspace = threadWorkspace(target);
@@ -85,14 +94,15 @@ export function canReadThread(reader: Pick<Thread, "id" | "cwd" | "worktree" | "
 /**
  * Keep only grants the thread could ask for (its scopes may have changed since, e.g. a new workspace).
  * A global thread can be granted any workspace, page or folder, since "all" covers them.
- * Explicit thread tags remain granted independently of the reader's current workspace or page.
+ * Explicit thread grants and the search grant remain independently of the reader's current workspace or page.
  */
 export function allowedGrants(thread: Pick<Thread, "cwd" | "worktree" | "scope">, grants: AccessScope[]): AccessScope[] {
   const asked = requestableScopes(thread);
   const global = asked.some((s) => s.kind === "all");
   const out: AccessScope[] = [];
   for (const scope of grants) {
-    if (scope.kind !== "thread" && !global && !asked.some((s) => sameScope(s, scope))) continue;
+    if (scope.kind === "search" && global) continue;
+    if (scope.kind !== "thread" && scope.kind !== "search" && !global && !asked.some((s) => sameScope(s, scope))) continue;
     if (!out.some((s) => sameScope(s, scope))) out.push(scope);
   }
   return out;
@@ -113,6 +123,7 @@ export function scopesGranted(grants: ThreadGrants | undefined, want: AccessScop
 /** A scope as the user and the agent see it. */
 export function scopeLabel(scope: AccessScope, lookup?: ScopeLookup): string {
   if (scope.kind === "all") return "all threads";
+  if (scope.kind === "search") return "titles of matching threads anywhere (search only)";
   if (scope.kind === "thread") return `thread "${lookup?.threadTitle?.(scope.id) ?? scope.id}"`;
   if (scope.kind === "workspace") return `threads in workspace ${scope.path}`;
   if (scope.kind === "page") return `threads on page "${lookup?.pageTitle?.(scope.id) ?? scope.id}"`;
@@ -168,6 +179,11 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
     default:
       return null;
   }
+}
+
+/** Whether an item is something said in the thread (a user message or an agent reply), as opposed to tool calls, output and notices. */
+export function isMessage(item: Item): boolean {
+  return (item.kind === "user" && !item.dropped) || (item.kind === "text" && !item.parentToolId);
 }
 
 /** Whether an item mentions every word of q (case-insensitive), in its text, tool title, detail or output. */

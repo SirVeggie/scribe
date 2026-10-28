@@ -1801,27 +1801,31 @@ function registerThreadTools(server: McpServer): void {
 
   server.tool(
     "thread_access",
-    "Ask the user to let this chat read other Scribe chat threads: earlier work, commands they ran and their output, decisions. A chat can only ask for threads in its own scopes: its workspace (threads working in the same folder or below it), and its page or folder (threads on that page, or in that folder and its pages and subfolders). A global chat can ask for all threads. thread_list and thread_read ask by themselves when nothing is allowed yet; use this to say why, to narrow the ask, or to ask for scopes not allowed yet. The answer lasts for the rest of this chat. Returns allowed, a message and the scopes now readable.",
+    "Ask the user to let this chat read other Scribe chat threads: earlier work, commands they ran and their output, decisions. A chat can only ask for threads in its own scopes: its workspace (threads working in the same folder or below it), and its page or folder (threads on that page, or in that folder and its pages and subfolders). A global chat can ask for all threads. search asks to search all threads with thread_list everywhere (only titles, folders and dates outside your scopes). thread asks to read one thread by id, such as an outside search hit. thread_list and thread_read ask by themselves when nothing is allowed yet; use this to say why, to narrow the ask, or to ask for more. The answer lasts for the rest of this chat. Returns allowed, a message and the scopes now readable.",
     {
-      scopes: z.array(z.enum(["workspace", "page", "folder", "all"])).optional().describe("Ask only for these of your scopes. Default all of them."),
+      scopes: z.array(z.enum(["workspace", "page", "folder", "search", "all"])).optional().describe("Ask only for these. Default your workspace and page or folder."),
+      thread: z.string().optional().describe("Ask to read this one thread (id from thread_list), even outside your scopes."),
       reason: z.string().optional().describe("One or two lines on why you need it, shown to the user."),
       importance,
     },
     { readOnlyHint: true },
-    async ({ scopes, reason, importance }, extra) => call("request", { scopes, reason, importance }, extra)
+    async ({ scopes, thread, reason, importance }, extra) => call("request", { scopes, thread, reason, importance }, extra)
   );
 
   server.tool(
     "thread_list",
-    "List the other Scribe chat threads this chat may read, newest activity first, with title, model, scope, folder, branch, status and turn count. q searches titles and transcripts (every word must match) and returns hits and the first match per thread. Asks the user for access first if nothing is allowed yet.",
+    "List the other Scribe chat threads this chat may read, newest activity first, as short rows: id, title, workspace, page or folder, last activity, status. q searches titles and transcripts (every word must match within one message or tool call) and adds hits per thread: title, messages (user messages and agent replies) and other (tool calls and output). Threads whose title or messages match come first; messages: true ignores tool calls and output. everywhere: true also searches threads outside your scopes: those rows show only title, workspace and date (outside: true), and thread_access with thread asks to read one. details adds model, branch, turns and a snippet of the first match. Asks the user for access first if nothing is allowed yet.",
     {
       q: z.string().optional().describe("Words to find in thread titles, messages, commands or their output."),
+      everywhere: z.boolean().optional().describe("With q: also search threads outside your scopes (titles only). Asks the user once."),
+      messages: z.boolean().optional().describe("With q: match only titles, user messages and agent replies, not tool calls or their output."),
+      details: z.boolean().optional().describe("Add provider, model, mode, branch, turns, createdAt and a match snippet to readable rows."),
       limit: z.number().optional().describe("At most this many threads (default 20, max 100)."),
       archived: z.boolean().optional().describe("Include archived threads."),
       importance,
     },
     { readOnlyHint: true },
-    async ({ q, limit, archived, importance }, extra) => call("list", { q, limit, archived, importance }, extra)
+    async ({ q, everywhere, messages, details, limit, archived, importance }, extra) => call("list", { q, everywhere, messages, details, limit, archived, importance }, extra)
   );
 
   server.tool(

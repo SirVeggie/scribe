@@ -76,8 +76,8 @@ import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, READ_SHELL_WAIT_MS
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
-import { likePatterns, matchMessages, searchWords, type ThreadMessageHit } from "./threadSearch.js";
-import { allowedGrants, canReadThread, grantScopes, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
+import { likePatterns, matchMessages, messageSnippet, searchWords, type ThreadMessageHit } from "./threadSearch.js";
+import { allowedGrants, canReadThread, grantScopes, isMessage, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
 import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, withGrantOptions } from "./toolGrants.js";
 import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, memoryPlace, saveMemory, type Memory } from "./memory.js";
@@ -2998,7 +2998,7 @@ export class AgentHost {
    */
   async requestThreadAccess(
     threadId: string,
-    opts: { only?: Array<AccessScope["kind"]>; importance?: WebImportance; reason?: string; signal?: AbortSignal } = {}
+    opts: { only?: Array<AccessScope["kind"]>; thread?: string; importance?: WebImportance; reason?: string; signal?: AbortSignal } = {}
   ): Promise<{ allowed: boolean; message: string; scopes: string[] }> {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Reading other threads only works in Scribe chat threads.");
@@ -3009,28 +3009,45 @@ export class AgentHost {
       return allowedGrants(t, t.threadGrants ?? []);
     };
     let want = requestableScopes(thread);
-    if (opts.only?.length) want = want.filter((s) => opts.only!.includes(s.kind));
-    if (!want.length) return { allowed: false, message: "This thread has no such scope to ask for: it can ask for its workspace, its page or folder, or (a global thread) all threads.", scopes: labels(granted()) };
+    const global = want.some((s) => s.kind === "all");
+    if (opts.thread) {
+      // One thread, e.g. a search hit outside this thread's scopes: the user decides on it alone.
+      const target = this.threads.get(opts.thread);
+      if (!target || target.id === threadId) return { allowed: false, message: `No other thread ${opts.thread}.`, scopes: labels(granted()) };
+      if (canReadThread({ ...thread, threadGrants: granted() }, target, lookup)) return { allowed: true, message: "Already allowed.", scopes: labels(granted()) };
+      want = [{ kind: "thread", id: target.id }];
+    } else if (opts.only?.length) {
+      // A global thread already searches and reads everything once it has "all".
+      const only = global && opts.only.includes("search") ? [...opts.only, "all" as const] : opts.only;
+      want = want.filter((s) => only.includes(s.kind));
+      if (!global && only.includes("search")) want.push({ kind: "search" });
+    }
+    if (!want.length) return { allowed: false, message: "This thread has no such scope to ask for: it can ask for its workspace, its page or folder, search (titles of matching threads anywhere), one thread by id, or (a global thread) all threads.", scopes: labels(granted()) };
     if (scopesGranted(granted(), want)) return { allowed: true, message: "Already allowed.", scopes: labels(granted()) };
     const run = this.runs.get(threadId);
     if (!run) return { allowed: false, message: "With no turn running the user cannot be asked.", scopes: labels(granted()) };
     const importance = opts.importance ?? "useful";
     const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const reading = want.filter((s) => s.kind !== "search");
     const detail = [
-      `The agent asks to read the transcripts of other threads: ${labels(want).join("; ")}. Importance: ${importance}.`,
+      reading.length ? `The agent asks to read the transcripts of other threads: ${labels(reading).join("; ")}.` : "",
+      want.some((s) => s.kind === "search")
+        ? "The agent asks to search all threads. For threads outside the scopes it may read, it sees only the title, folder and date of a match, not the transcript."
+        : "",
+      `Importance: ${importance}.`,
       opts.reason?.trim(),
       waitMs !== null ? `Refused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.` : undefined,
     ]
       .filter(Boolean)
       .join("\n");
-    const short: Record<AccessScope["kind"], string> = { workspace: "workspace", page: "page", folder: "folder", thread: "thread", all: "all threads" };
+    const short: Record<AccessScope["kind"], string> = { workspace: "workspace", page: "page", folder: "folder", thread: "thread", search: "search (titles only)", all: "all threads" };
     const options: ApprovalOption[] = [
       { id: "all", label: want.length === 1 ? "Allow for this thread" : "Allow all of these", kind: "allow_always" },
       ...(want.length > 1 ? want.map((s, i) => ({ id: `s${i}`, label: `Only ${short[s.kind]}`, kind: "allow_always" as const })) : []),
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
-    const title = `Read other threads: ${labels(want).join("; ")}`;
+    const title = want.length === 1 && want[0].kind === "search" ? "Search all threads (titles only outside this thread's scopes)" : `Read other threads: ${labels(want).join("; ")}`;
     const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", title: title.slice(0, 300), detail, options, status: "pending" });
     const abort = new AbortController();
     const onAbort = () => abort.abort();
@@ -3192,11 +3209,16 @@ export class AgentHost {
   }
 
   /** Threads reader may read, asking for access first when it has none yet. */
-  private async readableThreads(readerId: string, opts: { importance?: WebImportance; signal?: AbortSignal }): Promise<{ reader: Thread; threads: Thread[]; lookup: ScopeLookup }> {
+  private async readableThreads(
+    readerId: string,
+    opts: { search?: boolean; importance?: WebImportance; signal?: AbortSignal }
+  ): Promise<{ reader: Thread; threads: Thread[]; lookup: ScopeLookup }> {
     let reader = this.threads.get(readerId);
     if (!reader) throw new Error("Reading other threads only works in Scribe chat threads.");
-    if (!allowedGrants(reader, reader.threadGrants ?? []).length) {
-      const asked = await this.requestThreadAccess(readerId, { importance: opts.importance, signal: opts.signal });
+    if (!allowedGrants(reader, reader.threadGrants ?? []).some((s) => s.kind !== "search")) {
+      // A search everywhere asks for this thread's scopes and the search in one question.
+      const only = opts.search ? [...requestableScopes(reader).map((s) => s.kind), "search" as const] : undefined;
+      const asked = await this.requestThreadAccess(readerId, { only, importance: opts.importance, signal: opts.signal });
       if (!asked.allowed) throw new Error(asked.message);
       reader = this.threads.get(readerId) ?? reader;
     }
@@ -3212,53 +3234,116 @@ export class AgentHost {
     return this.runs.has(t.id) ? "running" : turns.at(-1)?.status ?? "new";
   }
 
-  /** thread_list: threads this one may read, newest first; q searches titles and transcripts. */
+  /**
+   * thread_list: threads this one may read, newest first. q searches titles and transcripts: threads
+   * whose title or messages match come before those that match only in tool calls and output.
+   * everywhere also searches threads outside the reader's scopes (with the user's search grant), but
+   * shows only their titles, folders and dates. Rows are short unless details asks for more.
+   */
   async listReadableThreads(
     readerId: string,
-    opts: { q?: string; limit?: number; archived?: boolean; importance?: WebImportance; signal?: AbortSignal } = {}
-  ): Promise<{ scopes: string[]; threads: Array<Record<string, unknown>>; more: number }> {
-    const { reader, threads, lookup } = await this.readableThreads(readerId, opts);
+    opts: {
+      q?: string;
+      limit?: number;
+      archived?: boolean;
+      everywhere?: boolean;
+      messages?: boolean;
+      details?: boolean;
+      importance?: WebImportance;
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<{ scopes: string[]; threads: Array<Record<string, unknown>>; more: number; note?: string }> {
     const words = queryWords(opts.q);
+    const everywhere = Boolean(opts.everywhere && words.length);
+    let { reader, threads, lookup } = await this.readableThreads(readerId, { ...opts, search: everywhere });
+    const notes: string[] = [];
+    if (opts.everywhere && !words.length) notes.push("everywhere needs q: without it only readable threads are listed.");
+    const grants = () => allowedGrants(reader, reader.threadGrants ?? []);
+    let searchAll = everywhere && grants().some((s) => s.kind === "search" || s.kind === "all");
+    if (everywhere && !searchAll) {
+      const asked = await this.requestThreadAccess(readerId, { only: ["search"], importance: opts.importance, signal: opts.signal });
+      reader = this.threads.get(readerId) ?? reader;
+      searchAll = asked.allowed && grants().some((s) => s.kind === "search");
+      if (!searchAll) notes.push(`Searched only the threads you may read: ${asked.message}`);
+    }
+    const readable = new Set(threads.map((t) => t.id));
+    const trusted = this.threadTrusted(reader);
+    // Outside threads show their title only; a tainted one's title stays hidden from an untrusted reader too (#269).
+    const outsidePool = searchAll ? [...this.threads.values()].filter((t) => t.id !== readerId && !readable.has(t.id) && (trusted || !t.tainted)) : [];
+    const pool = [...threads, ...outsidePool].filter((t) => opts.archived || !t.archived);
     const limit = Math.max(1, Math.min(100, Math.floor(opts.limit ?? 20)));
-    const rows: Array<Record<string, unknown>> = [];
-    let more = 0;
-    const sorted = threads.filter((t) => opts.archived || !t.archived).sort((a, b) => b.activityAt - a.activityAt);
-    for (const t of sorted) {
-      let hits: number | undefined;
-      let match: string | undefined;
-      if (words.length) {
-        const titleHit = words.every((w) => t.title.toLowerCase().includes(w));
-        const found = this.peekItems(t.id).filter((it) => itemMatches(it, words));
-        if (!titleHit && !found.length) continue;
-        hits = found.length;
-        const first = found[0] ? itemText(found[0]) : null;
-        if (first) match = first.length > 300 ? `${first.slice(0, 300)}…` : first;
-      }
-      if (rows.length >= limit) {
-        more += 1;
+    // Read transcripts only of threads with an item that mentions every word.
+    if (words.length) this.flushNow();
+    const mentioned = words.length ? this.db.threadsMentioning(words.map(likePatterns)) : null;
+
+    type Found = { t: Thread; rank: number; hits?: Record<string, unknown>; match?: string };
+    const found: Found[] = [];
+    for (const t of pool) {
+      if (!words.length) {
+        found.push({ t, rank: 0 });
         continue;
       }
+      const titleHit = words.every((w) => t.title.toLowerCase().includes(w));
+      let messages = 0;
+      let other = 0;
+      let first: Item | undefined;
+      if (mentioned?.has(t.id)) {
+        let firstOther: Item | undefined;
+        for (const it of this.peekItems(t.id)) {
+          if (!itemMatches(it, words)) continue;
+          if (isMessage(it)) {
+            messages += 1;
+            first ??= it;
+          } else if (!opts.messages) {
+            other += 1;
+            firstOther ??= it;
+          }
+        }
+        first ??= firstOther;
+      }
+      if (!titleHit && !messages && !other) continue;
+      const hits = { ...(titleHit ? { title: true } : {}), ...(messages ? { messages } : {}), ...(other ? { other } : {}) };
+      const text = first && readable.has(t.id) && opts.details ? (isMessage(first) ? (first as { text: string }).text : itemText(first)) : null;
+      found.push({ t, rank: titleHit || messages ? 0 : 1, hits, ...(text ? { match: messageSnippet(text, words[0], 200) } : {}) });
+    }
+    found.sort((a, b) => a.rank - b.rank || b.t.activityAt - a.t.activityAt);
+
+    const rows = found.slice(0, limit).map(({ t, hits, match }): Record<string, unknown> => {
+      const outside = !readable.has(t.id);
+      const workspace = t.worktree?.home ?? t.cwd;
       const turns = this.peekTurns(t.id);
       const wt = t.worktree;
-      rows.push({
+      return {
         id: t.id,
         title: t.title,
-        provider: t.provider,
-        model: t.model,
-        mode: t.mode,
-        scope: threadScopeLabel(t, lookup),
-        ...(t.cwd ? { cwd: t.cwd } : {}),
-        ...(wt ? { branch: wt.branch, ...(wt.closed ? { worktree: wt.closed.how } : {}) } : {}),
-        status: this.threadStatus(t, turns),
-        turns: turns.length,
-        createdAt: new Date(t.createdAt).toISOString(),
-        activityAt: new Date(t.activityAt).toISOString(),
+        ...(workspace ? { workspace } : {}),
+        ...(t.scope.kind === "page" || t.scope.kind === "folder" ? { scope: threadScopeLabel(t, lookup) } : {}),
+        activityAt: `${new Date(t.activityAt).toISOString().slice(0, 16)}Z`,
+        ...(outside ? { outside: true } : { status: this.threadStatus(t, turns) }),
+        ...(hits ? { hits } : {}),
         ...(t.archived ? { archived: true } : {}),
-        ...(hits !== undefined ? { hits } : {}),
+        ...(opts.details && !outside
+          ? {
+              provider: t.provider,
+              model: t.model,
+              mode: t.mode,
+              ...(wt ? { branch: wt.branch, ...(wt.closed ? { worktree: wt.closed.how } : {}) } : {}),
+              turns: turns.length,
+              createdAt: new Date(t.createdAt).toISOString(),
+            }
+          : {}),
         ...(match ? { match } : {}),
-      });
+      };
+    });
+    if (rows.some((r) => r.outside)) {
+      notes.push("Rows with outside: true are outside the threads you may read: you see only their title, folder and date. thread_access with thread: <id> asks the user to let you read one.");
     }
-    return { scopes: allowedGrants(reader, reader.threadGrants ?? []).map((s) => scopeLabel(s, lookup)), threads: rows, more };
+    return {
+      scopes: grants().map((s) => scopeLabel(s, lookup)),
+      threads: rows,
+      more: Math.max(0, found.length - limit),
+      ...(notes.length ? { note: notes.join(" ") } : {}),
+    };
   }
 
   /**

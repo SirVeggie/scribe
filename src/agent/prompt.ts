@@ -181,7 +181,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       : " When the work moves to a folder outside the workspace for more than a file or two, ask to move the workspace there with thread_update (workspace) instead of having each file access approved; the change applies when your turn ends, so end the turn after the call.";
   if (rename || move) lines.push(`This thread:${rename}${move}`);
   lines.push(
-    "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. The user is asked to allow it first; thread_access says why. Threads the user tags with # in a chat message are already granted read access individually, including outside those scopes."
+    "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. thread_list with everywhere also finds threads elsewhere, showing only their titles; thread_access with thread asks to read one. The user is asked to allow it first; thread_access says why. Threads the user tags with # in a chat message are already granted read access individually, including outside those scopes."
   );
   if (thread.helperOf) {
     lines.push(

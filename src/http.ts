@@ -1389,10 +1389,21 @@ export async function startHttp(): Promise<http.Server> {
     const op = req.params.op;
     const run = (): Promise<unknown> => {
       if (op === "request") {
-        const only = strings(body.scopes)?.filter((s): s is AccessScope["kind"] => ["workspace", "page", "folder", "all"].includes(s));
-        return host.requestThreadAccess(thread, { only, importance, reason: str(body.reason, 1000), signal: abort.signal });
+        const only = strings(body.scopes)?.filter((s): s is AccessScope["kind"] => ["workspace", "page", "folder", "search", "all"].includes(s));
+        return host.requestThreadAccess(thread, { only, thread: str(body.thread, 60), importance, reason: str(body.reason, 1000), signal: abort.signal });
       }
-      if (op === "list") return host.listReadableThreads(thread, { q: str(body.q, 300), limit: num(body.limit), archived: body.archived === true, importance, signal: abort.signal });
+      if (op === "list") {
+        return host.listReadableThreads(thread, {
+          q: str(body.q, 300),
+          limit: num(body.limit),
+          archived: body.archived === true,
+          everywhere: body.everywhere === true,
+          messages: body.messages === true,
+          details: body.details === true,
+          importance,
+          signal: abort.signal,
+        });
+      }
       if (op === "read") {
         const target = str(body.thread, 60);
         if (!target) return Promise.reject(new Error("thread is required"));
