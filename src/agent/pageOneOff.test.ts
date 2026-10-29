@@ -22,7 +22,8 @@ function pageContext(threads: Array<[string, unknown]> = []) {
   const calls: any[] = [];
   const settings: any[] = [];
   const context = vm.createContext({
-    S: { threads: new Map(threads), details: new Map() }, PAGE_PROMPT_MAX: 20000,
+    S: { threads: new Map(threads), details: new Map(), ready: true }, PAGE_PROMPT_MAX: 20000,
+    loadStartupData: async () => {},
     pageThreadSettings: (data: any) => (settings.push(data), { approval: data.approval ?? "board", cwd: data.cwd ?? "" }),
     pageMayWrite: async () => ({ ok: true }), pageMayUseFolder: async () => ({ ok: true }), pageFolder: () => null,
     ensureDetail: async () => {}, pageSentAt: new Map(), showPageThread: () => {},
@@ -67,6 +68,22 @@ test("send takes images, and a page deletes only its own threads", async () => {
   assert.equal(calls.length, 1);
   assert.equal((await vm.runInContext("pageRequest({ id: 'ocr' }, { op: 'delete', threadId: 'mine' })", context)).ok, true);
   assert.deepEqual([calls[1].method, calls[1].url], ["DELETE", "/threads/mine"]);
+});
+
+test("a page asking for its saved thread as Scribe starts waits for the thread list (#883)", async () => {
+  const own = { id: "mine", scope: { kind: "page", ref: "lab" }, status: "idle" };
+  const { context } = pageContext();
+  context.S.ready = false;
+  context.lastReply = async () => "Done";
+  context.pageBrief = (t: any) => ({ id: t.id, status: t.status });
+  context.loadStartupData = async () => { context.S.threads = new Map([["mine", own]]); context.S.ready = true; };
+  const got = await vm.runInContext("pageRequest({ id: 'lab' }, { op: 'get', threadId: 'mine' })", context);
+  assert.equal(got.ok, true);
+  assert.equal(got.reply, "Done");
+  // Still no list (Scribe offline): the page hears it is unavailable, not that its thread is gone.
+  context.S.ready = false;
+  context.loadStartupData = async () => { throw new Error("offline"); };
+  assert.equal((await vm.runInContext("pageRequest({ id: 'lab' }, { op: 'get', threadId: 'mine' })", context)).error, "unavailable");
 });
 
 test("the bridge reads data: URLs and refuses images that won't do before calling the board", async () => {

@@ -12735,6 +12735,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
    */
   async function pageRequest(tab, data, { activated = true } = {}) {
     const prompt = typeof data.prompt === "string" ? data.prompt.trim() : "";
+    // Before the first thread list arrives every thread looks missing: a page restoring its saved
+    // thread as Scribe starts would forget it and start another in a new worktree (#883).
+    if (!S.ready) await loadStartupData().catch(() => {});
+    if (!S.ready && (data.threadId || data.op === "threads")) return { ok: false, error: "unavailable" };
     const thread = data.threadId ? S.threads.get(data.threadId) : null;
     switch (data.op) {
       case "threads":

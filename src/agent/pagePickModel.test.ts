@@ -16,7 +16,7 @@ function fn(source: string, name: string): string {
 function pickContext() {
   const opened: any[] = [];
   const context: any = vm.createContext({
-    S: { threads: new Map(), details: new Map() },
+    S: { threads: new Map(), details: new Map(), ready: true },
     setTimeout,
     openMenuAnchor: null,
     modelInfo: (provider: string, id: string) => (id === "opus" ? { label: "Opus" } : null),

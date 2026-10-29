@@ -58,7 +58,7 @@ test("page launch forwards card context through the bridge into the first messag
   const bridge = fs.readFileSync(new URL("../bridge.ts", import.meta.url), "utf8");
   const calls: any[] = [];
   const context = vm.createContext({
-    S: { threads: new Map(), details: new Map() }, PAGE_PROMPT_MAX: 20000,
+    S: { threads: new Map(), details: new Map(), ready: true }, PAGE_PROMPT_MAX: 20000,
     pageThreadSettings: () => ({}), pageMayWrite: async () => ({ ok: true }),
     pageSentAt: new Map(), showPageThread: () => {},
     api: async (method: string, url: string, body: any) => {
