@@ -11,7 +11,7 @@ import { isPlainRecord, type PlanLimits, type Thread } from "./types.js";
 
 /** What the pool needs from Claude's provider: logins and usage reads per config folder. */
 export type AccountProvider = {
-  loginAccount(dir: string): Promise<boolean>;
+  loginAccount(dir: string, signal?: AbortSignal): Promise<boolean>;
   accountStatus(dir: string): Promise<{ loggedIn: boolean } | null>;
   logoutAccount(id: string, dir: string): Promise<void>;
   fetchPlanUsage(dir?: string): Promise<unknown | null>;
@@ -59,6 +59,7 @@ export class ClaudeAccountPool {
   private fetching = new Map<string, Promise<void>>();
   /** An account being signed in: its id until the browser sign-in ends. */
   adding: string | null = null;
+  private addAbort: AbortController | null = null;
   /** What went wrong with the last sign-in, for the accounts popup. */
   lastError: string | null = null;
 
@@ -232,9 +233,14 @@ export class ClaudeAccountPool {
     this.timers.set(id, timer);
   }
 
-  /** Start the browser sign-in for another account. It joins the list once signed in. */
+  /**
+   * Start the browser sign-in for another account. It joins the list once signed in. Closing the
+   * browser does not end Claude Code's sign-in, so adding again replaces one still waiting.
+   */
   add(): void {
-    if (this.adding) throw new Error("Finish the Claude sign-in that is already open.");
+    this.cancelAdd();
+    const abort = new AbortController();
+    this.addAbort = abort;
     const id = `acc_${crypto.randomBytes(5).toString("hex")}`;
     const dir = path.join(accountsRoot(this.deps.dataDir), id);
     prepareProfile(dir);
@@ -242,11 +248,11 @@ export class ClaudeAccountPool {
     this.lastError = null;
     this.deps.changed();
     const provider = this.deps.provider();
-    void provider.loginAccount(dir)
+    void provider.loginAccount(dir, abort.signal)
       .then(async (ok) => {
-        const status = ok ? await provider.accountStatus(dir) : null;
+        const status = ok && !abort.signal.aborted ? await provider.accountStatus(dir) : null;
         if (!status?.loggedIn) {
-          this.lastError = "The sign-in did not finish.";
+          if (!abort.signal.aborted) this.lastError = "The sign-in did not finish.";
           removeProfile(dir);
           return;
         }
@@ -271,9 +277,21 @@ export class ClaudeAccountPool {
         }
       })
       .finally(() => {
+        if (this.adding !== id) return;
         this.adding = null;
+        this.addAbort = null;
         this.deps.changed();
       });
+  }
+
+  /** Stop a sign-in still waiting for the browser. */
+  cancelAdd(): void {
+    if (!this.addAbort) return;
+    this.addAbort.abort();
+    this.addAbort = null;
+    this.adding = null;
+    this.lastError = null;
+    this.deps.changed();
   }
 
   /** Log an added account out and forget it. The caller checks that no chat runs on it. */

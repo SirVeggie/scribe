@@ -10824,7 +10824,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return row;
     };
     const render = (data) => {
-      add.disabled = Boolean(data.adding);
+      // A sign-in whose browser was closed never ends by itself: Add account starts it again.
+      add.lastChild.textContent = data.adding ? "Sign in again" : "Add account";
       const use = button("", "ag-pill", () => {
         const pick = async (value) => {
           try {
@@ -10873,7 +10874,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         list.append(row);
       }
       body.replaceChildren(useRow, list);
-      if (data.adding) body.append(el("p", "ag-modal-hint", "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first."));
+      if (data.adding) {
+        const hint = el("div", "ag-accounts-adding");
+        hint.append(el("p", "ag-modal-hint", "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first."),
+          button("Cancel", "ag-btn small", async () => {
+            try {
+              render(await api("POST", "/claude/accounts/cancel"));
+            } catch (err) {
+              notice(err.message);
+            }
+          }));
+        body.append(hint);
+      }
       else if (data.error) body.append(el("p", "ag-modal-hint ag-accounts-error", data.error));
       clearTimeout(timer);
       if (data.adding) timer = setTimeout(refresh, 3000);

@@ -197,6 +197,7 @@ export class ClaudeProvider implements AgentProvider {
   private spares = new SparePool<ClaudeSession>();
   private auth: { at: number; value: ClaudeAuth } | null = null;
   private login: Promise<void> | null = null;
+  private loginAbort: AbortController | null = null;
 
   async status(): Promise<ProviderStatus> {
     try {
@@ -234,21 +235,29 @@ export class ClaudeProvider implements AgentProvider {
    * localhost callback, so there is no URL to hand back (the one it prints wants a code pasted).
    */
   async startLogin(): Promise<{ url: string | null }> {
-    if (this.login) return { url: null };
-    this.login = this.runLogin().then(() => undefined).finally(() => {
+    // Closing the browser does not end `claude auth login`: logging in again starts a fresh one.
+    this.loginAbort?.abort();
+    const abort = new AbortController();
+    this.loginAbort = abort;
+    const login: Promise<void> = this.runLogin(undefined, abort.signal).then(() => undefined).finally(() => {
+      if (this.login !== login) return;
       this.auth = null;
       this.modelCache = null;
       this.login = null;
+      this.loginAbort = null;
     });
+    this.login = login;
     return { url: null };
   }
 
   /** Sign an added account's config folder in (#452). Resolves whether the sign-in went through. */
-  loginAccount(dir: string): Promise<boolean> {
-    return this.runLogin(dir);
+  loginAccount(dir: string, signal?: AbortSignal): Promise<boolean> {
+    return this.runLogin(dir, signal);
   }
 
-  private runLogin(dir?: string): Promise<boolean> {
+  /** signal: stop the sign-in (the user closed the browser and starts again, or cancels). */
+  private runLogin(dir?: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
     const binary = claudeBinary();
     if (!binary) return Promise.reject(new Error("The Claude Code binary for this platform is not installed."));
     const child = spawn(binary, ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(dir ? { env: accountEnv(dir) } : {}) });
@@ -260,6 +269,8 @@ export class ClaudeProvider implements AgentProvider {
     child.stderr?.on("data", take);
     const timer = setTimeout(() => stopChild(child), LOGIN_TIMEOUT_MS);
     timer.unref?.();
+    const stop = () => stopChild(child);
+    signal?.addEventListener("abort", stop, { once: true });
     return new Promise<boolean>((resolve) => {
       child.once("error", (err) => {
         log(`Claude login failed: ${err.message}`);
@@ -272,9 +283,12 @@ export class ClaudeProvider implements AgentProvider {
           const tail = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" ");
           log(`Claude login failed (exit ${code ?? "null"})${tail ? `: ${tail}` : ""}`);
         }
-        resolve(code === 0);
+        resolve(code === 0 && !signal?.aborted);
       });
-    }).finally(() => clearTimeout(timer));
+    }).finally(() => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
+    });
   }
 
   /** `claude auth status` for an added account's folder; null when it gives no answer. */

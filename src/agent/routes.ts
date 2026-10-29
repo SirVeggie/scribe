@@ -234,6 +234,10 @@ export function agentRouter(host: AgentHost): express.Router {
     host.addClaudeAccount();
     return host.claudeAccounts();
   }));
+  router.post("/claude/accounts/cancel", wrap(() => {
+    host.cancelClaudeAccount();
+    return host.claudeAccounts();
+  }));
   router.delete("/claude/accounts/:id", wrap(async (req) => {
     await host.removeClaudeAccount(req.params.id);
     return host.claudeAccounts();

@@ -1338,6 +1338,11 @@ export class AgentHost {
     this.claudePool.add();
   }
 
+  /** Stop a Claude account sign-in still waiting for the browser. */
+  cancelClaudeAccount(): void {
+    this.claudePool.cancelAdd();
+  }
+
   /** Log a Claude account out. The default one is Claude Code's own login (the CLI's too). */
   async removeClaudeAccount(id: string): Promise<void> {
     if (id === DEFAULT_ACCOUNT) return this.providerLogout("claude");

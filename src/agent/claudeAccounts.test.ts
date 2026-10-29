@@ -160,3 +160,43 @@ test("chats keep their account while warm, move after an hour idle, and follow a
   assert.deepEqual(p.alternative("default"), { account: "acc_1", label: "another account" });
   assert.throws(() => p.setUse("acc_unknown"));
 });
+
+test("adding again replaces a sign-in whose browser was closed, and cancel ends it", async () => {
+  const signals: AbortSignal[] = [];
+  const provider: AccountProvider = {
+    // Like `claude auth login` after the browser is closed: it never ends until stopped.
+    loginAccount: (_dir, signal) => new Promise((resolve) => {
+      signals.push(signal!);
+      signal!.addEventListener("abort", () => resolve(false));
+    }),
+    accountStatus: async () => null, logoutAccount: async () => undefined, fetchPlanUsage: async () => null, signedIn: () => true,
+  };
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-add-"));
+  const prevConfig = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = path.join(data, "default");
+  try {
+    const settings: Record<string, unknown> = {};
+    const p = new ClaudeAccountPool({
+      getSetting: <T,>(key: string, fallback: T) => (key in settings ? settings[key] as T : fallback),
+      setSetting: (key, value) => { settings[key] = value; },
+      provider: () => provider, dataDir: data, defaultLimits: () => undefined, running: () => 0, changed: () => undefined, offline: true,
+    });
+    p.add();
+    const first = p.adding;
+    p.add();
+    assert.ok(signals[0].aborted, "the stuck sign-in is stopped");
+    assert.notEqual(p.adding, first);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.ok(p.adding, "the old sign-in ending does not clear the new one");
+    assert.equal(p.lastError, null);
+    p.cancelAdd();
+    assert.ok(signals[1].aborted);
+    assert.equal(p.adding, null);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(p.lastError, null);
+    assert.equal(p.multi(), false);
+  } finally {
+    if (prevConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prevConfig;
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});

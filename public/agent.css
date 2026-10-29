@@ -6853,3 +6853,9 @@ body.resizing-split main.has-split .agent-dock {
 .ag-meter-accounts {
   font-size: 12.5px;
 }
+
+.ag-accounts-adding {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
