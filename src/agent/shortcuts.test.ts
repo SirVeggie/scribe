@@ -5,6 +5,31 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8");
 
+test("reasoning cycling skips Default and wraps through explicit levels", async () => {
+  for (const initial of [undefined, null, "low", "high", "unavailable"]) {
+    const settings = { provider: "test", model: "test", effort: initial };
+    const visited: string[] = [];
+    const notices: string[] = [];
+    const ctx = vm.createContext({
+      targetView: () => ({
+        settings: () => settings,
+        updateSettings: async ({ effort }: { effort: string }) => {
+          settings.effort = effort;
+          visited.push(effort);
+        },
+      }),
+      modelInfo: () => ({ defaultEffort: "low", efforts: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }),
+      notice: (message: string) => notices.push(message),
+    });
+    const start = source.indexOf("  async function cycleEffort()");
+    vm.runInContext(source.slice(start, source.indexOf("  function applyButton()", start)), ctx);
+    for (let i = 0; i < 3; i++) await vm.runInContext("cycleEffort()", ctx);
+    const expected = initial === "low" ? ["high", "low", "high"] : ["low", "high", "low"];
+    assert.deepEqual(visited, expected, `starting from ${initial}`);
+    assert.deepEqual(notices, expected.map(level => `Reasoning: ${level === "low" ? "Low" : "High"}`));
+  }
+});
+
 test("workspace cycling visits every folder and none as thread counts and recency change", async () => {
   for (const existing of [true, false]) {
     const currentThread = { cwd: "C:/llm-chat" as string | null };

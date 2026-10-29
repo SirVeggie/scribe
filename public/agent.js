@@ -10228,10 +10228,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       notice(`${info?.label || s.model} has no reasoning levels`);
       return;
     }
-    const levels = [null, ...info.efforts.map((e) => e.id)];
-    const next = levels[(levels.indexOf(s.effort ?? null) + 1) % levels.length];
+    const levels = info.efforts.map((e) => e.id);
+    const next = levels[(levels.indexOf(s.effort) + 1) % levels.length];
     await view.updateSettings({ effort: next });
-    const label = next ? info.efforts.find((e) => e.id === next)?.label || next : `Default${info.defaultEffort ? ` (${info.efforts.find((e) => e.id === info.defaultEffort)?.label || info.defaultEffort})` : ""}`;
+    const label = info.efforts.find((e) => e.id === next)?.label || next;
     notice(`Reasoning: ${label}`);
   }
 
