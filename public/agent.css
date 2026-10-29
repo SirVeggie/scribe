@@ -1452,6 +1452,55 @@ html[data-theme="cream"] .ag-md {
   color: var(--text);
 }
 
+/* thread_update renaming the chat, as a timeline event */
+.ag-rename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ag-rename .ag-ico {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.ag-rename-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--heading);
+  font-weight: 500;
+}
+
+/* a tool's flat input as labelled fields */
+.ag-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--ag-sunken);
+  border-radius: 7px;
+  padding: 7px 9px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.ag-field-key {
+  color: var(--muted);
+}
+
+.ag-field-value {
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .ag-subtools {
   display: flex;
   flex-direction: column;

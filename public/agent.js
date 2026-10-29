@@ -4580,6 +4580,14 @@
     renderTool(it, byParent) {
       const helper = helperCall(it);
       if (helper && !helper.existing) return this.renderHelperCall(it, helper);
+      const renamed = threadRenameTitle(it);
+      if (renamed) {
+        // A finished rename reads as an event in the timeline rather than a tool step.
+        const node = el("div", "ag-rename");
+        node.dataset.itemId = it.id;
+        node.append(icon("pen"), el("span", null, "Renamed chat to"), el("span", "ag-rename-title", renamed));
+        return node;
+      }
       const key = `t:${it.id}`;
       const task = it.task;
       const open = this.expanded.has(key);
@@ -4602,6 +4610,7 @@
       const page = pageTool(it);
       const browser = browserOpenInfo(it);
       const fileSummary = fileToolSummary(it);
+      const scribe = !page && !browser && !fileSummary ? scribeToolLabel(it) : null;
       if (helper) {
         const action = helper.input.stop === true ? "Stop helper" : typeof helper.input.task === "string" && helper.input.task.trim() ? "Follow up helper" : "Wait for helper";
         label.append(el("span", "ag-tool-verb", action), el("span", "ag-tool-title", helper.thread ? helperName(helper.thread) : helper.id));
@@ -4631,8 +4640,15 @@
         }
         if (files.length > 3) label.append(el("span", "ag-muted", `+${files.length - 3} more`));
       } else if (it.tool === "execute") {
-        label.append(el("code", "ag-cmd", it.detail || it.title));
+        label.append(el("code", "ag-cmd", shellCommandText(it.detail || it.title)));
         if (it.detail && it.title && it.title !== it.detail && !it.title.startsWith("`")) label.dataset.tooltip = it.title;
+      } else if (scribe) {
+        label.append(el("span", "ag-tool-verb", scribe.verb));
+        if (scribe.target) {
+          const title = el("span", "ag-tool-title", scribe.target);
+          title.dataset.tooltip = scribe.target;
+          label.append(title);
+        }
       } else {
         label.append(el("span", "ag-tool-title", it.title));
       }
@@ -4656,7 +4672,7 @@
         } else if (it.tool === "execute") {
           if (it.detail && it.title && !it.title.startsWith("`") && it.title !== it.detail) body.append(el("div", "ag-tool-desc", it.title));
           // The head cuts the command to one line; the body has all of it.
-          if (it.detail) body.append(el("pre", "ag-pre small ag-cmd-full", it.detail));
+          if (it.detail) body.append(el("pre", "ag-pre small ag-cmd-full", shellCommandText(it.detail)));
         } else if (it.detail && it.tool !== "execute" && !(it.tool === "task" && typeof it.input?.prompt === "string")) body.append(el("pre", "ag-pre small", it.detail));
         if (it.diff) {
           const files = R.parsePatch(it.diff);
@@ -4676,11 +4692,13 @@
           brief.append(md);
           body.append(brief);
         } else if (it.input && (it.tool === "mcp" || it.tool === "other" || it.tool === "fetch" || it.tool === "task") && !browser) {
-          body.append(el("pre", "ag-pre small", jsonText(it.input)));
+          body.append(fieldsView(it.input) || el("pre", "ag-pre small", jsonText(it.input)));
         }
         // A background task's tool result is only the launch receipt; its outcome is on the task line.
         if (it.output && it.tool !== "read" && !task?.background && !page && !browser) {
-          const out = el("pre", "ag-pre ag-out", it.output.length > 6000 ? `${it.output.slice(0, 6000)}\n…` : it.output);
+          const result = it.tool === "mcp" ? parseToolJson(it.output) : null;
+          const text = (result && resultText(result)) || it.output;
+          const out = el("pre", "ag-pre ag-out", text.length > 6000 ? `${text.slice(0, 6000)}\n…` : text);
           body.append(out);
         }
         if (children?.length) {
@@ -7269,6 +7287,132 @@
     if (name === "grep_files" && input.ignoreCase) parts.push("ignore case");
     if (name !== "read_file" && Number.isInteger(input.offset) && input.offset > 1) parts.push(`from result ${input.offset}`);
     return parts.join(" · ");
+  }
+
+  /**
+   * A shell step's command as the agent wrote it. Codex reports the shell it ran under around it,
+   * quoted for that shell: "C:\\...\\powershell.exe" -Command '…' or /bin/bash -lc '…'.
+   */
+  function shellCommandText(command) {
+    const text = String(command || "");
+    const m = /^\s*(?:"(?:[^"]*[\\/])?(powershell|pwsh|bash|zsh|sh)(?:\.exe)?"|(?:[^"\s]*[\\/])?(powershell|pwsh|bash|zsh|sh)(?:\.exe)?)(?:\s+-(?:NoProfile|NoLogo|NonInteractive|l|login)|\s+-ExecutionPolicy\s+\w+)*\s+-(?:Command|c|lc)\s+([\s\S]+?)\s*$/i.exec(text);
+    if (!m) return text;
+    const ps = /^(powershell|pwsh)$/i.test(m[1] || m[2]);
+    const arg = m[3];
+    if (arg.length >= 2 && arg[0] === "'" && arg.endsWith("'")) {
+      const inner = arg.slice(1, -1);
+      if (ps) return inner.replace(/''/g, "'");
+      // Any other quote means the argument was several quoted pieces: show it as given.
+      return inner.replace(/'\\''/g, "").includes("'") ? arg : inner.replace(/'\\''/g, "'");
+    }
+    if (arg.length >= 2 && arg[0] === '"' && arg.endsWith('"')) {
+      const inner = arg.slice(1, -1);
+      return ps ? inner.replace(/(?:`|\\)"/g, '"') : inner.replace(/\\(["\\$`])/g, "$1");
+    }
+    return arg;
+  }
+
+  /** The first non-empty string among an input's fields. */
+  function firstText(input, ...keys) {
+    for (const k of keys) {
+      const v = input[k];
+      if (typeof v === "string" && v.trim()) return v.trim().split("\n")[0];
+    }
+    return "";
+  }
+
+  function pageName(input) {
+    const ref = firstText(input, "key", "id");
+    return (ref && app()?.resolvePages?.([ref])?.[ref]?.title) || ref.replace(/^scribe:/, "");
+  }
+
+  /** Scribe's own tools as a verb and what it acts on, for the step head: [verb, target]. */
+  const SCRIBE_TOOL_LABELS = {
+    thread_update: (i) => (typeof i.title === "string" && i.title.trim() ? ["Rename thread", i.title] : i.workspace ? ["Move workspace", i.workspace] : ["Update thread"]),
+    thread_list: (i) => ["Find threads", firstText(i, "query", "q")],
+    thread_read: (i) => ["Read thread", firstText(i, "thread", "id")],
+    thread_access: (i) => ["Ask to read thread", firstText(i, "thread", "id")],
+    skill_read: (i) => ["Read skill", [firstText(i, "name"), firstText(i, "file")].filter(Boolean).join(" · ")],
+    memory_save: (i) => [i.id ? "Update memory" : "Save memory", firstText(i, "title", "text")],
+    memory_delete: (i) => ["Delete memory", firstText(i, "id")],
+    memory_list: () => ["List memories"],
+    ask_user: (i) => ["Ask you", firstText(i, "title") || firstText(Array.isArray(i.questions) && isRecord(i.questions[0]) ? i.questions[0] : {}, "question", "label")],
+    web_request: (i) => ["Ask for web access", firstText(i, "reason", "why")],
+    page_read: (i) => ["Read page", pageName(i)],
+    page_list: () => ["List open pages"],
+    page_state: (i) => ["Read page data", pageName(i)],
+    page_grep: (i) => ["Search page", [pageName(i), firstText(i, "pattern", "query")].filter(Boolean).join(" · ")],
+    page_wait: (i) => ["Wait on page", pageName(i)],
+    page_ask: (i) => ["Ask on page", pageName(i)],
+    page_open: (i) => ["Open page", pageName(i)],
+    page_close: (i) => ["Close page", pageName(i)],
+    page_screenshot: (i) => ["Screenshot page", pageName(i)],
+    page_access: (i) => ["Ask for page access", pageName(i)],
+    page_pin: (i) => ["Pin page", pageName(i)],
+    page_unpin: (i) => ["Unpin page", pageName(i)],
+    library_search: (i) => ["Search library", firstText(i, "query", "q")],
+    library_folders: () => ["List library folders"],
+    scribe_docs: (i) => ["Read Scribe docs", firstText(i, "section", "topic")],
+    settings_find: (i) => ["Find settings", firstText(i, "query", "q")],
+    settings_show: () => ["Show settings"],
+    component_show: (i) => ["Show in chat", firstText(i, "title")],
+    harness_docs: () => ["Read agent setup docs"],
+    harness_change: () => ["Change agent setup"],
+    agent_models: () => ["List models"],
+    plugin_list: () => ["List plugins"],
+    plugin_guide: (i) => ["Read plugin guide", firstText(i, "id")],
+    plugin_call: (i) => ["Call plugin", [firstText(i, "id"), firstText(i, "method")].filter(Boolean).join(" · ")],
+    browser_snapshot: () => ["Read browser page"],
+    browser_screenshot: () => ["Screenshot browser"],
+    browser_act: (i) => ["Use browser", firstText(i, "action", "kind")],
+    browser_eval: () => ["Run script in browser"],
+    browser_console: () => ["Read browser console"],
+    browser_network: () => ["Read browser network"],
+    browser_tabs: () => ["List browser tabs"],
+  };
+
+  /** A call to one of Scribe's other tools, read for the step head: { verb, target }. */
+  function scribeToolLabel(it) {
+    if (it.tool !== "mcp") return null;
+    const name = /^Scribe:\s+(\w+)/.exec(it.title || "")?.[1] || /^mcp__scribe__(\w+)$/.exec(it.name || "")?.[1];
+    if (!name) return null;
+    const input = isRecord(it.input) ? it.input : {};
+    const known = SCRIBE_TOOL_LABELS[name];
+    if (known) {
+      const [verb, target] = known(input);
+      return { verb, target: typeof target === "string" ? target.trim() : "" };
+    }
+    const words = name.replace(/_/g, " ");
+    return { verb: words[0].toUpperCase() + words.slice(1), target: pageName(input) };
+  }
+
+  /** The new title of a thread_update that only renamed the thread and went through; "" otherwise. */
+  function threadRenameTitle(it) {
+    if (it.tool !== "mcp" || it.status !== "done" || it.output == null) return "";
+    if (!/^Scribe:\s+thread_update\b/.test(it.title || "") && it.name !== "mcp__scribe__thread_update") return "";
+    if (isRecord(it.input) && it.input.workspace) return "";
+    const said = parseToolJson(it.output)?.title;
+    return typeof said === "string" ? /^The thread is now titled “(.*)”\.$/s.exec(said)?.[1] || "" : "";
+  }
+
+  /** A tool's input as labelled fields when it is flat (strings, numbers, flags); null otherwise. */
+  function fieldsView(input) {
+    if (!isRecord(input)) return null;
+    const entries = Object.entries(input).filter(([, v]) => v !== undefined && v !== null && v !== "");
+    if (!entries.length || entries.length > 12 || entries.some(([, v]) => typeof v === "object")) return null;
+    const list = el("div", "ag-fields");
+    for (const [k, v] of entries) {
+      const text = String(v);
+      list.append(el("span", "ag-field-key", k.replace(/_/g, " ")), el("span", "ag-field-value", text.length > 2000 ? `${text.slice(0, 2000)}…` : text));
+    }
+    return list;
+  }
+
+  /** A JSON tool result whose fields are all sentences (Scribe's own replies) as plain lines. */
+  function resultText(result) {
+    const entries = Object.entries(result);
+    if (!entries.length || entries.some(([, v]) => typeof v !== "string")) return "";
+    return entries.length === 1 ? entries[0][1] : entries.map(([k, v]) => `${k}: ${v}`).join("\n");
   }
 
   /** A thread's helper threads (agent_run), oldest first. */

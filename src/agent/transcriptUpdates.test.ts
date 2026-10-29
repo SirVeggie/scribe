@@ -363,3 +363,42 @@ test("render requests in one frame draw once, at the widest scope asked for", as
     await browser.close();
   }
 });
+
+test("tool steps read for the user: unwrapped shell commands, Scribe tool verbs, and a rename line (#873)", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    const shown = await page.evaluate(async (base) => {
+      const w = window as any;
+      const ps = String.raw`"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git commit -m "x"; echo ''done'''`;
+      w.T.open(base.thread, [
+        ...base.items.slice(0, 1),
+        { id: "sh", threadId: "t", turnId: "u1", seq: 2, kind: "tool", tool: "execute", toolId: "c1", title: "Shell", detail: ps, status: "done", exitCode: 0 },
+        { id: "rn", threadId: "t", turnId: "u1", seq: 3, kind: "tool", tool: "mcp", toolId: "c2", title: "Scribe: thread_update", input: { title: "Cat on a fence" }, output: '{\n  "title": "The thread is now titled “Cat on a fence”."\n}', status: "done" },
+        { id: "no", threadId: "t", turnId: "u1", seq: 4, kind: "tool", tool: "mcp", toolId: "c3", title: "Scribe: thread_update", input: { title: "Other" }, output: '{"title":"Not changed: the user named this thread “Mine”."}', status: "done" },
+        { id: "sk", threadId: "t", turnId: "u1", seq: 5, kind: "tool", tool: "mcp", toolId: "c4", title: "Scribe: skill_read", input: { name: "scribe" }, output: "x", status: "done" },
+      ], [base.turn]);
+      await w.T.frame();
+      (document.querySelector('[data-item-id="no"] .ag-tool-head') as HTMLElement).click();
+      const text = (sel: string) => document.querySelector(sel)?.textContent;
+      return {
+        cmd: text('[data-item-id="sh"] .ag-cmd'),
+        rename: text('[data-item-id="rn"].ag-rename'),
+        refused: text('[data-item-id="no"] .ag-tool-label'),
+        refusedField: text('[data-item-id="no"] .ag-fields'),
+        refusedOut: text('[data-item-id="no"] .ag-out'),
+        skill: text('[data-item-id="sk"] .ag-tool-label'),
+      };
+    }, { thread, items, turn });
+    assert.deepEqual(shown, {
+      cmd: `git commit -m "x"; echo 'done'`,
+      rename: "Renamed chat toCat on a fence",
+      refused: "Rename threadOther",
+      refusedField: "titleOther",
+      refusedOut: "Not changed: the user named this thread “Mine”.",
+      skill: "Read skillscribe",
+    });
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
