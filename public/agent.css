@@ -6844,6 +6844,25 @@ body.resizing-split main.has-split .agent-dock {
   text-align: right;
 }
 
+.ag-usage-tip-account + .ag-usage-tip-account {
+  margin-top: 8px;
+}
+
+.ag-usage-tip-account > .ag-account-name {
+  margin-bottom: 4px;
+}
+
+.ag-usage-tip-account.ag-usage-tip-divided {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.ag-usage-tip-accounts.ag-usage-tip-undivided {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .ag-account-name {
   overflow: hidden;
   text-overflow: ellipsis;

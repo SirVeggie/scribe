@@ -137,11 +137,13 @@ export class ClaudeAccountPool {
     return row?.email ?? (id === DEFAULT_ACCOUNT || !id ? "the default account" : "another account");
   }
 
-  /** The default account's live usage averaged with the added ones', or null with only one account. */
+  /** The default account's live usage averaged with the added ones', and the next chat's pick; null with only one account. */
   combined(): PlanLimits | null {
     if (!this.multi()) return null;
-    return combineLimits(this.list().map((r) => ({ id: r.id, weight: r.weight, ...(r.email ? { email: r.email } : {}), ...(r.plan ? { plan: r.plan } : {}),
+    const out = combineLimits(this.list().map((r) => ({ id: r.id, weight: r.weight, ...(r.email ? { email: r.email } : {}), ...(r.plan ? { plan: r.plan } : {}),
       ...(r.limits ? { limits: r.limits } : {}) })));
+    const next = out && this.peek();
+    return out && next ? { ...out, nextAccount: next } : out;
   }
 
   private candidates(exclude?: string): PickCandidate[] {

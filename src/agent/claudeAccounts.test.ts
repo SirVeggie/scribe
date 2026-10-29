@@ -77,12 +77,27 @@ test("the combined meter averages by plan size and resets with the soonest accou
   ], now)!;
   const five = out.windows.find((w) => w.id === "five_hour")!;
   const week = out.windows.find((w) => w.id === "seven_day")!;
-  assert.ok(Math.abs(five.utilization - (0.2 + 0.8 * 5) / 6) < 1e-9);
+  // The 5-hour window also by weekly headroom: 1 × 0.4 for a, 5 × 1.0 for b.
+  assert.ok(Math.abs(five.utilization - (0.2 * 0.4 + 0.8 * 5) / 5.4) < 1e-9);
   assert.ok(Math.abs(week.utilization - 0.6 / 6) < 1e-9);
   assert.equal(five.resetsAt, now + 2 * H);
   assert.equal(out.accounts?.length, 3);
   assert.equal(out.accounts?.[1].email, "b@x");
   assert.equal(combineLimits([{ id: "x", weight: 1 }], now), null);
+});
+
+test("an account with its week nearly used up barely counts in the combined 5-hour window", () => {
+  const out = combineLimits([
+    { id: "default", weight: 1, limits: limits(0, 0.99, 20, 2) },
+    { id: "acc_1", weight: 1, limits: limits(0.7, 0.08, 96, 4) },
+  ], now)!;
+  const five = out.windows.find((w) => w.id === "five_hour")!;
+  assert.ok(five.utilization > 0.69, `5-hour ${five.utilization}`);
+  const spent = combineLimits([
+    { id: "default", weight: 1, limits: limits(0.2, 1, 20, 2) },
+    { id: "acc_1", weight: 1, limits: limits(0.6, 1, 96, 4) },
+  ], now)!;
+  assert.ok(Math.abs(spent.windows.find((w) => w.id === "five_hour")!.utilization - 0.4) < 1e-9, "every week spent: plan weights");
 });
 
 test("merging keeps newer windows and drops older readings", () => {

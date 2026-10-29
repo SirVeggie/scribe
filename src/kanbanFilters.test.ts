@@ -270,6 +270,23 @@ test("Board header shows main provider quotas, detailed tips, and live recovery"
     await claude.getByText('0%').waitFor();
     assert.equal(await usage.locator('.board-quota').count(), 1);
     assert.equal(await claude.locator('progress').getAttribute('value'), '0');
+    // Several Claude accounts (#894): each one's windows, not the average; past three, the next pick's bars and a line for the rest.
+    const now = Date.now();
+    const acc = (id: string, five: number, week = true) => ({ id, email: id + '@x', weight: 1, limits: { availability: 'available', at: now, windows: [
+      { id: 'five_hour', label: '5-hour', utilization: five, resetsAt: now + 3600000 },
+      ...(week ? [{ id: 'seven_day', label: 'Weekly', utilization: 0.5, resetsAt: now + 86400000 }] : [])] } });
+    await page.evaluate(claudeLimits => (window as any).scribe.agent.changedLimits({ claude: claudeLimits }),
+      { at: now, windows: [{ id: 'five_hour', label: '5-hour', utilization: 0.33 }], accounts: [acc('a', 0.1), acc('b', 0.2)] });
+    await claude.getByText('33%').waitFor();
+    assert.match(await claude.getAttribute('data-tooltip') || '', /a@x\n5-hour: 10% used.*\nWeekly: 50% used.*\n \nb@x\n5-hour: 20% used/);
+    assert.equal(JSON.parse(await claude.getAttribute('data-tooltip-quotas') || '[]').length, 4);
+    await page.evaluate(claudeLimits => (window as any).scribe.agent.changedLimits({ claude: claudeLimits }),
+      { at: now, windows: [{ id: 'five_hour', label: '5-hour', utilization: 0.34 }], nextAccount: 'c',
+        accounts: [acc('a', 0.1, false), acc('b', 0.2, false), acc('c', 0.3, false), acc('d', 0.4, false)] });
+    await claude.getByText('34%').waitFor();
+    const many = await claude.getAttribute('data-tooltip') || '';
+    assert.match(many, /c@x · next chat\n5-hour: 30% used/);
+    assert.match(many, /a@x · 5h 10% · wk –\nb@x · 5h 20% · wk –\nd@x · 5h 40% · wk –$/);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

@@ -232,7 +232,9 @@ export type AccountLimitsRow = {
 
 /**
  * The accounts' windows as one: each window's use averaged by plan size (a Max 5x account counts
- * five times a Pro one), resetting when the soonest of them does. Accounts that have not reported a
+ * five times a Pro one), resetting when the soonest of them does. The 5-hour window is weighted by
+ * each account's weekly headroom too (#894): an account whose week is nearly used up has little of
+ * its 5-hour window left to give, however empty that looks. Accounts that have not reported a
  * window are left out of its average. The rows go along for the per-account breakdown.
  */
 export function combineLimits(rows: AccountLimitsRow[], now = Date.now()): PlanLimits | null {
@@ -240,6 +242,9 @@ export function combineLimits(rows: AccountLimitsRow[], now = Date.now()): PlanL
   if (!reported.length) return null;
   const ids: string[] = [];
   for (const r of reported) for (const w of r.limits!.windows) if (!ids.includes(w.id)) ids.push(w.id);
+  const headroom = (r: AccountLimitsRow) => Math.min(1, Math.max(0, 1 - windowUse(r.limits, "seven_day", now).used));
+  // Every week used up: the plain plan weights, so the meter still says something.
+  const byWeek = reported.some((r) => headroom(r) > 0);
   const windows: PlanLimits["windows"] = [];
   for (const id of ids) {
     let sum = 0;
@@ -251,8 +256,10 @@ export function combineLimits(rows: AccountLimitsRow[], now = Date.now()): PlanL
       if (!w) continue;
       label = w.label;
       const live = w.resetsAt && w.resetsAt <= now ? 0 : w.utilization;
-      sum += live * r.weight;
-      weight += r.weight;
+      const share = id === "five_hour" && byWeek ? r.weight * headroom(r) : r.weight;
+      if (!share) continue;
+      sum += live * share;
+      weight += share;
       if (w.resetsAt && w.resetsAt > now) resets.push(w.resetsAt);
     }
     if (!weight) continue;

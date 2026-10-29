@@ -328,8 +328,13 @@ export type PlanLimits = {
   ordinaryUsageAllowed?: boolean | null;
   permissionAt?: number;
   buckets?: Array<{ id: string; label: string; planType?: string; credits?: { hasCredits: boolean; unlimited: boolean; balance?: string } }>;
-  /** Claude with several accounts (#452): the windows above are their plan-weighted average; these are each account's own. */
+  /**
+   * Claude with several accounts (#452): the windows above are their weighted average (the 5-hour one
+   * also by each account's weekly headroom, #894); these are each account's own.
+   */
   accounts?: Array<{ id: string; email?: string; plan?: string; weight: number; limits?: PlanLimits }>;
+  /** With accounts: the one a new chat would run on now. */
+  nextAccount?: string;
 };
 
 export type PlanWindow = {

@@ -10507,20 +10507,55 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     if (!limits) return null;
     const tip = el("div", "ag-usage-tip");
     tip.append(el("div", "ag-usage-tip-title", `${PROVIDER_LABEL[provider] || provider} plan usage`));
-    for (const w of detailWindows(limits)) {
-      const row = el("div", `ag-usage-tip-row lvl-${usageLevel(w.utilization)}`);
-      row.append(el("span", "ag-usage-tip-label", w.label), quotaBar(w), el("span", "ag-usage-tip-pct", quotaPercent(provider, w.utilization)));
-      if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaResetPace(provider, w)));
-      tip.append(row);
-    }
-    if (provider === "claude" && limits.accounts?.length > 1) {
-      tip.firstChild.textContent = `Claude plan usage · average of ${limits.accounts.length} accounts`;
-      tip.append(claudeAccountRows(limits, thread?.claudeAccount, "ag-usage-tip-accounts"));
-    }
+    if (provider === "claude" && limits.accounts?.length > 1) tip.append(...claudeAccountsTip(limits, thread?.claudeAccount));
+    else for (const w of detailWindows(limits)) tip.append(usageTipRow(provider, w));
     if (provider === "claude") for (const note of claudeQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
     else if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
     return tip;
+  }
+
+  function usageTipRow(provider, w) {
+    const row = el("div", `ag-usage-tip-row lvl-${usageLevel(w.utilization)}`);
+    row.append(el("span", "ag-usage-tip-label", w.label), quotaBar(w), el("span", "ag-usage-tip-pct", quotaPercent(provider, w.utilization)));
+    if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaResetPace(provider, w)));
+    return row;
+  }
+
+  /**
+   * Several Claude accounts (#894): each account's own windows, no average. The chat's account (or
+   * the next chat's pick) goes first, set off by a divider; up to three accounts all get bars, more
+   * leave the others one line each.
+   */
+  function claudeAccountsTip(limits, account) {
+    const accounts = limits.accounts;
+    const focus = accounts.find((a) => a.id === account) ? account : accounts.find((a) => a.id === limits.nextAccount)?.id;
+    const first = accounts.find((a) => a.id === focus);
+    const rest = accounts.filter((a) => a !== first);
+    const bars = (a) => {
+      const box = el("div", "ag-usage-tip-account");
+      const name = el("div", "ag-account-name", a.email || "Account");
+      if (a === first) name.append(el("span", "ag-muted", focus === account ? " · this chat" : " · next chat"));
+      box.append(name);
+      const windows = liveWindows(a.limits?.windows).filter((w) => w.id === "five_hour" || w.id === "seven_day");
+      for (const w of windows) box.append(usageTipRow("claude", w));
+      if (!windows.length) box.append(el("div", "ag-usage-tip-note", "No usage reported yet"));
+      return box;
+    };
+    const out = [];
+    if (first) out.push(bars(first));
+    if (accounts.length <= 3) {
+      rest.forEach((a, i) => {
+        const box = bars(a);
+        if (i === 0 && first) box.classList.add("ag-usage-tip-divided");
+        out.push(box);
+      });
+    } else {
+      const rows = claudeAccountRows(rest, "ag-usage-tip-accounts");
+      if (!first) rows.classList.add("ag-usage-tip-undivided");
+      out.push(rows);
+    }
+    return out;
   }
 
   /* ----- context window ----- */
@@ -10776,8 +10811,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     }
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
     if (provider === "claude" && limits.accounts?.length > 1) {
-      head.firstChild.after(el("span", "ag-muted", ` · average of ${limits.accounts.length} accounts`));
-      box.append(claudeAccountRows(limits, null, "ag-usage-tip-accounts ag-meter-accounts"));
+      head.firstChild.after(el("span", "ag-muted", ` · ${limits.accounts.length} accounts combined`));
+      box.append(claudeAccountRows(limits.accounts, "ag-usage-tip-accounts ag-meter-accounts"));
     }
     if (provider === "claude") for (const note of claudeQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
     return box;
@@ -10926,19 +10961,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     void refresh();
   }
 
-  /** Per-account rows under the averaged Claude windows (#452). account: the chat's own, marked. */
-  function claudeAccountRows(limits, account, cls) {
+  /** Claude accounts one line each (#452): 5-hour and weekly use. */
+  function claudeAccountRows(accounts, cls) {
     const box = el("div", cls);
     const pct = (a, id) => {
       const w = liveWindows(a.limits?.windows).find((x) => x.id === id);
       return w ? quotaPercent("claude", w.utilization) : "–";
     };
     box.append(el("span"), el("span", "ag-muted", "5h"), el("span", "ag-muted", "wk"));
-    for (const a of limits.accounts) {
-      const name = el("span", "ag-account-name", a.email || "Account");
-      if (account && a.id === account) name.append(el("span", "ag-muted", " · this chat"));
-      box.append(name, el("span", null, pct(a, "five_hour")), el("span", null, pct(a, "seven_day")));
-    }
+    for (const a of accounts) box.append(el("span", "ag-account-name", a.email || "Account"), el("span", null, pct(a, "five_hour")), el("span", null, pct(a, "seven_day")));
     return box;
   }
 

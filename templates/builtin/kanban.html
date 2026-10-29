@@ -6432,12 +6432,38 @@
         else if (limits.availability && limits.availability !== "available") details.push("Usage limits unavailable");
         if (provider === "codex" && limits.ordinaryUsageAllowed === false) details.push("Included usage blocked · waiting for provider confirmation");
         if (limits.overage) details.push("Extra usage billing active");
-        windows.forEach(function (w) {
+        var quotaLine = function (w) {
           var quota = workerQuotaWindow(provider, w);
           var text = w.label + ": " + (quota.percent == null ? "Unavailable" : quota.percent + "% used") + (quota.reset ? " · " + quota.reset : "");
           details.push(text);
           quotas.push({ text: text, percent: quota.percent });
-        });
+        };
+        var accounts = provider === "claude" && Array.isArray(limits.accounts) && limits.accounts.length > 1 ? limits.accounts : null;
+        if (accounts) {
+          // Several Claude accounts (#894): each one's own windows, not their average. Up to three get
+          // bars; with more, the next chat's account does and the others get a line each.
+          var next = accounts.length > 3 && accounts.find(function (a) { return a.id === limits.nextAccount; }) || accounts[0];
+          accounts.forEach(function (a) {
+            if (accounts.length > 3 && a !== next) return;
+            details.push(" ");
+            details.push((a.email || "Account") + (accounts.length > 3 ? " · next chat" : ""));
+            var own = (a.limits && a.limits.windows || []).filter(function (w) { return w.id === "five_hour" || w.id === "seven_day"; });
+            own.forEach(quotaLine);
+            if (!own.length) details.push("No usage reported yet");
+          });
+          if (accounts.length > 3) {
+            details.push(" ");
+            accounts.forEach(function (a) {
+              if (a === next) return;
+              var pct = function (id) {
+                var w = (a.limits && a.limits.windows || []).find(function (x) { return x.id === id; });
+                var q = w && workerQuotaWindow(provider, w);
+                return q && q.percent != null ? q.percent + "%" : "–";
+              };
+              details.push((a.email || "Account") + " · 5h " + pct("five_hour") + " · wk " + pct("seven_day"));
+            });
+          }
+        } else windows.forEach(quotaLine);
         if (!windows.length && !limits.detail && (!limits.availability || limits.availability === "available")) details.push("No usage windows reported");
       }
       group.setAttribute("aria-label", name + (percent == null ? " usage limits unavailable" : " · " + main.label + " · " + percent + "% used"));
