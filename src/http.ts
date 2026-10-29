@@ -1968,7 +1968,8 @@ export async function startHttp(): Promise<http.Server> {
       return;
     }
     try {
-      const grants = store.setPagePermission(req.params.id, String(req.body?.perm ?? ""), value, req.body?.folders);
+      const keep = typeof req.body?.keep === "boolean" ? req.body.keep : undefined;
+      const grants = store.setPagePermission(req.params.id, String(req.body?.perm ?? ""), value, req.body?.folders, keep);
       broadcast({ type: "page_permission", id: req.params.id, perm: String(req.body?.perm ?? ""), value });
       res.json({ permissions: permissionViews(grants) });
     } catch (err) {

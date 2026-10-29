@@ -69,7 +69,7 @@
     return [tab.id, need.perm, need.folder || "", need.approval || ""].join("\n");
   }
 
-  /** Resolves "allow", "deny", or null (not now). */
+  /** Resolves { value: "allow" | "deny", keep }, or null (not now). */
   function prompt(tab, def, need, explicit) {
     const key = askKey(tab, need);
     if (asking.has(key)) return asking.get(key);
@@ -104,6 +104,15 @@
       where.append(el("dt", "", def.levelName || "Approval"), el("dd", "", levelLabel(def, need.approval || levelsOf(def)[0].id)));
       body.append(where);
     }
+    let keep = null;
+    if (def.risky) {
+      // Risky grants reset when an agent rewrites the page; the user may keep this one (#895).
+      const label = el("label", "ag-check permission-ask-keep");
+      keep = el("input");
+      keep.type = "checkbox";
+      label.append(keep, el("span", null, "Don't ask again when an agent updates this page"));
+      body.append(label);
+    }
     body.append(el("p", "permission-ask-note", "You can change this later from the tab menu: Permissions…"));
     const actions = el("div", "confirm-actions");
     const later = el("button", "", "Not now");
@@ -128,7 +137,7 @@
         () => {
           const value = dlg.returnValue;
           dlg.remove();
-          resolve(value === "allow" || value === "deny" ? value : null);
+          resolve(value === "allow" || value === "deny" ? { value, keep: Boolean(keep?.checked) } : null);
         },
         { once: true }
       );
@@ -136,7 +145,8 @@
   }
 
   /** Store the user's answer: a per-folder permission gains the folder, the rest are set as a whole. */
-  async function remember(tab, def, need, answer) {
+  async function remember(tab, def, need, { value: answer, keep }) {
+    const kept = def.risky ? { keep } : {};
     if (answer === "allow" && def.perFolder) {
       const same = (f) => f.path.toLowerCase() === String(need.folder).toLowerCase();
       const folders = (def.folders || []).filter((f) => !same(f));
@@ -145,10 +155,10 @@
       const before = (def.folders || []).find(same)?.approval;
       if (def.id === "files" && before && before !== level) level = "readwrite";
       folders.push({ path: need.folder, approval: level });
-      await request("PUT", tab.id, "", { perm: def.id, value: def.value === "deny" ? "ask" : def.value, folders });
+      await request("PUT", tab.id, "", { perm: def.id, value: def.value === "deny" ? "ask" : def.value, folders, ...kept });
       return;
     }
-    await request("PUT", tab.id, "", { perm: def.id, value: answer });
+    await request("PUT", tab.id, "", { perm: def.id, value: answer, ...kept });
   }
 
   /**
@@ -172,9 +182,9 @@
       }
       if (!pending.length) return { ok: true };
       const answer = await prompt(tab, { label: pending.map(p => p.def.label).join(" and "),
-        detail: pending.map(p => p.def.detail).join(" ") }, { perm: pending.map(p => p.item.perm).join("+") }, explicit);
+        detail: pending.map(p => p.def.detail).join(" "), risky: pending.some(p => p.def.risky) }, { perm: pending.map(p => p.item.perm).join("+") }, explicit);
       if (answer) for (const p of pending) await remember(tab, p.def, p.item, answer);
-      return answer === "allow" ? { ok: true } : { ok: false, error: "denied", permission: pending[0].item.perm };
+      return answer?.value === "allow" ? { ok: true } : { ok: false, error: "denied", permission: pending[0].item.perm };
     }
     const denied = { ok: false, error: "denied", permission: need.perm };
     let result;
@@ -196,7 +206,7 @@
       app()?.showNotice?.(err.message);
       return denied;
     }
-    return answer === "allow" ? { ok: true } : denied;
+    return answer.value === "allow" ? { ok: true } : denied;
   }
 
   /** The page's permissions as it may see them: ids, labels, values, and approved folders. */
@@ -241,7 +251,7 @@
     const form = el("form");
     form.method = "dialog";
     const head = el("h2", "", "Permissions");
-    const sub = el("p", "permissions-sub", `What “${tab.title}” may do. Kept on this PC, not exported; an agent changing the page's code resets the risky ones.`);
+    const sub = el("p", "permissions-sub", `What “${tab.title}” may do. Kept on this PC, not exported; an agent changing the page's code resets the risky ones unless kept.`);
     const rows = el("div", "permissions-rows");
     const actions = el("div", "confirm-actions");
     const done = el("button", "", "Done");
@@ -270,6 +280,15 @@
         const value = p.perFolder && p.value === "allow" ? "ask" : p.value;
         row.append(text, selectOf(values, value, p.label, (next) => save({ perm: p.id, value: next })));
         rows.append(row);
+        if (p.risky && (p.value !== p.default || p.folders?.length)) {
+          const label = el("label", "ag-check permission-keep");
+          const box = el("input");
+          box.type = "checkbox";
+          box.checked = Boolean(p.keep);
+          box.addEventListener("change", () => save({ perm: p.id, value: p.value, keep: box.checked }));
+          label.append(box, el("span", null, "Keep when an agent updates the page"));
+          rows.append(label);
+        }
         if (!p.perFolder) continue;
         const folders = el("div", "permission-folders");
         if (!p.folders?.length) {

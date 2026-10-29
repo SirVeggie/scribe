@@ -98,10 +98,13 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
 /** approval is the folder's level: an approval rung, or one of the permission's own levels (files: read, write, readwrite). */
 export type FolderGrant = { path: string; approval: string };
 
-/** One stored grant. folders only for permissions granted per folder, whose value is ask or deny. */
-export type PermissionGrant = { value: PermissionValue; folders?: FolderGrant[]; updatedAt: number };
+/**
+ * One stored grant. folders only for permissions granted per folder, whose value is ask or deny.
+ * keep: the user chose to keep a risky grant when an agent rewrites the page (#895).
+ */
+export type PermissionGrant = { value: PermissionValue; folders?: FolderGrant[]; keep?: boolean; updatedAt: number };
 
-export type PermissionView = PermissionDef & { value: PermissionValue; folders?: FolderGrant[]; updatedAt?: number };
+export type PermissionView = PermissionDef & { value: PermissionValue; folders?: FolderGrant[]; keep?: boolean; updatedAt?: number };
 
 /** What a request needs: the permission, plus the folder and approval for per-folder ones. */
 export type PermissionNeed = { perm: string; folder?: string; approval?: string };
@@ -163,6 +166,7 @@ export function permissionViews(grants: Map<string, PermissionGrant>): Permissio
       ...def,
       value: grant?.value ?? def.default,
       ...(def.perFolder ? { folders: grant?.folders ?? [] } : {}),
+      ...(grant?.keep ? { keep: true } : {}),
       ...(grant ? { updatedAt: grant.updatedAt } : {}),
     };
   });

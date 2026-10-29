@@ -1635,6 +1635,20 @@ test("page permissions are kept per page, reset by an agent rewrite, and not exp
   assert.equal(again.pagePermissions("page").get("audio.transcribe")?.value, "allow");
   assert.equal(again.pagePermissions("page").size, 1);
   assert.equal(again.resetRiskyPermissions("page"), false);
+
+  // A kept grant survives the rewrite (#895), and a later change without keep leaves it kept.
+  again.setPagePermission("page", "agent.unattended", "allow", undefined, true);
+  again.setPagePermission("page", "agent.workspace", "allow", [{ path: folder, approval: "edits" }], true);
+  again.setPagePermission("page", "agent.workspace", "allow", [{ path: folder, approval: "full" }]);
+  again.setPagePermission("page", "audio.microphone", "allow");
+  assert.equal(again.resetRiskyPermissions("page"), true);
+  const kept = again.pagePermissions("page");
+  assert.deepEqual(kept.get("agent.unattended"), { value: "allow", keep: true, updatedAt: kept.get("agent.unattended")?.updatedAt });
+  assert.deepEqual(kept.get("agent.workspace")?.folders, [{ path: folder, approval: "full" }]);
+  assert.equal(kept.has("audio.microphone"), false);
+  again.setPagePermission("page", "agent.unattended", "allow", undefined, false);
+  assert.equal(again.resetRiskyPermissions("page"), true);
+  assert.equal(again.pagePermissions("page").has("agent.unattended"), false);
   again.deletePermanent(tab.id);
   again.closeDb();
 });

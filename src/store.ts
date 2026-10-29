@@ -2041,12 +2041,15 @@ export class BoardStore extends EventEmitter {
         continue;
       }
       let folders: FolderGrant[] | undefined;
+      let keep = false;
       try {
-        folders = row.data ? normalizeFolders((JSON.parse(row.data) as { folders?: unknown }).folders, permissionDef(row.perm)) : undefined;
+        const data = row.data ? (JSON.parse(row.data) as { folders?: unknown; keep?: unknown }) : {};
+        folders = data.folders !== undefined ? normalizeFolders(data.folders, permissionDef(row.perm)) : undefined;
+        keep = data.keep === true;
       } catch {
         folders = undefined;
       }
-      grants.set(row.perm, { value: row.value, ...(folders ? { folders } : {}), updatedAt: row.updatedAt });
+      grants.set(row.perm, { value: row.value, ...(folders?.length ? { folders } : {}), ...(keep ? { keep } : {}), updatedAt: row.updatedAt });
     }
     const pluginKey = tab.templateId ? this.templates.get(tab.templateId)?.source?.builtin : undefined;
     if (pluginKey?.startsWith("plugin-")) {
@@ -2059,9 +2062,9 @@ export class BoardStore extends EventEmitter {
   /**
    * Set one permission for a page. folders replaces the approved folders of a per-folder
    * permission; those have no blanket allow, so allow is stored as ask. Back at the default with no
-   * folders, the grant is removed.
+   * folders, the grant is removed. keep (left out: as it was) keeps the grant when an agent rewrites the page.
    */
-  setPagePermission(idOrKey: string, perm: string, value: PermissionValue, folders?: unknown): Map<string, PermissionGrant> {
+  setPagePermission(idOrKey: string, perm: string, value: PermissionValue, folders?: unknown, keep?: boolean): Map<string, PermissionGrant> {
     const tab = this.locate(idOrKey)?.tab;
     if (!tab) {
       throw new Error(`tab not found: ${idOrKey}`);
@@ -2071,7 +2074,9 @@ export class BoardStore extends EventEmitter {
       throw new Error(`unknown permission: ${perm}`);
     }
     const stored = def.perFolder && value === "allow" ? "ask" : value;
-    const list = def.perFolder ? (folders === undefined ? this.pagePermissions(tab.id).get(perm)?.folders ?? [] : normalizeFolders(folders, def)) : [];
+    const before = this.pagePermissions(tab.id).get(perm);
+    const list = def.perFolder ? (folders === undefined ? before?.folders ?? [] : normalizeFolders(folders, def)) : [];
+    const kept = keep ?? before?.keep ?? false;
     if (this.dirty.has(tab.id)) {
       this.persist();
     }
@@ -2079,7 +2084,8 @@ export class BoardStore extends EventEmitter {
     if (stored === def.default && !list.length && !perm.startsWith("plugin.")) {
       db.writePermission(tab.id, perm, null, null, Date.now());
     } else {
-      db.writePermission(tab.id, perm, stored, list.length ? JSON.stringify({ folders: list }) : null, Date.now());
+      const data = { ...(list.length ? { folders: list } : {}), ...(kept ? { keep: true } : {}) };
+      db.writePermission(tab.id, perm, stored, Object.keys(data).length ? JSON.stringify(data) : null, Date.now());
     }
     return this.pagePermissions(tab.id);
   }
@@ -2147,13 +2153,14 @@ export class BoardStore extends EventEmitter {
       return false;
     }
     let reset = false;
+    const grants = this.pagePermissions(tab.id);
     const templateKey=tab.templateId?this.templates.get(tab.templateId)?.source?.builtin:undefined;
     if(templateKey?.startsWith("plugin-")) {
       const perm=`plugin.${templateKey.slice(7).split("--")[0]}`;
-      if(permissionDef(perm)?.risky) { this.db.writePermission(tab.id,perm,"ask",null,Date.now()); reset=true; }
+      if(permissionDef(perm)?.risky && !grants.get(perm)?.keep) { this.db.writePermission(tab.id,perm,"ask",null,Date.now()); reset=true; }
     }
     for (const row of this.db.readPermissions(tab.id)) {
-      if (permissionDef(row.perm)?.risky !== false) {
+      if (permissionDef(row.perm)?.risky !== false && !grants.get(row.perm)?.keep) {
         this.db.writePermission(tab.id, row.perm, row.perm.startsWith("plugin.") ? "ask" : null, null, Date.now());
         reset = true;
       }
