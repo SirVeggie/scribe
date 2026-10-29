@@ -9239,7 +9239,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (pill !== undefined) this.queueLive(key, pill);
         else this.setLive(key, text);
       }
-      if (S.dockExpanded || !S.dockShown) return;
+      // Not drawn now: the feed is out of date, so the next bind (show, collapse) repaints it (#876).
+      if (S.dockExpanded || !S.dockShown) {
+        this.feedPainted = null;
+        return;
+      }
       let line = this.feedLines.get(key);
       if (!line) {
         line = el("div", `dock-line ${cls}`);
@@ -9353,7 +9357,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         return;
       }
       const detail = S.details.get(turn.threadId);
-      const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId) : null;
+      const lastText = detail ? [...detail.items].reverse().find((it) => it.turnId === turn.id && it.kind === "text" && !it.parentToolId && String(it.text || "").trim()) : null;
       const files = turn.files || [];
       if (files.length) {
         const added = files.reduce((a, f) => a + f.added, 0);
