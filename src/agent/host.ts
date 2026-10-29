@@ -604,9 +604,13 @@ export class AgentHost {
       summarizeContext: (thread, prompt, signal) => this.summarizeContext(thread, prompt, signal),
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
-      // A board worker's own chat, which hands in its card. Its helpers run unattended too but hand
-      // nothing in, so the worker launch checks (Scribe tools present, page scope) are not theirs.
+      // Page workers run unattended; helpers do not hand anything in themselves.
       isWorker: (id) => !this.threads.get(id)?.helperOf && this.unattended(id),
+      workerTools: (id) => {
+        const thread = this.threads.get(id);
+        const page = thread?.scope.kind === "page" && thread.scope.ref ? store.get(thread.scope.ref) : undefined;
+        return page && store.drives(page) ? { boardActions: true, reports: true } : {};
+      },
       permissions: (id, policy) => {
         const thread = this.threads.get(id);
         if (!thread) return;

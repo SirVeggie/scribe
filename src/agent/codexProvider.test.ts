@@ -11,7 +11,7 @@ import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
 import { CodexSession, readCodexPlanUsage, syncAuthFiles, guardianDenialEvent } from "./providers/codex.js";
 import type { ApprovalDecision, ApprovalRequest, RunSink, SessionContext } from "./providers/provider.js";
 import { FALLBACK_MODELS, gitCommonDir, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides, turnPermissionOverrides, windowsSandboxConfig } from "./providers/codex.js";
-import { codexPermissions, permissionBoundaryProblem, scribeToolAvailability, workerPermissionProblem } from "./effectivePermissions.js";
+import { codexPermissions, permissionBoundaryProblem, scribeToolAvailability, workerPermissionProblem, type WorkerToolRequirements } from "./effectivePermissions.js";
 import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
@@ -246,11 +246,14 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function sessionFixture(nativeId: string | null = null, approval: Thread["approval"] = "edits", limits?: SessionContext["limits"],
   mcp?: { servers: ResolvedMcpServer[]; bridge: ConstructorParameters<typeof CodexSession>[6] },
-  worker = false, scope: Thread["scope"] = { kind: "page", ref: "board" }) {
+  worker = false, scope: Thread["scope"] = { kind: "page", ref: "board" },
+  required: WorkerToolRequirements = { boardActions: true, reports: true }) {
   let f: ReturnType<typeof rpcFixture>;
   const reviews: unknown[] = [];
-  const session = new CodexSession({ ...thread({ approval }), id: "scribe-thread", nativeId, cwd: "/work", scope } as Thread,
+  const settings = thread({ approval, ...(approval === "readonly" || approval === "board" ? { mode: "board" } : {}) });
+  const session = new CodexSession({ ...settings, id: "scribe-thread", nativeId, cwd: "/work", scope } as Thread,
     { scratchDir: "/scratch", boardMcp: { command: "node", args: [], env: {} }, webAllowlist: () => [], limits, isWorker: () => worker,
+      workerTools: () => required,
       ...(mcp ? { mcpServers: () => mcp.servers } : {}) } as SessionContext,
     () => {}, (message, close) => { f = rpcFixture(message, close); return f.rpc; }, () => {}, (_message, extra) => { reviews.push(extra); }, mcp?.bridge);
   const seen = { images: [] as Array<{ source: string; images: import("./outputImages.js").OutputImage[] }>, text: "", steered: [] as string[], approvals: [] as string[], output: "", tools: [] as string[], reviews, notices: [] as Array<{ level: string; text: string }> };
@@ -272,7 +275,7 @@ function sessionFixture(nativeId: string | null = null, approval: Thread["approv
     const start = f!.sent.find((message) => message.method === (nativeId ? "thread/resume" : "thread/start"))!;
     assert.equal(start.params?.approvalPolicy, approval === "full" ? "never" : "on-request");
     assert.equal(start.params?.approvalsReviewer, approval === "auto" ? "auto_review" : "user");
-    assert.equal(start.params?.sandbox, approval === "full" ? "danger-full-access" : "workspace-write");
+    assert.equal(start.params?.sandbox, sandboxFor(settings));
     f!.emit({ id: start.id, result: { thread: { id: "native-thread" }, ...policy } });
     await tick();
     if (worker && scope.kind !== "workspace") {
@@ -984,8 +987,29 @@ test("effective policy parsing never substitutes requested permissions for missi
   assert.match(permissionBoundaryProblem({ ...policy, sandbox: "danger-full-access" })!, /broader/);
   assert.deepEqual(scribeToolAvailability({ mcp__scribe__page_action: {}, page_patch: {} }), { boardActions: "available", reports: "missing" });
   const board = { mode: "board", scope: { kind: "page", ref: "board" } } as Thread;
-  assert.equal(workerPermissionProblem(board, { ...policy, requestedSandbox: "read-only", approval: "on-request", boardActions: "available", reports: "available" }), null);
+  assert.equal(workerPermissionProblem(board, { ...policy, requestedSandbox: "read-only", approval: "on-request", boardActions: "available", reports: "available" }, { boardActions: true, reports: true }), null);
 });
+
+test("worker tool checks require only the workflow's declared tools", () => {
+  const page = { mode: "board", scope: { kind: "page", ref: "images" } } as Thread;
+  const policy = { ...codexPermissions({ sandbox: "read-only", approvalPolicy: "on-request" }, { sandbox: "read-only", approvalPolicy: "on-request" }), ...scribeToolAvailability({ page_action: {} }) };
+  assert.equal(workerPermissionProblem(page, policy, {}), null);
+  assert.equal(workerPermissionProblem(page, policy, { boardActions: true }), null);
+  assert.match(workerPermissionProblem(page, policy, { reports: true })!, /page_show/);
+  assert.match(workerPermissionProblem(page, { ...policy, approval: "unknown" }, {})!, /did not report/);
+});
+
+for (const nativeId of [null, "saved-image-thread"]) {
+  test(`Codex ${nativeId ? "resume" : "start"} allows a Read-only page job without board or report tools`, async () => {
+    const f = sessionFixture(nativeId, "readonly", undefined, undefined, true, { kind: "page", ref: "images" }, {});
+    try {
+      const { run } = await f.start({ sandbox: { type: "readOnly" }, approvalPolicy: "on-request" }, {});
+      assert.ok(f.f.sent.some((m) => m.method === "turn/start"));
+      f.complete();
+      assert.equal((await run).status, "done");
+    } finally { f.session.dispose(); }
+  });
+}
 
 for (const nativeId of [null, "saved-thread"]) {
   test(`Codex ${nativeId ? "resume" : "start"} stops incompatible workers before any model turn`, async () => {

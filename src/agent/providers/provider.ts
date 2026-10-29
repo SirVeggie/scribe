@@ -1,4 +1,4 @@
-import type { EffectivePermissions } from "../effectivePermissions.js";
+import type { EffectivePermissions, WorkerToolRequirements } from "../effectivePermissions.js";
 import type {
   ApprovalOption,
   ChatImage,
@@ -162,6 +162,8 @@ export type SessionContext = {
   summarizeContext?(thread: Thread, prompt: string, signal: AbortSignal): Promise<string>;
   /** Whether this is an unattended page worker, checked at the start of every turn. */
   isWorker?(threadId: string): boolean;
+  /** Tools needed for the page's workflow; ordinary page jobs need no board hand-in or report. */
+  workerTools?(threadId: string): WorkerToolRequirements;
   /** Observed provider policy, including warmed sessions before their first turn. */
   permissions?(threadId: string, policy: EffectivePermissions): void;
   /** The daemon's own board MCP command, so the agent's board tools reach this board. */

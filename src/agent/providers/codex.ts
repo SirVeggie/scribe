@@ -1260,7 +1260,7 @@ export class CodexSession implements ProviderSession {
     const boundaryProblem = permissionBoundaryProblem(policy);
     if (boundaryProblem) return { status: "error", error: boundaryProblem };
     if (worker) {
-      const problem = workerPermissionProblem(this.thread, policy);
+      const problem = workerPermissionProblem(this.thread, policy, this.ctx.workerTools?.(this.thread.id) ?? {});
       if (problem) return { status: "error", error: problem };
     }
     if (this.cancelled) return { status: "cancelled" };

@@ -42,13 +42,15 @@ export function permissionBoundaryProblem(policy: EffectivePermissions): string 
   return null;
 }
 
-export function workerPermissionProblem(thread: Pick<Thread, "mode" | "scope">, policy: EffectivePermissions): string | null {
-  if (thread.scope.kind === "workspace") return "Worker cannot report or hand in its card: App scope None removes Scribe tools. Choose the board's page scope.";
+export type WorkerToolRequirements = { boardActions?: boolean; reports?: boolean };
+
+export function workerPermissionProblem(thread: Pick<Thread, "mode" | "scope">, policy: EffectivePermissions, required: WorkerToolRequirements): string | null {
+  if ((required.boardActions || required.reports) && thread.scope.kind === "workspace") return "Worker cannot report or hand in its card: App scope None removes Scribe tools. Choose the board's page scope.";
   if (thread.mode === "code" && policy.sandbox === "read-only") return "Code worker launch stopped: Codex returned read-only filesystem access. File edits and commits cannot run. Check the Codex sandbox setup before retrying; on Windows, select a supported Windows sandbox implementation.";
   if (policy.sandbox === "unknown" || policy.approval === "unknown") return "Worker launch stopped: Codex did not report its effective filesystem or approval policy. Update or check the provider before retrying.";
   if (policy.approval !== policy.requestedApproval) return "Worker launch stopped: Codex returned an approval policy different from the requested policy. Check the provider configuration before retrying.";
-  if (policy.boardActions !== "available") return "Worker launch stopped: Codex has no verified Scribe page_action tool for board hand-in. Check the Scribe MCP connection before retrying.";
-  if (policy.reports !== "available") return "Worker launch stopped: Codex has no verified Scribe page_show tool for saving reports. Check the Scribe MCP connection before retrying.";
+  if (required.boardActions && policy.boardActions !== "available") return "Worker launch stopped: Codex has no verified Scribe page_action tool for board hand-in. Check the Scribe MCP connection before retrying.";
+  if (required.reports && policy.reports !== "available") return "Worker launch stopped: Codex has no verified Scribe page_show tool for saving reports. Check the Scribe MCP connection before retrying.";
   return null;
 }
 
