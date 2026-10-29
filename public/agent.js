@@ -9700,7 +9700,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         ["Recent", sections.recent],
       ].filter(([, list]) => list.length);
       // Running threads resend every second or so; rebuild only when a row would change.
-      const sig = JSON.stringify(groups.map(([name, list]) => [name, ...list.map((t) => [t.id, t.status, t.unread, t.title, activityLine(t), t.activity?.lastText, t.asking?.detail])]));
+      const currentId = S.dockShown ? dock.view.threadId : null;
+      const sig = JSON.stringify([currentId, groups.map(([name, list]) => [name, ...list.map((t) => [t.id, t.status, t.unread, t.title, activityLine(t), t.activity?.lastText, t.asking?.detail])])]);
       if (sig === this.sig && this.node.childElementCount) return;
       this.sig = sig;
       this.node.replaceChildren();
@@ -9720,16 +9721,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       }
     },
     row(t) {
+      const current = S.dockShown && dock.view.threadId === t.id;
       // A finished thread whose reply was seen is dim, with no status dot.
       const seen = t.status === "idle" && !t.unread;
-      const row = el("div", `ag-fly-row s-${seen ? "checked" : t.status}`);
+      const row = el("div", `ag-fly-row s-${seen ? "checked" : t.status}${current ? " current" : ""}`);
       row.dataset.thread = t.id;
+      if (current) row.setAttribute("aria-current", "true");
       row.tabIndex = 0;
       row.role = "button";
       const meta = el("span", "ag-fly-meta");
       meta.append(el("span", "ag-fly-title", t.title), el("span", "ag-fly-line", activityLine(t)));
       const limit = waitingAsk(t)?.kind === "limit";
-      row.append(el("span", limit ? "ag-dot s-waiting" : seen ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
+      row.append(current ? icon("you", "ag-ico ag-fly-current") : el("span", limit ? "ag-dot s-waiting" : seen ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
       if (limit) row.append(limitButtons(t.id, t.asking.itemId, "pending"));
       else if (t.status === "waiting" && t.asking?.kind === "approval") row.append(approvalButtons(t));
       else if (t.status === "waiting") {

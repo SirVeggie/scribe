@@ -4807,7 +4807,8 @@ body.resizing-split main.has-split .agent-dock {
   box-shadow: none;
 }
 
-.ag-transcript .ag-you {
+.ag-transcript .ag-you,
+.ag-fly-current {
   margin-top: 3px;
   color: var(--ag-live);
   filter: drop-shadow(0 0 3px rgba(var(--ag-live-rgb), 0.75));
@@ -6561,11 +6562,17 @@ body.resizing-split main.has-split .agent-dock {
   background: color-mix(in srgb, var(--ag-warn) 12%, transparent);
 }
 
-.ag-fly-row.s-checked {
+.ag-fly-current {
+  width: 12px;
+  height: 12px;
+  margin: 0 -2px;
+}
+
+.ag-fly-row.s-checked:not(.current) {
   opacity: 0.42;
 }
 
-.ag-fly-row.s-checked .ag-fly-title {
+.ag-fly-row.s-checked:not(.current) .ag-fly-title {
   color: var(--muted);
 }
 
