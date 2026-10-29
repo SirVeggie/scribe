@@ -1,5 +1,15 @@
 # Migrations
 
+## `message_text` table and triggers (`agent.sqlite`, #602, additive, schema still 1)
+
+- **What changed:** Thread message search (the thread menu, the palette's thread search, and `thread_list` with `messages: true`) reads a new `message_text` table instead of scanning every item's JSON. It holds one row per searchable item (`item_id`, `thread_id`, `seq`, `text`): the user's messages and the agent's own replies, not dropped and not a subagent's. On the real history that is about 5 MB of 195 MB, and queries went from 250–300 ms to 9–37 ms.
+- **Data:** Two triggers on `items` (`items_message_text_insert`, `items_message_text_update`) keep it current, and `ON DELETE CASCADE` from `items(id)` removes rows with their item or thread. The triggers live in the database, so an older daemon writing items keeps the table correct too. On open, `fillMessageText` fills the table from `items` once (about 0.4 s on the real history) and writes `message_text = 1` to `meta`.
+- **Changing what is searchable:** edit `searchable()` in `src/agent/db.ts` and `searchableMessageText` in `public/agent.js`, drop and recreate both triggers, and bump `MESSAGE_TEXT_VERSION` so the table is rebuilt.
+- **Why no version bump:** Nothing existing changes; `CREATE ... IF NOT EXISTS` runs on every open. `AGENT_SCHEMA_VERSION` stays `1` and `VERSION` stays as is.
+- **Where:** `src/agent/db.ts` (`searchMessages`, `messagesMentioning`, `fillMessageText`), `src/agent/threadSearch.ts` (`textLikePatterns`), `src/agent/host.ts` (`searchThreadMessages`, `listReadableThreads`). `tools/probe-thread-search-real.ts` measures the real history read-only.
+- **How to verify:** `src/agent/threadSearch.test.ts`, `src/agent/threadSearchHost.test.ts`, `src/agent/threadAccess.test.ts`.
+- **When to remove:** Keep.
+
 ## Newest-first unpinned strip and the `strip_order` meta key (#861, data change, schema still 3)
 
 - **What changed:** New unpinned tabs open at the left of the unpinned group (next to the pinned tabs) instead of the right end, so the strip sorts unpinned tabs by `strip_seq` descending. Pinned tabs still sort ascending (new pins on the right). Space switches and Open folder number tabs so their saved or Library order still reads left to right.

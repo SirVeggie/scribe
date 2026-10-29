@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { AgentDb } from "./db.js";
-import { likePatterns, matchMessages, searchWords } from "./threadSearch.js";
+import { DatabaseSync } from "node:sqlite";
+import { matchMessages, searchWords } from "./threadSearch.js";
 import type { Item, Thread } from "./types.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-thread-search-"));
@@ -20,7 +21,7 @@ const item = (threadId: string, body: Record<string, unknown>): Item => ({ id: `
 
 const search = (q: string) => {
   const words = searchWords(q);
-  return matchMessages(db.searchMessages(words.flatMap(likePatterns)), words);
+  return matchMessages(db.searchMessages(words), words);
 };
 
 test("thread search reads the user's messages and the agent's replies, word by word", () => {
@@ -74,4 +75,49 @@ test("later messages can complete a match and improve its snippet", () => {
     { threadId: "t", text: "llama h2o later" },
   ];
   assert.deepEqual(matchMessages(rows, ["llama", "h2o"]), [{ id: "t", words: ["llama", "h2o"], snippet: "llama and h2o together" }]);
+});
+
+test("the message text table follows edits, drops and deletes of items and threads", () => {
+  db.saveThread({ id: "sync", title: "sync", activityAt: 1 } as unknown as Thread);
+  const kept = item("sync", { kind: "user", text: "first draft of syncneedle" });
+  const later = item("sync", { kind: "text", text: "partial" });
+  db.saveItems([kept, later]);
+  assert.deepEqual(search("syncneedle").map((hit) => hit.id), ["sync"]);
+
+  // Streaming text grows by saving the item again.
+  db.saveItems([{ ...later, text: "partial, then streamedneedle" } as Item]);
+  assert.deepEqual(search("streamedneedle").map((hit) => hit.id), ["sync"]);
+
+  // Dropping a message takes it out of search; undropping brings it back.
+  db.saveItems([{ ...kept, dropped: true } as Item]);
+  assert.deepEqual(search("syncneedle"), []);
+  db.saveItems([kept]);
+  assert.deepEqual(search("syncneedle").map((hit) => hit.id), ["sync"]);
+
+  db.deleteItem(kept.id);
+  assert.deepEqual(search("syncneedle"), []);
+  db.deleteThread("sync");
+  assert.deepEqual(search("streamedneedle"), []);
+});
+
+test("a database from before the message text table gets it filled on open", () => {
+  const file = path.join(dir, "older.sqlite");
+  const first = new AgentDb(file);
+  first.saveThread({ id: "old", title: "old", activityAt: 1 } as unknown as Thread);
+  first.saveItems([item("old", { kind: "user", text: "backfillneedle from long ago" }), item("old", { kind: "tool", name: "shell", output: "backfillneedle" })]);
+  first.close();
+  // What an older daemon left behind: the items, no table rows and no version mark.
+  const raw = new DatabaseSync(file);
+  raw.exec("DELETE FROM message_text; DELETE FROM meta WHERE k = 'message_text';");
+  raw.close();
+
+  const reopened = new AgentDb(file);
+  try {
+    const rows = [...reopened.searchMessages(["backfillneedle"])].map((row) => ({ ...row }));
+    assert.deepEqual(rows, [{ threadId: "old", text: "backfillneedle from long ago" }]);
+    assert.deepEqual([...reopened.messagesMentioning(["backfillneedle", "ago"])].length, 1);
+    assert.deepEqual([...reopened.messagesMentioning(["backfillneedle", "missing"])], []);
+  } finally {
+    reopened.close();
+  }
 });

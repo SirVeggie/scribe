@@ -21,10 +21,21 @@ export function searchWords(q: unknown): string[] {
 /** Same stopwords as library search; keep public/agent.js in sync. */
 const QUERY_STOPWORDS = new Set(["a", "an", "the", "my", "me", "your", "our", "page", "pages", "tab", "tabs", "board", "html", "list", "lists", "updated", "update", "please", "show"]);
 
-/** SQL LIKE patterns that find a word in an item's stored JSON. LIKE folds case for ASCII only, so other letters get their case variants. */
+/** LIKE folds case for ASCII only, so a word with other letters also gets its common case variants. */
+function caseForms(word: string): string[] {
+  return [...new Set(/[^\x00-\x7f]/.test(word) ? [word, word.toUpperCase(), word[0].toUpperCase() + word.slice(1)] : [word])];
+}
+
+const likeEscape = (text: string) => `%${text.replace(/[!%_]/g, "!$&")}%`;
+
+/** SQL LIKE patterns (ESCAPE '!') that find a word in an item's stored JSON. */
 export function likePatterns(word: string): string[] {
-  const forms = /[^\x00-\x7f]/.test(word) ? [word, word.toUpperCase(), word[0].toUpperCase() + word.slice(1)] : [word];
-  return [...new Set(forms)].map((form) => `%${JSON.stringify(form).slice(1, -1).replace(/[!%_]/g, "!$&")}%`);
+  return caseForms(word).map((form) => likeEscape(JSON.stringify(form).slice(1, -1)));
+}
+
+/** SQL LIKE patterns (ESCAPE '!') that find a word in plain message text (the message_text table). */
+export function textLikePatterns(word: string): string[] {
+  return caseForms(word).map(likeEscape);
 }
 
 export function messageSnippet(text: string, word: string, width = 160): string {

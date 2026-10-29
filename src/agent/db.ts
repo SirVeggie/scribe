@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dataDir } from "../config.js";
 import type { ThreadStats } from "./threadStats.js";
 import type { Item, Thread, Turn } from "./types.js";
+import { textLikePatterns } from "./threadSearch.js";
 import { settleAccess } from "./types.js";
 import { parseWebAccess } from "./webAccess.js";
 
@@ -13,6 +14,16 @@ function readThread(data: string): Thread {
   thread.web = parseWebAccess(thread.web) ?? "on";
   Object.assign(thread, settleAccess(thread.mode, thread.approval));
   return thread;
+}
+
+/**
+ * Whether a stored item is searchable message text: the user's messages and the agent's own replies,
+ * not dropped and not a subagent's. Keep in sync with searchableMessageText in public/agent.js.
+ * The triggers below are stored in the database, so changing this needs them dropped and made again.
+ */
+function searchable(data: string): string {
+  return `json_extract(${data}, '$.kind') IN ('user', 'text') AND json_extract(${data}, '$.dropped') IS NOT 1
+    AND json_extract(${data}, '$.parentToolId') IS NULL AND json_type(${data}, '$.text') = 'text'`;
 }
 
 /**
@@ -49,7 +60,26 @@ CREATE TABLE IF NOT EXISTS thread_stats (
   data TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS message_text (
+  item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_message_text_thread ON message_text(thread_id, seq);
+CREATE TRIGGER IF NOT EXISTS items_message_text_insert AFTER INSERT ON items BEGIN
+  INSERT INTO message_text (item_id, thread_id, seq, text)
+    SELECT NEW.id, NEW.thread_id, NEW.seq, json_extract(NEW.data, '$.text') WHERE ${searchable("NEW.data")};
+END;
+CREATE TRIGGER IF NOT EXISTS items_message_text_update AFTER UPDATE ON items BEGIN
+  DELETE FROM message_text WHERE item_id = OLD.id;
+  INSERT INTO message_text (item_id, thread_id, seq, text)
+    SELECT NEW.id, NEW.thread_id, NEW.seq, json_extract(NEW.data, '$.text') WHERE ${searchable("NEW.data")};
+END;
 `;
+
+/** Bump to rebuild message_text from items on the next open (after changing what counts as searchable). */
+const MESSAGE_TEXT_VERSION = "1";
 
 export const AGENT_SCHEMA_VERSION = 1;
 
@@ -62,6 +92,27 @@ export class AgentDb {
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;");
     this.db.exec(CREATE_SQL);
     this.db.prepare("INSERT OR IGNORE INTO meta (k, v) VALUES ('schema', ?)").run(String(AGENT_SCHEMA_VERSION));
+    this.fillMessageText();
+  }
+
+  /**
+   * Fill message_text from items once (for databases from before it, or after MESSAGE_TEXT_VERSION changes).
+   * After that, the triggers on items keep it current, whichever daemon version writes.
+   */
+  private fillMessageText(): void {
+    const row = this.db.prepare("SELECT v FROM meta WHERE k = 'message_text'").get() as { v: string } | undefined;
+    if (row?.v === MESSAGE_TEXT_VERSION) return;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(`DELETE FROM message_text;
+        INSERT INTO message_text (item_id, thread_id, seq, text)
+          SELECT id, thread_id, seq, json_extract(data, '$.text') FROM items WHERE ${searchable("data")};`);
+      this.db.prepare("INSERT INTO meta (k, v) VALUES ('message_text', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(MESSAGE_TEXT_VERSION);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   close(): void {
@@ -134,24 +185,29 @@ export class AgentDb {
   }
 
   /**
-   * The user's messages and the agent's own replies (not a subagent's) whose stored JSON matches any of the
-   * LIKE patterns, oldest first within a thread. The patterns narrow the scan; the caller checks the text.
+   * Searchable messages (see searchable) that mention any of the lowercase words, oldest first within a
+   * thread. LIKE folds ASCII case only, so the caller checks the text again.
    */
-  *searchMessages(patterns: string[]): IterableIterator<{ threadId: string; text: string }> {
+  *searchMessages(words: string[]): IterableIterator<{ threadId: string; text: string }> {
+    const patterns = words.flatMap(textLikePatterns);
     if (!patterns.length) return;
-    const rows = this.db
+    yield* this.db
       .prepare(
-        `SELECT thread_id AS threadId, json_extract(data, '$.text') AS text FROM items
-         WHERE (${patterns.map(() => "data LIKE ? ESCAPE '!'").join(" OR ")})
-           AND json_extract(data, '$.kind') IN ('user', 'text')
-           AND json_extract(data, '$.dropped') IS NOT 1
-           AND json_extract(data, '$.parentToolId') IS NULL
+        `SELECT thread_id AS threadId, text FROM message_text
+         WHERE ${patterns.map(() => "text LIKE ? ESCAPE '!'").join(" OR ")}
          ORDER BY thread_id, seq`
       )
-      .iterate(...patterns) as IterableIterator<{ threadId: string; text: unknown }>;
-    for (const row of rows) {
-      if (typeof row.text === "string") yield { threadId: row.threadId, text: row.text };
-    }
+      .iterate(...patterns) as IterableIterator<{ threadId: string; text: string }>;
+  }
+
+  /** Searchable messages that mention every one of the lowercase words, oldest first within a thread. */
+  *messagesMentioning(words: string[]): IterableIterator<{ threadId: string; text: string }> {
+    if (!words.length) return;
+    const groups = words.map(textLikePatterns);
+    const where = groups.map((g) => `(${g.map(() => "text LIKE ? ESCAPE '!'").join(" OR ")})`).join(" AND ");
+    yield* this.db
+      .prepare(`SELECT thread_id AS threadId, text FROM message_text WHERE ${where} ORDER BY thread_id, seq`)
+      .iterate(...groups.flat()) as IterableIterator<{ threadId: string; text: string }>;
   }
 
   /**

@@ -122,6 +122,11 @@ test("thread_list asks first, then lists and searches threads in the workspace; 
   assert.match(String(detailed.threads[0].match), /npm test/);
   assert.equal(detailed.threads[0].provider, "claude");
   assert.equal((await host.listReadableThreads(reader.id, { q: "npm test", messages: true })).threads.length, 0);
+  // messages: only what was said counts, every word in one message.
+  const said = await host.listReadableThreads(reader.id, { q: "timer MOCKED", messages: true, details: true });
+  assert.deepEqual(said.threads.map((row) => [row.id, row.hits]), [[other.id, { messages: 1 }]]);
+  assert.match(String(said.threads[0].match), /timer is mocked/);
+  assert.equal((await host.listReadableThreads(reader.id, { q: "timer flaky", messages: true })).threads.length, 0);
 
   const read = await host.readOtherThread(reader.id, { thread: other.id, limit: 2 });
   assert.equal(read.total, 3);

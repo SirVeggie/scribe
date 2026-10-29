@@ -3210,7 +3210,7 @@ export class AgentHost {
     const words = searchWords(q);
     // Items are saved in batches; without this, a refresh right after a message would miss its text.
     if (words.length) this.flushNow();
-    return matchMessages(this.db.searchMessages(words.flatMap(likePatterns)), words);
+    return matchMessages(this.db.searchMessages(words), words);
   }
 
   /** Threads reader may read, asking for access first when it has none yet. */
@@ -3277,9 +3277,20 @@ export class AgentHost {
     const outsidePool = searchAll ? [...this.threads.values()].filter((t) => t.id !== readerId && !readable.has(t.id) && (trusted || !t.tainted)) : [];
     const pool = [...threads, ...outsidePool].filter((t) => opts.archived || !t.archived);
     const limit = Math.max(1, Math.min(100, Math.floor(opts.limit ?? 20)));
-    // Read transcripts only of threads with an item that mentions every word.
     if (words.length) this.flushNow();
-    const mentioned = words.length ? this.db.threadsMentioning(words.map(likePatterns)) : null;
+    // messages: the message text table answers alone. Otherwise read transcripts only of threads
+    // with an item that mentions every word.
+    const messageHits = new Map<string, { count: number; text: string }>();
+    if (words.length && opts.messages) {
+      for (const row of this.db.messagesMentioning(words)) {
+        const lower = row.text.toLowerCase();
+        if (!words.every((w) => lower.includes(w))) continue;
+        const hit = messageHits.get(row.threadId);
+        if (hit) hit.count += 1;
+        else messageHits.set(row.threadId, { count: 1, text: row.text });
+      }
+    }
+    const mentioned = words.length && !opts.messages ? this.db.threadsMentioning(words.map(likePatterns)) : null;
 
     type Found = { t: Thread; rank: number; hits?: Record<string, unknown>; match?: string };
     const found: Found[] = [];
@@ -3292,7 +3303,12 @@ export class AgentHost {
       let messages = 0;
       let other = 0;
       let first: Item | undefined;
-      if (mentioned?.has(t.id)) {
+      let firstText: string | undefined;
+      const messageHit = messageHits.get(t.id);
+      if (messageHit) {
+        messages = messageHit.count;
+        firstText = messageHit.text;
+      } else if (mentioned?.has(t.id)) {
         let firstOther: Item | undefined;
         for (const it of this.peekItems(t.id)) {
           if (!itemMatches(it, words)) continue;
@@ -3308,7 +3324,8 @@ export class AgentHost {
       }
       if (!titleHit && !messages && !other) continue;
       const hits = { ...(titleHit ? { title: true } : {}), ...(messages ? { messages } : {}), ...(other ? { other } : {}) };
-      const text = first && readable.has(t.id) && opts.details ? (isMessage(first) ? (first as { text: string }).text : itemText(first)) : null;
+      firstText ??= first && (isMessage(first) ? (first as { text: string }).text : itemText(first) ?? undefined);
+      const text = firstText && readable.has(t.id) && opts.details ? firstText : null;
       found.push({ t, rank: titleHit || messages ? 0 : 1, hits, ...(text ? { match: messageSnippet(text, words[0], 200) } : {}) });
     }
     found.sort((a, b) => a.rank - b.rank || b.t.activityAt - a.t.activityAt);
