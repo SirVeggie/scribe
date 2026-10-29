@@ -216,6 +216,8 @@ export type Thread = {
   retryWorktreeFrom?: string;
   /** Provider session id used to resume. */
   nativeId: string | null;
+  /** Claude with several accounts (#452): the account its sessions run on ("default" or an added one). Missing: the default. */
+  claudeAccount?: string;
   /**
    * Set by a rewind until the next turn ends. at: the provider transcript entry the next turn
    * continues from (Claude forks its session there); null starts a fresh session. recap: the kept
@@ -326,6 +328,8 @@ export type PlanLimits = {
   ordinaryUsageAllowed?: boolean | null;
   permissionAt?: number;
   buckets?: Array<{ id: string; label: string; planType?: string; credits?: { hasCredits: boolean; unlimited: boolean; balance?: string } }>;
+  /** Claude with several accounts (#452): the windows above are their plan-weighted average; these are each account's own. */
+  accounts?: Array<{ id: string; email?: string; plan?: string; weight: number; limits?: PlanLimits }>;
 };
 
 export type PlanWindow = {
@@ -675,7 +679,9 @@ export type ItemBody =
    * A plan usage limit stopped a user's turn (#78): Continue sends the thread on once the limit
    * resets (queued until then), Dismiss leaves it. Expired: the thread went on another way.
    */
-  | { kind: "usage_limit"; resetsAt: number; status: "pending" | "queued" | "resumed" | "dismissed" | "expired" }
+  | { kind: "usage_limit"; resetsAt: number; status: "pending" | "queued" | "resumed" | "dismissed" | "expired";
+      /** Claude with several accounts (#452): an account with room the chat can go on with now. switched: the one it did. */
+      switchTo?: { account: string; label: string }; switched?: string }
   | { kind: "todos"; todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | { kind: "notice"; level: "info" | "warn" | "error"; text: string };
 
@@ -725,6 +731,8 @@ export type ProviderStatus = {
   login?: boolean;
   /** A stored login can be removed; environment credentials cannot be logged out. */
   logout?: boolean;
+  /** Claude with added accounts (#452): how many are signed in. */
+  accounts?: number;
 };
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {

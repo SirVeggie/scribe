@@ -62,6 +62,8 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { trackPace, withPace, type PaceState } from "./planPace.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, usageLimitResetsAt } from "./planLimits.js";
 import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
+import { ClaudeAccountPool, mergeClaudeLimits, type AccountView } from "./claudeAccountPool.js";
+import { DEFAULT_ACCOUNT } from "./claudeAccounts.js";
 import { isPlainRecord } from "./types.js";
 import { DEFAULT_RESUME_PROMPT, PageRuns, RESUME_DELAY_MS, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
@@ -624,8 +626,18 @@ export class AgentHost {
       // Not for board workers: nobody watches their threads to approve commands.
       cursorHostShell: (threadId) => this.prefs().cursorHostShell && !this.unattended(threadId),
       limits: (provider, info) => this.recordLimits(provider, info),
+      claudeEnv: (thread) => this.claudePool.env(thread.claudeAccount),
       claudeLimits: (threadId, limits) => {
         if (this.closed) return;
+        const account = this.threads.get(threadId)?.claudeAccount;
+        if (account && account !== DEFAULT_ACCOUNT) {
+          // An added account's reading (#452): its own meter, never the default account's.
+          this.claudeThreadLimits.set(threadId, limits);
+          this.db.setSetting("claudeThreadLimits", Object.fromEntries(this.claudeThreadLimits));
+          this.claudePool.record(account, limits);
+          this.emitThread(threadId);
+          return;
+        }
         const previous = this.claudeThreadLimits.get(threadId);
         if (limits.availability === "unavailable" && limits.detail === "Claude quota unavailable" && previous) {
           limits = claudePlanSnapshot(null, limits.billingSource ?? {}, limits.at, previous);
@@ -682,7 +694,25 @@ export class AgentHost {
       },
     }, this.db.getSetting<WindowStartState>("usageWindowStarts", {}));
     // Older versions kept fresher observations on individual threads only.
-    for (const limits of [...this.claudeThreadLimits.values()].sort((a, b) => a.at - b.at)) this.recordClaudeLimits(limits);
+    this.claudePool = new ClaudeAccountPool({
+      getSetting: (key, fallback) => this.db.getSetting(key, fallback),
+      setSetting: (key, value) => this.db.setSetting(key, value),
+      provider: () => this.providers.claude as ClaudeProvider,
+      dataDir: dataDir(),
+      defaultLimits: () => this.planLimits.claude,
+      running: (account) => [...new Set([...this.runs.keys(), ...this.resuming])].filter((id) => {
+        const thread = this.threads.get(id);
+        return thread?.provider === "claude" && (thread.claudeAccount ?? DEFAULT_ACCOUNT) === account;
+      }).length,
+      changed: () => {
+        if (!this.closed) this.emit({ type: "agent_limits", limits: this.liveLimits() });
+      },
+      offline: Boolean(this.fakes),
+    });
+    for (const [id, limits] of [...this.claudeThreadLimits].sort((a, b) => a[1].at - b[1].at)) {
+      const account = this.threads.get(id)?.claudeAccount;
+      if (!account || account === DEFAULT_ACCOUNT) this.recordClaudeLimits(limits);
+    }
     if (!this.fakes) {
       this.usageWindowTimer = setInterval(() => void this.usageWindowStarts.tick(), 30_000);
       this.usageWindowTimer.unref?.();
@@ -814,6 +844,8 @@ export class AgentHost {
   /** Recent provider readings per window, for the burn rate. */
   private planPace: PaceState = {};
   private claudeThreadLimits = new Map<string, PlanLimits>();
+  /** Several Claude subscriptions (#452): added accounts, the pick for each chat, their usage. */
+  private claudePool!: ClaudeAccountPool;
 
   private claudeUsageSnapshot(value: unknown): PlanLimits {
     if (!isPlainRecord(value) && this.planLimits.claude) return this.planLimits.claude;
@@ -849,6 +881,9 @@ export class AgentHost {
       const entry = this.usageWindowStarts?.view(provider);
       if (out[provider] && entry) out = { ...out, [provider]: { ...out[provider]!, windowStart: entry } };
     }
+    // Several Claude accounts (#452): one meter, their plan-weighted average, with each account's own.
+    const combined = this.claudePool?.combined();
+    if (combined) out = { ...out, claude: { ...combined, ...(out.claude?.windowStart ? { windowStart: out.claude.windowStart } : {}) } };
     return out;
   }
 
@@ -881,28 +916,10 @@ export class AgentHost {
 
   /** Publish live query readings to the same persisted snapshot used by board and chat meters. */
   private recordClaudeLimits(next: PlanLimits): void {
-    const previous = this.planLimits.claude;
-    // Empty/API-only reports cannot erase a known subscription quota, nor can an old query replay.
-    if (next.availability !== "available") return;
-    if (previous && next.at < previous.at) {
-      // Overage-only events retain the query's old window timestamp.
-      if ((next.overageAt ?? 0) > Math.max(previous.at, previous.overageAt ?? 0)) {
-        this.commitLimits("claude", { ...previous, overage: next.overage, overageAt: next.overageAt }, false);
-      }
-      return;
-    }
-    const windows = new Map((previous?.windows ?? []).map((w) => [w.id, w]));
-    for (const window of next.windows) windows.set(window.id, window);
-    const merged = { ...previous, ...next, windows: [...windows.values()] };
-    // Rate-limit events always carry a status; a newer reading without one is a full /usage read.
-    if (next.status === undefined) delete merged.status;
-    if ((previous?.extraUsage?.at ?? 0) > (next.extraUsage?.at ?? 0)) merged.extraUsage = previous?.extraUsage;
-    if ((previous?.overageAt ?? 0) > (next.overageAt ?? 0)) {
-      merged.overage = previous?.overage;
-      merged.overageAt = previous?.overageAt;
-    }
-    this.usageWindowStarts.observe("claude", next);
-    this.commitLimits("claude", merged, false);
+    const merged = mergeClaudeLimits(this.planLimits.claude, next);
+    if (!merged) return;
+    if (merged.fresh) this.usageWindowStarts.observe("claude", next);
+    this.commitLimits("claude", merged.limits, false);
   }
 
   /** Poll without a model turn, including after a reset or a rolling notification. */
@@ -1052,6 +1069,7 @@ export class AgentHost {
   dispose(): void {
     this.closed = true;
     this.usageWindowStarts.dispose();
+    this.claudePool.dispose();
     if (this.usageWindowTimer) clearInterval(this.usageWindowTimer);
     store.off("tab_closed", this.onPageClosed);
     store.off("tab_upserted", this.onPageUpserted);
@@ -1287,7 +1305,59 @@ export class AgentHost {
   }
 
   async providerStatus(): Promise<ProviderStatus[]> {
-    return Promise.all(Object.values(this.fakes ?? this.providers).map((provider) => provider.status()));
+    const list = await Promise.all(Object.values(this.fakes ?? this.providers).map((provider) => provider.status()));
+    if (!this.claudePool?.multi()) return list;
+    const accounts = this.claudePool.list().length;
+    // Added accounts keep Claude usable while the default login is signed out.
+    return list.map((p) => p.id !== "claude" ? p : { ...p, accounts, ...(accounts && !p.available ? { available: true, detail: `${accounts} account${accounts === 1 ? "" : "s"}` } : {}) });
+  }
+
+  /** Pick the Claude account a chat's next session runs on (#452) and keep it on the thread. */
+  private assignClaudeAccount(thread: Thread): void {
+    if (thread.provider !== "claude") return;
+    const ended = this.loadTurns(thread.id).filter((t) => t.status !== "running" && t.endedAt).map((t) => t.endedAt!);
+    const account = this.claudePool.resolve(thread, ended.length ? Math.max(...ended) : null);
+    if (account === thread.claudeAccount) return;
+    const stored = this.threads.get(thread.id);
+    for (const t of new Set([thread, stored])) {
+      if (!t) continue;
+      if (account) t.claudeAccount = account;
+      else delete t.claudeAccount;
+    }
+    this.db.saveThread(stored ?? thread);
+  }
+
+  /** Claude's accounts for the settings popup (#452): each with its plan and usage, and which one new chats use. */
+  claudeAccounts(): { accounts: AccountView[]; use: string; adding: boolean; error: string | null } {
+    return { accounts: this.claudePool.list(), use: this.claudePool.use, adding: Boolean(this.claudePool.adding), error: this.claudePool.lastError };
+  }
+
+  /** Sign another Claude account in, in its own config folder; the browser opens for it. */
+  addClaudeAccount(): void {
+    this.checkLoggingOut("claude");
+    this.claudePool.add();
+  }
+
+  /** Log a Claude account out. The default one is Claude Code's own login (the CLI's too). */
+  async removeClaudeAccount(id: string): Promise<void> {
+    if (id === DEFAULT_ACCOUNT) return this.providerLogout("claude");
+    for (const thread of this.threads.values()) {
+      if (thread.provider !== "claude" || thread.claudeAccount !== id) continue;
+      if (this.runs.has(thread.id) || this.resuming.has(thread.id) || (this.status.get(thread.id) ?? "idle") !== "idle" || this.queues.get(thread.id)?.length || this.backgroundTasks(thread.id)) {
+        throw new Error("Finish or stop the chats on this account before logging it out.");
+      }
+    }
+    for (const [threadId, session] of this.sessions) {
+      if (this.threads.get(threadId)?.claudeAccount !== id) continue;
+      session.dispose();
+      this.sessions.delete(threadId);
+    }
+    await this.claudePool.remove(id);
+  }
+
+  /** "distribute", or the one account every Claude chat uses until changed. */
+  setClaudeAccountUse(use: string): void {
+    this.claudePool.setUse(use);
   }
 
   /** The provider that runs a thread: the real one, or its fake under SCRIBE_FAKE_AGENTS=1. */
@@ -1675,6 +1745,7 @@ export class AgentHost {
     if (thread.fork) return;
     // The session would start in the main checkout and restart once the worktree is made.
     if (wantsWorktree(thread)) return;
+    this.assignClaudeAccount(thread);
     const session = this.session(thread);
     session.update(this.sessionThread(thread));
     await session.warm(threadInstructions(thread, this.scopeInfo(thread)));
@@ -1685,6 +1756,7 @@ export class AgentHost {
     const draft = this.draftThread(input);
     if (workspaceFolderError(draft)) return;
     if (wantsWorktree(draft)) return;
+    if (draft.provider === "claude") draft.claudeAccount = this.claudePool.peek();
     this.agent(draft.provider).prewarm(draft, threadInstructions(draft, this.scopeInfo(draft)), this.ctx);
   }
 
@@ -4179,6 +4251,7 @@ export class AgentHost {
         }
         // Stop can also arrive while the model is looked up.
         if (!run.cancelled) {
+          this.assignClaudeAccount(thread);
           const live = this.sessionThread(thread);
           const session = this.session(thread);
           session.update(live);
@@ -4325,7 +4398,8 @@ export class AgentHost {
     const implement = turn.plan && result.status === "done" && latest ? this.endPlanTurn(threadId, turn, run) : null;
     // Page runs wait out the limit themselves; a user's own thread asks whether to go on after the reset.
     if (turn.limitResetsAt && latest && !latest.helperOf && !this.pageRuns.get(threadId) && !pageOwned(this.loadItems(threadId))) {
-      this.addItem(threadId, turn.id, { kind: "usage_limit", resetsAt: turn.limitResetsAt, status: "pending" });
+      const switchTo = latest.provider === "claude" ? this.claudePool.alternative(latest.claudeAccount) : null;
+      this.addItem(threadId, turn.id, { kind: "usage_limit", resetsAt: turn.limitResetsAt, status: "pending", ...(switchTo ? { switchTo } : {}) });
     }
     this.emitThread(threadId);
     const moved = run.workspace && latest ? this.applyWorkspace(threadId, turn.id, run.workspace.cwd) : false;
@@ -5474,11 +5548,24 @@ export class AgentHost {
    * The user's answer to a usage limit card (#78). Continue queues the thread to go on once the
    * limit resets (right away when it already has); dismiss leaves it, also after a Continue.
    */
-  resolveUsageLimit(threadId: string, itemId: string, go: boolean): void {
-    this.requireThread(threadId);
+  resolveUsageLimit(threadId: string, itemId: string, go: boolean, account?: string): void {
+    const thread = this.requireThread(threadId);
     const item = this.loadItems(threadId).find((it) => it.id === itemId);
     if (!item || item.kind !== "usage_limit" || (item.status !== "pending" && !(item.status === "queued" && !go))) {
       throw new Error("This usage limit is no longer waiting.");
+    }
+    if (go && account) {
+      // Another Claude account has room (#452): go on there now. The chat stays on it from here.
+      if (thread.provider !== "claude" || !this.claudePool.isAccount(account)) throw new Error("That Claude account is no longer signed in.");
+      thread.claudeAccount = account;
+      this.db.saveThread(thread);
+      item.status = "resumed";
+      item.switched = this.claudePool.label(account);
+      this.touch(item);
+      this.limitResumes.delete(threadId);
+      this.saveLimitResumes();
+      this.send(threadId, { text: DEFAULT_RESUME_PROMPT, from: "scribe" });
+      return;
     }
     item.status = go ? "queued" : "dismissed";
     this.touch(item);

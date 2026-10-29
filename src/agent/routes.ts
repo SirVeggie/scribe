@@ -228,6 +228,22 @@ export function agentRouter(host: AgentHost): express.Router {
   // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
   router.post("/codex/login", wrap(() => host.codexLogin()));
   router.post("/claude/login", wrap(() => host.claudeLogin()));
+  // Several Claude accounts (#452): list, add (browser sign-in), log out, and which one chats use.
+  router.get("/claude/accounts", wrap(() => host.claudeAccounts()));
+  router.post("/claude/accounts", wrap(() => {
+    host.addClaudeAccount();
+    return host.claudeAccounts();
+  }));
+  router.delete("/claude/accounts/:id", wrap(async (req) => {
+    await host.removeClaudeAccount(req.params.id);
+    return host.claudeAccounts();
+  }));
+  router.put("/claude/accounts/use", wrap((req) => {
+    const use = typeof req.body?.use === "string" ? req.body.use : "";
+    if (!use) throw new Error("use is required");
+    host.setClaudeAccountUse(use);
+    return host.claudeAccounts();
+  }));
   for (const id of ["claude", "codex", "cursor"] as const) {
     router.post(`/${id}/logout`, wrap(async () => {
       await host.providerLogout(id);
@@ -971,7 +987,7 @@ export function agentRouter(host: AgentHost): express.Router {
     wrap((req) => {
       const body = isPlainRecord(req.body) ? req.body : {};
       host.interact(req.params.id);
-      host.resolveUsageLimit(req.params.id, req.params.itemId, body.continue === true);
+      host.resolveUsageLimit(req.params.id, req.params.itemId, body.continue === true, typeof body.account === "string" ? body.account : undefined);
       return { ok: true };
     })
   );

@@ -114,10 +114,15 @@ function claudeBinary(): string | null {
 
 type ClaudeAuth = { loggedIn: boolean; authMethod?: string; email?: string; apiProvider?: string; apiKeySource?: string };
 
+/** The environment for an added account's config folder (#452). */
+function accountEnv(dir: string): NodeJS.ProcessEnv {
+  return { ...process.env, CLAUDE_CONFIG_DIR: dir };
+}
+
 /** `claude auth status --json`: the login the SDK will use (claude.ai, API key, or a cloud provider). */
-function claudeAuthStatus(binary: string): Promise<ClaudeAuth | null> {
+function claudeAuthStatus(binary: string, dir?: string): Promise<ClaudeAuth | null> {
   return new Promise((resolve) => {
-    const child = spawn(binary, ["auth", "status", "--json"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    const child = spawn(binary, ["auth", "status", "--json"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true, ...(dir ? { env: accountEnv(dir) } : {}) });
     let out = "";
     const timer = setTimeout(() => stopChild(child), 15_000);
     child.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
@@ -230,9 +235,23 @@ export class ClaudeProvider implements AgentProvider {
    */
   async startLogin(): Promise<{ url: string | null }> {
     if (this.login) return { url: null };
+    this.login = this.runLogin().then(() => undefined).finally(() => {
+      this.auth = null;
+      this.modelCache = null;
+      this.login = null;
+    });
+    return { url: null };
+  }
+
+  /** Sign an added account's config folder in (#452). Resolves whether the sign-in went through. */
+  loginAccount(dir: string): Promise<boolean> {
+    return this.runLogin(dir);
+  }
+
+  private runLogin(dir?: string): Promise<boolean> {
     const binary = claudeBinary();
-    if (!binary) throw new Error("The Claude Code binary for this platform is not installed.");
-    const child = spawn(binary, ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    if (!binary) return Promise.reject(new Error("The Claude Code binary for this platform is not installed."));
+    const child = spawn(binary, ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(dir ? { env: accountEnv(dir) } : {}) });
     let output = "";
     const take = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-4000);
@@ -241,10 +260,10 @@ export class ClaudeProvider implements AgentProvider {
     child.stderr?.on("data", take);
     const timer = setTimeout(() => stopChild(child), LOGIN_TIMEOUT_MS);
     timer.unref?.();
-    this.login = new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       child.once("error", (err) => {
         log(`Claude login failed: ${err.message}`);
-        resolve();
+        resolve(false);
       });
       child.once("exit", (code) => {
         if (code === 0) {
@@ -253,15 +272,23 @@ export class ClaudeProvider implements AgentProvider {
           const tail = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" ");
           log(`Claude login failed (exit ${code ?? "null"})${tail ? `: ${tail}` : ""}`);
         }
-        resolve();
+        resolve(code === 0);
       });
-    }).finally(() => {
-      clearTimeout(timer);
-      this.auth = null;
-      this.modelCache = null;
-      this.login = null;
-    });
-    return { url: null };
+    }).finally(() => clearTimeout(timer));
+  }
+
+  /** `claude auth status` for an added account's folder; null when it gives no answer. */
+  accountStatus(dir: string): Promise<{ loggedIn: boolean; email?: string } | null> {
+    const binary = claudeBinary();
+    return binary ? claudeAuthStatus(binary, dir) : Promise.resolve(null);
+  }
+
+  /** Log an added account out (#452). Its sessions are the host's to close first. */
+  async logoutAccount(id: string, dir: string): Promise<void> {
+    const binary = claudeBinary();
+    if (!binary) throw new Error("The Claude Code binary for this platform is not installed.");
+    this.spares.drop((key) => key.endsWith(`,${JSON.stringify(id)}]`));
+    await authCommand(binary, ["auth", "logout"], accountEnv(dir), "Claude log out");
   }
 
   async logout(): Promise<void> {
@@ -271,8 +298,14 @@ export class ClaudeProvider implements AgentProvider {
     await this.modelLoad;
     this.dispose();
     await authCommand(binary, ["auth", "logout"], process.env, "Claude log out");
-    this.auth = null;
+    // Signed out until a status check says otherwise (a signed-out answer is never trusted for long).
+    this.auth = { at: Date.now(), value: { loggedIn: false } };
     this.modelCache = null;
+  }
+
+  /** Whether the default login was signed in when last checked; null before the first check (#452). */
+  signedIn(): boolean | null {
+    return this.auth ? this.auth.value.loggedIn : null;
   }
 
   models(refresh = false): Promise<ModelOption[]> {
@@ -496,16 +529,18 @@ export class ClaudeProvider implements AgentProvider {
    * Default-environment plan usage without a model message. Thread queries report
    * separately so project credentials never overwrite this default snapshot.
    */
-  async fetchPlanUsage(): Promise<unknown | null> {
-    return this.fetchPlanUsageStandalone();
+  async fetchPlanUsage(dir?: string): Promise<unknown | null> {
+    return this.fetchPlanUsageStandalone(dir);
   }
 
-  private async fetchPlanUsageStandalone(): Promise<unknown | null> {
+  /** dir: an added account's config folder (#452). */
+  private async fetchPlanUsageStandalone(dir?: string): Promise<unknown | null> {
     const sdk = await loadSdk();
     const input = new InputQueue();
     const abortController = new AbortController();
     const timer = setTimeout(() => abortController.abort(), 45_000);
-    const q = sdk.query({ prompt: input, options: { settingSources: ["user"], tools: [], persistSession: false, abortController } });
+    const q = sdk.query({ prompt: input, options: { settingSources: ["user"], tools: [], persistSession: false, abortController,
+      ...(dir ? { env: { ...accountEnv(dir), CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" } } : {}) } });
     try {
       const source = await q.accountInfo().then(claudeBillingSource, () => ({}));
       return { report: await queryPlanUsage(q), billingSource: source };
@@ -526,7 +561,7 @@ export class ClaudeProvider implements AgentProvider {
 
 /** What a running Claude process cannot change: its tools, folder, and instructions (which follow the scope). */
 function claudeSpareKey(thread: Thread): string {
-  return JSON.stringify([thread.mode, customKey(thread), thread.web, thread.cwd, thread.scope.kind, thread.scope.ref]);
+  return JSON.stringify([thread.mode, customKey(thread), thread.web, thread.cwd, thread.scope.kind, thread.scope.ref, thread.claudeAccount ?? null]);
 }
 
 export function permissionModeFor(thread: Pick<Thread, "mode" | "approval">): PermissionMode {
@@ -756,7 +791,7 @@ class ClaudeSession implements ProviderSession {
 
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.id, thread.mode, customKey(thread), thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers())]);
+    return JSON.stringify([thread.id, thread.mode, customKey(thread), thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers()), thread.claudeAccount ?? null]);
   }
 
   update(thread: Thread): void {
@@ -878,7 +913,7 @@ class ClaudeSession implements ProviderSession {
           },
         ],
       },
-      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" },
+      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1", ...this.ctx.claudeEnv?.(this.thread) },
       stderr: (data) => {
         this.stderrTail = (this.stderrTail + data).slice(-4000);
       },

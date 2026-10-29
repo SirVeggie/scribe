@@ -183,6 +183,8 @@ export type SessionContext = {
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
   claudeLimits?(threadId: string, limits: import("../types.js").PlanLimits): void;
+  /** Environment a Claude session starts with for its account (#452): CLAUDE_CONFIG_DIR for an added one, else nothing. Read when a session starts. */
+  claudeEnv?(thread: Thread): Record<string, string>;
   /**
    * A task started by a tool call changed: a subagent or background command. It can arrive between
    * turns (a background agent still working), so it names the thread instead of going through a run.
@@ -270,6 +272,11 @@ export class SparePool<S extends { dispose(): void; scribeThreadId(): string }> 
     const timer = setTimeout(() => this.take(key)?.dispose(), SPARE_TTL_MS);
     timer.unref?.();
     this.spares.set(key, { session, timer });
+  }
+
+  /** Dispose the spares whose key matches. */
+  drop(match: (key: string) => boolean): void {
+    for (const key of [...this.spares.keys()]) if (match(key)) this.take(key)?.dispose();
   }
 
   dispose(): void {
