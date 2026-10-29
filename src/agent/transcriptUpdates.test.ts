@@ -49,6 +49,17 @@ const items = [
 test("agent output images render live and from history with the shared image viewer", async () => {
   const { browser, page, errors } = await chatPage();
   try {
+    for (const name of ["app.css", "agent.css"]) {
+      await page.addStyleTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    }
+    const png = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 800;
+      canvas.height = 600;
+      canvas.getContext("2d")!.fillRect(0, 0, 800, 600);
+      return canvas.toDataURL("image/png").split(",")[1];
+    });
+    await page.route("**/api/agent/threads/t/files/*", (route) => route.fulfill({ contentType: "image/png", body: Buffer.from(png, "base64") }));
     const images = { id: "images", threadId: "t", turnId: "u1", seq: 2, kind: "images", sourceId: "generation", images: [
       { id: "image-1", name: "one.png", mimeType: "image/png", size: 100 }, { id: "image-2", name: "two.png", mimeType: "image/png", size: 200 },
     ] };
@@ -63,6 +74,20 @@ test("agent output images render live and from history with the shared image vie
       return T.frame();
     }, [thread, turn, before, images, after] as const);
     assert.equal(await page.locator(".ag-output-image img").count(), 2);
+    await page.locator(".ag-output-image img").evaluateAll((images) => Promise.all(images.map((image) => (image as HTMLImageElement).decode())));
+    for (const width of [1000, 640, 360]) {
+      await page.setViewportSize({ width, height: 800 });
+      const sizes = await page.locator(".ag-output-image").evaluateAll((buttons) => buttons.map((button) => {
+        const image = button.querySelector("img")!;
+        return { buttonHeight: button.clientHeight, imageHeight: image.clientHeight, imageWidth: image.clientWidth, availableWidth: button.parentElement!.clientWidth };
+      }));
+      for (const size of sizes) {
+        assert.ok(size.imageHeight > 100, `image has a usable height at ${width}px`);
+        assert.ok(size.buttonHeight >= size.imageHeight, `image is not clipped by the button at ${width}px`);
+        assert.ok(size.imageWidth <= size.availableWidth, `image fits the chat at ${width}px`);
+        assert.ok(Math.abs(size.imageWidth / size.imageHeight - 4 / 3) < 0.02, "image keeps its aspect ratio");
+      }
+    }
     await page.locator(".ag-output-image").nth(1).click();
     assert.deepEqual(await page.evaluate(() => {
       const p = (window as any).previewed;

@@ -1307,7 +1307,7 @@ html[data-theme="cream"] .ag-md {
 }
 
 .ag-output-images { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
-.ag-output-image { padding: 0; border: 1px solid var(--border); border-radius: 8px; background: transparent; cursor: pointer; overflow: hidden; max-width: 100%; }
+.ag-output-image { height: auto; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: transparent; cursor: pointer; overflow: hidden; max-width: 100%; }
 .ag-output-image img { display: block; width: auto; height: auto; max-width: 100%; max-height: 360px; }
 
 .ag-file {
