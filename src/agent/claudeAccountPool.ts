@@ -332,3 +332,6 @@ export function mergeClaudeLimits(previous: PlanLimits | undefined, next: PlanLi
   }
   return { limits: merged, fresh: true };
 }
+
+/** What a chat is told when it goes on with another account after a usage limit. */
+export const SWITCHED_ACCOUNT_PROMPT = "A usage limit stopped your last turn, so this chat now goes on with another Claude account. Go on where you left off: check your task and the work you have done so far, then finish it as before.";

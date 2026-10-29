@@ -62,7 +62,7 @@ import { MAX_FORK_MESSAGE, MAX_FORK_MIDDLE, clip, forkBlock, summaryPrompt, type
 import { trackPace, withPace, type PaceState } from "./planPace.js";
 import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRefreshAt, planLimitsFromCodexRateLimits, planLimitsFromCursorUsage, planLimitsFromRateLimitInfo, usageLimitResetsAt } from "./planLimits.js";
 import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
-import { ClaudeAccountPool, mergeClaudeLimits, type AccountView } from "./claudeAccountPool.js";
+import { ClaudeAccountPool, SWITCHED_ACCOUNT_PROMPT, mergeClaudeLimits, type AccountView } from "./claudeAccountPool.js";
 import { DEFAULT_ACCOUNT } from "./claudeAccounts.js";
 import { isPlainRecord } from "./types.js";
 import { DEFAULT_RESUME_PROMPT, PageRuns, RESUME_DELAY_MS, runView, type PageRun, type RunInput } from "./pageRuns.js";
@@ -2248,7 +2248,7 @@ export class AgentHost {
     if (this.runs.has(threadId)) return undefined;
     const last = [...this.loadItems(threadId)].reverse().find((it) => it.kind !== "notice");
     if (last?.kind === "plan" && last.status === "pending") return { kind: "plan", itemId: last.id, title: last.title || "Plan to review" };
-    if (last?.kind === "usage_limit" && last.status === "pending") return { kind: "limit", itemId: last.id, title: "Usage limit hit", resetsAt: last.resetsAt };
+    if (last?.kind === "usage_limit" && last.status === "pending") return { kind: "limit", itemId: last.id, title: "Usage limit hit", resetsAt: last.resetsAt, ...(last.switchTo ? { switchTo: last.switchTo } : {}) };
     return undefined;
   }
 
@@ -5564,7 +5564,7 @@ export class AgentHost {
       this.touch(item);
       this.limitResumes.delete(threadId);
       this.saveLimitResumes();
-      this.send(threadId, { text: DEFAULT_RESUME_PROMPT, from: "scribe" });
+      this.send(threadId, { text: SWITCHED_ACCOUNT_PROMPT, from: "scribe" });
       return;
     }
     item.status = go ? "queued" : "dismissed";

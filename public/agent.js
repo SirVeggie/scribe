@@ -5329,10 +5329,10 @@
       node.dataset.itemId = it.id;
       const head = el("div", "ag-card-head");
       head.append(icon("clock"), el("span", "ag-card-title", "Usage limit hit"), el("span", "ag-muted", `Resets ${R.finishTime(it.resetsAt)}`));
-      const tag = { queued: "Continues after reset", resumed: "Continued", dismissed: "Dismissed", expired: "Went on" }[it.status];
+      const tag = it.switched && it.status === "resumed" ? `Continued on ${it.switched}` : { queued: "Continues after reset", resumed: "Continued", dismissed: "Dismissed", expired: "Went on" }[it.status];
       if (tag) head.append(el("span", `ag-tag ${it.status === "resumed" ? "ok" : ""}`, tag));
       node.append(head);
-      if (it.status === "pending" || it.status === "queued") node.append(limitButtons(it.threadId, it.id, it.status));
+      if (it.status === "pending" || it.status === "queued") node.append(limitButtons(it.threadId, it.id, it.status, null, it.switchTo));
       return node;
     }
 
@@ -9558,20 +9558,22 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   }
 
   /** Continue after reset / Dismiss for a usage limit card, in the transcript, a toast or the flyout. */
-  function limitButtons(threadId, itemId, status, onDone) {
+  function limitButtons(threadId, itemId, status, onDone, switchTo = null) {
     const box = el("span", "ag-act-btns");
-    const answer = (go) => async (event) => {
+    const answer = (go, account) => async (event) => {
       event.stopPropagation();
       for (const b of box.querySelectorAll("button")) b.disabled = true;
       try {
-        await api("POST", `/threads/${encodeURIComponent(threadId)}/limits/${encodeURIComponent(itemId)}`, { continue: go });
+        await api("POST", `/threads/${encodeURIComponent(threadId)}/limits/${encodeURIComponent(itemId)}`, { continue: go, ...(account ? { account } : {}) });
         onDone?.();
       } catch (err) {
         notice(err.message);
         for (const b of box.querySelectorAll("button")) b.disabled = false;
       }
     };
-    if (status === "pending") box.append(button("Continue after reset", "ag-btn tiny primary", answer(true), "Sends the chat on once usage is available again"));
+    // Claude with several accounts (#452): another one has room now; the chat moves to it.
+    if (status === "pending" && switchTo) box.append(button(`Continue on ${switchTo.label}`, "ag-btn tiny primary", answer(true, switchTo.account)));
+    if (status === "pending") box.append(button("Continue after reset", `ag-btn tiny${switchTo ? "" : " primary"}`, answer(true), "Sends the chat on once usage is available again"));
     box.append(button(status === "queued" ? "Cancel" : "Dismiss", "ag-btn tiny", answer(false)));
     return box;
   }
@@ -9745,7 +9747,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       meta.append(el("span", "ag-fly-title", t.title), el("span", "ag-fly-line", activityLine(t)));
       const limit = waitingAsk(t)?.kind === "limit";
       row.append(current ? icon("you", "ag-ico ag-fly-current") : el("span", limit ? "ag-dot s-waiting" : seen ? "ag-dot" : `ag-dot s-${t.status === "idle" ? "ready" : t.status}`), meta);
-      if (limit) row.append(limitButtons(t.id, t.asking.itemId, "pending"));
+      if (limit) row.append(limitButtons(t.id, t.asking.itemId, "pending", null, t.asking.switchTo));
       else if (t.status === "waiting" && t.asking?.kind === "approval") row.append(approvalButtons(t));
       else if (t.status === "waiting") {
         row.append(
@@ -9957,7 +9959,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (t.asking?.kind === "limit") body.append(el("span", "ag-toast-text", `Resets ${R.finishTime(t.asking.resetsAt)}`));
         if (t.asking?.detail) body.append(el("code", "ag-toast-detail", t.asking.detail));
         if (t.asking?.kind === "approval") actions.append(approvalButtons(t, () => this.remove(entry.key)));
-        if (t.asking?.kind === "limit") actions.append(limitButtons(t.id, t.asking.itemId, "pending", () => this.remove(entry.key)));
+        if (t.asking?.kind === "limit") actions.append(limitButtons(t.id, t.asking.itemId, "pending", () => this.remove(entry.key), t.asking.switchTo));
       } else {
         body.append(title, " finished");
         if (t.activity?.lastText) body.append(el("span", "ag-toast-text", t.activity.lastText));
@@ -10511,6 +10513,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (w.resetsAt) row.append(el("span", "ag-usage-tip-reset", quotaResetPace(provider, w)));
       tip.append(row);
     }
+    if (provider === "claude" && limits.accounts?.length > 1) {
+      tip.firstChild.textContent = `Claude plan usage · average of ${limits.accounts.length} accounts`;
+      tip.append(claudeAccountRows(limits, thread?.claudeAccount, "ag-usage-tip-accounts"));
+    }
     if (provider === "claude") for (const note of claudeQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
     else if (limits.overage) tip.append(el("div", "ag-usage-tip-note", "Using extra usage"));
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) tip.append(el("div", "ag-usage-tip-note", note));
@@ -10769,7 +10775,140 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       box.append(row);
     }
     if (provider === "codex") for (const note of codexQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
+    if (provider === "claude" && limits.accounts?.length > 1) {
+      head.firstChild.after(el("span", "ag-muted", ` · average of ${limits.accounts.length} accounts`));
+      box.append(claudeAccountRows(limits, null, "ag-usage-tip-accounts ag-meter-accounts"));
+    }
     if (provider === "claude") for (const note of claudeQuotaNotes(limits)) box.append(el("p", "ag-muted ag-meter-none", note));
+    return box;
+  }
+
+  /* ---------- several Claude accounts (#452) ---------- */
+
+  async function addClaudeAccount() {
+    try {
+      await api("POST", "/claude/accounts");
+      openClaudeAccounts();
+    } catch (err) {
+      notice(err.message);
+    }
+  }
+
+  let claudeAccountsOpen = null;
+
+  /** Every Claude account with its weekly use, which one new chats use, and log out. */
+  function openClaudeAccounts() {
+    if (claudeAccountsOpen) return claudeAccountsOpen.refresh();
+    let timer = null;
+    let wasAdding = false;
+    const { panel, close } = modal("ag-source ag-accounts", () => {
+      clearTimeout(timer);
+      claudeAccountsOpen = null;
+    });
+    const body = el("div", "ag-accounts-body");
+    const actions = el("div", "ag-modal-actions");
+    const add = button("Add account", "ag-btn small", async () => {
+      try {
+        render(await api("POST", "/claude/accounts"));
+      } catch (err) {
+        notice(err.message);
+      }
+    });
+    add.prepend(icon("plus"));
+    actions.append(add, el("span", "ag-grow"), button("Close", "ag-btn small", () => close()));
+    panel.append(el("h2", "ag-modal-title", "Claude accounts"), body, actions);
+    const meter = (w, short) => {
+      const row = el("div", `ag-meter lvl-${usageLevel(w?.utilization || 0)}`);
+      row.append(el("span", "ag-meter-label", short), w ? quotaBar(w) : el("div", "ag-meter-bar"), el("span", "ag-meter-pct", w ? quotaPercent("claude", w.utilization) : "–"));
+      if (w?.resetsAt) row.append(el("span", "ag-meter-reset", quotaReset("claude", w.resetsAt)));
+      return row;
+    };
+    const render = (data) => {
+      add.disabled = Boolean(data.adding);
+      const use = button("", "ag-pill", () => {
+        const pick = async (value) => {
+          try {
+            render(await api("PUT", "/claude/accounts/use", { use: value }));
+          } catch (err) {
+            notice(err.message);
+          }
+        };
+        openMenu(use, [
+          { label: "Distribute", detail: "Spread new chats over the accounts", checked: data.use === "distribute", run: () => pick("distribute") },
+          ...data.accounts.map((a) => ({ label: a.email || "Account", detail: a.plan, checked: data.use === a.id, run: () => pick(a.id) })),
+        ], { width: 280 });
+      });
+      const current = data.accounts.find((a) => a.id === data.use);
+      use.append(el("span", null, current ? current.email || "Account" : "Distribute"), icon("chevron", "ag-ico ag-chev-down"));
+      const useRow = el("div", "setting-row");
+      useRow.append(el("span", null, "Use"), use);
+      const list = el("div", "ag-accounts-list");
+      for (const a of data.accounts) {
+        const row = el("div", "ag-account");
+        const head = el("div", "ag-account-head");
+        head.append(el("strong", null, a.email || "Account"));
+        if (a.plan) head.append(el("span", "ag-tag", a.plan));
+        if (a.default) head.append(el("span", "ag-muted", "Claude Code login"));
+        head.append(el("span", "ag-grow"));
+        const out = button("Log out", "ag-btn small", async () => {
+          out.disabled = true;
+          try {
+            render(await api("DELETE", `/claude/accounts/${encodeURIComponent(a.id)}`));
+            await loadConfig();
+            agentSettings.renderStatus();
+            requestRender();
+          } catch (err) {
+            notice(err.message);
+            out.disabled = false;
+          }
+        });
+        if (a.default) {
+          const hint = "Also logs out Claude Code on this computer.";
+          out.dataset.tooltip = hint;
+          out.setAttribute("aria-description", hint);
+        }
+        head.append(out);
+        const windows = a.limits?.windows || [];
+        row.append(head, meter(windows.find((w) => w.id === "seven_day"), "Weekly"), meter(windows.find((w) => w.id === "five_hour"), "5-hour"));
+        list.append(row);
+      }
+      body.replaceChildren(useRow, list);
+      if (data.adding) body.append(el("p", "ag-modal-hint", "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first."));
+      else if (data.error) body.append(el("p", "ag-modal-hint ag-accounts-error", data.error));
+      clearTimeout(timer);
+      if (data.adding) timer = setTimeout(refresh, 3000);
+      if (wasAdding && !data.adding) {
+        void loadConfig().then(() => {
+          agentSettings.renderStatus();
+          requestRender();
+        });
+      }
+      wasAdding = Boolean(data.adding);
+    };
+    const refresh = async () => {
+      try {
+        if (panel.isConnected) render(await api("GET", "/claude/accounts"));
+      } catch (err) {
+        notice(err.message);
+      }
+    };
+    claudeAccountsOpen = { refresh };
+    void refresh();
+  }
+
+  /** Per-account rows under the averaged Claude windows (#452). account: the chat's own, marked. */
+  function claudeAccountRows(limits, account, cls) {
+    const box = el("div", cls);
+    const pct = (a, id) => {
+      const w = liveWindows(a.limits?.windows).find((x) => x.id === id);
+      return w ? quotaPercent("claude", w.utilization) : "–";
+    };
+    box.append(el("span"), el("span", "ag-muted", "5h"), el("span", "ag-muted", "wk"));
+    for (const a of limits.accounts) {
+      const name = el("span", "ag-account-name", a.email || "Account");
+      if (account && a.id === account) name.append(el("span", "ag-muted", " · this chat"));
+      box.append(name, el("span", null, pct(a, "five_hour")), el("span", null, pct(a, "seven_day")));
+    }
     return box;
   }
 
@@ -11999,7 +12138,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         } else if (!p.available || !p.logout) {
           actions.append(el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
         }
-        if (p.logout) {
+        // Claude with several accounts (#452): + signs another in; once there are more, the accounts popup replaces Log out.
+        if (p.id === "claude" && (p.logout || p.accounts)) {
+          actions.append(button(icon("plus"), "ag-btn small", () => addClaudeAccount(), "Add another Claude account"));
+        }
+        if (p.id === "claude" && p.accounts) {
+          actions.append(button(`${p.accounts} account${p.accounts === 1 ? "" : "s"}`, "ag-btn small", () => openClaudeAccounts()));
+        } else if (p.logout) {
           const logout = button("Log out", "ag-btn small", async () => {
             logout.disabled = true;
             try {

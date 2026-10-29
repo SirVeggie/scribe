@@ -381,6 +381,8 @@ export type ThreadView = Thread & {
     options?: ApprovalOption[];
     /** Limit: when the plan's usage limit resets (the thread itself is idle meanwhile). */
     resetsAt?: number;
+    /** Limit, Claude with several accounts (#452): an account with room the chat can go on with now. */
+    switchTo?: { account: string; label: string };
   };
   /** Running, waiting or unread threads: the live step and the latest agent message, for the activity flyout and toasts. */
   activity?: { line: string; lastText?: string };

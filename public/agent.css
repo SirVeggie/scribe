@@ -6796,3 +6796,60 @@ body.resizing-split main.has-split .agent-dock {
 .ag-component .ag-card-head .ag-btn { margin-left: auto; }
 
 .ag-browser-thumb { cursor: pointer; }
+
+/* Several Claude accounts (#452): the accounts popup, and each account's use under the averaged meter. */
+.ag-accounts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ag-accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ag-account {
+  padding: 8px 10px 2px;
+  border-radius: 9px;
+  background: rgba(var(--lift-rgb), 0.04);
+}
+
+.ag-account-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12.5px;
+}
+
+.ag-accounts-error {
+  color: var(--danger);
+}
+
+.ag-usage-tip-accounts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px 40px;
+  column-gap: 8px;
+  row-gap: 2px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.ag-usage-tip-accounts > span:nth-child(3n + 2),
+.ag-usage-tip-accounts > span:nth-child(3n) {
+  font: 11.5px var(--ag-mono);
+  text-align: right;
+}
+
+.ag-account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-meter-accounts {
+  font-size: 12.5px;
+}

@@ -100,7 +100,7 @@ test("Claude createSession leaves the spare when a different thread sends first"
   const provider = new ClaudeProvider();
   const spare = new FakeSession("th_a");
   const a = thread({ id: "th_a" });
-  const key = JSON.stringify([a.mode, "", a.web, a.cwd, a.scope.kind, a.scope.ref]);
+  const key = JSON.stringify([a.mode, "", a.web, a.cwd, a.scope.kind, a.scope.ref, null]);
   poolOf(provider).put(key, spare);
   const other = provider.createSession(thread({ id: "th_b" }), ctx());
   assert.notEqual(other, spare);
