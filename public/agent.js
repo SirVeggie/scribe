@@ -11996,7 +11996,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
               }
             })
           );
-        } else {
+        } else if (!p.available || !p.logout) {
           actions.append(el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
         }
         if (p.logout) {

@@ -103,6 +103,7 @@ test("provider log out refreshes the row, keeps failures usable, and excludes en
     const row = page.locator(".setting-row").filter({ has: page.getByText("Codex", { exact: true }) });
     const logout = row.getByRole("button", { name: "Log out", exact: true });
     assert.equal(await page.getByRole("button", { name: "Log out", exact: true }).count(), 2);
+    assert.equal(await page.getByText("Ready", { exact: true }).count(), 1, "only the provider without logout keeps its Ready badge");
     await logout.click();
     await page.getByText("Finish or stop Codex chats before logging out.", { exact: true }).waitFor();
     assert.equal(await logout.isEnabled(), true);
