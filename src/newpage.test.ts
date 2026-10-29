@@ -35,12 +35,15 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
   const deadlines = new Map<number, number>();
   let hidden = false;
   const effects: { canvas: any; destroyed: boolean; ready: () => void; fail: () => void }[] = [];
+  const clones: any[] = [];
   const motion = { matches: false, addEventListener: (_: string, fn: () => void) => { motionChanges.push(fn); } };
   const node = () => ({
     hidden: false, inert: false, textContent: "", innerHTML: "",
     children: [] as any[], listeners: {} as Record<string, () => void>,
-    dataset: {} as Record<string, string>, style: { cssText: "" },
+    dataset: {} as Record<string, string>, style: { cssText: "", setProperty() {}, removeProperty() {} } as any,
     append(...children: any[]) { this.children.push(...children); },
+    prepended: [] as any[], prepend(child: any) { this.prepended.push(child); },
+    after(sibling: any) { clones.push(sibling); },
     setAttribute() {},
     removeAttribute() {}, remove() {},
     classList: { toggle(_name: string, _on: boolean) {}, add(_name: string) {}, remove(_name: string) {} },
@@ -94,7 +97,7 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
     },
   };
   if (!webgl) delete win.scribeGL;
-  class Observer { observe() {} }
+  class Observer { observe() {} unobserve() {} }
   runInNewContext(source, {
     window: win, document: {
       createElement: () => node(),
@@ -120,7 +123,7 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
     ...hostOverrides,
   });
   return {
-    page, draws, shaders, motion, uniforms, classes, css, root, animations, timers, parts, events,
+    page, clones, draws, shaders, motion, uniforms, classes, css, root, animations, timers, parts, events,
     intent: (value: typeof intent) => { intent = value; },
     activeShader: () => activeShader,
     frame: () => {
@@ -153,6 +156,42 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
     visibility: (value: boolean) => { hidden = value; events.visibilitychange(); },
   };
 }
+
+test("each blank pane gets its own screen; the shader follows the front one and screens stay with their pages", () => {
+  const picked: string[][] = [];
+  const activated: string[] = [];
+  const s = screen(true, false, {
+    threads: () => 0, templates: () => [{ id: "t", title: "T" }],
+    pick: (template: any, tab: any) => picked.push([template.id, tab.id]),
+    activate: (id: string) => activated.push(id),
+  });
+  s.page.show({ tab: { id: "a" }, pane: "a" }, [{ tab: { id: "b" }, pane: "b" }]);
+  assert.equal(s.clones.length, 1);
+  const beside = s.clones[0];
+  assert.equal(s.root.dataset.pane, "a");
+  assert.equal(beside.dataset.pane, "b");
+  assert.equal(beside.hidden, false);
+  assert.equal(s.running(), true);
+  s.parts.get(".newpage-templates:not(.newpage-files)")!.children[0].listeners.click();
+  assert.deepEqual(picked, [["t", "a"]], "a template fills the screen's own page");
+
+  // Focus moves to b: each screen keeps its page and the one shader moves to b's screen.
+  s.page.show({ tab: { id: "b" }, pane: "b" }, [{ tab: { id: "a" }, pane: "a" }]);
+  assert.equal(s.clones.length, 1);
+  assert.equal(s.root.dataset.pane, "a");
+  assert.equal(beside.dataset.pane, "b");
+  assert.equal(beside.prepended.length, 1, "the canvas moved to the front screen");
+  assert.equal(s.running(), true);
+  s.root.listeners.focusin();
+  assert.deepEqual(activated, ["a"], "tabbing into a screen beside brings its page forward");
+
+  // b alone: a's screen hides and no further screens appear.
+  s.page.show({ tab: { id: "b" }, pane: "" });
+  assert.equal(s.root.hidden, true);
+  assert.equal(beside.hidden, false);
+  assert.equal(beside.dataset.pane, undefined);
+  assert.equal(s.clones.length, 1);
+});
 
 test("recent workspaces open the selected path and refresh when preferences arrive", () => {
   let dirs: string[] = [];

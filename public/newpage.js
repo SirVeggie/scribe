@@ -232,7 +232,10 @@ return glow(c,e);}`;
     return id;
   }
 
-  /** The shader behind the New page screen; null when WebGL isn't there (the CSS blobs show then). */
+  /**
+   * The shader behind a New page screen; null when WebGL isn't there (the CSS blobs show then).
+   * There is one, and attach() moves it to whichever screen is in front.
+   */
   function createBackdrop(root) {
     const GL = window.scribeGL;
     if (!GL) return null;
@@ -353,7 +356,7 @@ return glow(c,e);}`;
       time += dt;
       motionTime += dt * (1 + .1 * work);
       draw();
-    }, { element: root });
+    }, { element: () => root });
 
     function start(immediate = false) {
       theme();
@@ -369,11 +372,23 @@ return glow(c,e);}`;
     }
 
     new MutationObserver(() => running && start()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    new ResizeObserver(() => running && draw()).observe(root);
+    const resize = new ResizeObserver(() => running && draw());
+    resize.observe(root);
     still.addEventListener("change", () => running && start());
     window.addEventListener("scribe:ui-fx", () => running && start());
 
     return {
+      /** Move the shader to another screen; the next set() draws it there at once. */
+      attach(next) {
+        if (next === root) return;
+        loop.stop();
+        running = false;
+        root.classList.remove("gl", "gl-warm");
+        resize.unobserve(root);
+        root = next;
+        root.prepend(canvas);
+        resize.observe(root);
+      },
       /** Run with this background while the screen is shown. */
       set(on, id, working = false, colors = null) {
         const immediate = on && (!running || style !== id);
@@ -407,275 +422,350 @@ return glow(c,e);}`;
    * and openWorkspace(path) (a new floating chat using saved agent defaults).
    */
   window.createNewPage = (host) => {
-    const root = document.getElementById("newpage");
-    const body = root.querySelector(".newpage-body");
-    const lede = root.querySelector(".newpage-lede");
-    const askBtn = root.querySelector(".newpage-ask");
-    const grid = root.querySelector(".newpage-templates:not(.newpage-files)");
-    const gridHead = root.querySelector(".newpage-templates-head:not(.newpage-files-head):not(.newpage-workspaces-head)");
-    const files = root.querySelector(".newpage-files");
-    const filesHead = root.querySelector(".newpage-files-head");
-    const workspaces = root.querySelector(".newpage-workspaces");
-    const workspacesHead = root.querySelector(".newpage-workspaces-head");
-    const where = root.querySelector(".newpage-where");
-    const intentWord = root.querySelector(".newpage-intent-word");
-    const intentTitle = root.querySelector(".newpage-intent-title");
-    askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
-    askBtn.addEventListener("click", () => host.openChat());
-    const backdrop = createBackdrop(root);
+    const first = document.getElementById("newpage");
+    // A clean copy, taken before anything is drawn, for the screens of further blank panes.
+    const blueprint = first.cloneNode(true);
+    blueprint.removeAttribute("id");
+    blueprint.querySelector(".np-canvas")?.remove();
+    const backdrop = createBackdrop(first);
     /** Each blank page keeps the background it drew, so coming back to it doesn't change it. */
     const picks = new Map();
-    let current = null;
-    /** The screen is over a page that has content (the creating screen), not standing in for a blank one. */
-    let covering = false;
-    let wordTimer = 0;
-    let wordAnimation = null;
-    let wordAt = 0;
-    let lastIntent = null;
-    root.addEventListener("click", () => covering && !replacement && host.dismissIntent?.());
-    /** The page shown and what was drawn for it, so a re-render with nothing new keeps focus and scroll. */
-    let shown = null;
-    let drawn = "";
-    let replacement = null;
-    let creationStarted = null;
+    /** The screen the shader is on (the front one). Screens beside it show the CSS blobs, to keep to one WebGL loop. */
+    let holder = null;
 
-    function cancelReplacement() {
-      if (!replacement) return;
-      replacement.frame.removeEventListener("load", replacement.reveal);
-      clearTimeout(replacement.timer);
-      replacement.animations.forEach((animation) => animation.cancel());
-      replacement = null;
-      root.inert = false;
-    }
+    /** One New page screen. Each visible blank pane gets its own, so its buttons keep working while focus moves. */
+    function createScreen(root) {
+      const screen = { root };
+      const body = root.querySelector(".newpage-body");
+      const lede = root.querySelector(".newpage-lede");
+      const askBtn = root.querySelector(".newpage-ask");
+      const grid = root.querySelector(".newpage-templates:not(.newpage-files)");
+      const gridHead = root.querySelector(".newpage-templates-head:not(.newpage-files-head):not(.newpage-workspaces-head)");
+      const files = root.querySelector(".newpage-files");
+      const filesHead = root.querySelector(".newpage-files-head");
+      const workspaces = root.querySelector(".newpage-workspaces");
+      const workspacesHead = root.querySelector(".newpage-workspaces-head");
+      const where = root.querySelector(".newpage-where");
+      const intentWord = root.querySelector(".newpage-intent-word");
+      const intentTitle = root.querySelector(".newpage-intent-title");
+      askBtn.innerHTML = `${SPARK_SVG}<span>Ask the agent</span><kbd>Ctrl</kbd><kbd>K</kbd>`;
+      askBtn.addEventListener("click", () => host.openChat());
+      let current = null;
+      /** The screen is over a page that has content (the creating screen), not standing in for a blank one. */
+      let covering = false;
+      let wordTimer = 0;
+      let wordAnimation = null;
+      let wordAt = 0;
+      let lastIntent = null;
+      root.addEventListener("click", () => covering && !replacement && host.dismissIntent?.());
+      // Tabbing into a screen beside the front one brings its page to the front, as a click does.
+      root.addEventListener("focusin", () => current && !covering && host.activate?.(current.id));
+      /** The page shown and what was drawn for it, so a re-render with nothing new keeps focus and scroll. */
+      let shown = null;
+      let drawn = "";
+      let replacement = null;
+      let creationStarted = null;
 
-    /** Hold the waiting screen until its own page loads, then dissolve it over the page. */
-    function replace(tab, frame) {
-      if (replacement?.id === tab.id) return;
-      // The creating screen dissolves into whichever page comes to the front, usually the one just made.
-      if (!frame || (current?.id !== tab.id && !covering)) {
-        render(null);
-        return;
+      function cancelReplacement() {
+        if (!replacement) return;
+        replacement.frame.removeEventListener("load", replacement.reveal);
+        clearTimeout(replacement.timer);
+        replacement.animations.forEach((animation) => animation.cancel());
+        replacement = null;
+        root.inert = false;
       }
-      const pending = { id: tab.id, frame, animations: [], timer: 0, reveal: null };
-      replacement = pending;
-      root.inert = true;
-      pending.reveal = () => {
-        if (replacement !== pending) return;
-        frame.removeEventListener("load", pending.reveal);
-        clearTimeout(pending.timer);
-        const remaining = creationStarted === null ? 0 : CREATION_MIN_MS - (performance.now() - creationStarted);
-        if (remaining > 0) {
-          pending.timer = setTimeout(pending.reveal, remaining);
-          return;
-        }
-        if (!window.scribeMotion.enabled()) {
+
+      /** Hold the waiting screen until its own page loads, then dissolve it over the page. */
+      function replace(tab, frame) {
+        if (replacement?.id === tab.id) return;
+        // The creating screen dissolves into whichever page comes to the front, usually the one just made.
+        if (!frame || (current?.id !== tab.id && !covering)) {
           render(null);
           return;
         }
-        const timing = { token: "slow", fill: "both", easing: "ease-in-out" };
-        pending.animations = [
-          window.scribeMotion.animate(root, [{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing),
-          window.scribeMotion.animate(frame, [{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing),
-        ];
-        Promise.all(pending.animations.map((animation) => animation.finished)).then(() => {
-          if (replacement === pending) render(null);
-        }).catch(() => { /* Switching pages cancels the animations. */ });
-      };
-      if (frame.dataset.loaded) pending.reveal();
-      else {
-        frame.addEventListener("load", pending.reveal);
-        // A slow or failed frame must not leave the waiting screen covering the page forever.
-        pending.timer = setTimeout(pending.reveal, 4000);
+        const pending = { id: tab.id, frame, animations: [], timer: 0, reveal: null };
+        replacement = pending;
+        root.inert = true;
+        pending.reveal = () => {
+          if (replacement !== pending) return;
+          frame.removeEventListener("load", pending.reveal);
+          clearTimeout(pending.timer);
+          const remaining = creationStarted === null ? 0 : CREATION_MIN_MS - (performance.now() - creationStarted);
+          if (remaining > 0) {
+            pending.timer = setTimeout(pending.reveal, remaining);
+            return;
+          }
+          if (!window.scribeMotion.enabled()) {
+            render(null);
+            return;
+          }
+          const timing = { token: "slow", fill: "both", easing: "ease-in-out" };
+          pending.animations = [
+            window.scribeMotion.animate(root, [{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing),
+            window.scribeMotion.animate(frame, [{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing),
+          ];
+          Promise.all(pending.animations.map((animation) => animation.finished)).then(() => {
+            if (replacement === pending) render(null);
+          }).catch(() => { /* Switching pages cancels the animations. */ });
+        };
+        if (frame.dataset.loaded) pending.reveal();
+        else {
+          frame.addEventListener("load", pending.reveal);
+          // A slow or failed frame must not leave the waiting screen covering the page forever.
+          pending.timer = setTimeout(pending.reveal, 4000);
+        }
       }
-    }
 
-    function card(template, builtin) {
-      const btn = el("button", "newpage-card");
-      btn.type = "button";
-      const icon = el("span", "newpage-card-icon");
-      icon.innerHTML = builtin ? BUILTIN_SVG : FILE_SVG;
-      const text = el("span", "newpage-card-text");
-      text.append(el("span", "newpage-card-title", template.title));
-      if (template.description) text.append(el("span", "newpage-card-desc", template.description));
-      btn.append(icon, text);
-      btn.addEventListener("click", () => host.pick(template));
-      return btn;
-    }
-
-    /** The Files section (#707): a new file in the Library folder of the page this screen opened from. */
-    function fileCard(kind, title, label, name) {
-      const btn = el("button", "newpage-card newpage-file-card");
-      btn.type = "button";
-      const badge = window.scribeFiles.badge(name);
-      badge.textContent = label;
-      btn.append(badge, el("span", "newpage-card-title", title));
-      btn.addEventListener("click", () => host.createFile?.(kind));
-      return btn;
-    }
-
-    function renderFiles(target) {
-      filesHead.hidden = !host.createFile;
-      files.hidden = !host.createFile;
-      where.hidden = !host.createFile;
-      if (!host.createFile) return;
-      files.replaceChildren(
-        fileCard("md", "Markdown", "MD", "a.md"),
-        fileCard("txt", "Text", "TXT", "a.txt"),
-        fileCard("other", "Other…", ".*", "a.txt")
-      );
-      const parts = [];
-      if (target.folder) parts.push(["In ", target.folder]);
-      parts.push(target.location ? ["on disk in ", target.location] : ["asks where on disk"]);
-      where.replaceChildren(
-        ...parts.flatMap(([text, strong], i) => {
-          const out = [document.createTextNode((i ? " · " : "") + text)];
-          if (strong) out.push(el("b", null, strong));
-          return out;
-        })
-      );
-    }
-
-    function renderWorkspaces(dirs) {
-      workspaces.hidden = workspacesHead.hidden = !dirs.length;
-      workspaces.replaceChildren(...dirs.map((dir) => {
+      function card(template, builtin) {
         const btn = el("button", "newpage-card");
         btn.type = "button";
+        const icon = el("span", "newpage-card-icon");
+        icon.innerHTML = builtin ? BUILTIN_SVG : FILE_SVG;
         const text = el("span", "newpage-card-text");
-        const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
-        text.append(el("span", "newpage-card-title", name), el("span", "newpage-card-desc", dir));
-        btn.append(text);
-        btn.addEventListener("click", () => host.openWorkspace(dir));
+        text.append(el("span", "newpage-card-title", template.title));
+        if (template.description) text.append(el("span", "newpage-card-desc", template.description));
+        btn.append(icon, text);
+        btn.addEventListener("click", () => current && host.pick(template, current));
         return btn;
-      }));
-    }
-
-    /** Built-ins that already have a local copy show once, as the copy. */
-    function templateList() {
-      const own = host.templates();
-      const copied = new Set(own.map((t) => t.builtinSource).filter(Boolean));
-      const builtins = host.builtins().filter((t) => !t.localId && !copied.has(t.key));
-      return [...own.map((t) => [t, false]), ...builtins.map((t) => [t, true])];
-    }
-
-    function background(id) {
-      if (!chosen().includes(picks.get(id))) picks.set(id, pick());
-      return picks.get(id);
-    }
-
-    function updateBackdrop(provider = host.provider?.()) {
-      const colors = appearanceStorage.getItem(PROVIDER_KEY) === "1" && provider ? window.scribeOrb?.colors(provider) : null;
-      root.classList.toggle("provider-colors", Boolean(colors));
-      if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
-      else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));
-      const id = current?.id;
-      backdrop?.set(Boolean(current), current ? background(id) : null, current ? covering || host.working(id) : false, colors);
-    }
-
-    function showWord() {
-      wordAnimation?.cancel();
-      wordAnimation = null;
-      intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
-      if (!window.scribeMotion.enabled()) return;
-      // Finish the exit before replacing the text; one timeline also survives timer throttling.
-      // The glint sweeps once while the word holds still, so the words go glint, change, glint.
-      wordAnimation = window.scribeMotion.animate(intentWord, [
-        { opacity: 0, filter: "blur(8px)", transform: "translateY(8px)", backgroundPosition: "140% 0", offset: 0, easing: "ease-out" },
-        { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "140% 0", offset: .2, easing: "ease-in-out" },
-        { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "-40% 0", offset: .8 },
-        { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "-40% 0", offset: .84, easing: "ease-in" },
-        { opacity: 0, filter: "blur(8px)", transform: "translateY(-6px)", backgroundPosition: "-40% 0", offset: 1 },
-      ], { duration: INTENT_WORD_MS, fill: "both", easing: "linear" });
-      wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
-    }
-
-    /** The words take turns while a page is being written; they stay as they are when it ends, to fade with the screen. */
-    function setIntent(intent) {
-      root.classList.toggle("intent", Boolean(intent));
-      clearTimeout(wordTimer);
-      wordAnimation?.cancel();
-      wordAnimation = null;
-      if (!intent) return;
-      intentTitle.textContent = intent.title || "";
-      wordAt = 0;
-      showWord();
-    }
-
-    function wordMotionChanged() {
-      clearTimeout(wordTimer);
-      wordAnimation?.cancel();
-      wordAnimation = null;
-      if (current && root.classList.contains("intent")) showWord();
-    }
-    matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", wordMotionChanged);
-    window.addEventListener("scribe:ui-fx", wordMotionChanged);
-
-    /** cover: the page has content, and the screen goes over it while the floating chat writes a new page. */
-    function render(tab, cover = false) {
-      cancelReplacement();
-      const entering = Boolean(tab && cover) && !(covering && current?.id === tab.id);
-      const visible = Boolean(current);
-      const intent = tab ? host.intent?.(tab.id) || null : null;
-      if (tab && current?.id !== tab.id) creationStarted = null;
-      if (tab && (cover || intent || host.working(tab.id))) creationStarted ??= performance.now();
-      root.hidden = !tab;
-      current = tab || null;
-      covering = Boolean(tab && cover);
-      // Blank and creating screens share their page's pick, including when other pages are busy.
-      updateBackdrop();
-      if (!tab) {
-        creationStarted = null;
-        shown = null;
-        drawn = "";
-        lastIntent = null;
-        setIntent(null);
-        return;
       }
-      if (entering && !visible && window.scribeMotion.enabled()) {
-        window.scribeMotion.animate(root, [{ opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)" }], { token: "slow", easing: "ease-in-out" });
+
+      /** The Files section (#707): a new file in the Library folder of the page this screen opened from. */
+      function fileCard(kind, title, label, name) {
+        const btn = el("button", "newpage-card newpage-file-card");
+        btn.type = "button";
+        const badge = window.scribeFiles.badge(name);
+        badge.textContent = label;
+        btn.append(badge, el("span", "newpage-card-title", title));
+        btn.addEventListener("click", () => host.createFile?.(kind));
+        return btn;
       }
-      const threads = covering ? 1 : host.threads(tab.id);
-      const working = covering || host.working(tab.id);
-      const list = threads ? [] : templateList();
-      const target = host.fileTarget?.() || {};
-      const dirs = threads ? [] : host.workspaces?.() || [];
-      const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description]), target, dirs]);
-      if (shown === tab.id && drawn === key) return;
-      // The same call with more known about it (its title) keeps the word it is on.
-      const sameIntent = Boolean(intent) && shown === tab.id && lastIntent === intent.itemId;
-      if (shown !== tab.id) host.refreshFiles?.();
-      shown = tab.id;
-      drawn = key;
-      root.classList.toggle("has-thread", threads > 0);
-      root.classList.toggle("working", Boolean(working));
-      root.classList.toggle("cover", covering);
-      if (sameIntent) intentTitle.textContent = intent.title || "";
-      else setIntent(intent);
-      lastIntent = intent ? intent.itemId : null;
-      // A page being made hides the options too, even when its chat belongs to another scope.
-      body.inert = threads > 0 || Boolean(intent);
-      // Keep the existing text and template cards in place while they fade away.
-      if (threads > 0) return;
-      lede.textContent = "Start from a template, or ask the agent to make something here.";
-      renderFiles(target);
-      renderWorkspaces(dirs);
-      gridHead.hidden = !list.length;
-      grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
+
+      function renderFiles(target) {
+        filesHead.hidden = !host.createFile;
+        files.hidden = !host.createFile;
+        where.hidden = !host.createFile;
+        if (!host.createFile) return;
+        files.replaceChildren(
+          fileCard("md", "Markdown", "MD", "a.md"),
+          fileCard("txt", "Text", "TXT", "a.txt"),
+          fileCard("other", "Other…", ".*", "a.txt")
+        );
+        const parts = [];
+        if (target.folder) parts.push(["In ", target.folder]);
+        parts.push(target.location ? ["on disk in ", target.location] : ["asks where on disk"]);
+        where.replaceChildren(
+          ...parts.flatMap(([text, strong], i) => {
+            const out = [document.createTextNode((i ? " · " : "") + text)];
+            if (strong) out.push(el("b", null, strong));
+            return out;
+          })
+        );
+      }
+
+      function renderWorkspaces(dirs) {
+        workspaces.hidden = workspacesHead.hidden = !dirs.length;
+        workspaces.replaceChildren(...dirs.map((dir) => {
+          const btn = el("button", "newpage-card");
+          btn.type = "button";
+          const text = el("span", "newpage-card-text");
+          const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
+          text.append(el("span", "newpage-card-title", name), el("span", "newpage-card-desc", dir));
+          btn.append(text);
+          btn.addEventListener("click", () => host.openWorkspace(dir));
+          return btn;
+        }));
+      }
+
+      /** Built-ins that already have a local copy show once, as the copy. */
+      function templateList() {
+        const own = host.templates();
+        const copied = new Set(own.map((t) => t.builtinSource).filter(Boolean));
+        const builtins = host.builtins().filter((t) => !t.localId && !copied.has(t.key));
+        return [...own.map((t) => [t, false]), ...builtins.map((t) => [t, true])];
+      }
+
+      function background(id) {
+        if (!chosen().includes(picks.get(id))) picks.set(id, pick());
+        return picks.get(id);
+      }
+
+      function updateBackdrop(provider = host.provider?.()) {
+        const colors = appearanceStorage.getItem(PROVIDER_KEY) === "1" && provider ? window.scribeOrb?.colors(provider) : null;
+        root.classList.toggle("provider-colors", Boolean(colors));
+        if (colors) colors.forEach((c, i) => root.style.setProperty("--np-c" + i, [1, 3, 5].map((p) => parseInt(c.slice(p, p + 2), 16)).join(",")));
+        else [0, 1, 2, 3].forEach((i) => root.style.removeProperty("--np-c" + i));
+        const id = current?.id;
+        if (holder === screen) backdrop?.set(Boolean(current), current ? background(id) : null, current ? covering || host.working(id) : false, colors);
+      }
+
+      function showWord() {
+        wordAnimation?.cancel();
+        wordAnimation = null;
+        intentWord.textContent = INTENT_WORDS[wordAt % INTENT_WORDS.length];
+        if (!window.scribeMotion.enabled()) return;
+        // Finish the exit before replacing the text; one timeline also survives timer throttling.
+        // The glint sweeps once while the word holds still, so the words go glint, change, glint.
+        wordAnimation = window.scribeMotion.animate(intentWord, [
+          { opacity: 0, filter: "blur(8px)", transform: "translateY(8px)", backgroundPosition: "140% 0", offset: 0, easing: "ease-out" },
+          { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "140% 0", offset: .2, easing: "ease-in-out" },
+          { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "-40% 0", offset: .8 },
+          { opacity: 1, filter: "blur(0px)", transform: "none", backgroundPosition: "-40% 0", offset: .84, easing: "ease-in" },
+          { opacity: 0, filter: "blur(8px)", transform: "translateY(-6px)", backgroundPosition: "-40% 0", offset: 1 },
+        ], { duration: INTENT_WORD_MS, fill: "both", easing: "linear" });
+        wordTimer = setTimeout(() => { wordAt += 1; showWord(); }, INTENT_WORD_MS);
+      }
+
+      /** The words take turns while a page is being written; they stay as they are when it ends, to fade with the screen. */
+      function setIntent(intent) {
+        root.classList.toggle("intent", Boolean(intent));
+        clearTimeout(wordTimer);
+        wordAnimation?.cancel();
+        wordAnimation = null;
+        if (!intent) return;
+        intentTitle.textContent = intent.title || "";
+        wordAt = 0;
+        showWord();
+      }
+
+      function wordMotionChanged() {
+        clearTimeout(wordTimer);
+        wordAnimation?.cancel();
+        wordAnimation = null;
+        if (current && root.classList.contains("intent")) showWord();
+      }
+      matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", wordMotionChanged);
+      window.addEventListener("scribe:ui-fx", wordMotionChanged);
+
+      /** cover: the page has content, and the screen goes over it while the floating chat writes a new page. */
+      function render(tab, cover = false) {
+        cancelReplacement();
+        const entering = Boolean(tab && cover) && !(covering && current?.id === tab.id);
+        const visible = Boolean(current);
+        const intent = tab ? host.intent?.(tab.id) || null : null;
+        if (tab && current?.id !== tab.id) creationStarted = null;
+        if (tab && (cover || intent || host.working(tab.id))) creationStarted ??= performance.now();
+        root.hidden = !tab;
+        current = tab || null;
+        covering = Boolean(tab && cover);
+        // Blank and creating screens share their page's pick, including when other pages are busy.
+        updateBackdrop();
+        if (!tab) {
+          creationStarted = null;
+          shown = null;
+          drawn = "";
+          lastIntent = null;
+          setIntent(null);
+          return;
+        }
+        if (entering && !visible && window.scribeMotion.enabled()) {
+          window.scribeMotion.animate(root, [{ opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)" }], { token: "slow", easing: "ease-in-out" });
+        }
+        const threads = covering ? 1 : host.threads(tab.id);
+        const working = covering || host.working(tab.id);
+        const list = threads ? [] : templateList();
+        const target = host.fileTarget?.() || {};
+        const dirs = threads ? [] : host.workspaces?.() || [];
+        const key = JSON.stringify([tab.id, covering, threads, working, intent && [intent.itemId, intent.title], list.map(([t]) => [t.id, t.title, t.description]), target, dirs]);
+        if (shown === tab.id && drawn === key) return;
+        // The same call with more known about it (its title) keeps the word it is on.
+        const sameIntent = Boolean(intent) && shown === tab.id && lastIntent === intent.itemId;
+        if (shown !== tab.id) host.refreshFiles?.();
+        shown = tab.id;
+        drawn = key;
+        root.classList.toggle("has-thread", threads > 0);
+        root.classList.toggle("working", Boolean(working));
+        root.classList.toggle("cover", covering);
+        if (sameIntent) intentTitle.textContent = intent.title || "";
+        else setIntent(intent);
+        lastIntent = intent ? intent.itemId : null;
+        // A page being made hides the options too, even when its chat belongs to another scope.
+        body.inert = threads > 0 || Boolean(intent);
+        // Keep the existing text and template cards in place while they fade away.
+        if (threads > 0) return;
+        lede.textContent = "Start from a template, or ask the agent to make something here.";
+        renderFiles(target);
+        renderWorkspaces(dirs);
+        gridHead.hidden = !list.length;
+        grid.replaceChildren(...list.map(([template, builtin]) => card(template, builtin)));
+      }
+
+      window.addEventListener("scribe:newpage-bg", () => updateBackdrop());
+      window.addEventListener("scribe:dock-provider", (event) => updateBackdrop(event.detail.provider));
+      window.addEventListener("scribe:orb-appearance", () => updateBackdrop());
+      window.addEventListener("scribe:threads-ready", () => render(current, covering));
+      window.addEventListener("scribe:workspaces-changed", () => { if (current) render(current, covering); });
+
+      return Object.assign(screen, {
+        render,
+        replace,
+        tab: () => current,
+        cover: () => covering,
+        /** Focus a starting control only while the page has no thread. */
+        focus() {
+          if (!current || host.threads(current.id) > 0) return;
+          (files.querySelector("button") || grid.querySelector("button") || askBtn).focus({ preventScroll: true });
+        },
+      });
     }
 
-    window.addEventListener("scribe:newpage-bg", () => updateBackdrop());
-    window.addEventListener("scribe:dock-provider", (event) => updateBackdrop(event.detail.provider));
-    window.addEventListener("scribe:orb-appearance", () => updateBackdrop());
-    window.addEventListener("scribe:threads-ready", () => render(current, covering));
-    window.addEventListener("scribe:workspaces-changed", () => { if (current) render(current, covering); });
+    const screens = [createScreen(first)];
+    holder = screens[0];
+
+    function addScreen() {
+      const root = blueprint.cloneNode(true);
+      root.hidden = true;
+      screens[screens.length - 1].root.after(root);
+      const screen = createScreen(root);
+      screens.push(screen);
+      return screen;
+    }
+
+    function place(screen, pane) {
+      if (pane) screen.root.dataset.pane = pane;
+      else delete screen.root.dataset.pane;
+    }
+
+    /**
+     * front: { tab, pane, cover } for the page in front (the shader goes there), or null.
+     * beside: [{ tab, pane }] for the other blank panes on screen. A screen stays with its page.
+     */
+    function show(front, beside = []) {
+      const items = [front, ...beside].filter(Boolean);
+      const used = new Map();
+      for (const item of items) {
+        const screen = screens.find((s) => !used.has(s) && s.tab()?.id === item.tab.id);
+        if (screen) used.set(screen, item);
+      }
+      for (const item of items) {
+        if ([...used.values()].includes(item)) continue;
+        used.set(screens.find((s) => !used.has(s)) || addScreen(), item);
+      }
+      const frontScreen = [...used].find(([, item]) => item === front)?.[0];
+      if (frontScreen && frontScreen !== holder) {
+        backdrop?.attach(frontScreen.root);
+        holder = frontScreen;
+      }
+      for (const screen of screens) {
+        const item = used.get(screen);
+        if (item && item.pane !== undefined) place(screen, item.pane);
+        screen.render(item?.tab || null, Boolean(item?.cover));
+      }
+    }
 
     return {
-      render,
-      replace,
-      /** Focus a starting control only while the page has no thread. */
-      focus() {
-        if (!current || host.threads(current.id) > 0) return;
-        (files.querySelector("button") || grid.querySelector("button") || askBtn).focus({ preventScroll: true });
+      show,
+      /** Just the front screen, wherever it is. */
+      render: (tab, cover = false) => show(tab ? { tab, cover } : null),
+      /** No blank page on screen: the front screen dissolves into the page now in front. */
+      replace(tab, frame) {
+        for (const screen of screens) if (screen !== holder) screen.render(null);
+        holder.replace(tab, frame);
       },
+      /** Draw every shown screen again, for changed templates or threads. */
+      refresh() {
+        for (const screen of screens) if (screen.tab()) screen.render(screen.tab(), screen.cover());
+      },
+      focus: () => holder.focus(),
     };
   };
 })();

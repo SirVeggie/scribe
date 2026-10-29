@@ -3901,7 +3901,7 @@ html.popout .actions,
 html.popout .side-pane,
 html.popout .agent-pane,
 html.popout #empty,
-html.popout #newpage {
+html.popout .newpage {
   display: none !important;
 }
 

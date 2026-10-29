@@ -629,7 +629,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       const draftWidths = [];
       const newPageView = {
         focus(){}, replace(){newPageEl.hidden=true;},
-        render(tab){newPageEl.hidden=!tab;if(tab)draftWidths.push(newPageEl.getBoundingClientRect().width);}
+        show(item){newPageEl.hidden=!item;if(item){newPageEl.dataset.pane=item.pane;if(!item.pane)delete newPageEl.dataset.pane;draftWidths.push(newPageEl.getBoundingClientRect().width);}}
       };
       const render = () => renderFrames();
       ${newPageSource}

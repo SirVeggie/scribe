@@ -27,7 +27,6 @@
     // Let the restored shell settle before revealing it; fast refreshes get a brief, stable view.
     refreshOverlayTimer = setTimeout(() => dismissRefreshOverlay(true), Math.max(250, 700 - performance.now()));
   }
-  const newPageEl = document.getElementById("newpage");
   const framesEl = document.getElementById("frames");
   const clearBtn = document.getElementById("clear");
   const libraryToggle = document.getElementById("library-toggle");
@@ -458,6 +457,8 @@
     templates: () => state.templates,
     builtins: () => state.builtinTemplates,
     pick: fillFromTemplate,
+    // A screen beside the front one brings its page forward when it gets focus.
+    activate: (id) => id !== state.activeId && activatePage(id),
     fileTarget: () => newFileTarget(draftFolder()),
     createFile: (kind) => createFile(kind, draftFolder()),
     // The Files section says where a new file goes, which can follow a changed default.
@@ -1150,9 +1151,8 @@
     reportViewer();
   }
 
-  /** A template picked on the New page screen fills this page; one with fields asks for them first. */
-  function fillFromTemplate(template) {
-    const tab = activeTab();
+  /** A template picked on a New page screen fills its page; one with fields asks for them first. */
+  function fillFromTemplate(template, tab = activeTab()) {
     if (!isBlank(tab)) {
       return;
     }
@@ -2643,10 +2643,7 @@
     if (freshTemplateId) {
       flashTemplateRow(freshTemplateId);
     }
-    const active = activeTab();
-    if (isBlank(active)) {
-      newPageView.render(active);
-    }
+    newPageView.refresh();
   }
 
   function templateRow(template, builtin, collapsed = false) {
@@ -3174,17 +3171,17 @@
     }
     views.layout();
     checkPageAudioVisibility();
-    // The New page screen stands in for a blank page's frame, in whichever pane the page is.
-    const blank = isBlank(tab) ? tab : views.besidePages().find(isBlank) || null;
+    // A New page screen stands in for each blank page's frame, in whichever pane the page is.
+    // The front one (the active page, else the first blank beside it) gets the shader.
+    const blanks = [...(isBlank(tab) ? [tab] : []), ...views.besidePages().filter(isBlank)];
+    const blank = blanks[0] || null;
     const cover = !blank && tab && pageIntent?.origin === tab.id ? tab : null;
-    const pane = blank ? views.paneOf(blank.id) : cover ? views.paneOf(cover.id) : "";
+    const at = (page) => ({ tab: page, pane: views.paneOf(page.id) });
     mainEl.classList.toggle("blank-page", Boolean(blank));
-    if (pane) newPageEl.dataset.pane = pane;
-    else delete newPageEl.dataset.pane;
-    if (blank) newPageView.render(blank);
-    else if (cover) newPageView.render(cover, true);
+    if (blank) newPageView.show(at(blank), blanks.slice(1).map(at));
+    else if (cover) newPageView.show({ ...at(cover), cover: true });
     else if (tab) newPageView.replace(tab, frames.get(tab.id)?.el);
-    else newPageView.render(null);
+    else newPageView.show(null);
     const hinted = !blank && !cover && tab && pageHint?.origin === tab.id;
     pageHintEl.hidden = !hinted;
     const hintPane = hinted ? views.paneOf(tab.id) : "";
@@ -6211,10 +6208,7 @@
         syncTabEl(el, tab);
       }
     }
-    const tab = activeTab();
-    if (isBlank(tab)) {
-      newPageView.render(tab);
-    }
+    newPageView.refresh();
   });
   sidebarTabLibrary.addEventListener("click", () => setSidebarTab("library"));
   sidebarTabTemplates.addEventListener("click", () => setSidebarTab("templates"));
