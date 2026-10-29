@@ -138,10 +138,10 @@ vec4 galaxy(vec2 uv,float t){float r=length(uv)+.001;float ang=atan(uv.y,uv.x);f
 float n=fbm(uv*3.+vec2(t*.1));float dens=clamp(arm*(.4+.8*n)*exp(-r*1.4)*1.8+exp(-r*6.)*1.2,0.,1.);
 vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1,r));}
 
-// A regular travelling wave, with enough height change to read at 30px even idle.
+// A regular travelling wave, compact at idle and taller while working.
 vec4 bars(vec2 uv,float t){float a=0.;vec3 col=vec3(0.);
 for(int i=0;i<5;i++){float fi=float(i);float wave=.5+.5*cos(t*TAU/3.6-fi*TAU/5.);
-float h=.22+.44*wave;vec2 p=uv-vec2((fi-2.)*.34,0.);
+float h=mix(.04+.12*wave,.22+.44*wave,u_work);vec2 p=uv-vec2((fi-2.)*.34,0.);
 float d=length(vec2(p.x,max(abs(p.y)-h,0.)))-.09;float mask=aaIn(d);
 vec3 c=mix(u_c1,u_c3,.45+.45*wave);col+=c*mask;a+=mask;}
 return vec4(col,clamp(a,0.,1.));}
