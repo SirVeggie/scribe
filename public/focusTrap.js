@@ -61,5 +61,17 @@
     };
   }
 
+  // Focus that a script moves on its own (a prompt that pops up, focus restored after a click)
+  // still matches :focus-visible once the keyboard was used at some point. Keep the ring for
+  // focus a key just moved, and hide it otherwise until a navigation key is pressed.
+  const NAV_KEYS = ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"];
+  let lastKey = -Infinity;
+  const quiet = (on) => document.documentElement.classList.toggle("scribe-focus-quiet", on);
+  window.addEventListener("keydown", (event) => {
+    lastKey = performance.now();
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && NAV_KEYS.includes(event.key)) quiet(false);
+  }, true);
+  window.addEventListener("focusin", () => quiet(performance.now() - lastKey > 300), true);
+
   window.scribeFocusTrap = { focusables, trapTab, bind };
 })();

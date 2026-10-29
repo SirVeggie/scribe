@@ -2294,8 +2294,21 @@ kbd {
   box-shadow: 0 0 0 1px rgba(255, 143, 143, 0.7);
 }
 
-/* Automatic dialog focus gets an outline once keyboard navigation begins. */
-.scribe-focus-pending :focus {
+/* Keyboard focus: a soft accent ring that follows the control's corners, instead of the browser's
+   black one. Fields sit flush; their borders already frame them. Rules for specific controls win. */
+:where(:focus-visible) {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+:where(input, textarea, select, [contenteditable]):focus-visible {
+  outline-offset: 0;
+}
+
+/* Automatic dialog focus gets an outline once keyboard navigation begins. Focus a script moved
+   without a key press stays quiet the same way (focusTrap.js). */
+.scribe-focus-pending :focus,
+.scribe-focus-quiet :focus {
   outline: none !important;
 }
 
