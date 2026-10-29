@@ -26,11 +26,27 @@ pub fn is_running() -> bool {
     TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok()
 }
 
-/// The Scribe checkout whose `dist/index.js` runs the daemon. Defaults to the clone this app was built from.
+/// The Scribe folder whose `dist/index.js` runs the daemon: `SCRIBE_DIR`, else the `app` folder a release
+/// installer puts beside this exe (`npm run desktop:release`), else the clone this app was built from.
 fn repo_dir() -> PathBuf {
-    match std::env::var_os("SCRIBE_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."),
+    if let Some(dir) = std::env::var_os("SCRIBE_DIR") {
+        return PathBuf::from(dir);
+    }
+    bundled_dir().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."))
+}
+
+fn bundled_dir() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.join("app");
+    dir.join("dist").join("index.js").is_file().then_some(dir)
+}
+
+/// The Node a release ships in `app/node`, else the one on PATH.
+fn node(dir: &std::path::Path) -> PathBuf {
+    let bundled = dir.join("node").join(if cfg!(windows) { "node.exe" } else { "node" });
+    if bundled.is_file() {
+        bundled
+    } else {
+        PathBuf::from("node")
     }
 }
 
@@ -48,14 +64,15 @@ pub fn data_dir() -> PathBuf {
 
 /// Starts the daemon, or replaces one from another build, through the same code path the MCP uses.
 pub fn ensure_daemon() -> Result<(), String> {
-    let script = repo_dir().join("dist").join("index.js");
+    let dir = repo_dir();
+    let script = dir.join("dist").join("index.js");
     if !script.is_file() {
         return Err(format!(
             "{} is missing. Run npm install and npm run build in the Scribe folder, or set SCRIBE_DIR.",
             script.display()
         ));
     }
-    let mut command = Command::new("node");
+    let mut command = Command::new(node(&dir));
     command.arg(&script).arg("--ensure");
     #[cfg(windows)]
     {

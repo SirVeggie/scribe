@@ -2,16 +2,14 @@
 // Usage: npm run desktop:install -- <target folder>
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installRelease } from "./install-release.mjs";
+import { requireToolchain, tauriCli } from "./cargo-env.mjs";
 
 const EXE = "scribe.exe";
 const PREVIOUS_EXES = ["agent-board-desktop.exe", "board.exe"];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const tauriJs = path.join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
-const cargoBin = path.join(os.homedir(), ".cargo", "bin");
 
 const target = process.argv[2];
 if (!target) {
@@ -20,17 +18,8 @@ if (!target) {
 }
 const installed = path.join(path.resolve(target), EXE);
 
-const env = envWithCargo();
-if (!fs.existsSync(tauriJs)) {
-  console.error("The Tauri CLI is not installed (missing node_modules/@tauri-apps/cli).");
-  console.error("Run npm install in this repo, then retry.");
-  process.exit(1);
-}
-if (!commandExists("cargo", env)) {
-  console.error("cargo was not found. The desktop app is a Rust/Tauri binary; npm install does not install Rust.");
-  console.error("Install a toolchain from https://rustup.rs/ (Windows: MSVC, plus Visual Studio C++ build tools), then retry.");
-  process.exit(1);
-}
+const env = requireToolchain(root);
+const tauriJs = tauriCli(root);
 
 // Cargo may use CARGO_TARGET_DIR or a configured target-dir (including in worktrees).
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--manifest-path", path.join(root, "desktop", "Cargo.toml"), "--format-version", "1", "--no-deps"], { cwd: root, env, encoding: "utf8" }));
@@ -60,23 +49,6 @@ for (const name of PREVIOUS_EXES) {
   }
 }
 console.log(`Copied to ${installed}`);
-
-function envWithCargo() {
-  const env = { ...process.env };
-  const key = Object.keys(env).find((name) => name.toLowerCase() === "path") ?? "PATH";
-  const current = env[key] ?? "";
-  if (fs.existsSync(cargoBin) && !current.split(path.delimiter).includes(cargoBin)) {
-    env[key] = `${cargoBin}${path.delimiter}${current}`;
-  }
-  return env;
-}
-
-function commandExists(name, env) {
-  const file = process.platform === "win32" && !name.endsWith(".exe") ? `${name}.exe` : name;
-  const key = Object.keys(env).find((n) => n.toLowerCase() === "path");
-  const dirs = key ? env[key].split(path.delimiter) : [];
-  return dirs.some((dir) => dir && fs.existsSync(path.join(dir, file)));
-}
 
 function processNames() {
   return [EXE, ...PREVIOUS_EXES];
