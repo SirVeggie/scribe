@@ -4,6 +4,26 @@ Reviewed 2026-10-29 against the saved lab page `scribe:floating-chat-effects-lab
 (revision 7) and this branch's Scribe source. The lab is a saved Library page;
 its JavaScript is not `public/orb.js`, which supplies the visual effects.
 
+## Resolution (re-check of the follow-up)
+
+The likeliest real trigger is on Scribe's side, not the user's timing. A page's
+`scribe.agent.get` was answered from the chat's client thread cache
+(`pageRequest` in `public/agent.js`), which is empty until the startup
+`GET /threads` returns. A lab tab restored when Scribe starts (or reloads, which
+the lab's own Merge toast asks for) asked for its saved thread during that gap,
+got `not_found`, cleared `threadId` and started a new worker in a new worktree
+from master on the next request. The three page-side races found earlier are
+real but need a send within milliseconds of loading; this one needs only a
+reload.
+
+Fixes: `pageRequest` now waits for the first thread list and answers
+`unavailable` rather than `not_found` when it has none. The lab (revision 9)
+waits for restoration before sending, shares one in-flight start, forgets its
+worker only on `not_found`, retries restoration on the next send, and adopts a
+worker another window started. Recovery merged `agent/floating-chat-effects-2`
+into the lab's current worker branch `agent/floating-chat-effects-3`
+(`cf6ddc0`, keeping its newer Voice bars) and republished `orb.js`.
+
 ## Follow-up: separate worktrees and apparently missing changes
 
 The user reported three linked effects worktrees and asked for the cause before
