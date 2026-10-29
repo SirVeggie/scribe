@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { log } from "../log.js";
 import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
 import {
   DEFAULT_ACCOUNT, accountScore, accountsRoot, cleanAccountsState, combineLimits, pickAccount, planLabel, planWeight,
-  prepareProfile, readAccountProfile, removeProfile, type ClaudeAccount, type ClaudeAccountsState, type PickCandidate,
+  prepareProfile, readAccountProfile, removeProfile, swapLogin, type ClaudeAccount, type ClaudeAccountsState, type PickCandidate,
 } from "./claudeAccounts.js";
 import { livePlanLimits, nextRefreshAt } from "./planLimits.js";
 import { isPlainRecord, type PlanLimits, type Thread } from "./types.js";
@@ -67,7 +68,22 @@ export class ClaudeAccountPool {
     this.state = cleanAccountsState(deps.getSetting("claudeAccounts", null));
     const saved = deps.getSetting<Record<string, PlanLimits>>("claudeAccountLimits", {});
     this.limits = Object.fromEntries(Object.entries(saved).filter(([id]) => this.state.accounts.some((a) => a.id === id)));
-    if (!deps.offline) for (const a of this.state.accounts) this.schedule(a.id, 5_000);
+    if (!deps.offline) {
+      for (const a of this.state.accounts) this.schedule(a.id, 5_000);
+      this.sweepFolders();
+    }
+  }
+
+  /** Folders of sign-ins that never finished (the daemon stopped meanwhile). */
+  private sweepFolders(): void {
+    const root = accountsRoot(this.deps.dataDir);
+    try {
+      for (const name of fs.readdirSync(root)) {
+        if (/^acc_[0-9a-f]+$/.test(name) && !this.state.accounts.some((a) => a.id === name)) removeProfile(path.join(root, name));
+      }
+    } catch {
+      /* no folder yet */
+    }
   }
 
   /** True once an account has been added: chats are then spread over several. */
@@ -292,6 +308,33 @@ export class ClaudeAccountPool {
     this.adding = null;
     this.lastError = null;
     this.deps.changed();
+  }
+
+  /**
+   * Make an added account Claude Code's own login (#452): it trades sign-ins with the default folder,
+   * which the Claude Code CLI uses. The ids keep their folders, so their profiles, the pinned account
+   * and pick times trade places too. Returns the added account's usage, which now belongs to the
+   * default; the default's goes to the added one. The caller checks that no chat runs on either.
+   */
+  swapWithDefault(id: string, defaultLimits: PlanLimits | undefined): PlanLimits | undefined {
+    const acc = this.account(id);
+    if (!acc?.dir) throw new Error("No such Claude account.");
+    const before = readAccountProfile(null);
+    swapLogin(acc.dir);
+    const { email: _e, orgName: _o, plan: _p, tier: _t, ...rest } = acc;
+    const next: ClaudeAccount = { ...rest, ...before };
+    this.state.accounts = this.state.accounts.map((a) => (a.id === id ? next : a));
+    const trade = (value: string) => (value === id ? DEFAULT_ACCOUNT : value === DEFAULT_ACCOUNT ? id : value);
+    this.state.use = trade(this.state.use);
+    this.state.picked = Object.fromEntries(Object.entries(this.state.picked).map(([k, v]) => [trade(k), v]));
+    const theirs = this.limits[id];
+    const { [id]: _old, ...others } = this.limits;
+    this.limits = defaultLimits ? { ...others, [id]: defaultLimits } : others;
+    this.deps.setSetting("claudeAccountLimits", this.limits);
+    this.save();
+    this.schedule(id, MIN_FETCH_GAP_MS);
+    this.deps.changed();
+    return theirs;
   }
 
   /** Log an added account out and forget it. The caller checks that no chat runs on it. */

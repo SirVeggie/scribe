@@ -34,6 +34,7 @@ before(() => {
     loginAccount: async () => false,
     accountStatus: async () => null,
     logoutAccount: async () => undefined,
+    loginSwapped: () => {},
     createSession: (created: Thread, ctx: SessionContext) => {
       let thread = created;
       return {
@@ -109,5 +110,33 @@ test("pinning an account moves every chat to it; an unknown account is refused",
   assert.equal(runs.at(-1)!.account, "acc_t");
   assert.throws(() => host.setClaudeAccountUse("acc_nope"));
   assert.equal(host.claudeAccounts().use, "acc_t");
+  host.setClaudeAccountUse("distribute");
+});
+
+test("Claude Code's own login can be traded with an added account; chats and the pin follow their account", async () => {
+  const base = process.env.CLAUDE_CONFIG_DIR!;
+  fs.mkdirSync(base, { recursive: true });
+  fs.mkdirSync(accountDir, { recursive: true });
+  fs.writeFileSync(path.join(base, ".credentials.json"), "secret-one");
+  fs.writeFileSync(path.join(base, ".claude.json"), JSON.stringify({ theme: "dark", oauthAccount: { emailAddress: "one@example.com" } }));
+  fs.writeFileSync(path.join(accountDir, ".credentials.json"), "secret-two");
+  fs.writeFileSync(path.join(accountDir, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "second@example.com" } }));
+  host.setClaudeAccountUse("acc_t");
+  const thread = host.createThread({ provider: "claude", approval: "full", cwd: dir, scope: { kind: "global", ref: null } });
+  host.send(thread.id, { text: "hi" });
+  await until(() => runs.at(-1)?.threadId === thread.id && view(thread.id).status === "idle");
+  assert.equal(view(thread.id).claudeAccount, "acc_t");
+
+  host.setClaudeCodeAccount("acc_t");
+  assert.equal(fs.readFileSync(path.join(base, ".credentials.json"), "utf8"), "secret-two");
+  assert.equal(fs.readFileSync(path.join(accountDir, ".credentials.json"), "utf8"), "secret-one");
+  const own = JSON.parse(fs.readFileSync(path.join(base, ".claude.json"), "utf8"));
+  assert.equal(own.oauthAccount.emailAddress, "second@example.com");
+  assert.equal(own.theme, "dark", "the rest of Claude Code's settings stay");
+  const list = host.claudeAccounts();
+  assert.equal(list.accounts.find((a) => a.default)?.email, "second@example.com");
+  assert.equal(list.accounts.find((a) => a.id === "acc_t")?.email, "one@example.com");
+  assert.equal(list.use, "default", "the pinned account is still second@");
+  assert.equal(view(thread.id).claudeAccount, "default", "the chat stays with second@ in its new folder");
   host.setClaudeAccountUse("distribute");
 });

@@ -317,6 +317,13 @@ export class ClaudeProvider implements AgentProvider {
     this.modelCache = null;
   }
 
+  /** The default folder's login changed hands (#452): check it again, and drop spares started with the old one. */
+  loginSwapped(): void {
+    this.auth = null;
+    this.modelCache = null;
+    this.spares.dispose();
+  }
+
   /** Whether the default login was signed in when last checked; null before the first check (#452). */
   signedIn(): boolean | null {
     return this.auth ? this.auth.value.loggedIn : null;

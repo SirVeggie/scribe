@@ -270,3 +270,40 @@ export function combineLimits(rows: AccountLimitsRow[], now = Date.now()): PlanL
       ...(r.limits ? { limits: r.limits } : {}) })),
   };
 }
+
+function writeAtomic(file: string, text: string): void {
+  const tmp = `${file}.scribe-${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Give Claude Code's own login (the default folder, which the CLI uses) the added account's sign-in
+ * and the added folder the default's (#452): the stored credentials and the account entry in each
+ * .claude.json trade places; everything else in both stays. Needs the logins stored as files.
+ */
+export function swapLogin(dir: string, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): void {
+  const base = defaultConfigDir(env, home);
+  const credA = path.join(base, ".credentials.json");
+  const credB = path.join(dir, ".credentials.json");
+  if (!fs.existsSync(credA) || !fs.existsSync(credB)) throw new Error("Claude Code keeps one of these logins outside its folder (a system keychain), so Scribe cannot switch it.");
+  const fileA = accountFile(null, env, home);
+  const fileB = accountFile(dir, env, home);
+  const read = (file: string): Record<string, unknown> => {
+    const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!isPlainRecord(raw)) throw new Error(`${file} is not a JSON object.`);
+    return raw;
+  };
+  const jsonA = read(fileA);
+  const jsonB = read(fileB);
+  const secretA = fs.readFileSync(credA, "utf8");
+  const secretB = fs.readFileSync(credB, "utf8");
+  const accountA = jsonA.oauthAccount;
+  const accountB = jsonB.oauthAccount;
+  writeAtomic(credA, secretB);
+  writeAtomic(credB, secretA);
+  if (accountB === undefined) delete jsonA.oauthAccount; else jsonA.oauthAccount = accountB;
+  if (accountA === undefined) delete jsonB.oauthAccount; else jsonB.oauthAccount = accountA;
+  writeAtomic(fileA, `${JSON.stringify(jsonA, null, 2)}\n`);
+  writeAtomic(fileB, `${JSON.stringify(jsonB, null, 2)}\n`);
+}

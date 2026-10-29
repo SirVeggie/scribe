@@ -242,6 +242,12 @@ export function agentRouter(host: AgentHost): express.Router {
     await host.removeClaudeAccount(req.params.id);
     return host.claudeAccounts();
   }));
+  router.put("/claude/accounts/cli", wrap((req) => {
+    const id = typeof req.body?.id === "string" ? req.body.id : "";
+    if (!id) throw new Error("id is required");
+    host.setClaudeCodeAccount(id);
+    return host.claudeAccounts();
+  }));
   router.put("/claude/accounts/use", wrap((req) => {
     const use = typeof req.body?.use === "string" ? req.body.use : "";
     if (!use) throw new Error("use is required");

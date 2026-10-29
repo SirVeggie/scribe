@@ -10843,6 +10843,24 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       use.append(el("span", null, current ? current.email || "Account" : "Distribute"), icon("chevron", "ag-ico ag-chev-down"));
       const useRow = el("div", "setting-row");
       useRow.append(el("span", null, "Use"), use);
+      // Which account the Claude Code CLI is signed in with: the default folder trades logins with the pick.
+      const own = data.accounts.find((a) => a.default);
+      const cli = button("", "ag-pill", () => {
+        openMenu(cli, data.accounts.map((a) => ({ label: a.email || "Account", detail: a.plan, checked: a.default, run: async () => {
+          if (a.default) return;
+          try {
+            render(await api("PUT", "/claude/accounts/cli", { id: a.id }));
+            await loadConfig();
+            agentSettings.renderStatus();
+            requestRender();
+          } catch (err) {
+            notice(err.message);
+          }
+        } })), { width: 280 });
+      });
+      cli.append(el("span", null, own?.email || "Not signed in"), icon("chevron", "ag-ico ag-chev-down"));
+      const cliRow = el("div", "setting-row");
+      cliRow.append(el("span", null, "Claude Code"), cli);
       const list = el("div", "ag-accounts-list");
       for (const a of data.accounts) {
         const row = el("div", "ag-account");
@@ -10873,7 +10891,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         row.append(head, meter(windows.find((w) => w.id === "seven_day"), "Weekly"), meter(windows.find((w) => w.id === "five_hour"), "5-hour"));
         list.append(row);
       }
-      body.replaceChildren(useRow, list);
+      body.replaceChildren(useRow, ...(own && data.accounts.length > 1 ? [cliRow] : []), list);
       if (data.adding) {
         const hint = el("div", "ag-accounts-adding");
         hint.append(el("p", "ag-modal-hint", "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first."),

@@ -1346,18 +1346,54 @@ export class AgentHost {
   /** Log a Claude account out. The default one is Claude Code's own login (the CLI's too). */
   async removeClaudeAccount(id: string): Promise<void> {
     if (id === DEFAULT_ACCOUNT) return this.providerLogout("claude");
+    this.closeAccountSessions([id], "Finish or stop the chats on this account before logging it out.");
+    await this.claudePool.remove(id);
+  }
+
+  /** Close idle sessions on these Claude accounts; refuse while a chat on one is busy. */
+  private closeAccountSessions(accounts: string[], busy: string): void {
+    const on = (thread: Thread | undefined) => thread?.provider === "claude" && accounts.includes(thread.claudeAccount ?? DEFAULT_ACCOUNT);
     for (const thread of this.threads.values()) {
-      if (thread.provider !== "claude" || thread.claudeAccount !== id) continue;
+      if (!on(thread)) continue;
       if (this.runs.has(thread.id) || this.resuming.has(thread.id) || (this.status.get(thread.id) ?? "idle") !== "idle" || this.queues.get(thread.id)?.length || this.backgroundTasks(thread.id)) {
-        throw new Error("Finish or stop the chats on this account before logging it out.");
+        throw new Error(busy);
       }
     }
     for (const [threadId, session] of this.sessions) {
-      if (this.threads.get(threadId)?.claudeAccount !== id) continue;
+      if (!on(this.threads.get(threadId))) continue;
       session.dispose();
       this.sessions.delete(threadId);
     }
-    await this.claudePool.remove(id);
+  }
+
+  /**
+   * Make an added Claude account the one Claude Code itself (the CLI) is signed in with: it trades
+   * logins with the default folder. Chats follow their account to its new folder.
+   */
+  setClaudeCodeAccount(id: string): void {
+    if (id === DEFAULT_ACCOUNT) return;
+    this.checkLoggingOut("claude");
+    if (!this.claudePool.isAccount(id)) throw new Error("No such Claude account.");
+    this.closeAccountSessions([DEFAULT_ACCOUNT, id], "Finish or stop the Claude chats on these accounts before switching.");
+    const theirs = this.claudePool.swapWithDefault(id, this.planLimits.claude);
+    (this.providers.claude as ClaudeProvider).loginSwapped();
+    for (const thread of this.threads.values()) {
+      if (thread.provider !== "claude") continue;
+      const now = thread.claudeAccount ?? DEFAULT_ACCOUNT;
+      if (now !== id && now !== DEFAULT_ACCOUNT) continue;
+      thread.claudeAccount = now === id ? DEFAULT_ACCOUNT : id;
+      this.db.saveThread(thread);
+    }
+    this.usageWindowStarts.reset("claude");
+    this.planPace = Object.fromEntries(Object.entries(this.planPace).filter(([key]) => !key.startsWith("claude:")));
+    this.db.setSetting("limitPace", this.planPace);
+    if (theirs) this.commitLimits("claude", theirs, false);
+    else {
+      delete this.planLimits.claude;
+      this.db.setSetting("limits", this.planLimits);
+      this.emit({ type: "agent_limits", limits: this.liveLimits() });
+    }
+    void this.refreshClaudeUsage();
   }
 
   /** "distribute", or the one account every Claude chat uses until changed. */
