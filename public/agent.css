@@ -4667,6 +4667,7 @@ body.resizing-split main.has-split .agent-dock {
 }
 
 .dock-bar-left .ag-stat-chip {
+  background: transparent;
   height: 22px;
   padding: 0 6px;
   font-size: 11.5px;
