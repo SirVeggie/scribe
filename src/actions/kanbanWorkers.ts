@@ -209,6 +209,7 @@ export function workerPrompt(state: BoardState, page: { id: string; title: strin
     brief,
     "",
     "How to work:",
+    '- When creating a new card, set the "By Agent" label.',
     `- Use the board with the scribe MCP: page_action with id "${page.id}". The board's agent guide comes with this message (or with your first page_action result); follow it.`,
     `- The board has claimed your card for you under "${name}" and moved it to the working column, so don't claim it. The card is above as it was when this chat started; get it only to see its images or older comments. Do the work, then finish it. If you need the user's input, release it with status { kind: "blocked", text } and a note saying what you need, instead of waiting for an answer.`,
     "- Keep tool use and checking in proportion to the change. For a small CSS or copy change, the card's mockup or one quick look is enough: don't build test pages, re-read files you've already read, or read skills the card doesn't need (this guide covers the board).",

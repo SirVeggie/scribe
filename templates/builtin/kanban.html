@@ -1349,7 +1349,12 @@
   var ROLE_TAG = { done: "✓ done", agent: "🤖 inbox", working: "🤖 working", review: "review" };
   var PRIORITIES = ["None", "Low", "Medium", "High", "Urgent"];
   var PALETTE = ["#ff6b7a", "#f2994a", "#e0b34a", "#3dd68c", "#2bc4c4", "#6ea8ff", "#b48cff", "#f178b6", "#8b95a8"];
-  var DEFAULT_LABELS = [["Bug", "#ff6b7a"], ["Feature", "#6ea8ff"], ["Chore", "#8b95a8"]];
+  var DEFAULT_LABELS = [
+    { name: "Bug", color: "#ff6b7a" },
+    { name: "Feature", color: "#6ea8ff" },
+    { name: "Chore", color: "#8b95a8" },
+    { name: "By Agent", color: "#f2994a", description: "Created by an agent rather than the user.", neverSuggest: true }
+  ];
   var DAY = 86400000;
   var CHECK_ICON = '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect class="box" x="1.75" y="1.75" width="12.5" height="12.5" rx="3.5"/><path class="mark" d="M4.9 8.2l2.1 2.1 4.2-4.5"/></svg>';
   var PAUSE_ICON = '<svg class="pause-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.25" y="2" width="2.75" height="8" rx=".6"/><rect x="7" y="2" width="2.75" height="8" rx=".6"/></svg>';
@@ -1653,7 +1658,7 @@
       patch.columns = cols;
     }
     if (patch.columns && !labels().length) {
-      patch.labels = DEFAULT_LABELS.map(function (l) { return { id: newId("lb"), name: l[0], color: l[1] }; });
+      patch.labels = DEFAULT_LABELS.map(function (l) { return Object.assign({ id: newId("lb") }, l); });
     }
     var raw = arr(scribe.state.cards);
     var colIds = cols.map(function (c) { return c.id; });
@@ -5583,6 +5588,7 @@
       cardBrief(c),
       "",
       "How to work:",
+      '- When creating a new card, set the "By Agent" label.',
       "- Use the board with the scribe MCP: page_action with id \"" + scribe.id + "\". The board's agent guide comes with this message (or with your first page_action result); follow it.",
       "- The board has claimed your card for you under \"" + name + "\" and moved it to the working column, so don't claim it. The card is above as it was when this chat started; get it only to see its images or older comments. Do the work, then finish it. If you need the user's input, release it with status { kind: \"blocked\", text } and a note saying what you need, instead of waiting for an answer.",
     ];

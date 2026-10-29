@@ -22,6 +22,8 @@ Columns are named by role (`agent`, `working`, `review`, `done`), id, or title. 
 
 ## Working a card
 
+When creating a new card, set the **By Agent** label.
+
 1. Find work: `list` with `column: "agent"` (every agent inbox), then `get` the card you take. To stay in one inbox, pass its id or title. A `list` with no column skips done-role cards (pass `done: true` for those, or `q` to search including them).
 2. `claim` it with a short status text. That moves it to the working column and records you as its holder. Another agent's claim makes yours fail: pick a different card.
 3. Report progress or ask questions with `comment`. If you are stuck, `update` its `status` to `{ kind: "blocked", text: "<why>" }` and wait for a `comment` event.

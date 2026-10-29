@@ -423,6 +423,7 @@ test("shared instructions enable workers and precede their own instructions in e
   assert.equal(run("workerReady({ name: 'Sol', mode: 'board' })"), true);
   assert.equal(run("workerReady({ mode: 'board' })"), false); // All workers need a name.
   assert.match(run("workerPrompt(w, c)"), /The user's instructions:\nShared rule\.\n\nYour card/);
+  assert.match(run("workerPrompt(w, c)"), /How to work:\n- When creating a new card, set the "By Agent" label\./);
   run("w.instructions = '  Worker rule.  '");
   for (const solo of [false, true]) {
     assert.match(run(`workerPrompt(w, c, '', ${solo})`), /Shared rule\.\n\nWorker rule\./);

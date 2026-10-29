@@ -267,6 +267,7 @@ test("a running worker with no chat gets its first ready card launched, under a 
   assert.equal(out.launch.settings.approval, "auto");
   assert.equal(out.launch.run.tag, "worker:w_op");
   assert.match(out.launch.prompt, /Your card: #1 One/);
+  assert.match(out.launch.prompt, /How to work:\n- When creating a new card, set the "By Agent" label\./);
   assert.match(out.launch.prompt, /Your other ready cards when this chat started: #2 Two\./);
   const next = apply(state, out);
   assert.equal((worker(next).step as { token: string }).token, out.launch.ref.token);
