@@ -1644,6 +1644,78 @@ ${POINTER_DRAG_JS}
     }
   };
 
+  // ---------- files ----------
+  // Files in folders the user approved for this page (#882), each at read, write, or readwrite.
+  // Calls never prompt, so they work from the page's own code: ask up front with request() in a
+  // click. Paths are absolute. Failures resolve { ok: false, error, message }; error "permission"
+  // means no folder covers the path at that access yet, "denied" that the user refused.
+  function filesCall(op, file, opts) {
+    if (capturing) return Promise.resolve({ ok: false, error: "capture" });
+    opts = opts || {};
+    var query = "?path=" + encodeURIComponent(String(file || ""));
+    if (opts.append) query += "&append=1";
+    if (opts.overwrite === false) query += "&overwrite=0";
+    var init = opts.body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: opts.body };
+    return fetch("/api/tabs/" + encodeURIComponent(tabId) + "/files/" + op + query, init).then(function (res) {
+      if (res.ok && op === "read") return res;
+      return res.json().catch(function () { return { ok: false, error: "failed", message: "request failed (" + res.status + ")" }; });
+    }).catch(function (err) {
+      return { ok: false, error: "failed", message: String((err && err.message) || err) };
+    });
+  }
+  var files = {
+    /** The folders approved for this page: { ok, folders: [{ path, access: "read" | "write" | "readwrite" }] }. */
+    folders: function () {
+      return permissions.query().then(function (result) {
+        if (!result || !result.ok) return result || { ok: false, error: "failed" };
+        var perm = (result.permissions || []).filter(function (p) { return p.id === "files"; })[0];
+        return { ok: true, folders: ((perm && perm.folders) || []).map(function (f) { return { path: f.path, access: f.approval }; }) };
+      });
+    },
+    /**
+     * Ask the user for a folder (needs a click): { ok, granted, folder }. opts: { folder, access }
+     * (access defaults to "readwrite"); without a folder, the user picks one first.
+     */
+    request: function (opts) {
+      if (!hasGesture()) {
+        console.warn("[scribe] scribe.files.request needs a click or key press; ignored");
+        return Promise.resolve({ ok: false, error: "no_gesture" });
+      }
+      opts = opts || {};
+      var access = opts.access === "read" || opts.access === "write" ? opts.access : "readwrite";
+      return askBoard({ type: "scribe-permissions", op: "request", perm: "files", folder: agentText(opts.folder), approval: access, pick: !opts.folder }, AGENT_ASK_MS);
+    },
+    /** A path under folder: join(folder, "images", "a.png"). The daemon normalizes the separators. */
+    join: function () {
+      return Array.prototype.slice.call(arguments).map(String).filter(Boolean).join("/");
+    },
+    /** { ok, text } by default; opts.as "blob" gives { ok, blob }, "arrayBuffer" { ok, buffer }. Needs read access. */
+    read: function (file, opts) {
+      var as = (opts && opts.as) || "text";
+      return filesCall("read", file).then(function (res) {
+        if (!(res instanceof Response)) return res;
+        if (as === "blob") return res.blob().then(function (blob) { return { ok: true, blob: blob }; });
+        if (as === "arrayBuffer") return res.arrayBuffer().then(function (buffer) { return { ok: true, buffer: buffer }; });
+        return res.text().then(function (text) { return { ok: true, text: text }; });
+      });
+    },
+    /**
+     * Save a string, Blob, ArrayBuffer, or typed array: { ok, path, name, size, mtime }. Missing
+     * folders are made. opts: { append, overwrite: false (fails with "exists") }. Needs write access.
+     */
+    write: function (file, data, opts) {
+      opts = opts || {};
+      var body = data instanceof Blob ? data : new Blob([data == null ? "" : data]);
+      return filesCall("write", file, { body: body, append: opts.append === true, overwrite: opts.overwrite });
+    },
+    /** { ok, path, entries: [{ name, kind: "file" | "directory", size, mtime }] }. Needs read access. */
+    list: function (dir) { return filesCall("list", dir); },
+    /** { ok, path, name, kind, size, mtime }, or error "not_found". Needs read access. */
+    stat: function (file) { return filesCall("stat", file); },
+    /** Delete a file or an empty folder: { ok, path }. Needs write access. */
+    remove: function (file) { return filesCall("delete", file, { body: new Blob([]) }); }
+  };
+
   // ---------- ml ----------
   // Small typed questions about text of this page's own, answered by the classifier the user set up
   // in Settings. The page never learns which source answers. Needs the ml.decide permission: ask
@@ -2011,6 +2083,7 @@ ${POINTER_DRAG_JS}
     audio: audio,
     plugin: plugin,
     permissions: permissions,
+    files: files,
     /** The ops engine, for pages that build ops: get(state, path), diff(before, after, keys), apply(state, ops). */
     ops: {
       get: engine.getAt,

@@ -40,8 +40,13 @@
     return (await request("GET", id)).permissions || [];
   }
 
-  function approvalLabel(id) {
-    return APPROVALS.find((a) => a.id === (id === "ask" ? "edits" : id))?.label || id;
+  /** A per-folder permission's levels: its own (files: Read, Write, Read & write) or the approval rungs. */
+  function levelsOf(def) {
+    return def.levels || APPROVALS;
+  }
+
+  function levelLabel(def, id) {
+    return levelsOf(def).find((a) => a.id === (id === "ask" && !def.levels ? "edits" : id))?.label || id;
   }
 
   function el(tag, cls, text) {
@@ -96,7 +101,7 @@
     if (def.perFolder) {
       const where = el("dl", "permission-ask-where");
       where.append(el("dt", "", "Folder"), el("dd", "permission-path", need.folder || "?"));
-      where.append(el("dt", "", "Approval"), el("dd", "", approvalLabel(need.approval || "readonly")));
+      where.append(el("dt", "", def.levelName || "Approval"), el("dd", "", levelLabel(def, need.approval || levelsOf(def)[0].id)));
       body.append(where);
     }
     body.append(el("p", "permission-ask-note", "You can change this later from the tab menu: Permissions…"));
@@ -133,8 +138,13 @@
   /** Store the user's answer: a per-folder permission gains the folder, the rest are set as a whole. */
   async function remember(tab, def, need, answer) {
     if (answer === "allow" && def.perFolder) {
-      const folders = (def.folders || []).filter((f) => f.path.toLowerCase() !== String(need.folder).toLowerCase());
-      folders.push({ path: need.folder, approval: need.approval || "readonly" });
+      const same = (f) => f.path.toLowerCase() === String(need.folder).toLowerCase();
+      const folders = (def.folders || []).filter((f) => !same(f));
+      let level = need.approval || levelsOf(def)[0].id;
+      // Write on a folder the page could already read (or the other way round) keeps both.
+      const before = (def.folders || []).find(same)?.approval;
+      if (def.id === "files" && before && before !== level) level = "readwrite";
+      folders.push({ path: need.folder, approval: level });
       await request("PUT", tab.id, "", { perm: def.id, value: def.value === "deny" ? "ask" : def.value, folders });
       return;
     }
@@ -273,7 +283,7 @@
           remove.addEventListener("click", () => save({ perm: p.id, value: value, folders: others() }));
           line.append(
             el("span", "permission-path", folder.path),
-            selectOf(APPROVALS, folder.approval === "ask" ? "edits" : folder.approval, `Approval in ${folder.path}`, (approval) =>
+            selectOf(levelsOf(p), folder.approval === "ask" && !p.levels ? "edits" : folder.approval, `${p.levelName || "Approval"} in ${folder.path}`, (approval) =>
               save({ perm: p.id, value: value, folders: (p.folders || []).map((f) => (f === folder ? { ...f, approval } : f)) })
             ),
             remove

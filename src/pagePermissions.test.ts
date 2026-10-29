@@ -23,6 +23,7 @@ test("permissions without a grant are at their defaults", () => {
       ["agent.chat", "allow"],
       ["agent.unattended", "ask"],
       ["agent.workspace", "ask"],
+      ["files", "ask"],
       ["ml.decide", "ask"],
     ]
   );
@@ -68,4 +69,27 @@ test("folder grants from input are absolute, normalized, and one per folder", ()
     // An unknown rung is the lowest one.
     { path: path.join(root, "b"), approval: "readonly" },
   ]);
+});
+
+test("files folders are granted at read, write, or read & write, and read & write covers both (#882)", () => {
+  const grants = new Map([["files", grant("ask", [
+    { path: path.join(root, "both"), approval: "readwrite" },
+    { path: path.join(root, "logs"), approval: "write" },
+    { path: path.join(root, "docs"), approval: "read" },
+  ])]]);
+  const need = (folder: string, approval: string) => checkPermission(grants, { perm: "files", folder: path.join(root, folder), approval });
+  assert.equal(need("both/a.png", "read"), "allow");
+  assert.equal(need("both/a.png", "write"), "allow");
+  assert.equal(need("logs/today.log", "write"), "allow");
+  assert.equal(need("logs/today.log", "read"), "ask");
+  assert.equal(need("docs/x.md", "read"), "allow");
+  assert.equal(need("docs/x.md", "write"), "ask");
+  assert.equal(need("elsewhere/x.md", "read"), "ask");
+  assert.deepEqual(
+    normalizeFolders([{ path: root, approval: "edits" }, { path: path.join(root, "w"), approval: "write" }], permissionViews(new Map()).find((p) => p.id === "files")),
+    [{ path: root, approval: "read" }, { path: path.join(root, "w"), approval: "write" }]
+  );
+  const view = permissionViews(new Map()).find((p) => p.id === "files");
+  assert.equal(view?.risky, true);
+  assert.deepEqual(view?.levels?.map((l) => l.id), ["read", "write", "readwrite"]);
 });

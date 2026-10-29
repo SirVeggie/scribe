@@ -20,6 +20,7 @@ import { checkFramable } from "./frameCheck.js";
 import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { checkPermission, isPermissionValue, permissionViews } from "./pagePermissions.js";
+import { PageFileError, deletePageFile, listPageFolder, readPageFile, resolvePageFile, statPageFile, writePageFile, type FileOp } from "./pageFiles.js";
 import { frameReach, isAccessLevel, normalizeTarget, pageReach, reachMessage, type PageReader, type Reach } from "./pageAccess.js";
 import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
@@ -816,6 +817,40 @@ export async function startHttp(): Promise<http.Server> {
     const tab=store.get(req.params.id);if(!tab){res.status(404).json({ok:false,error:"missing"});return;}
     res.json({ok:true,plugins:declaredPlugins(tab.html).map(id=>({id,enabled:pluginService.enabled(id),installed:pluginService.database.list().some(p=>p.manifest.id===id)}))});
   });
+
+  /**
+   * scribe.files (#882): the page's own script, on its own origin, in folders the user approved for it.
+   * Agents use their own file tools, and another page cannot borrow this page's folders.
+   */
+  const pageFileRoute = (op: FileOp, fn: (file: string, req: express.Request, res: express.Response) => void) =>
+    (req: express.Request, res: express.Response) => {
+      try {
+        const tab = store.get(req.params.id);
+        if (viewerOf(req) === "agent" || !tab || framePageId(req) !== tab.id) {
+          res.status(403).json({ ok: false, error: "denied", message: "Only the page's own script uses its files" });
+          return;
+        }
+        fn(resolvePageFile(store.pagePermissions(tab.id), req.query.path, op), req, res);
+      } catch (err) {
+        const code = err instanceof PageFileError ? err.code : "failed";
+        res.status(code === "not_found" ? 404 : code === "permission" || code === "denied" ? 403 : 400)
+          .json({ ok: false, error: code, message: (err as Error).message, ...(code === "permission" || code === "denied" ? { permission: "files" } : {}) });
+      }
+    };
+  app.get("/api/tabs/:id/files/read", pageFileRoute("read", (file, _req, res) => {
+    res.type("application/octet-stream").send(readPageFile(file, MAX_PAGE_ASSET_BYTES));
+  }));
+  app.get("/api/tabs/:id/files/stat", pageFileRoute("stat", (file, _req, res) => res.json({ ok: true, path: file, ...statPageFile(file) })));
+  app.get("/api/tabs/:id/files/list", pageFileRoute("list", (file, _req, res) => res.json({ ok: true, path: file, entries: listPageFolder(file) })));
+  app.post("/api/tabs/:id/files/write", readAssetBody, pageFileRoute("write", (file, req, res) => {
+    if (!Buffer.isBuffer(req.body)) throw new PageFileError("invalid_path", "expected the file's bytes as an application/octet-stream body");
+    const entry = writePageFile(file, req.body, { append: req.query.append === "1", overwrite: req.query.overwrite !== "0" });
+    res.json({ ok: true, path: file, ...entry });
+  }));
+  app.post("/api/tabs/:id/files/delete", pageFileRoute("delete", (file, _req, res) => {
+    deletePageFile(file);
+    res.json({ ok: true, path: file });
+  }));
 
   /** Per-viewer page state (scribe.local). Never broadcast and never shown to agents. */
   app.get("/api/tabs/:id/local", (req, res) => {

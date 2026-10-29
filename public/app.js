@@ -4821,10 +4821,16 @@
     const need = { perm: String(data.perm || "") };
     if (typeof data.folder === "string" && data.folder) need.folder = data.folder;
     if (typeof data.approval === "string" && data.approval) need.approval = data.approval;
-    perms.ensure(tab, need, { explicit: true }).then(
-      (result) => reply(result.ok ? { ok: true, granted: true } : { ok: true, granted: false }),
-      (err) => reply({ ok: false, error: String(err?.message || err) })
-    );
+    (async () => {
+      // scribe.files.request with no folder: the user picks one, then answers the usual prompt for it.
+      if (!need.folder && data.pick === true && need.perm === "files") {
+        const picked = await window.scribeChat?.pickWorkspace?.("", { title: "Folder for this page's files", hint: "", action: "Use folder", used: false });
+        if (!picked) return { ok: false, error: "cancelled" };
+        need.folder = picked;
+      }
+      const result = await perms.ensure(tab, need, { explicit: true });
+      return { ok: true, granted: result.ok, ...(need.folder ? { folder: need.folder } : {}) };
+    })().then(reply, (err) => reply({ ok: false, error: String(err?.message || err) }));
   }
 
   /**

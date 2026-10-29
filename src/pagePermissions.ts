@@ -23,7 +23,15 @@ export type PermissionDef = {
   risky: boolean;
   /** Granted per folder (with the most permissive approval allowed there) instead of as a whole. */
   perFolder?: boolean;
+  /** A per-folder permission's own levels instead of the approval rungs, and what the level is called. */
+  levels?: { id: string; label: string }[];
+  levelName?: string;
 };
+
+/** What a page may do in a folder approved for scribe.files (#882): write only saves without seeing what is there. */
+export const FILE_ACCESS = ["read", "write", "readwrite"] as const;
+export type FileAccess = (typeof FILE_ACCESS)[number];
+export const FILES_PERMISSION = "files";
 
 export const PAGE_PERMISSIONS: PermissionDef[] = [
   {
@@ -64,6 +72,20 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
     perFolder: true,
   },
   {
+    id: FILES_PERMISSION,
+    label: "Files in folders you approve",
+    detail: "Its own code reads or saves files there, for example generated images or a log. Nothing outside those folders.",
+    default: "ask",
+    risky: true,
+    perFolder: true,
+    levelName: "Access",
+    levels: [
+      { id: "read", label: "Read" },
+      { id: "write", label: "Write" },
+      { id: "readwrite", label: "Read & write" },
+    ],
+  },
+  {
     id: "ml.decide",
     label: "Ask the classifier",
     detail: "Send text from this page to the classifier set up in Settings, for example a card's title and description to suggest its labels. With a hosted source, that text leaves this PC.",
@@ -73,7 +95,8 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
   },
 ];
 
-export type FolderGrant = { path: string; approval: PageApproval };
+/** approval is the folder's level: an approval rung, or one of the permission's own levels (files: read, write, readwrite). */
+export type FolderGrant = { path: string; approval: string };
 
 /** One stored grant. folders only for permissions granted per folder, whose value is ask or deny. */
 export type PermissionGrant = { value: PermissionValue; folders?: FolderGrant[]; updatedAt: number };
@@ -100,8 +123,20 @@ export function parsePageApproval(value: unknown): PageApproval | null {
   return value === "ask" ? "edits" : isApproval(value) ? value : null;
 }
 
+/** A folder level for def: one of its own levels, or an approval rung; null when it is none. */
+function parseLevel(def: PermissionDef | undefined, value: unknown): string | null {
+  if (def?.levels) return def.levels.some((level) => level.id === value) ? (value as string) : null;
+  return parsePageApproval(value);
+}
+
+/** Whether a folder granted at `granted` covers a request for `want` (files: read & write covers both). */
+function covers(def: PermissionDef, granted: string, want: string): boolean {
+  if (def.levels) return granted === want || (def.id === FILES_PERMISSION && granted === "readwrite");
+  return APPROVAL_RANK.indexOf(granted as PageApproval) >= APPROVAL_RANK.indexOf(want as PageApproval);
+}
+
 /** Folder grants from untrusted input: absolute paths, normalized, one per path (the last wins). */
-export function normalizeFolders(value: unknown): FolderGrant[] {
+export function normalizeFolders(value: unknown, def?: PermissionDef): FolderGrant[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -115,7 +150,7 @@ export function normalizeFolders(value: unknown): FolderGrant[] {
       continue;
     }
     const folder = path.resolve(raw);
-    byKey.set(folderKey(folder), { path: folder, approval: parsePageApproval(item.approval) ?? "readonly" });
+    byKey.set(folderKey(folder), { path: folder, approval: parseLevel(def, item.approval) ?? def?.levels?.[0].id ?? "readonly" });
   }
   return [...byKey.values()];
 }
@@ -151,9 +186,9 @@ export function checkPermission(grants: Map<string, PermissionGrant>, need: Perm
   if (!need.folder || !path.isAbsolute(need.folder)) {
     return "deny";
   }
-  const want = APPROVAL_RANK.indexOf(parsePageApproval(need.approval) ?? "readonly");
+  const want = parseLevel(def, need.approval) ?? def.levels?.[0].id ?? "readonly";
   const covered = (grant?.folders ?? []).some(
-    (folder) => isInside(need.folder as string, folder.path) && APPROVAL_RANK.indexOf(folder.approval) >= want
+    (folder) => isInside(need.folder as string, folder.path) && covers(def, folder.approval, want)
   );
   return covered ? "allow" : "ask";
 }
@@ -163,7 +198,7 @@ function folderKey(folder: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function isInside(child: string, parent: string): boolean {
+export function isInside(child: string, parent: string): boolean {
   const rel = path.relative(folderKey(parent), folderKey(child));
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }

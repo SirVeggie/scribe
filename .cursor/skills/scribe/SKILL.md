@@ -600,6 +600,7 @@ await scribe.agent.watch(threadId, { data: { job: 7 }, after: 0 }); // hand over
   - `agent.chat` (allowed by default): `start` / `send` / `stop` right after a click or key press on the page. Call them first in the handler, before other `await`s.
   - `agent.unattended` (asks): the same from the page's own code, e.g. in `scribe.onChange` when a card moves. Only while the page is loaded in a Scribe window, and every open window runs the page's code: claim the work in state first (an `update` with a `test` op) so two windows don't both start it.
   - `agent.workspace` (asks): any thread with a `cwd`, approved per folder and rung. `pickFolder()` only picks; Scribe still asks before the first thread there.
+  - `files` (asks): `scribe.files`, approved per folder at Read, Write or Read & write (see Files in a folder).
   - `scribe.permissions.request("agent.unattended")` (inside a click) asks up front, e.g. from a settings dialog; `scribe.permissions.query()` reads `[{ id, label, value, folders? }]`.
 - Agents can't read or change these grants, and an agent changing a page's HTML (or its template) resets the risky ones to Ask: tell the user to re-approve after you edit such a page.
 - Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
@@ -718,6 +719,27 @@ if (result.ok) result.answers.bug;   // { type: "yesno", yes: 0.93 }
 - Limits per page: 20,000 characters of state, 32 questions a call, 30 calls a minute and 300 an hour, two calls at once. Send the one card or note being judged, not the whole state. Ask about several things in one call rather than one call each.
 - The page never learns which source or model answered, and cannot pick one. With a hosted source the text leaves this PC, which is what the permission tells the user.
 - Treat an answer as a suggestion: show it and let the user take it (the Kanban board's label and priority chips), and check that the thing asked about has not changed before you store the answer. Every open window runs the page's code, so write the result in a way that is safe to repeat.
+
+### Files in a folder: scribe.files
+
+A page's own code can read and save files on disk, only in folders the user approved for that page, each at **Read**, **Write**, or **Read & write** (permission `files`, risky, asks by default). Write only saves without seeing what is there: generated images, a log. Use it when output belongs in the user's folder; keep page data in state and page-owned uploads in assets.
+
+```js
+// In a click: the user picks a folder (or pass one) and approves it at that access.
+const { granted, folder } = await scribe.files.request({ access: "write" });   // or { folder, access }
+if (granted) scribe.set({ outDir: folder });
+
+await scribe.files.write(scribe.files.join(state.outDir, "2026", "shot.png"), blob);  // string, Blob, ArrayBuffer, typed array
+await scribe.files.write(scribe.files.join(state.outDir, "run.log"), line + "\n", { append: true });
+const { text } = await scribe.files.read(file);                    // { as: "blob" } → { blob }, "arrayBuffer" → { buffer }
+const { entries } = await scribe.files.list(dir);                  // [{ name, kind: "file" | "directory", size, mtime }]
+await scribe.files.stat(file); await scribe.files.remove(file);    // remove: a file or an empty folder
+const { folders } = await scribe.files.folders();                  // [{ path, access }]
+```
+
+- Paths are absolute. `write` makes missing folders; `{ overwrite: false }` fails with `exists`. read, list and stat need Read; write and remove need Write. Up to 32 MB a file.
+- Calls never prompt, so they work from the page's own code (after an agent run, in `onChange`). They resolve `{ ok: false, error, message }`: `permission` (no folder covers the path at that access: ask with `request` in a click), `denied`, `not_found`, `exists`, `invalid_path`, `too_large`. Show it on the page; don't retry in a loop.
+- Links inside a folder cannot lead out of it, and another page cannot use this page's folders. Agents you start from the page still need their own `cwd` approval (`agent.workspace`): a Read-only worker can make the images and the page saves them.
 
 ## Waiting for user input
 

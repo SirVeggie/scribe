@@ -20,6 +20,8 @@ const PLUGIN_PATH = /^\/api\/tabs\/[^/]+\/plugins\/[^/]+\/(call|state\/[^/]+)$/;
 const PLUGIN_STATUS_PATH = /^\/api\/tabs\/[^/]+\/plugins$/;
 const COMPONENT_PATH = /^\/api\/tabs\/[^/]+\/components(?:\/(?:validate|leases)|\/pc_[a-f0-9]{16}(?:\/(?:plugin|events))?)?$/;
 const TEMPLATE_INCOMPATIBLE_PATH = /^\/api\/tabs\/[^/]+\/template-incompatible$/;
+const FILES_READ_PATH = /^\/api\/tabs\/[^/]+\/files\/(read|list|stat)$/;
+const FILES_WRITE_PATH = /^\/api\/tabs\/[^/]+\/files\/(write|delete)$/;
 const ASSETS_PATH = /^\/api\/tabs\/[^/]+\/assets$/;
 const ASSET_PATH = /^\/api\/tabs\/[^/]+\/assets\/[^/]+$/;
 const BLOB_PATH = /^\/blob\/[^/]+$/;
@@ -62,6 +64,7 @@ function pageApi(req: express.Request): boolean {
   if ((method === "GET" || method === "PUT") && (STATE_PATH.test(path) || LOCAL_PATH.test(path))) return true;
   if (method === "POST" && (EVENTS_PATH.test(path) || ACTION_PATH.test(path) || PROBLEMS_PATH.test(path) || TEMPLATE_INCOMPATIBLE_PATH.test(path))) return true;
   if ((method === "GET" || method === "POST") && ASSETS_PATH.test(path)) return true;
+  if ((method === "GET" && FILES_READ_PATH.test(path)) || (method === "POST" && FILES_WRITE_PATH.test(path))) return true;
   return (method === "GET" || method === "DELETE") && ASSET_PATH.test(path);
 }
 

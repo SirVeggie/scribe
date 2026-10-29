@@ -2042,7 +2042,7 @@ export class BoardStore extends EventEmitter {
       }
       let folders: FolderGrant[] | undefined;
       try {
-        folders = row.data ? normalizeFolders((JSON.parse(row.data) as { folders?: unknown }).folders) : undefined;
+        folders = row.data ? normalizeFolders((JSON.parse(row.data) as { folders?: unknown }).folders, permissionDef(row.perm)) : undefined;
       } catch {
         folders = undefined;
       }
@@ -2071,7 +2071,7 @@ export class BoardStore extends EventEmitter {
       throw new Error(`unknown permission: ${perm}`);
     }
     const stored = def.perFolder && value === "allow" ? "ask" : value;
-    const list = def.perFolder ? (folders === undefined ? this.pagePermissions(tab.id).get(perm)?.folders ?? [] : normalizeFolders(folders)) : [];
+    const list = def.perFolder ? (folders === undefined ? this.pagePermissions(tab.id).get(perm)?.folders ?? [] : normalizeFolders(folders, def)) : [];
     if (this.dirty.has(tab.id)) {
       this.persist();
     }
