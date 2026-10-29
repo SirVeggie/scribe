@@ -9764,13 +9764,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.peekId = t.id;
       for (const r of this.node.querySelectorAll(".ag-fly-row")) r.classList.toggle("on", r === rowEl);
       const peek = el("div", "ag-fly-peek");
+      if (t.activity?.lastText) peek.append(el("p", "ag-fly-peek-quote", t.activity.lastText));
       if (t.status === "waiting" && t.asking) {
         peek.append(el("p", "ag-fly-peek-title", t.asking.title));
         if (t.asking.detail) peek.append(el("pre", "ag-pre small", t.asking.detail));
       } else if (t.status === "running" && t.activity?.line) {
-        peek.append(el("p", "ag-fly-peek-title ag-fly-peek-line", t.activity.line));
+        peek.append(el("p", "ag-fly-peek-line", t.activity.line));
       }
-      if (t.activity?.lastText) peek.append(el("p", "ag-fly-peek-quote", t.activity.lastText));
       if (t.status === "waiting" && t.asking?.kind === "approval") peek.append(approvalButtons(t));
       this.peek?.remove();
       this.peek = null;
