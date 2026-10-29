@@ -9734,8 +9734,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
     row(t) {
       const current = S.dockShown && dock.view.threadId === t.id;
-      // A finished thread whose reply was seen is dim, with no status dot.
-      const seen = t.status === "idle" && !t.unread;
+      // A seen reply is dim only when the thread no longer needs an answer (including usage limits).
+      const seen = t.status === "idle" && !waitingAsk(t) && !t.unread;
       const row = el("div", `ag-fly-row s-${seen ? "checked" : t.status}${current ? " current" : ""}`);
       row.dataset.thread = t.id;
       if (current) row.setAttribute("aria-current", "true");
