@@ -4,6 +4,83 @@ Reviewed 2026-10-29 against the saved lab page `scribe:floating-chat-effects-lab
 (revision 7) and this branch's Scribe source. The lab is a saved Library page;
 its JavaScript is not `public/orb.js`, which supplies the visual effects.
 
+## Follow-up: separate worktrees and apparently missing changes
+
+The user reported three linked effects worktrees and asked for the cause before
+any fixes. No runtime, branch, or preview changes were made in this follow-up.
+The earlier report described normal reuse but did not establish the failure
+paths that strand unmerged work; the following findings supersede its untested
+edge-case discussion below.
+
+### Confirmed cause
+
+The lab decides whether to start from its in-memory `thread`, initially null,
+instead of waiting for restoration of the saved `threadId`. Three failure paths
+were reproduced using the unchanged revision-7 `sendToAgent` and `initAgent`
+functions in Node VM contexts with fake agent calls:
+
+1. A send before `agent.get(savedId)` completes starts a replacement despite a
+   valid saved worker. Late restoration can then overwrite the in-memory worker
+   after the replacement ID was saved.
+2. Two initial sends before either `agent.start` completes each start a worker;
+   there is no shared in-flight start guard.
+3. A temporary rejection from `agent.get` clears the saved ID, just as if the
+   worker had actually been deleted.
+
+This reproduction created no real agents, worktrees, or page-state updates.
+It proves the code defects, not which event occurred in the historical session.
+There is no retained browser trace identifying that exact event.
+
+Every replacement calls `agent.start` with `cwd` set to the main repository and
+`worktree: true`. Scribe associates worktrees with threads, not with pages or
+titles. The new thread therefore gets a branch from main-checkout HEAD, not from
+the lab's previous unmerged branch. `createWorktree` adds `-2`, `-3`, etc. when
+the branch name or folder is already taken. Repeated messages on one thread
+retain its open worktree (`wantsWorktree` in `host.ts` checks for an open one).
+
+### What actually happened to the effects
+
+Thread transcripts and Git refs confirm this sequence (Europe/Helsinki times):
+
+| When | Event |
+| --- | --- |
+| 27 October 04:51 | The first effects worker merged 37 commits and removed its worktree. |
+| 27 October 04:55–05:13 | Another worker on `agent/floating-chat-effects` added the later Three dots work, ending at `60882b4`. This work remains unmerged. |
+| 27 October 05:15 | A page-started replacement created `agent/floating-chat-effects-2` from master, which lacked Three dots. That agent noticed and fast-forwarded its own branch onto `60882b4`, then added Orbit and Voice bars (`3d3109e`). |
+| 27 October 05:23–05:24 | Another page-started worker created `agent/floating-chat-effects-3`, immediately hit a Claude session limit, and subsequently had its empty worktree removed. |
+| 29 October 05:25–05:27 | The current Codex worker created `agent/floating-chat-effects-3` from master again. It implemented Voice bars in the older file and published it to the lab, then shrank the idle bars (`8c8212d`, `6b38e2e`). It did not bring forward Three dots or Orbit. |
+
+This latest publication replaced the demo's whole `orb.js` snapshot. Thus the
+preview stopped including the earlier effects while their Git commits remained
+on the other branches. The new workers' initial messages are marked **sent by
+page** and contain the lab's `First request` prompt: these were explicit lab
+`start` calls, not merely the dock's two-hour draft selection rule.
+
+All three worktrees currently exist and have clean working trees. Relative to
+current master, `agent/floating-chat-effects-2` contains nine unmerged commits,
+including all eight from `agent/floating-chat-effects` plus Orbit/Voice bars.
+`agent/floating-chat-effects-3` contains the two newer Voice bars commits.
+Comparing the two `orb.js` versions confirms Three dots, Orbit, and their shared
+shade are present on `-2` and absent on `-3`. These effects are recoverable;
+neither merging nor copying them was attempted. Recovery must preserve unrelated
+newer main-branch changes rather than replace the whole file from the older tree.
+
+### Proposed next step, awaiting the user
+
+Make sends wait for restoration and share an in-flight start; preserve the saved
+ID on temporary lookup failures; when a saved worker is truly gone, check for
+surviving page work before creating a replacement. Recovery should combine the
+earlier effects with the current bars changes. The user-facing report includes
+a decision form, because the user explicitly requested the explanation before
+fixes.
+
+Evidence: threads `th_b174ae96217e` (merge notice), `th_4e3a5d3864ce` (Three
+dots), `th_e57f27b3b4de` (new worktree and fast-forward), `th_70699e16c46e`
+(limit and empty merge), and `th_d4df466454d3` (new Codex worktree/publication).
+Read-only Git checks: worktree list, all three working-tree statuses, branch
+histories, and `orb.js` diffs. The source-level reproduction passed all three
+cases. No runtime tests were needed for this documentation-only follow-up.
+
 ## The lab's effect request fields
 
 All effect fields share one worker conversation, tracked in page state as
