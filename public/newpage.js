@@ -468,16 +468,24 @@ return glow(c,e);}`;
 
       function cancelReplacement() {
         if (!replacement) return;
-        replacement.frame.removeEventListener("load", replacement.reveal);
-        clearTimeout(replacement.timer);
-        replacement.animations.forEach((animation) => animation.cancel());
+        const pending = replacement;
         replacement = null;
+        pending.frame.removeEventListener("load", pending.reveal);
+        clearTimeout(pending.timer);
+        pending.animations.forEach((animation) => animation.cancel());
         root.inert = false;
       }
 
       /** Hold the waiting screen until its own page loads, then dissolve it over the page. */
       function replace(tab, frame) {
-        if (replacement?.id === tab.id) return;
+        if (!current) return;
+        if (replacement?.id === tab.id && replacement.frame === frame) return;
+        // Once the reveal has a destination, navigating elsewhere dismisses it immediately.
+        if (replacement && replacement.id !== tab.id) {
+          render(null);
+          return;
+        }
+        cancelReplacement();
         // The creating screen dissolves into whichever page comes to the front, usually the one just made.
         if (!frame || (current?.id !== tab.id && !covering)) {
           render(null);
@@ -486,6 +494,7 @@ return glow(c,e);}`;
         const pending = { id: tab.id, frame, animations: [], timer: 0, reveal: null };
         replacement = pending;
         root.inert = true;
+        const finish = () => { if (replacement === pending) render(null); };
         pending.reveal = () => {
           if (replacement !== pending) return;
           frame.removeEventListener("load", pending.reveal);
@@ -500,13 +509,15 @@ return glow(c,e);}`;
             return;
           }
           const timing = { token: "slow", fill: "both", easing: "ease-in-out" };
-          pending.animations = [
-            window.scribeMotion.animate(root, [{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing),
-            window.scribeMotion.animate(frame, [{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing),
-          ];
-          Promise.all(pending.animations.map((animation) => animation.finished)).then(() => {
-            if (replacement === pending) render(null);
-          }).catch(() => { /* Switching pages cancels the animations. */ });
+          // Animation completion must never be the only way to uncover the app.
+          pending.timer = setTimeout(finish, Math.max(4000, window.scribeMotion.duration("slow") * 2));
+          try {
+            pending.animations.push(window.scribeMotion.animate(root, [{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(12px)" }], timing));
+            pending.animations.push(window.scribeMotion.animate(frame, [{ opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)" }], timing));
+          } catch {
+            finish();
+          }
+          Promise.all(pending.animations.map((animation) => animation.finished)).then(finish, finish);
         };
         if (frame.dataset.loaded) pending.reveal();
         else {
@@ -636,6 +647,12 @@ return glow(c,e);}`;
       matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", wordMotionChanged);
       window.addEventListener("scribe:ui-fx", wordMotionChanged);
 
+      function refresh() {
+        // Thread/template updates still describe the old screen while its page is loading.
+        // They must not cancel the reveal and put that screen back over the finished page.
+        if (!replacement) render(current, covering);
+      }
+
       /** cover: the page has content, and the screen goes over it while the floating chat writes a new page. */
       function render(tab, cover = false) {
         cancelReplacement();
@@ -692,11 +709,12 @@ return glow(c,e);}`;
       window.addEventListener("scribe:newpage-bg", () => updateBackdrop());
       window.addEventListener("scribe:dock-provider", (event) => updateBackdrop(event.detail.provider));
       window.addEventListener("scribe:orb-appearance", () => updateBackdrop());
-      window.addEventListener("scribe:threads-ready", () => render(current, covering));
-      window.addEventListener("scribe:workspaces-changed", () => { if (current) render(current, covering); });
+      window.addEventListener("scribe:threads-ready", refresh);
+      window.addEventListener("scribe:workspaces-changed", () => { if (current) refresh(); });
 
       return Object.assign(screen, {
         render,
+        refresh,
         replace,
         tab: () => current,
         cover: () => covering,
@@ -763,7 +781,7 @@ return glow(c,e);}`;
       },
       /** Draw every shown screen again, for changed templates or threads. */
       refresh() {
-        for (const screen of screens) if (screen.tab()) screen.render(screen.tab(), screen.cover());
+        for (const screen of screens) if (screen.tab()) screen.refresh();
       },
       focus: () => holder.focus(),
     };

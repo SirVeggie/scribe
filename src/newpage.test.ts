@@ -54,7 +54,17 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
   const root = node();
   (root as any).animate = () => {
     let finish!: () => void;
-    const animation = { finished: new Promise<void>((resolve) => { finish = resolve; }), finish: () => finish(), cancelled: false, cancel() { this.cancelled = true; } };
+    let reject!: () => void;
+    let settled = false;
+    const animation = { finished: new Promise<void>((resolve, fail) => {
+      finish = () => { settled = true; resolve(); };
+      reject = () => { settled = true; fail(new Error("Animation cancelled")); };
+    }), finish: () => finish(), cancelled: false, cancel() {
+      this.cancelled = true;
+      if (!settled) reject();
+    } };
+    // Entry/word animations have no completion handler, like their browser counterparts.
+    void animation.finished.catch(() => {});
     animations.push(animation);
     return animation;
   };
@@ -72,7 +82,7 @@ function screen(webgl = true, restoring = false, hostOverrides: Record<string, a
     return parts.get(key)!;
   };
   const win: any = {
-    scribeMotion: { enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate(), animate: (node: any, frames: any, options: any) => {
+    scribeMotion: { duration: () => 600, enabled: () => !motion.matches && uiEffects, reveal: (node: any) => node.animate(), animate: (node: any, frames: any, options: any) => {
       const animation = (root as any).animate();
       Object.assign(animation, { node, frames, options });
       return animation;
@@ -387,11 +397,87 @@ test("replacement waits for load, survives rerenders and stops the backdrop afte
   assert.equal(s.animations.length, 0);
   frame.load();
   assert.equal(s.animations.length, 2);
-  assert.equal(s.timers.size, 0);
+  assert.equal(s.timers.size, 1); // The fade also has a fallback deadline.
   s.animations.forEach((animation) => animation.finish());
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(s.root.hidden, true);
   assert.equal(s.running(), false);
+});
+
+test("thread, template and workspace refreshes cannot interrupt a pending page reveal", async () => {
+  const s = screen();
+  const frame = s.frame();
+  s.page.render({ id: "notes" }, true);
+  s.advance(1500);
+  s.page.replace({ id: "made" }, frame);
+  const refresh = () => {
+    s.page.refresh();
+    s.events["scribe:threads-ready"]();
+    s.events["scribe:workspaces-changed"]();
+  };
+  refresh();
+  assert.equal(frame.listeners.size, 1);
+  assert.equal(s.root.inert, true);
+  frame.load();
+  const fades = s.animations.slice(-2);
+  refresh();
+  assert.ok(fades.every(animation => !animation.cancelled));
+  fades.forEach(animation => animation.finish());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(s.root.hidden, true);
+  assert.equal(s.root.inert, false);
+  assert.equal(s.running(), false);
+  assert.equal(s.timers.size, 0);
+});
+
+test("switching to a content tab dismisses the creating overlay and cancels its frame fade", async () => {
+  const s = screen();
+  const frame = s.frame();
+  frame.dataset.loaded = "1";
+  s.page.render({ id: "notes" }, true);
+  s.advance(1500);
+  s.page.replace({ id: "made" }, frame);
+  const fades = s.animations.slice(-2);
+  s.page.replace({ id: "other" }, s.frame());
+  assert.equal(s.root.hidden, true);
+  assert.equal(s.root.inert, false);
+  assert.ok(fades.every(animation => animation.cancelled));
+  assert.equal(s.timers.size, 0);
+  s.page.render({ id: "new-draft" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(s.root.hidden, false); // Old rejection handlers cannot hide a new screen.
+});
+
+test("a replaced iframe gets its own load listener and the old listener is removed", () => {
+  const s = screen();
+  const old = s.frame();
+  const next = s.frame();
+  s.page.render({ id: "draft" });
+  s.page.replace({ id: "draft" }, old);
+  s.page.replace({ id: "draft" }, next);
+  assert.equal(old.listeners.size, 0);
+  assert.equal(next.listeners.size, 1);
+  next.load();
+  assert.equal(s.animations.length, 2);
+});
+
+test("cancelled or stalled reveal animations cannot leave the overlay covering the app", async () => {
+  for (const cancel of [true, false]) {
+    const s = screen();
+    const frame = s.frame();
+    s.page.render({ id: "draft" });
+    s.page.replace({ id: "draft" }, frame);
+    s.advance(4000); // A missing load event still starts the reveal.
+    assert.equal(s.animations.length, 2);
+    if (cancel) s.animations[0].cancel();
+    else s.advance(4000); // No completion from the animation engine.
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(s.root.hidden, true);
+    assert.equal(s.root.inert, false);
+    assert.equal(s.running(), false);
+    assert.ok(s.animations.every(animation => animation.cancelled));
+    assert.equal(s.timers.size, 0);
+  }
 });
 
 test("switching pages cancels a pending replacement and reduced motion skips the fade", () => {
