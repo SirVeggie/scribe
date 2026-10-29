@@ -25,6 +25,7 @@ import { McpBridge, type BridgeAsk, type BridgedTool } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { threadToken } from "../../callers.js";
 import { outputImages } from "../outputImages.js";
+import { authCommand } from "./authCommand.js";
 
 type ThreadItem = SdkThreadItem | { type: "image_generation"; id: string; status: string; savedPath?: string; result?: string; failure?: unknown };
 
@@ -597,7 +598,7 @@ export class CodexProvider implements AgentProvider {
     }
     const key = hasApiKey();
     if (key) return { id: this.id, label: this.label, available: true, detail: key };
-    if (hasAuthFile()) return { id: this.id, label: this.label, available: true, detail: "codex login" };
+    if (hasAuthFile()) return { id: this.id, label: this.label, available: true, detail: "codex login", logout: true };
     return {
       id: this.id,
       label: this.label,
@@ -664,6 +665,16 @@ export class CodexProvider implements AgentProvider {
       await Promise.race([urlReady, entry.done, new Promise((resolve) => setTimeout(resolve, LOGIN_URL_WAIT_MS))]);
     }
     return { url: this.login?.url ?? null };
+  }
+
+  async logout(): Promise<void> {
+    if (this.login) throw new Error("Finish the Codex login before logging out.");
+    await this.modelLoad;
+    this.dispose();
+    // Both homes must be cleared: otherwise syncCodexAuth restores the old account.
+    await authCommand(process.execPath, [codexCliJs(), "logout"], loginEnv(), "Codex log out");
+    await authCommand(process.execPath, [codexCliJs(), "logout"], cliEnv(), "Codex log out");
+    this.modelCache = null;
   }
 
   models(refresh = false): Promise<ModelOption[]> {

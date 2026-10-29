@@ -57,3 +57,59 @@ test("Codex settings offer reauthentication after a live usage failure and recov
     await page.getByText("Ready", { exact: true }).waitFor();
   } finally { await browser.close(); }
 });
+
+test("provider log out refreshes the row, keeps failures usable, and excludes environment keys", async (t) => {
+  let browser;
+  try { browser = await launchChromium({ headless: true, args: [], purpose: "Provider logout UI test" }); }
+  catch (error) {
+    if ((error as Error).message.includes("Could not launch")) return t.skip("no Chromium installed");
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    const config = { providers: [
+      { id: "codex", label: "Codex", available: true, logout: true },
+      { id: "claude", label: "Claude", available: true, logout: true },
+      { id: "cursor", label: "Cursor", available: true, detail: "CURSOR_API_KEY" },
+    ], models: {}, prefs: {}, limits: {} };
+    let attempts = 0;
+    await page.route("http://logout.test/**", (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith("/codex/logout")) {
+        assert.equal(route.request().method(), "POST");
+        if (++attempts === 1) return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "Finish or stop Codex chats before logging out." }) });
+        Object.assign(config.providers[0], { available: false, logout: false, login: true });
+      }
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(url.pathname.endsWith("/config") ? config : { ok: true }) });
+    });
+    await page.goto("http://logout.test/");
+    const code = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8")
+      .replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, "  window.statusTest = { S, agentSettings };");
+    await loadChatFixture(page, code);
+    await page.evaluate((config) => {
+      const { S, agentSettings } = (window as any).statusTest;
+      S.config = config;
+      agentSettings.status = document.createElement("div");
+      document.body.append(agentSettings.status);
+      agentSettings.renderStatus();
+    }, config);
+    await page.evaluate(() => {
+      (window as any).scribeApp = { showNotice(text: string) {
+        const message = document.createElement("div");
+        message.textContent = text;
+        document.body.append(message);
+      } };
+    });
+    const row = page.locator(".setting-row").filter({ has: page.getByText("Codex", { exact: true }) });
+    const logout = row.getByRole("button", { name: "Log out", exact: true });
+    assert.equal(await page.getByRole("button", { name: "Log out", exact: true }).count(), 2);
+    await logout.click();
+    await page.getByText("Finish or stop Codex chats before logging out.", { exact: true }).waitFor();
+    assert.equal(await logout.isEnabled(), true);
+    await logout.click();
+    await row.getByRole("button", { name: "Log in", exact: true }).waitFor();
+    assert.equal(await row.getByText("Ready", { exact: true }).count(), 0);
+    assert.equal(await row.getByRole("button", { name: "Log out", exact: true }).count(), 0);
+    assert.equal(attempts, 2);
+  } finally { await browser.close(); }
+});

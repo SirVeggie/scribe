@@ -11974,9 +11974,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const row = el("div", "setting-row");
         const label = el("span");
         label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${loginExpired ? "Login missing or expired" : p.detail || ""}`));
-        row.append(label);
+        const actions = el("span", "settings-actions");
+        row.append(label, actions);
         if (loginExpired || (p.login && !p.available)) {
-          row.append(
+          actions.append(
             button(loginExpired ? "Log in again" : "Log in", "ag-btn", async () => {
               try {
                 const res = await api("POST", `/${p.id}/login`);
@@ -11996,7 +11997,28 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
             })
           );
         } else {
-          row.append(el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
+          actions.append(el("span", p.available ? "ag-tag ok" : "ag-tag", p.available ? "Ready" : "Unavailable"));
+        }
+        if (p.logout) {
+          const logout = button("Log out", "ag-btn small", async () => {
+            logout.disabled = true;
+            try {
+              await api("POST", `/${p.id}/logout`);
+              await loadConfig();
+              agentSettings.renderStatus();
+              requestRender();
+            } catch (err) {
+              notice(err.message);
+            } finally {
+              logout.disabled = false;
+            }
+          });
+          if (p.id === "codex" || p.id === "claude") {
+            const hint = `Also logs out ${p.id === "codex" ? "the Codex CLI" : "Claude Code"} on this computer.`;
+            logout.dataset.tooltip = hint;
+            logout.setAttribute("aria-description", hint);
+          }
+          actions.append(logout);
         }
         this.status.append(row);
       }

@@ -721,8 +721,10 @@ export type ProviderStatus = {
   label: string;
   available: boolean;
   detail?: string;
-  /** Not logged in, and the provider can start a browser login (Cursor, Codex). */
+  /** Not logged in, and the provider can start a browser login. */
   login?: boolean;
+  /** A stored login can be removed; environment credentials cannot be logged out. */
+  logout?: boolean;
 };
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {

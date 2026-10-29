@@ -651,19 +651,21 @@ export class AgentHost {
       .filter(([id]) => this.threads.get(id)?.provider === "claude"));
     this.usageWindowStarts = new UsageWindowStarts({
       now: () => Date.now(),
-      enabled: () => this.prefs().usageWindowStarts,
+      enabled: () => ({ claude: !this.loggingOut.has("claude") && this.prefs().usageWindowStarts.claude,
+        codex: !this.loggingOut.has("codex") && this.prefs().usageWindowStarts.codex }),
       running: (provider) => [...this.runs.keys(), ...this.resuming].some((id) => this.threads.get(id)?.provider === provider),
       read: async (provider) => {
-        if (this.closed || this.fakes) return null;
+        if (this.closed || this.fakes || this.loggingOut.has(provider)) return null;
+        const generation = this.authGenerations.get(provider);
         if (provider === "codex") {
           const parsed = planLimitsFromCodexRateLimits(await this.readCodexUsage(), Date.now());
-          if (this.closed) return null;
+          if (this.closed || this.loggingOut.has(provider) || generation !== this.authGenerations.get(provider)) return null;
           if (parsed) this.commitLimits(provider, parsed, false);
           return parsed;
         }
         const beforeRead = this.planLimits.claude;
         const report = await (this.providers.claude as ClaudeProvider).fetchPlanUsage();
-        if (this.closed) return null;
+        if (this.closed || this.loggingOut.has(provider) || generation !== this.authGenerations.get(provider)) return null;
         if (this.planLimits.claude !== beforeRead) return null;
         const parsed = this.claudeUsageSnapshot(report);
         if (parsed.availability === "available" || beforeRead?.availability !== "available") this.commitLimits(provider, applyExpiredWindows(parsed), false);
@@ -827,6 +829,8 @@ export class AgentHost {
   private codexUsageTimer: NodeJS.Timeout | null = null;
   private codexUsageFetch: Promise<void> | null = null;
   private codexUsageFetchAt = 0;
+  private loggingOut = new Set<ProviderId>();
+  private authGenerations = new Map<ProviderId, number>();
   private closed = false;
 
   /** Shared provider usage for every meter. Claude/Cursor windows display zero after reset. */
@@ -850,10 +854,11 @@ export class AgentHost {
 
   /** After a Cursor turn, pull its plan usage, at most once per CURSOR_USAGE_TTL_MS. */
   private refreshCursorUsage(): void {
-    if (this.closed || this.fakes || Date.now() - this.cursorUsageFetchAt < CURSOR_USAGE_TTL_MS) return;
+    if (this.closed || this.fakes || this.loggingOut.has("cursor") || Date.now() - this.cursorUsageFetchAt < CURSOR_USAGE_TTL_MS) return;
     this.cursorUsageFetchAt = Date.now();
+    const generation = this.authGenerations.get("cursor");
     void (this.providers.cursor as CursorProvider).fetchPlanUsage().then((resp) => {
-      if (this.closed || !resp) return;
+      if (this.closed || this.loggingOut.has("cursor") || generation !== this.authGenerations.get("cursor") || !resp) return;
       const parsed = planLimitsFromCursorUsage(resp, Date.now());
       if (parsed) this.commitLimits("cursor", parsed, false);
     });
@@ -902,7 +907,7 @@ export class AgentHost {
 
   /** Poll without a model turn, including after a reset or a rolling notification. */
   private refreshCodexUsage(): Promise<void> {
-    if (this.closed || this.fakes) return Promise.resolve();
+    if (this.closed || this.fakes || this.loggingOut.has("codex")) return Promise.resolve();
     if (this.codexUsageFetch) return this.codexUsageFetch;
     if (Date.now() - this.codexUsageFetchAt < 60_000) return Promise.resolve();
     this.codexUsageFetchAt = Date.now();
@@ -984,7 +989,7 @@ export class AgentHost {
   }
 
   private async doRefreshClaudeUsage(): Promise<void> {
-    if (this.closed) return;
+    if (this.closed || this.loggingOut.has("claude")) return;
     if (this.usageTimer) {
       clearTimeout(this.usageTimer);
       this.usageTimer = null;
@@ -1180,11 +1185,13 @@ export class AgentHost {
 
   /** Start Cursor's browser login; resolves with the login URL. */
   cursorLogin(): Promise<{ url: string | null }> {
+    this.checkLoggingOut("cursor");
     return (this.providers.cursor as CursorProvider).startLogin();
   }
 
   /** Start Codex's ChatGPT login (`codex login`); resolves with the login URL when the CLI prints one. */
   codexLogin(): Promise<{ url: string | null }> {
+    this.checkLoggingOut("codex");
     return (this.providers.codex as CodexProvider).startLogin(() => {
       this.codexUsageFetchAt = 0;
       void this.refreshCodexUsage();
@@ -1230,7 +1237,53 @@ export class AgentHost {
 
   /** Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. */
   claudeLogin(): Promise<{ url: string | null }> {
+    this.checkLoggingOut("claude");
     return (this.providers.claude as ClaudeProvider).startLogin();
+  }
+
+  /** Forget a provider's shared login once its chats are idle. */
+  async providerLogout(id: "claude" | "codex" | "cursor"): Promise<void> {
+    if (this.loggingOut.has(id)) throw new Error("Log out is already in progress.");
+    for (const thread of this.threads.values()) {
+      if (thread.provider === id && (this.runs.has(thread.id) || this.resuming.has(thread.id) ||
+          (this.status.get(thread.id) ?? "idle") !== "idle" || this.queues.get(thread.id)?.length || this.backgroundTasks(thread.id))) {
+        throw new Error(`Finish or stop ${this.providers[id].label} chats before logging out.`);
+      }
+    }
+    this.loggingOut.add(id);
+    this.authGenerations.set(id, (this.authGenerations.get(id) ?? 0) + 1);
+    try {
+      // Let account probes finish before removing credentials or their cached readings.
+      await Promise.allSettled([id === "codex" ? this.codexUsageFetch : id === "claude" ? this.usageFetch : null]);
+      for (const [threadId, session] of this.sessions) {
+        if (this.threads.get(threadId)?.provider !== id) continue;
+        session.dispose();
+        this.sessions.delete(threadId);
+      }
+      await (this.providers[id] as ClaudeProvider | CodexProvider | CursorProvider).logout();
+      if (id === "claude" || id === "codex") this.usageWindowStarts.reset(id);
+      if (id === "claude") {
+        this.claudeThreadLimits.clear();
+        this.db.setSetting("claudeThreadLimits", {});
+      }
+      this.db.setSetting(`models.${id}`, []);
+      delete this.planLimits[id];
+      this.planPace = Object.fromEntries(Object.entries(this.planPace).filter(([key]) => !key.startsWith(`${id}:`)));
+      this.db.setSetting("limits", this.planLimits);
+      this.db.setSetting("limitPace", this.planPace);
+      if (id === "codex") {
+        if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
+        this.codexUsageTimer = null;
+        this.codexUsageFetchAt = 0;
+      } else if (id === "claude") {
+        if (this.usageTimer) clearTimeout(this.usageTimer);
+        this.usageTimer = null;
+        this.lastUsageFetchAt = 0;
+      } else this.cursorUsageFetchAt = 0;
+      this.emit({ type: "agent_limits", limits: this.liveLimits() });
+    } finally {
+      this.loggingOut.delete(id);
+    }
   }
 
   async providerStatus(): Promise<ProviderStatus[]> {
@@ -1239,7 +1292,12 @@ export class AgentHost {
 
   /** The provider that runs a thread: the real one, or its fake under SCRIBE_FAKE_AGENTS=1. */
   private agent(id: ProviderId): AgentProvider {
+    this.checkLoggingOut(id);
     return this.fakes?.[id] ?? this.providers[id];
+  }
+
+  private checkLoggingOut(id: ProviderId): void {
+    if (this.loggingOut.has(id)) throw new Error("Wait for log out to finish before using this provider.");
   }
 
   async models(provider: ProviderId, refresh = false): Promise<ModelOption[]> {

@@ -36,6 +36,20 @@ function fixture(initial: WindowStartState = {}) {
     busy: () => { busy = true; }, fail: () => { fail = true; }, pending: (p: () => Promise<void>) => { pending = p; } };
 }
 
+test("an account change discards a pending old-account quota probe", async () => {
+  const f = fixture();
+  f.enable({ claude: false, codex: true });
+  f.time(reset + START_DELAY_MS);
+  let resolve!: (report: PlanLimits) => void;
+  f.deps.read = () => new Promise<PlanLimits>(r => { resolve = r; });
+  const pending = f.scheduler.tick();
+  f.scheduler.reset("codex");
+  resolve(quota("codex"));
+  await pending;
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.state().codex, undefined);
+});
+
 test("both providers send once at reset plus ten minutes, with restart deduplication", async () => {
   const f = fixture();
   await f.scheduler.tick();

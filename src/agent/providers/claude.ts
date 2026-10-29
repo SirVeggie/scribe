@@ -16,6 +16,7 @@ import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
 import { outputImages } from "../outputImages.js";
+import { authCommand } from "./authCommand.js";
 
 /**
  * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
@@ -201,7 +202,8 @@ export class ClaudeProvider implements AgentProvider {
     const auth = await this.authStatus();
     // No answer (an older binary, a spawn error): leave it to the SDK, as before.
     if (!auth) return { id: this.id, label: this.label, available: true, detail: "Claude Agent SDK" };
-    if (auth.loggedIn) return { id: this.id, label: this.label, available: true, detail: authDetail(auth) };
+    if (auth.loggedIn) return { id: this.id, label: this.label, available: true, detail: authDetail(auth),
+      logout: auth.authMethod === "claude.ai" || auth.apiKeySource === "/login managed key" };
     return {
       id: this.id,
       label: this.label,
@@ -260,6 +262,17 @@ export class ClaudeProvider implements AgentProvider {
       this.login = null;
     });
     return { url: null };
+  }
+
+  async logout(): Promise<void> {
+    if (this.login) throw new Error("Finish the Claude login before logging out.");
+    const binary = claudeBinary();
+    if (!binary) throw new Error("The Claude Code binary for this platform is not installed.");
+    await this.modelLoad;
+    this.dispose();
+    await authCommand(binary, ["auth", "logout"], process.env, "Claude log out");
+    this.auth = null;
+    this.modelCache = null;
   }
 
   models(refresh = false): Promise<ModelOption[]> {

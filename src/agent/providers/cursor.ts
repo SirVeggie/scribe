@@ -185,7 +185,7 @@ export class CursorProvider implements AgentProvider {
       const { Cursor } = await sdk();
       const auth = await Cursor.auth.status();
       if (auth.status === "logged-in") {
-        return { id: this.id, label: this.label, available: true, detail: auth.email ? `SDK · ${auth.email}` : "SDK" };
+        return { id: this.id, label: this.label, available: true, detail: auth.email ? `SDK · ${auth.email}` : "SDK", logout: true };
       }
       return { id: this.id, label: this.label, available: false, detail: this.login ? "Finish the login in your browser" : "Not logged in", login: true };
     } catch (err) {
@@ -227,6 +227,15 @@ export class CursorProvider implements AgentProvider {
       await Promise.race([urlReady, entry.done, new Promise((resolve) => setTimeout(resolve, 15_000))]);
     }
     return { url: this.login?.url ?? null };
+  }
+
+  async logout(): Promise<void> {
+    if (this.login) throw new Error("Finish the Cursor login before logging out.");
+    await this.modelLoad;
+    this.dispose();
+    const { Cursor } = await sdk();
+    await Cursor.auth.logout();
+    this.modelCache = null;
   }
 
   /**

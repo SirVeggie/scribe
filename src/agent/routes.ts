@@ -228,6 +228,12 @@ export function agentRouter(host: AgentHost): express.Router {
   // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
   router.post("/codex/login", wrap(() => host.codexLogin()));
   router.post("/claude/login", wrap(() => host.claudeLogin()));
+  for (const id of ["claude", "codex", "cursor"] as const) {
+    router.post(`/${id}/logout`, wrap(async () => {
+      await host.providerLogout(id);
+      return { ok: true };
+    }));
+  }
   // Native's subscription logins (Pi's OAuth flows, tokens in Scribe's Pi auth.json).
   router.get("/pi/logins", wrap(async () => ({ logins: await host.piLogins() })));
   router.post("/pi/logins/:id", wrap(async (req) => ({ login: await host.piLogin(req.params.id) })));

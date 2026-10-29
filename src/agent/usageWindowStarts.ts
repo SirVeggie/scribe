@@ -28,6 +28,7 @@ export function windowStartBlocked(provider: WindowProvider, limits: PlanLimits,
 /** Server timestamps only. An attempt is saved before sending, including failures. */
 export class UsageWindowStarts {
   private busy = new Set<WindowProvider>();
+  private generations = new Map<WindowProvider, number>();
   private controllers = new Map<WindowProvider, AbortController>();
   private closed = false;
   constructor(private deps: {
@@ -40,6 +41,14 @@ export class UsageWindowStarts {
   }, private state: WindowStartState = {}) {}
 
   view(provider: WindowProvider): Entry | undefined { return this.state[provider]; }
+
+  /** An account change invalidates pending probes and the old account's reset. */
+  reset(provider: WindowProvider): void {
+    this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
+    this.controllers.get(provider)?.abort();
+    delete this.state[provider];
+    this.deps.save(this.state);
+  }
 
   observe(provider: WindowProvider, limits: PlanLimits): void {
     if (this.closed) return;
@@ -69,11 +78,12 @@ export class UsageWindowStarts {
     if (entry.checked && now - entry.checked < 5 * 60_000 &&
         (!due || entry.checked >= (entry.reset ?? 0) + START_DELAY_MS)) return;
     this.busy.add(provider);
+    const generation = this.generations.get(provider);
     try {
       this.state = { ...this.state, [provider]: { ...entry, checked: now } };
       this.deps.save(this.state);
       const report = await this.deps.read(provider);
-      if (this.closed || !this.deps.enabled()[provider]) return;
+      if (this.closed || !this.deps.enabled()[provider] || generation !== this.generations.get(provider)) return;
       if (report) this.observe(provider, report);
       entry = this.state[provider] ?? {};
       const reset = entry.reset;
@@ -90,16 +100,16 @@ export class UsageWindowStarts {
       deadline.unref?.();
       try {
         await this.deps.start(provider, controller.signal);
-        if (!this.closed) this.record(provider, reset, "Sent");
+        if (!this.closed && generation === this.generations.get(provider)) this.record(provider, reset, "Sent");
       } catch {
-        if (!this.closed) this.record(provider, reset, "Failed or cancelled; no retry this window");
+        if (!this.closed && generation === this.generations.get(provider)) this.record(provider, reset, "Failed or cancelled; no retry this window");
       } finally {
         clearTimeout(deadline);
         this.controllers.delete(provider);
       }
-      if (!this.closed && this.deps.enabled()[provider]) {
+      if (!this.closed && this.deps.enabled()[provider] && generation === this.generations.get(provider)) {
         const after = await this.deps.read(provider);
-        if (after && !this.closed) this.observe(provider, after);
+        if (after && !this.closed && generation === this.generations.get(provider)) this.observe(provider, after);
       }
     } catch {
       // Quota failures may be read again; they never trigger a model request.
