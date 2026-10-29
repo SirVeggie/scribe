@@ -56,6 +56,13 @@
     return node;
   }
 
+  /** A plain-text hover tip (public/tooltip.js), also read out to screen readers. */
+  function tip(node, text) {
+    node.dataset.tooltip = text;
+    node.setAttribute("aria-description", text);
+    return node;
+  }
+
   /* ---------- asking ---------- */
 
   /** One prompt at a time; the same question from the same page shares its answer. */
@@ -251,14 +258,17 @@
     const form = el("form");
     form.method = "dialog";
     const head = el("h2", "", "Permissions");
-    const sub = el("p", "permissions-sub", `What “${tab.title}” may do. Kept on this PC, not exported; an agent changing the page's code resets the risky ones unless kept.`);
+    const help = tip(el("button", "search-help", "?"), `What “${tab.title}” may do. Kept on this PC, not exported; an agent changing the page's code resets the risky ones unless kept.`);
+    help.type = "button";
+    help.setAttribute("aria-label", "About page permissions");
+    head.append(" ", help);
     const rows = el("div", "permissions-rows");
     const actions = el("div", "confirm-actions");
     const done = el("button", "", "Done");
     done.type = "submit";
     done.value = "done";
     actions.append(done);
-    form.append(head, sub, rows, actions);
+    form.append(head, rows, actions);
     dlg.append(form);
 
     const save = async (body) => {
@@ -275,7 +285,7 @@
       for (const p of perms) {
         const row = el("div", "permission-row");
         const text = el("div", "permission-text");
-        text.append(el("div", "permission-label", p.label), el("div", "permission-detail", p.detail));
+        text.append(p.detail ? tip(el("span", "permission-label setting-hinted", p.label), p.detail) : el("span", "permission-label", p.label));
         const values = p.perFolder ? VALUES.filter((v) => v.id !== "allow") : VALUES;
         const value = p.perFolder && p.value === "allow" ? "ask" : p.value;
         row.append(text, selectOf(values, value, p.label, (next) => save({ perm: p.id, value: next })));

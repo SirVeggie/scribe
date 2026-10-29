@@ -1764,8 +1764,7 @@ button.lens-not[aria-pressed="true"] {
 }
 
 .confirm p.permission-ask-detail,
-.confirm p.permission-ask-note,
-.confirm p.permissions-sub {
+.confirm p.permission-ask-note {
   padding-top: 4px;
   font-size: 12px;
   color: var(--muted);
@@ -1837,7 +1836,6 @@ button.lens-not[aria-pressed="true"] {
   color: var(--heading);
 }
 
-.permission-detail,
 .permission-empty {
   margin-top: 2px;
   font-size: 12px;
