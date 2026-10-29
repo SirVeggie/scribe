@@ -525,7 +525,7 @@ A page can start Scribe's own agent chat and read its replies with `scribe.agent
 ```js
 const { ok, threadId, error } = await scribe.agent.start(prompt, { title: "Card #12", approval: "board", show: "dock" });
 await scribe.agent.send(threadId, "Shorter, please.");     // queued if the thread is still working
-const { reply } = await scribe.agent.wait(threadId);       // resolves when the thread is idle (default 10 min)
+const { reply, images } = await scribe.agent.wait(threadId); // when the thread is idle (default 10 min); images: its generated images as page assets
 const { threads } = await scribe.agent.threads();          // this page's threads, newest first
 const { thread, reply: last } = await scribe.agent.get(threadId);
 scribe.agent.onChange((t) => render(t));                   // { id, title, status, queued, reply? } on status changes
@@ -562,6 +562,7 @@ await scribe.agent.delete(threadId);                       // keep the user's ch
 ```
 
 - `images` (on `start` and `send`): up to 10 images, 8 MB each: Blobs or Files (a paste or drop), `data:` URLs, or asset ids or URLs of this page. A bad one resolves `{ ok: false, error }` with `too_many_images`, `image_too_large`, `not_an_image` or `image_not_found`, and nothing is sent. Any thread takes them, not only one without tools.
+- Images out: `wait`, `get` and the settled `onChange` event also carry `images`, the images the agent produced in its latest turn (image generation, a tool's image result), already saved as this page's own assets: `[{ id, url, name, mimeType, bytes }]`. Show `url` or keep `id` in state (an asset nothing references is deleted later). Never ask the agent to report an image path; it may not know one, and the page cannot read it.
 - `delete` takes only the page's own threads. Delete a one-off chat once the page has its reply (or kept what it needs); leave it when the user may want to see the conversation.
 
 `scribe.agent.limits()` resolves to `{ ok, limits }`, where `limits` is keyed by provider. Each report has `at` (epoch milliseconds) and `windows` (`id`, `label`, `utilization` as a fraction where `1` means 100% used, optional `resetsAt` in epoch milliseconds), and may include `availability`, `detail`, `ordinaryUsageAllowed`, and `overage`. Missing providers have no report.

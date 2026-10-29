@@ -12531,18 +12531,28 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return t.worktree?.home || t.cwd || null;
   }
 
-  /** The text of the latest turn's replies. */
+  /**
+   * The latest turn's replies: their text, and the images the agent produced in it (image
+   * generation, tool results) as assets of the thread's page, so the page needs no file path (#890).
+   */
   async function lastReply(id) {
     const detail = await ensureDetail(id);
-    if (!detail) return "";
+    if (!detail) return { reply: "", images: [] };
     const turns = [...detail.turns.values()].sort((a, b) => b.seq - a.seq);
     const turn = turns.find((x) => x.status !== "running") || turns[0];
-    if (!turn) return "";
-    return detail.items
-      .filter((it) => it.kind === "text" && it.turnId === turn.id && !it.parentToolId)
-      .map((it) => it.text)
-      .join("\n\n")
-      .trim();
+    if (!turn) return { reply: "", images: [] };
+    const own = detail.items.filter((it) => it.turnId === turn.id && !it.parentToolId);
+    const reply = own.filter((it) => it.kind === "text").map((it) => it.text).join("\n\n").trim();
+    const files = [...new Map(own.filter((it) => it.kind === "images").flatMap((it) => it.images || []).map((f) => [f.id, f])).values()];
+    const images = [];
+    for (const file of files.slice(0, 10)) {
+      try {
+        images.push((await api("POST", `/threads/${encodeURIComponent(id)}/files/${encodeURIComponent(file.id)}/page-asset`)).asset);
+      } catch (err) {
+        console.warn("[agent] could not hand an image to the page", err);
+      }
+    }
+    return { reply, images };
   }
 
   /**
@@ -12711,14 +12721,14 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     if (t.scope.kind !== "page" || !t.scope.ref) return;
     if (prev && prev.status === t.status && prev.title === t.title && prev.queued === t.queued && JSON.stringify(prev.run || null) === JSON.stringify(t.run || null)) return;
     const settle = t.status === "idle" && !t.queued;
-    const send = (reply) => app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-event", thread: { ...pageBrief(t), ...(reply !== undefined ? { reply } : {}) } });
+    const send = (last) => app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-event", thread: { ...pageBrief(t), ...(last || {}) } });
     if (!settle) {
       send();
       return;
     }
-    void lastReply(t.id).then((reply) => {
-      send(reply);
-      for (const waiter of pageWaiters.get(t.id) || []) waiter(reply);
+    void lastReply(t.id).then((last) => {
+      send(last);
+      for (const waiter of pageWaiters.get(t.id) || []) waiter(last);
       pageWaiters.delete(t.id);
     });
   }
@@ -12726,9 +12736,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function waitIdle(id, timeoutMs) {
     return new Promise((resolve) => {
       const list = pageWaiters.get(id) || [];
-      const done = (reply) => {
+      const done = (last) => {
         clearTimeout(timer);
-        resolve({ ok: true, reply });
+        resolve({ ok: true, ...last });
       };
       const timer = setTimeout(() => {
         const rest = (pageWaiters.get(id) || []).filter((w) => w !== done);
@@ -12926,7 +12936,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         };
       case "get":
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
-        return { ok: true, thread: pageBrief(thread), reply: await lastReply(thread.id) };
+        return { ok: true, thread: pageBrief(thread), ...(await lastReply(thread.id)) };
       case "steps":
         // From now on the page also gets the thread's steps as they change (scribe-agent-steps).
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
@@ -12938,7 +12948,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         await ensureDetail(thread.id);
         const now = S.threads.get(thread.id);
         const caughtUp = (now.activityAt || 0) >= (pageSentAt.get(now.id) || 0);
-        if (now.status === "idle" && !now.queued && caughtUp) return { ok: true, thread: pageBrief(now), reply: await lastReply(now.id) };
+        if (now.status === "idle" && !now.queued && caughtUp) return { ok: true, thread: pageBrief(now), ...(await lastReply(now.id)) };
         const result = await waitIdle(now.id, data.timeoutMs);
         const after = S.threads.get(now.id);
         return after ? { ...result, thread: pageBrief(after) } : { ok: false, error: "not_found" };

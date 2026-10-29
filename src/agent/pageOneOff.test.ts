@@ -74,7 +74,7 @@ test("a page asking for its saved thread as Scribe starts waits for the thread l
   const own = { id: "mine", scope: { kind: "page", ref: "lab" }, status: "idle" };
   const { context } = pageContext();
   context.S.ready = false;
-  context.lastReply = async () => "Done";
+  context.lastReply = async () => ({ reply: "Done", images: [] });
   context.pageBrief = (t: any) => ({ id: t.id, status: t.status });
   context.loadStartupData = async () => { context.S.threads = new Map([["mine", own]]); context.S.ready = true; };
   const got = await vm.runInContext("pageRequest({ id: 'lab' }, { op: 'get', threadId: 'mine' })", context);
@@ -128,4 +128,29 @@ test("Codex without tools: no Scribe server, no shell, and code mode fails close
   const features = NO_TOOLS_CONFIG.features as Record<string, boolean>;
   for (const name of ["shell_tool", "unified_exec", "code_mode_host", "view_image", "multi_agent", "apps"]) assert.equal(features[name], false, name);
   assert.equal("mcp_servers" in NO_TOOLS_CONFIG, false);
+});
+
+test("the latest turn's own images reach the page as its assets, once each (#890)", async () => {
+  const calls: string[] = [];
+  const file = (id: string) => ({ id, name: "image.png", mimeType: "image/png", size: 3 });
+  const detail = {
+    turns: new Map([["t1", { id: "t1", seq: 1, status: "done" }], ["t2", { id: "t2", seq: 2, status: "done" }]]),
+    items: [
+      { kind: "images", turnId: "t1", images: [file("out-old")] },
+      { kind: "text", turnId: "t2", text: "Here it is." },
+      { kind: "images", turnId: "t2", sourceId: "a", images: [file("out-a")] },
+      { kind: "images", turnId: "t2", sourceId: "b", images: [file("out-a")] },
+      { kind: "images", turnId: "t2", parentToolId: "sub", images: [file("out-sub")] },
+    ],
+  };
+  const context = vm.createContext({
+    ensureDetail: async () => detail,
+    console,
+    api: async (_method: string, url: string) => (calls.push(url), { asset: { id: "pa_1", url: "/blob/pa_1" } }),
+  });
+  vm.runInContext(chat.match(/^  async function lastReply\([^]*?^  }/m)![0], context);
+  const last = await vm.runInContext("lastReply('th')", context);
+  assert.equal(last.reply, "Here it is.");
+  assert.deepEqual(calls, ["/threads/th/files/out-a/page-asset"]);
+  assert.equal(last.images[0].url, "/blob/pa_1");
 });

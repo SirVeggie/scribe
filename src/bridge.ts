@@ -1452,7 +1452,7 @@ ${POINTER_DRAG_JS}
     threads: function () {
       return agentCall({ op: "threads" });
     },
-    /** One thread and its latest reply: { ok, thread, reply }. */
+    /** One thread and its latest reply: { ok, thread, reply, images }. images: the latest turn's agent images as this page's assets [{ id, url, name, mimeType, bytes }]. */
     get: function (threadId) {
       return agentCall({ op: "get", threadId: agentText(threadId) });
     },
@@ -1472,7 +1472,7 @@ ${POINTER_DRAG_JS}
         });
       };
     },
-    /** Resolves once the thread is idle (queue included): { ok, thread, reply }, or { ok: false, error: "timeout" }. */
+    /** Resolves once the thread is idle (queue included): { ok, thread, reply, images }, or { ok: false, error: "timeout" }. */
     wait: function (threadId, opts) {
       var ms = opts && typeof opts.timeoutMs === "number" ? Math.max(1000, opts.timeoutMs) : 600000;
       return agentCall({ op: "wait", threadId: agentText(threadId), timeoutMs: ms }, ms + 5000);

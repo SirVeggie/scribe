@@ -20,6 +20,7 @@ import { workspaceKey, type ThreadPatch } from "./prefs.js";
 import { hookCoverage } from "./hooks.js";
 import { copySkill, createSkill, editableKind, readHarnessFile, readSmallText, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
+import { pageAssetUrl } from "../pageAssets.js";
 import { componentHost, PORT } from "../config.js";
 import { plugins } from "../plugins/current.js";
 import { relayComponentEvents } from "../plugins/componentHost.js";
@@ -756,6 +757,26 @@ export function agentRouter(host: AgentHost): express.Router {
       // Text and HTML come back as plain text, so a preview never runs a sent file's scripts.
       res.type(isTextFile(name, "") ? "text/plain; charset=utf-8" : path.extname(name) || "application/octet-stream");
       await new Promise<void>((resolve, reject) => res.sendFile(full, (err) => (err ? reject(err) : resolve())));
+    })
+  );
+
+  // An image a page thread's agent produced (image generation, a tool result), copied into that page's
+  // own assets so its code gets the image without the agent reporting a path (#890). The name comes from
+  // the content hash, so asking again for the same image returns the asset already made.
+  router.post(
+    "/threads/:id/files/:fileId/page-asset",
+    wrap((req) => {
+      const thread = host.getThread(req.params.id);
+      const fileId = req.params.fileId;
+      if (!thread || thread.scope.kind !== "page" || !thread.scope.ref) throw new Error("Thread not found");
+      const full = /^out-[0-9a-f]{64}$/.test(fileId) ? filePath(thread.id, fileId) : null;
+      if (!full) throw new Error("Image not found");
+      const ext = path.extname(full).slice(1);
+      const name = `agent-image-${fileId.slice(4, 20)}.${ext}`;
+      const found = store.listPageAssets(thread.scope.ref).assets.find((asset) => asset.name === name);
+      const mimeType = `image/${ext === "jpg" ? "jpeg" : ext}`;
+      const asset = found ?? store.savePageAsset(thread.scope.ref, { name, mimeType, data: fs.readFileSync(full) }).asset;
+      return { asset: { id: asset.id, url: pageAssetUrl(asset.id), name: asset.name, mimeType: asset.mimeType, bytes: asset.bytes } };
     })
   );
 
