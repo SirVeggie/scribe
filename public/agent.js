@@ -2766,8 +2766,8 @@
   function observeBrowserThumb(img, threadId) {
     img.dataset.threadId = threadId;
     liveThumbs.add(img);
+    // Widgets are built off-DOM; the observer starts the stream once mounted.
     ensureThumbObserver().observe(img);
-    syncThumbStream(img);
   }
 
   function browserPreviewTip(threadId) {

@@ -46,6 +46,55 @@ const items = [
   { id: "p", threadId: "t", turnId: "u1", seq: 4, kind: "approval", requestId: "p", title: "Run rm", status: "pending", options: [{ id: "allow", kind: "allow_once", label: "Allow" }, { id: "deny", kind: "reject_once", label: "Deny" }] },
 ];
 
+test("browser tool previews start after mounting and stop streaming while hidden or removed", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    for (const name of ["app.css", "agent.css"]) {
+      await page.addStyleTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    }
+    await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 320;
+      canvas.height = 200;
+      canvas.getContext("2d")!.fillRect(0, 0, 320, 200);
+      const data = canvas.toDataURL("image/jpeg").split(",")[1];
+      const streams: Array<{ url: string; closed: boolean }> = [];
+      (window as any).browserStreams = streams;
+      (window as any).EventSource = class extends EventTarget {
+        closed = false;
+        constructor(public url: string) {
+          super();
+          streams.push(this);
+          setTimeout(() => {
+            if (!this.closed) this.dispatchEvent(new MessageEvent("frame", { data: JSON.stringify({ data }) }));
+          }, 0);
+        }
+        close() { this.closed = true; }
+      };
+    });
+    const opened = {
+      id: "browser", threadId: "t", turnId: "u1", seq: 1, kind: "tool", tool: "mcp", toolId: "browser-call",
+      name: "mcp__scribe__browser_open", title: "browser_open", status: "done",
+      input: { url: "http://localhost:5173" }, output: JSON.stringify({ title: "Preview", url: "http://localhost:5173" }),
+    };
+    await page.evaluate(([thread, turn, opened]) => (window as any).T.open(thread, [opened], [turn]), [thread, turn, opened] as const);
+    await page.waitForFunction(() => {
+      const img = document.querySelector<HTMLImageElement>(".ag-browser-thumb img");
+      return img?.complete && img.naturalWidth === 320;
+    }, null, { timeout: 3000 });
+    assert.deepEqual(await page.evaluate(() => (window as any).browserStreams.map((s: any) => s.url)), ["/api/agent/threads/t/browser/live?w=480&n=2"]);
+
+    const widget = page.locator(".ag-browser-widget");
+    await widget.evaluate(node => { (node as HTMLElement).style.display = "none"; });
+    await page.waitForFunction(() => (window as any).browserStreams.every((s: any) => s.closed));
+    await widget.evaluate(node => { (node as HTMLElement).style.display = ""; });
+    await page.waitForFunction(() => (window as any).browserStreams.length === 2 && !(window as any).browserStreams[1].closed);
+    await widget.evaluate(node => node.remove());
+    await page.waitForFunction(() => (window as any).browserStreams.every((s: any) => s.closed));
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test("agent output images render live and from history with the shared image viewer", async () => {
   const { browser, page, errors } = await chatPage();
   try {
