@@ -3634,12 +3634,17 @@
       const scope = button("", "ag-scope-chip", (event) => this.scopeMenu(event.currentTarget), SCOPE_CHIP_TITLE);
       fillScopeDisplay(scope, s.scope, t ? workspaceDir(t) : s.cwd);
       meta.append(scope);
-      if (t && t.stats.files) {
-        const ch = button("", "ag-stat-chip", () => openDiff({ kind: "thread", threadId: t.id }), "Files changed in this thread");
-        ch.append(icon("diff"), el("span", null, `${t.stats.files} file${t.stats.files === 1 ? "" : "s"}`), R.counts(t.stats.added, t.stats.removed));
-        meta.append(ch);
-      }
+      const changes = this.threadChangesButton();
+      if (changes) meta.append(changes);
       this.header.append(meta);
+    }
+
+    threadChangesButton() {
+      const t = this.thread();
+      if (!t?.stats.files) return null;
+      const ch = button("", "ag-stat-chip", () => openDiff({ kind: "thread", threadId: t.id }), "Files changed in this thread");
+      ch.append(icon("diff"), el("span", null, `${t.stats.files} file${t.stats.files === 1 ? "" : "s"}`), R.counts(t.stats.added, t.stats.removed));
+      return ch;
     }
 
     rename(titleEl) {
@@ -5423,7 +5428,7 @@
     /* ----- live updates ----- */
 
     onThread(thread, prev) {
-      if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added) this.renderHeader();
+      if (!prev || prev.title !== thread.title || prev.scope?.ref !== thread.scope?.ref || prev.stats?.files !== thread.stats?.files || prev.stats?.added !== thread.stats?.added || prev.stats?.removed !== thread.stats?.removed) this.renderHeader();
       if (!prev || prev.status !== thread.status || prev.mode !== thread.mode || JSON.stringify(prev.custom) !== JSON.stringify(thread.custom) || prev.model !== thread.model || prev.effort !== thread.effort || prev.cwd !== thread.cwd || prev.approval !== thread.approval || prev.queued !== thread.queued || prev.background !== thread.background || JSON.stringify(prev.worktree) !== JSON.stringify(thread.worktree) || prev.stats?.turns !== thread.stats?.turns || JSON.stringify(prev.effectivePermissions) !== JSON.stringify(thread.effectivePermissions)) {
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
@@ -8866,8 +8871,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       head.append(out, top);
       const right = el("div", "dock-bar-right");
       right.append(view.bar);
+      this.changes = el("div", "dock-bar-left");
       const bar = el("div", "dock-bar");
-      bar.append(right);
+      bar.append(this.changes, right);
       panel.append(head, input, bar);
       view.helperHost = panel;
       view.helperBackground = [head, input, bar];
@@ -8972,6 +8978,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (!this.titleBtn) return;
       const t = this.view.thread();
       const s = this.view.settings();
+      const changes = this.view.threadChangesButton();
+      this.changes.replaceChildren(...(changes ? [changes] : []));
       this.titleBtn.replaceChildren(icon(t ? "sparkle" : "plus"), el("span", null, t ? t.title : "New thread"), icon("chevron", "ag-ico ag-chev-down"));
       fillScopeDisplay(this.scopeBtn, s.scope, t ? workspaceDir(t) : s.cwd);
       this.scopeBtn.dataset.tooltip = SCOPE_CHIP_TITLE;
