@@ -11,9 +11,9 @@
     aurora: ["#081a24", "#0f7a6c", "#7ad9a8", "#e9e2ff"],
   };
   const PROVIDERS = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
-  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy" };
+  const STYLES = { none: "None", liquid3d: "Liquid sphere", mesh: "Mesh gradient", meshquick: "Mesh gradient (quick)", ring: "Ring", ink: "Ink in water", plasma: "Plasma", halftone: "Halftone", galaxy: "Spiral galaxy", bars: "Voice bars" };
   // Shape animation speed while idle and working; others use [.6, 2].
-  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1] };
+  const SPEEDS = { meshquick: [1, 1.3], plasma: [.5, 1.1], bars: [1, 1.7] };
   // The same for surface effects.
   const SURFACE_SPEEDS = { pulse: [.6, 1.2], motes: [.6, 1.1], motesRise: [.6, 1.1], glow: [.6, 1.1] };
   const SYMBOLS = { none: "Colour only", glow: "Glowing symbol", crt: "CRT", dots: "LED matrix", emboss: "Embossed", glitch: "Glitch" };
@@ -138,10 +138,17 @@ vec4 galaxy(vec2 uv,float t){float r=length(uv)+.001;float ang=atan(uv.y,uv.x);f
 float n=fbm(uv*3.+vec2(t*.1));float dens=clamp(arm*(.4+.8*n)*exp(-r*1.4)*1.8+exp(-r*6.)*1.2,0.,1.);
 vec3 col=mix(pal(.4+.5*n),u_c3,exp(-r*5.));return pm(col,dens*smoothstep(1.6,1.1,r));}
 
+// A regular travelling wave, with enough height change to read at 30px even idle.
+vec4 bars(vec2 uv,float t){float a=0.;vec3 col=vec3(0.);
+for(int i=0;i<5;i++){float fi=float(i);float wave=.5+.5*cos(t*TAU/3.6-fi*TAU/5.);
+float h=.22+.44*wave;vec2 p=uv-vec2((fi-2.)*.34,0.);
+float d=length(vec2(p.x,max(abs(p.y)-h,0.)))-.09;float mask=aaIn(d);
+vec3 c=mix(u_c1,u_c3,.45+.45*wave);col+=c*mask;a+=mask;}
+return vec4(col,clamp(a,0.,1.));}
 vec4 base(vec2 uv,float t){
 if(u_style<.5)return vec4(0.);if(u_style<1.5)return liquid3d(uv,t);if(u_style<2.5)return mesh(uv,t);if(u_style<3.5)return meshquick(uv,t);
 if(u_style<4.5)return ring(uv,t);if(u_style<5.5)return ink(uv,t);if(u_style<6.5)return plasma(uv,t);if(u_style<7.5)return halftone(uv,t);
-return galaxy(uv*1.6,t);
+if(u_style<8.5)return galaxy(uv*1.6,t);return bars(uv,t);
 }
 float bevel(vec2 p){return smoothstep(0.,.08,-sym(p/u_iconSize)*u_iconSize);}
 vec4 mark(vec2 uv,float t){
