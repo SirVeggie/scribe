@@ -9764,18 +9764,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.peekId = t.id;
       for (const r of this.node.querySelectorAll(".ag-fly-row")) r.classList.toggle("on", r === rowEl);
       const peek = el("div", "ag-fly-peek");
-      const state = rowEl.classList.contains("s-checked") ? "Finished" : t.status === "waiting" ? "Waiting" : t.status === "running" ? "Running" : "Reply ready";
-      peek.append(el("p", "ag-fly-peek-head", `${state} · ${t.title}`));
       if (t.status === "waiting" && t.asking) {
         peek.append(el("p", "ag-fly-peek-title", t.asking.title));
         if (t.asking.detail) peek.append(el("pre", "ag-pre small", t.asking.detail));
       } else if (t.status === "running" && t.activity?.line) {
-        peek.append(el("p", "ag-fly-peek-title", t.activity.line));
+        peek.append(el("p", "ag-fly-peek-title ag-fly-peek-line", t.activity.line));
       }
       if (t.activity?.lastText) peek.append(el("p", "ag-fly-peek-quote", t.activity.lastText));
       if (t.status === "waiting" && t.asking?.kind === "approval") peek.append(approvalButtons(t));
-      this.hold(peek);
       this.peek?.remove();
+      this.peek = null;
+      if (!peek.childElementCount) return;
+      this.hold(peek);
       this.peek = peek;
       document.body.append(peek);
       // Beside the panel, level with the row; on the other side when there is no room.

@@ -6619,21 +6619,23 @@ body.resizing-split main.has-split .agent-dock {
 
 .ag-fly-peek {
   padding: 12px 14px;
+  overflow-wrap: anywhere;
 }
 
 .ag-fly-peek p {
   margin: 0 0 6px;
 }
 
-.ag-fly-peek-head {
-  font-size: 11px;
-  color: var(--muted);
-}
-
 .ag-fly-peek-title {
   color: var(--heading);
   font-weight: 600;
   font-size: 13px;
+}
+
+.ag-fly-peek-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ag-fly-peek .ag-pre {
