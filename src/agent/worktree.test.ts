@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { revertTrees, snapshotTree } from "./git.js";
+import { diffPatch, diffTrees, revertTrees, snapshotTree } from "./git.js";
 import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeRemaining, worktreeStatus } from "./worktree.js";
 
 let root = "";
@@ -87,6 +87,51 @@ test("discard removes committed and uncommitted work without touching the main c
   assert.equal(sh(repo, "rev-parse", "HEAD"), base);
   assert.equal(fs.existsSync(path.join(repo, "committed.txt")), false);
   assert.equal(fs.readFileSync(path.join(repo, "node_modules", "dep", "index.js"), "utf8"), "x");
+});
+
+test("thread and turn diffs survive commits, merging and worktree removal (#881)", async () => {
+  const { AgentHost } = await import("./host.js");
+  const { worktree: wt } = await createWorktree(repo, repo, "Saved thread diff");
+  const beforeTree = (await snapshotTree(wt.path))!;
+  fs.writeFileSync(path.join(wt.path, "review.txt"), "keep this diff\n");
+  const afterTree = (await snapshotTree(wt.path))!;
+  const files = await diffTrees(wt.path, beforeTree, afterTree);
+  const turn = { id: "turn", repo: wt.path, beforeTree, afterTree, files };
+  const thread = { worktree: wt };
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    threads: new Map([["thread", thread]]), runs: new Map(), loadTurns: () => [turn],
+  });
+  const check = async () => {
+    for (const turnId of [undefined, turn.id]) {
+      const changes = await host.changes("thread", turnId);
+      assert.equal(changes.repo, repo, "saved diffs use the surviving shared repository");
+      assert.deepEqual(changes.files, files);
+      assert.match((await host.patch("thread", turnId)).patch, /\+keep this diff/);
+    }
+    assert.equal(turn.repo, wt.path, "the revert target stays in the original worktree");
+  };
+  await check();
+  await commitAll(wt, "save review changes");
+  assert.equal(sh(wt.path, "status", "--porcelain"), "");
+  await check();
+  await mergeWorktree(wt);
+  await removeWorktree(wt);
+  await dropBranchIfEmpty(wt);
+  thread.worktree = { ...wt, closed: { how: "merged", at: Date.now() } };
+  await check();
+  // A leftover empty directory from failed Windows cleanup is not a repository either.
+  fs.mkdirSync(wt.path);
+  await check();
+  await removeWorktree(wt);
+});
+
+test("unavailable repositories and missing snapshot objects report diff errors instead of no changes", async () => {
+  const tree = (await snapshotTree(repo))!;
+  const missing = "0".repeat(40);
+  for (const cwd of [repo, path.join(root, "missing-repo")]) {
+    await assert.rejects(diffTrees(cwd, tree, missing), /Could not compare saved changes/);
+    await assert.rejects(diffPatch(cwd, tree, missing), /Could not read saved changes/);
+  }
 });
 
 test("cleanup accepts an already deregistered worktree with a leftover folder", async () => {

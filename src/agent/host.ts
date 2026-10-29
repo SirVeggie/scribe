@@ -6096,7 +6096,12 @@ export class AgentHost {
         turns = turns.map((turn) => (turn === live ? { ...turn, afterTree, files } : turn));
       }
     }
-    const withTrees = turns.filter((turn) => turn.repo && turn.beforeTree && turn.afterTree);
+    // Worktree snapshots live in the shared object database. Read them through the
+    // main checkout, which survives Merge/Leave and idle cleanup. Keep turn.repo
+    // unchanged: reverting a turn must still target the folder where it ran.
+    const wt = this.threads.get(threadId)?.worktree;
+    const withTrees = turns.filter((turn) => turn.repo && turn.beforeTree && turn.afterTree).map((turn) =>
+      wt && workspaceKey(turn.repo!) === workspaceKey(wt.path) ? { ...turn, repo: wt.repo } : turn);
     if (withTrees.length && withTrees.every((turn) => turn.repo === withTrees[0].repo)) {
       const first = withTrees[0];
       const last = withTrees[withTrees.length - 1];

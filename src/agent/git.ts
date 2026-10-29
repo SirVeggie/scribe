@@ -102,6 +102,9 @@ export async function diffTrees(repo: string, from: string, to: string): Promise
     git(["diff", "--no-ext-diff", "--no-color", "-M", "--numstat", "-z", from, to], repo),
     git(["diff", "--no-ext-diff", "--no-color", "-M", "--name-status", "-z", from, to], repo),
   ]);
+  for (const result of [numstat, names]) {
+    if (result.code !== 0) throw new Error(`Could not compare saved changes: ${result.error || result.stderr.trim() || "git diff failed"}`);
+  }
   const counts = new Map<string, { added: number; removed: number; binary: boolean }>();
   const parts = numstat.stdout.split("\0");
   for (let i = 0; i < parts.length; i += 1) {
@@ -152,6 +155,7 @@ export async function diffTrees(repo: string, from: string, to: string): Promise
 /** Unified patch between two trees, optionally for some paths only. Large patches are cut off. */
 export async function diffPatch(repo: string, from: string, to: string, paths: string[] = []): Promise<{ patch: string; truncated: boolean }> {
   const res = await git(["diff", "--no-ext-diff", "--no-color", "-M", from, to, "--", ...paths], repo);
+  if (res.code !== 0) throw new Error(`Could not read saved changes: ${res.error || res.stderr.trim() || "git diff failed"}`);
   if (res.stdout.length > MAX_PATCH_BYTES) {
     return { patch: res.stdout.slice(0, MAX_PATCH_BYTES), truncated: true };
   }
