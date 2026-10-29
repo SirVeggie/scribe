@@ -3208,6 +3208,8 @@ export class AgentHost {
   /** The thread menu's search: the threads whose messages mention words of q, with which words and a snippet. */
   searchThreadMessages(q: unknown): ThreadMessageHit[] {
     const words = searchWords(q);
+    // Items are saved in batches; without this, a refresh right after a message would miss its text.
+    if (words.length) this.flushNow();
     return matchMessages(this.db.searchMessages(words.flatMap(likePatterns)), words);
   }
 
