@@ -853,9 +853,11 @@
   .arch-row .row { display: flex; gap: 4px; }
   .label-edit { display: flex; align-items: center; gap: 6px; }
   .label-edit .field { flex: 1; }
-  .label-settings { padding: 4px 0 10px; border-bottom: 1px solid var(--border); }
+  .label-config { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .label-config svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  .label-settings { padding: 7px 9px; }
   .label-settings > .field { width: 100%; margin: 0 0 6px; }
-  .label-suggest { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .label-suggest { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; }
   .swatch { width: 22px; height: 22px; border-radius: 7px; flex: 0 0 auto; box-shadow: var(--depth); }
   .palette { display: flex; gap: 5px; flex-wrap: wrap; padding: 4px 0 2px; }
   .palette button { width: 20px; height: 20px; border-radius: 6px; }
@@ -4509,9 +4511,42 @@
     e.stopPropagation();
     openLabelsMenu();
   });
-  function openLabelsMenu() {
+  function openLabelsMenu(labelId, focusLabelId) {
     openMenu(labelsBtn, function (menu) {
       menu.style.width = "300px";
+      var selected = labels().find(function (l) { return l.id === labelId; });
+      if (selected) {
+        var back = el("button", null, "← Back");
+        back.type = "button";
+        back.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          openLabelsMenu(null, selected.id);
+        });
+        menu.appendChild(back);
+        menu.appendChild(el("div", "label", selected.name));
+        var details = el("div", "label-settings");
+        var description = el("textarea", "field");
+        description.rows = 3;
+        description.placeholder = "Description";
+        description.setAttribute("aria-label", "Description for " + selected.name);
+        description.value = str(selected.description);
+        description.addEventListener("change", function () {
+          saveLabels(labels().map(function (x) { return x.id === selected.id ? Object.assign({}, x, { description: description.value.trim() }) : x; }));
+        });
+        details.appendChild(description);
+        var never = el("label", "label-suggest");
+        never.appendChild(document.createTextNode("Never suggest"));
+        var check = el("input", "switch");
+        check.type = "checkbox";
+        check.checked = selected.neverSuggest === true;
+        check.addEventListener("change", function () {
+          saveLabels(labels().map(function (x) { return x.id === selected.id ? Object.assign({}, x, { neverSuggest: check.checked }) : x; }));
+        });
+        never.appendChild(check);
+        details.appendChild(never);
+        menu.appendChild(details);
+        return;
+      }
       menu.appendChild(el("div", "label", "Labels"));
       labels().forEach(function (l) {
         var row = el("div", "menu-row label-edit");
@@ -4519,6 +4554,7 @@
         sw.type = "button";
         sw.style.background = l.color;
         sw.setAttribute("aria-label", "Change colour");
+        sw.dataset.tooltip = "Change colour";
         sw.addEventListener("click", function (ev) {
           ev.stopPropagation();
           var i = PALETTE.indexOf(l.color);
@@ -4546,31 +4582,21 @@
           }));
           openLabelsMenu();
         });
+        var config = el("button", "ghost label-config");
+        config.type = "button";
+        config.dataset.labelSettings = l.id;
+        config.setAttribute("aria-label", "Settings for " + l.name);
+        config.dataset.tooltip = "Label settings";
+        config.appendChild($("settingsBtn").querySelector("svg").cloneNode(true));
+        config.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          openLabelsMenu(l.id);
+        });
         row.appendChild(sw);
         row.appendChild(name);
+        row.appendChild(config);
         row.appendChild(rm);
         menu.appendChild(row);
-        var details = el("div", "label-settings");
-        var description = el("textarea", "field");
-        description.rows = 2;
-        description.placeholder = "Description";
-        description.setAttribute("aria-label", "Description for " + l.name);
-        description.value = str(l.description);
-        description.addEventListener("change", function () {
-          saveLabels(labels().map(function (x) { return x.id === l.id ? Object.assign({}, x, { description: description.value.trim() }) : x; }));
-        });
-        details.appendChild(description);
-        var never = el("label", "label-suggest");
-        var check = el("input");
-        check.type = "checkbox";
-        check.checked = l.neverSuggest === true;
-        check.addEventListener("change", function () {
-          saveLabels(labels().map(function (x) { return x.id === l.id ? Object.assign({}, x, { neverSuggest: check.checked }) : x; }));
-        });
-        never.appendChild(check);
-        never.appendChild(document.createTextNode("Never suggest"));
-        details.appendChild(never);
-        menu.appendChild(details);
       });
       var addRow = el("div", "menu-row label-edit");
       var input = el("input", "field");
@@ -4587,6 +4613,8 @@
       addRow.appendChild(input);
       menu.appendChild(addRow);
     });
+    var focus = labelId ? menuEl.querySelector("button") : Array.from(menuEl.querySelectorAll(".label-config")).find(function (b) { return b.dataset.labelSettings === focusLabelId; });
+    if (focus) focus.focus();
   }
   function saveLabels(next) {
     scribe.set({ labels: next });

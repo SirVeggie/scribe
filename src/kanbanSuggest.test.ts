@@ -94,9 +94,17 @@ test("label settings persist descriptions and exclude never-suggest labels, incl
   const { browser, page, errors } = open;
   try {
     await page.locator("#labelsBtn").click();
+    assert.equal(await page.locator(".menu textarea, .menu input[type=checkbox]").count(), 0);
+    assert.equal(await page.getByRole("textbox", { name: "Label name", exact: true }).count(), 2);
+    await page.getByRole("button", { name: "Settings for Bug", exact: true }).click();
     const description = page.getByRole("textbox", { name: "Description for Bug", exact: true });
     await description.fill("Broken existing behaviour");
-    await description.press("Tab");
+    await page.getByRole("button", { name: "← Back", exact: true }).click();
+    assert.equal(await page.locator(".menu textarea, .menu input[type=checkbox]").count(), 0);
+    assert.equal(await page.getByRole("button", { name: "Settings for Bug", exact: true }).evaluate(b => b === document.activeElement), true);
+    await page.getByRole("button", { name: "Settings for Feature", exact: true }).click();
+    assert.equal(await page.getByRole("textbox", { name: "Description for Feature", exact: true }).inputValue(), "New behaviour");
+    assert.equal(await page.getByRole("checkbox", { name: "Never suggest", exact: true }).isChecked(), false);
     await page.keyboard.press("Escape");
     await page.evaluate(() => {
       const s = (window as any).scribe;
@@ -108,6 +116,7 @@ test("label settings persist descriptions and exclude never-suggest labels, incl
 
     // Disable while the answer is in flight: it must not reintroduce the label.
     await page.locator("#labelsBtn").click();
+    await page.getByRole("button", { name: "Settings for Bug", exact: true }).click();
     await page.getByRole("checkbox", { name: "Never suggest", exact: true }).first().check();
     await page.keyboard.press("Escape");
     await page.evaluate(() => (window as any).answer(["Bug", "Feature"]));
@@ -127,6 +136,7 @@ test("label settings persist descriptions and exclude never-suggest labels, incl
     assert.equal(await page.locator("#mLabels .label-chip").getAttribute("data-tooltip"), "Broken existing behaviour");
     await page.keyboard.press("Escape");
     await page.locator("#labelsBtn").click();
+    await page.getByRole("button", { name: "Settings for Bug", exact: true }).click();
     assert.equal(await page.getByRole("textbox", { name: "Description for Bug", exact: true }).inputValue(), "Broken existing behaviour");
     assert.equal(await page.getByRole("checkbox", { name: "Never suggest", exact: true }).first().isChecked(), true);
     assert.deepEqual(errors, []);
