@@ -26,7 +26,7 @@
     launcher.value = settings.launcher;
     section.querySelector("#intellij-launcher-row").hidden = !settings.enabled;
     checks.clear();
-    document.querySelectorAll("[data-intellij-actions]").forEach(node => { if (node.intellijGate) node.intellijGate(); else node.hidden = !settings.enabled; });
+    document.querySelectorAll("[data-intellij-actions]").forEach(node => { if (node.intellijGate) node.intellijGate(); else node.hidden = !usable(); });
   }
 
   /** Whether a file is in an IntelliJ project (an .idea folder above it), asked in batches per source. */
@@ -61,6 +61,11 @@ ${file}`); }
     for (const [file, waits] of batch.waits) for (const resolve of waits) resolve(files[file] === true);
   }
 
+  /** IntelliJ opens on the device that runs Scribe: not from another device's view of it (#905). */
+  function usable() {
+    return settings.enabled && !window.scribeHost?.remote;
+  }
+
   /**
    * Shows IntelliJ actions only while the integration is on and the file is in an IntelliJ project.
    * source may be a function: a chat's code block learns its thread once it is in the feed.
@@ -70,13 +75,13 @@ ${file}`); }
     actions.hidden = true;
     let tries = 0;
     actions.intellijGate = () => {
-      if (!settings.enabled) { actions.hidden = true; return; }
+      if (!usable()) { actions.hidden = true; return; }
       const from = typeof source === "function" ? source() : source;
       if (!from) {
         if (tries++ < 20) requestAnimationFrame(actions.intellijGate);
         return;
       }
-      inProject(from, file).then(ok => { actions.hidden = !(ok && settings.enabled); });
+      inProject(from, file).then(ok => { actions.hidden = !(ok && usable()); });
     };
     ready.then(actions.intellijGate);
   }

@@ -4,7 +4,6 @@ import express from "express";
 import { listPermissions, setRules } from "./permissions.js";
 import { McpPermissions } from "./mcpPermissions.js";
 import type { AgentHost } from "./host.js";
-import { shellOrigins } from "../config.js";
 import { identify } from "../callers.js";
 import { toMeta } from "../types.js";
 import { browserHttpStatus, ensureBrowserView, browserControl, browserNavigate, browserUserTabs, browserFit, browserInput, browserViews, closeThreadBrowser, watchBrowser, type BrowserInput } from "../browser.js";
@@ -21,7 +20,7 @@ import { hookCoverage } from "./hooks.js";
 import { copySkill, createSkill, editableKind, readHarnessFile, readSmallText, removeSkill, writeHarnessFile } from "./harnessFiles.js";
 import { store } from "../store.js";
 import { pageAssetUrl } from "../pageAssets.js";
-import { componentHost, PORT } from "../config.js";
+import { componentHost } from "../config.js";
 import { plugins } from "../plugins/current.js";
 import { relayComponentEvents } from "../plugins/componentHost.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
@@ -30,6 +29,7 @@ import { chunkPage } from "../search/chunker.js";
 import { checkSdkUpdates } from "./sdkUpdates.js";
 import { cardContext } from "./cardContext.js";
 import { DEFAULT_INTELLIJ, intellijSettings, intellijLauncher, intellijDiffArgs, intellijExportDiff, intellijFileArgs, intellijProjectFiles, launchIntelliJ } from "./intellij.js";
+import { requestOrigin, requestSuffix, shellOrigin } from "../contentOrigin.js";
 
 type AiPassage = { id: string; digest: string; kind: string; anchor: string | null; headingId: string | null; label: string };
 
@@ -972,7 +972,7 @@ export function agentRouter(host: AgentHost): express.Router {
   }));
   router.post("/threads/:id/components/:itemId/expand", wrap(req => {
     const item = host.componentItem(req.params.id, req.params.itemId);
-    const url = `http://${componentHost(item.id)}:${PORT}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
+    const url = `${requestOrigin(req, componentHost(item.id, requestSuffix(req)))}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
     const { tab } = store.openTempUrl(url, { activate: false });
     return { key: tab.key };
   }));
@@ -1155,7 +1155,7 @@ function shellOnly(req: express.Request, res: express.Response, next: express.Ne
     return;
   }
   const origin = req.get("origin");
-  if (origin && !shellOrigins().includes(origin)) {
+  if (origin && !shellOrigin(req, origin)) {
     res.status(403).json({ error: "Agent requests must come from the board" });
     return;
   }

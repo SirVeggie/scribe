@@ -1,9 +1,9 @@
 import express, { Router } from "express";
 import { identify } from "../callers.js";
-import { shellOrigins } from "../config.js";
 import type { PermissionGrant } from "../pagePermissions.js";
 import { PageMl } from "./page.js";
 import { mlService, type MlService } from "./service.js";
+import { shellOrigin } from "../contentOrigin.js";
 
 /** What the page routes need from the daemon: a page's grants (throws for an unknown page). */
 export type MlPageAccess = { grants: (tabId: string) => Map<string, PermissionGrant>; ml?: PageMl };
@@ -19,7 +19,7 @@ function shellOnly(req: express.Request, res: express.Response, next: express.Ne
     return;
   }
   const origin = req.get("origin");
-  if (origin && !shellOrigins().includes(origin)) {
+  if (origin && !shellOrigin(req, origin)) {
     res.status(403).json({ error: "Classifier settings can only be changed from the board" });
     return;
   }

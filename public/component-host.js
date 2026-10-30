@@ -11,8 +11,20 @@
     if (!response.ok) throw new Error(result.error || "Component request failed");
     return result;
   }
+  /** .localhost, or .d-<device>.localhost in another device's UI through the gateway (#905). */
+  const suffix = () => window.scribeHost?.suffix ?? ".localhost";
   function url(item) {
-    return `${location.protocol}//w-it-${item.id.slice(3)}.localhost:${location.port}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
+    return `${location.protocol}//w-it-${item.id.slice(3)}${suffix()}:${location.port}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
+  }
+  /** A chat component's URL, as the expand button stores it (on whichever device's host it was made). */
+  function chatComponent(raw) {
+    try {
+      const target = new URL(raw);
+      const match = /^w-it-([0-9a-f]{12})(?:\.d-[0-9a-f]{12})?\.localhost$/.exec(target.hostname);
+      return match && target.pathname.startsWith("/component/") ? { id: `it_${match[1]}`, thread: target.searchParams.get("thread") } : null;
+    } catch {
+      return null;
+    }
   }
   function theme(frame, port) {
     const style = getComputedStyle(frame.closest(".ag-component") || document.documentElement);
@@ -258,11 +270,11 @@
     },
     attach, url,
     async attachUrl(frame, raw) {
-      const target = new URL(raw);
-      const match = /^w-it-([0-9a-f]{12})\.localhost$/.exec(target.hostname);
-      if (!match) return false;
-      const thread = target.searchParams.get("thread");
-      const item = await api("GET", `/threads/${encodeURIComponent(thread)}/components/it_${match[1]}`);
+      const found = chatComponent(raw);
+      if (!found) return false;
+      const item = await api("GET", `/threads/${encodeURIComponent(found.thread)}/components/${found.id}`);
+      // Load it on this view's own component host, whichever host the stored URL named.
+      raw = url({ id: found.id, threadId: found.thread });
       if (frame.isConnected) {
         if (item.available === false) { frame.replaceWith(document.createTextNode(`${item.summary || item.fallback || ""}\n${item.reason}`)); return true; }
         attach(frame, item, { expanded: true });

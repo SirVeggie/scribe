@@ -91,6 +91,8 @@ export class PeerService extends EventEmitter {
   private readonly dialing = new Set<string>();
   private readonly retry = new Map<string, { timer?: NodeJS.Timeout; delay: number }>();
   private readonly errors = new Map<string, string>();
+  /** Each online device's Scribe VERSION, from its hello: the gateway serves our own UI files when it matches (#905). */
+  private readonly versions = new Map<string, string>();
   private readonly servers = new Map<string, tls.Server>();
   private offer: Offer | null = null;
   private server: http.Server | null = null;
@@ -265,6 +267,16 @@ export class PeerService extends EventEmitter {
   /** The link to a paired device, for streams of its own (WebSocket proxying in #905). */
   linkTo(id: string): Link | undefined {
     return this.links.get(id);
+  }
+
+  /** The Scribe VERSION a linked device runs, from its hello. */
+  versionOf(id: string): string | undefined {
+    return this.links.has(id) ? this.versions.get(id) : undefined;
+  }
+
+  /** A paired device's name, for the gateway's offline page. */
+  nameOf(id: string): string | undefined {
+    return this.peer(id)?.name;
   }
 
   // --- listening ---
@@ -489,6 +501,7 @@ export class PeerService extends EventEmitter {
     }
     this.learn(peer, hello);
     this.links.set(id, link);
+    if (typeof hello.version === "string") this.versions.set(id, hello.version.slice(0, 40));
     // Revocations made while this device was away reach it from whichever peer it meets first.
     if (Array.isArray(hello.revoked)) for (const fingerprint of hello.revoked.slice(0, 500)) this.onControl(id, link, { type: "revoked", fingerprint });
     this.errors.delete(id);

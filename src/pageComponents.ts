@@ -39,7 +39,8 @@ export class PageComponents {
     return { height: this.inspect(page, input).current.definition.height };
   }
 
-  resolve(page: string, input: Record<string, unknown>) {
+  /** `origin` names the component's host as the page's browser reaches it (another device's gateway, #905). */
+  resolve(page: string, input: Record<string, unknown>, origin: (host: string) => string = host => `http://${host}:${PORT}`, suffix?: string) {
     const { tab, spec, current } = this.inspect(page, input);
     const id = `pc_${randomBytes(8).toString("hex")}`;
     const local = componentJson(input.local ?? {});
@@ -50,7 +51,7 @@ export class PageComponents {
     if (this.mounts.size >= GLOBAL_COMPONENT_LIMIT) throw new Error(`Component limit reached (${GLOBAL_COMPONENT_LIMIT} active page instances). Close another page viewer.`);
     const mount: Mount = { id, page, revision: tab.revision, plugin: spec.plugin!, component: spec.component!, props: spec.props, local: local as Record<string, unknown>, hash: current.hash, token: randomBytes(16).toString("hex"), diagnostics: input.diagnostics === true, capture: input.capture === true, expires: this.now() + COMPONENT_LEASE_MS, at: Date.now(), count: 0, active: 0 };
     this.mounts.set(id, mount);
-    return { id, token: mount.token, height: current.definition.height, url: `http://${pageComponentHost(id)}:${PORT}/component/${id}?page=${encodeURIComponent(page)}` };
+    return { id, token: mount.token, height: current.definition.height, url: `${origin(pageComponentHost(id, suffix))}/component/${id}?page=${encodeURIComponent(page)}` };
   }
 
   current(page: string, id: string, allowed = true) {

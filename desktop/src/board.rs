@@ -20,6 +20,21 @@ pub fn base_url() -> String {
     format!("http://127.0.0.1:{}", port())
 }
 
+/// d-<12 hex>: another device's board, which the daemon's peer gateway (#905) serves on the board port.
+pub fn is_gateway_label(label: &str) -> bool {
+    label.strip_prefix("d-").is_some_and(|id| id.len() == 12 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+/// The board, or another device's board through the gateway: the origins that get the window's IPC.
+pub fn is_board_origin(url: &tauri::Url) -> bool {
+    let host = match url.host_str() {
+        Some("127.0.0.1") => true,
+        Some(host) => host.strip_suffix(".localhost").is_some_and(is_gateway_label),
+        None => false,
+    };
+    host && url.scheme() == "http" && url.port_or_known_default() == Some(port())
+}
+
 /// Whether something answers on the board port. Quick enough to ask on the UI's behalf.
 pub fn is_running() -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], port()));

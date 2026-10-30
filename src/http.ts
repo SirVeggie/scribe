@@ -77,7 +77,9 @@ import { appearanceRouter } from "./appearance.js";
 import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PeerService } from "./devices/peers.js";
 import { devicesRouter } from "./devices/routes.js";
-import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
+import { peerGateway } from "./devices/gateway.js";
+import { peerDeviceOf } from "./devices/link.js";
+import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
 import { browserViewHtml } from "./browserPage.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
@@ -188,7 +190,25 @@ export async function startHttp(): Promise<http.Server> {
 
   const app = express();
   app.disable("x-powered-by");
+  const peerHosts = peerHostsOverride();
+  const peers = new PeerService({ home: dataDir(), port: PEER_PORT, hosts: peerHosts === "off" ? [] : peerHosts, version: VERSION, log });
+  // Another device's UI through the peer link (#905), on d-<device>.localhost; its files from here when versions match.
+  const uiAssets = shellAssets(publicDir, {
+    "/vendor/marked.js": path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js"),
+    "/vendor/purify.js": path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js"),
+    "/vendor/highlight.js": () => highlightBundle ??= highlightScript(),
+    "/vendor/editor.js": editorBundle,
+    "/vendor/scribe-md.js": path.join(publicDir, "..", "templates", "scribe-md.js"),
+  });
+  const publicFiles = express.static(publicDir);
+  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)) });
+  app.use(gateway.http);
   app.use(contentOriginGate);
+  // These open a window on this device's own screen: not for someone viewing it from another device.
+  app.post(["/api/tabs/:id/file/open-location", "/api/agent/integrations/intellij/open", "/api/search/open-folder"], (req, res, next) => {
+    if (identify(req).device) res.status(409).json({ error: "This opens on the device's own screen, so it is not available from another device." });
+    else next();
+  });
   const pageComponents = new PageComponents(store, pluginService);
   app.use(componentSite(() => agentHost ?? undefined, publicDir, pageComponents));
   // A worktree's UI preview, on its chat's own origin (#703); other hosts go on.
@@ -203,13 +223,7 @@ export async function startHttp(): Promise<http.Server> {
     }
     res.status(403).json({ error: "Only the board UI can do this" });
   });
-  app.use(shellAssets(publicDir, {
-    "/vendor/marked.js": path.join(publicDir, "..", "node_modules", "marked", "lib", "marked.umd.js"),
-    "/vendor/purify.js": path.join(publicDir, "..", "node_modules", "dompurify", "dist", "purify.min.js"),
-    "/vendor/highlight.js": () => highlightBundle ??= highlightScript(),
-    "/vendor/editor.js": editorBundle,
-    "/vendor/scribe-md.js": path.join(publicDir, "..", "templates", "scribe-md.js"),
-  }));
+  app.use(uiAssets);
   agentHost = new AgentHost((event) => {
     broadcast(event);
     // Fresh model output replaces a claimed card's launch status promptly.
@@ -253,8 +267,6 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
-  const peerHosts = peerHostsOverride();
-  const peers = new PeerService({ home: dataDir(), port: PEER_PORT, hosts: peerHosts === "off" ? [] : peerHosts, version: VERSION, log });
   let devicesQueued = false;
   peers.on("change", () => {
     // Heartbeats and several links coming up at once fold into one refetch.
@@ -269,7 +281,7 @@ export async function startHttp(): Promise<http.Server> {
   const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
   app.use("/api/audio", audioRouter(audioService, pageAudio));
   app.use(noteAgentSession);
-  app.use(express.static(publicDir));
+  app.use(publicFiles);
   // pdf.js for PDF file pages: the library, its worker, and the fonts, CMaps and decoders it fetches.
   app.use("/vendor/pdfjs", (req, res, next) => (PDFJS_PATH.test(req.path) ? next() : res.status(404).end()),
     express.static(path.join(publicDir, "..", "node_modules", "pdfjs-dist"), { fallthrough: false, index: false }));
@@ -782,7 +794,7 @@ export async function startHttp(): Promise<http.Server> {
     if (viewerOf(req) === "agent" || framePageId(req) !== req.params.id) throw new Error("Components must name their host page.");
   };
   app.post("/api/tabs/:id/components", (req, res) => {
-    try { componentPage(req); res.json({ ok: true, ...pageComponents.resolve(req.params.id, req.body ?? {}) }); }
+    try { componentPage(req); res.json({ ok: true, ...pageComponents.resolve(req.params.id, req.body ?? {}, host => requestOrigin(req, host), requestSuffix(req)) }); }
     catch (error) { res.json({ ok: false, error: (error as Error).message }); }
   });
   app.post("/api/tabs/:id/components/validate", (req, res) => {
@@ -2546,10 +2558,13 @@ export async function startHttp(): Promise<http.Server> {
   // A page's script or a website must not read every page off the board's socket (#660).
   const wss = new WebSocketServer({ noServer: true, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers, req.socket) });
   // Two servers attached to one HTTP server abort each other's upgrades, so upgrades are routed by path.
+  // A socket another device's UI opened over the peer link (#905) is compressed: it crosses the network.
+  const linkWss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024 }, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers, req.socket) });
   server.on("upgrade", (req, socket, head) => {
+    if (gateway.upgrade(req, socket, head)) return;
     if (audioStream.handle(req, socket, head)) return;
     if (new URL(req.url || "/", "http://x").pathname !== "/ws") { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
-    wss.handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
+    (peerDeviceOf(req.socket) ? linkWss : wss).handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
   });
 
   wss.on("connection", (socket) => {

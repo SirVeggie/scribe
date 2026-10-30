@@ -649,7 +649,11 @@ ${POINTER_DRAG_JS}
 
   var LINK_MODES = { tab: true, peek: true, split: true };
   var embedded = window.parent !== window;
-  var boardOrigin = location.protocol + "//127.0.0.1" + (location.port ? ":" + location.port : "");
+  // Behind another device's gateway (#905) this page is <label>.d-<device>.localhost and its board d-<device>.localhost.
+  var gatewayBoard = (/^[^.]+\\.(d-[0-9a-f]{12}\\.localhost)$/.exec(location.hostname) || [])[1];
+  var hostSuffix = gatewayBoard ? "." + gatewayBoard : ".localhost";
+  var portSuffix = location.port ? ":" + location.port : "";
+  var boardOrigin = location.protocol + "//" + (gatewayBoard || "127.0.0.1") + portSuffix;
   var linkRequests = {};
   var linkSeq = 0;
 
@@ -698,7 +702,11 @@ ${POINTER_DRAG_JS}
     if (url.protocol !== location.protocol || url.port !== location.port) {
       return false;
     }
-    return url.hostname === "127.0.0.2" || /^(t-[0-9a-f]+|x[0-9a-f]+)\\.localhost$/.test(url.hostname);
+    if (url.hostname === (gatewayBoard ? "c" + hostSuffix : "127.0.0.2")) {
+      return true;
+    }
+    var host = url.hostname;
+    return host.slice(-hostSuffix.length) === hostSuffix && /^(t-[0-9a-f]+|x[0-9a-f]+)$/.test(host.slice(0, -hostSuffix.length));
   }
 
   /** A file on disk ("file:///C:/a.png"): the board opens it as a temporary page (#655). */
@@ -1867,7 +1875,7 @@ ${POINTER_DRAG_JS}
 
   // ---------- page plugins ----------
   var pluginListeners = [];
-  function pluginShellOrigin(origin) { return origin === boardOrigin || origin === location.protocol + "//localhost" + (location.port ? ":" + location.port : ""); }
+  function pluginShellOrigin(origin) { return origin === boardOrigin || (!gatewayBoard && origin === location.protocol + "//localhost" + portSuffix); }
   function plugin(id) {
     id = String(id);
     function request(suffix, body, retried) {
@@ -2007,6 +2015,8 @@ ${POINTER_DRAG_JS}
    * outlives the tab (#685).
    */
   var fileApi = {
+    /** Shown from another device (#905): its folders open on that device's screen, so openLocation is off. */
+    remote: Boolean(gatewayBoard),
     openLocation: function () {
       if (!hasGesture()) return Promise.resolve({ ok: false, error: "no_gesture" });
       return askBoard({ type: "scribe-file", op: "openLocation" }, 10000);

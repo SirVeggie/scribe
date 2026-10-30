@@ -114,7 +114,11 @@
         try { render(await request("DELETE", `/${encodeURIComponent(peer.id)}`)); } catch (err) { say(err.message); }
       });
       tip(text, `Fingerprint ${peer.fingerprint}`);
-      row.append(dot, text, revoke);
+      // Its own UI in this window, through this device's gateway (#905); from another device's view, the way back.
+      const home = peer.id === view.viewer;
+      const open = button(home ? "Back" : "Open", () => { location.href = `${location.protocol}//d-${peer.id}.localhost${location.port ? `:${location.port}` : ""}/`; });
+      open.disabled = !peer.online && !home;
+      row.append(dot, text, open, revoke);
       list.append(row);
     }
     if (showing === "offer") {

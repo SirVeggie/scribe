@@ -79,3 +79,37 @@ that implement it.
   the revoked device too. Each hello carries the revoked list, so a device that was away catches up.
 - `/api/devices` (user only; agents get 403), Settings → Devices, and `scribe pair <code>` / `scribe devices`
   (`npm run pair -- <code>`). Events: `devices` (refetch), `device_paired` (words + other devices to introduce).
+
+## Step 2 as built (#905)
+
+- `src/devices/gateway.ts`: the first middleware. A host `d-<id>.localhost` (the board) or
+  `<label>.d-<id>.localhost` (`t-`, `x`, `w-`, `w-it-`, `w-pc-`, and `c` for the shared content origin that
+  is 127.0.0.2 at home) is forwarded over the link to device `<id>`, streaming bodies both ways. WebSocket
+  upgrades on those hosts are piped as raw bytes over a link stream. `d-<this device>` redirects home, an
+  unknown device is 404, an offline one 502 with a link back.
+- Who may pass: only this device's browser. The local caller must be the user, send `Sec-Fetch-Site`, and
+  any `Origin` must be one of the same device's gateway origins on this port; sockets need that Origin.
+  Scribe's own headers (local token, thread token, client) are dropped. The agent browser blocks every
+  gateway host (`blockedBoardRequest`), since agents get no cross-device access in v1.
+- The remote side trusts the link's device (`Caller.device`), not the headers. It reads the suffix from the
+  forwarded Host rather than a separate header: only link requests carry gateway hosts, because the
+  local gateway takes them first. `config.ts` parsers accept the nested hosts; `contentOrigin.ts` has
+  `requestSuffix`, `requestOrigin`, `boardOrigin` and `shellOrigin` (the shell-origin check that also
+  takes the gateway board origin over a link), used by the redirects, the component CSP and URLs, and the
+  agent, audio, ml and devices routes.
+- The UI reads the suffix from its own location: `window.scribeHost` in `index.html` (app.js,
+  component-host.js, popout.js, integrations.js), and `gatewayBoard` in the page bridge.
+- Efficiency: when the peer's hello `version` equals ours, board files and the shared page files come from
+  this device's `public/`. Otherwise `?v=` (content-hashed, immutable) responses are cached in memory per
+  device and version (32 MB). Link sockets use a second `WebSocketServer` with permessage-deflate; local
+  ones stay uncompressed.
+- Not done: caching page HTML by revision. `/view` embeds the page's state and is `no-store`, so caching it
+  by revision would show stale state; it needs the state split out of the HTML first.
+- Path actions that open a window on the daemon's screen (Open file location, IntelliJ open, the search
+  pack's Open folder) answer 409 to link callers and are hidden in a remote view.
+- Settings → Devices: Open per online device (`location.href = d-<id>.localhost`), and Back for the device
+  you are viewing from (`viewer` in `/api/devices`).
+- Desktop: a capability for `http://d-*.localhost:<port>/*`, navigation to gateway boards allowed in the
+  main and pop-out windows, `child_window` takes the board `origin`, and `embeds.rs` knows the nested hosts.
+- Tests: `src/devices/gateway.test.ts` (three daemons on loopback) and `embeds.rs` cases. Run by hand: two
+  daemons through Keeper, B's full UI and a page loaded through A's gateway in Brave.

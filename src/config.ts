@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Daemon/UI protocol version. Bump with any API or event change; public/app.js BOARD_VERSION must match. */
-export const VERSION = "3.2.5";
+export const VERSION = "3.2.6";
 /** The install (checkout) this process runs from: the folder above src/ or dist/. */
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 export const HOST = "127.0.0.1";
@@ -80,37 +80,62 @@ export function shellOrigins(): string[] {
  */
 export const PAGE_HOST_SUFFIX = ".localhost";
 
+/**
+ * Another device's UI, through this daemon's gateway (#905): d-<device>.localhost is its board, and
+ * <label>.d-<device>.localhost its page, preview and component origins, and c.d-<device>.localhost its
+ * shared content origin (127.0.0.2 here). The remote daemon sees the same host names over the link and
+ * builds its URLs with that suffix instead of .localhost; its UI reads the suffix from its own location.
+ */
+const GATEWAY_HOST = /^(?:([^.]+)\.)?d-([0-9a-f]{12})\.localhost$/;
+
+export function gatewayHost(hostname: string): { device: string; label?: string } | undefined {
+  const match = GATEWAY_HOST.exec(hostname.toLowerCase());
+  return match ? { device: match[2], ...(match[1] ? { label: match[1] } : {}) } : undefined;
+}
+
+/** The page host suffix a host belongs to: .localhost, or .d-<device>.localhost behind the gateway. */
+export function hostSuffixOf(hostname: string): string {
+  const gateway = gatewayHost(hostname);
+  return gateway ? `.d-${gateway.device}${PAGE_HOST_SUFFIX}` : PAGE_HOST_SUFFIX;
+}
+
+/** The first label of a page-style host (<label>.localhost or <label>.d-<device>.localhost). */
+function hostLabel(hostname: string): string | undefined {
+  const host = hostname.toLowerCase();
+  if (GATEWAY_HOST.test(host)) return gatewayHost(host)?.label;
+  return host.endsWith(PAGE_HOST_SUFFIX) ? host.slice(0, -PAGE_HOST_SUFFIX.length) : undefined;
+}
+
 /** Keep the full item prefix: w-<hex> is already a worktree preview. */
-export function componentHost(itemId: string): string {
+export function componentHost(itemId: string, suffix = PAGE_HOST_SUFFIX): string {
   if (!/^it_[0-9a-f]{12}$/.test(itemId)) throw new Error("Invalid component item id");
-  return `w-it-${itemId.slice(3)}.localhost`;
+  return `w-it-${itemId.slice(3)}${suffix}`;
 }
 
 export function componentItemFromHost(hostname: string): string | undefined {
-  const match = /^w-it-([0-9a-f]{12})\.localhost$/.exec(hostname.toLowerCase());
+  const match = /^w-it-([0-9a-f]{12})$/.exec(hostLabel(hostname) ?? "");
   return match ? `it_${match[1]}` : undefined;
 }
 
-export function pageComponentHost(id: string): string {
+export function pageComponentHost(id: string, suffix = PAGE_HOST_SUFFIX): string {
   if (!/^pc_[0-9a-f]{16}$/.test(id)) throw new Error("Invalid page component id");
-  return `w-pc-${id.slice(3)}.localhost`;
+  return `w-pc-${id.slice(3)}${suffix}`;
 }
 
 export function pageComponentFromHost(hostname: string): string | undefined {
-  const match = /^w-pc-([0-9a-f]{16})\.localhost$/.exec(hostname.toLowerCase());
+  const match = /^w-pc-([0-9a-f]{16})$/.exec(hostLabel(hostname) ?? "");
   return match ? `pc_${match[1]}` : undefined;
 }
 
-export function pageHost(id: string): string {
+export function pageHost(id: string, suffix = PAGE_HOST_SUFFIX): string {
   const label = /^t_[0-9a-f]+$/.test(id) ? `t-${id.slice(2)}` : `x${Buffer.from(id, "utf8").toString("hex")}`;
-  return label + PAGE_HOST_SUFFIX;
+  return label + suffix;
 }
 
 /** The tab id a page host names, or undefined for any other host. */
 export function pageIdFromHost(hostname: string): string | undefined {
-  const host = hostname.toLowerCase();
-  if (!host.endsWith(PAGE_HOST_SUFFIX)) return undefined;
-  const label = host.slice(0, -PAGE_HOST_SUFFIX.length);
+  const label = hostLabel(hostname);
+  if (label === undefined) return undefined;
   if (/^t-[0-9a-f]{1,61}$/.test(label)) return `t_${label.slice(2)}`;
   if (/^x(?:[0-9a-f]{2}){1,31}$/.test(label)) return Buffer.from(label.slice(1), "hex").toString("utf8");
   return undefined;
@@ -121,16 +146,15 @@ export function pageIdFromHost(hostname: string): string | undefined {
  * th_ab12cd34. Its scripts are an agent's, so they must not run as the board; that origin gets the
  * worktree's files and the data-free shared ones, nothing else. Other ids use wx<hex of the id>.
  */
-export function previewHost(threadId: string): string {
+export function previewHost(threadId: string, suffix = PAGE_HOST_SUFFIX): string {
   const label = /^th_[0-9a-f]+$/.test(threadId) ? `w-${threadId.slice(3)}` : `wx${Buffer.from(threadId, "utf8").toString("hex")}`;
-  return label + PAGE_HOST_SUFFIX;
+  return label + suffix;
 }
 
 /** The chat a preview host names, or undefined for any other host. */
 export function previewThreadFromHost(hostname: string): string | undefined {
-  const host = hostname.toLowerCase();
-  if (!host.endsWith(PAGE_HOST_SUFFIX)) return undefined;
-  const label = host.slice(0, -PAGE_HOST_SUFFIX.length);
+  const label = hostLabel(hostname);
+  if (label === undefined) return undefined;
   if (/^w-[0-9a-f]{1,61}$/.test(label)) return `th_${label.slice(2)}`;
   if (/^wx(?:[0-9a-f]{2}){1,30}$/.test(label)) return Buffer.from(label.slice(2), "hex").toString("utf8");
   return undefined;

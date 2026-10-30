@@ -2,8 +2,8 @@ import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { authHeaders, type OpenAISource } from "../agent/openaiSources.js";
-import { shellOrigins } from "../config.js";
 import type { AudioResult } from "./types.js";
+import { shellOrigin } from "../contentOrigin.js";
 
 /** Live dictation (#832). The shell sends 16 kHz mono 16-bit PCM; the daemon answers with the text so far. */
 export const STREAM_RATE = 16000;
@@ -267,7 +267,7 @@ export function audioStreamServer(target: () => StreamTarget | AudioResult, usag
     handle(req: http.IncomingMessage, socket: Duplex, head: Buffer): boolean {
       if (new URL(req.url || "/", "http://x").pathname !== STREAM_PATH) return false;
       const origin = req.headers.origin;
-      if (!origin || !shellOrigins().includes(origin)) {
+      if (!origin || !shellOrigin(req, origin)) {
         socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return true;
       }
       wss.handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));

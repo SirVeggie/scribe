@@ -1,15 +1,19 @@
 import type express from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { componentItemFromHost, pageComponentFromHost, shellOrigins, pageOrigin } from "./config.js";
+import { PAGE_HOST_SUFFIX, componentItemFromHost, pageComponentFromHost, pageHost, shellOrigins, pageOrigin } from "./config.js";
+import { boardOrigin, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import type { PageComponents } from "./pageComponents.js";
 import type { AgentHost } from "./agent/host.js";
 import type { ComponentItem } from "./agent/componentTool.js";
 import { plugins } from "./plugins/current.js";
 import { PAGE_PROBLEM_JS, KIT_TONES } from "./pageProblems.js";
 
-export function componentCsp(page?: string): string {
-  const ancestors = page ? [...shellOrigins(), pageOrigin(page)] : shellOrigins();
+/** A component may sit in the board or its page; behind another device's gateway (#905), the origins it shows them on. */
+export function componentCsp(page?: string, req?: express.Request): string {
+  const suffix = req ? requestSuffix(req) : PAGE_HOST_SUFFIX;
+  const shell = suffix === PAGE_HOST_SUFFIX ? shellOrigins() : [boardOrigin(req!)];
+  const ancestors = page ? [...shell, suffix === PAGE_HOST_SUFFIX ? pageOrigin(page) : requestOrigin(req!, pageHost(page, suffix))] : shell;
   return `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts; frame-ancestors ${ancestors.join(" ")}`;
 }
 export const COMPONENT_CSP = componentCsp();
@@ -33,7 +37,7 @@ export function componentSite(host: () => AgentHost | undefined, publicDir: stri
       kit ??= { bridge: fs.readFileSync(path.join(publicDir, "component-bridge.js"), "utf8"), css: fs.readFileSync(path.join(publicDir, "kit.css"), "utf8"), js: fs.readFileSync(path.join(publicDir, "kit.js"), "utf8") };
       if (typeof req.query.page === "string" && pages) {
         const { mount, html } = pages.current(req.query.page, id, false);
-        const csp = componentCsp(mount.page);
+        const csp = componentCsp(mount.page, req);
         res.set({ "Content-Security-Policy": csp, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" }).type("html").send(componentDocument({ html, plugin: mount.plugin, props: mount.props, local: mount.local }, kit, mount.diagnostics ? { token: mount.token, capture: mount.capture, relay: true } : undefined));
         return;
       }
@@ -46,7 +50,7 @@ export function componentSite(host: () => AgentHost | undefined, publicDir: stri
         const current = plugins!.component(item.plugin, item.component!, item.props);
         renderItem = { ...item, html: current.html };
       }
-      res.set({ "Content-Security-Policy": COMPONENT_CSP, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" }).type("html").send(componentDocument(renderItem, kit, host()!.componentProblems.boot(id, 0)));
+      res.set({ "Content-Security-Policy": componentCsp(undefined, req), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" }).type("html").send(componentDocument(renderItem, kit, host()!.componentProblems.boot(id, 0)));
     } catch { res.status(404).type("text").send("Component not found."); }
   };
 }

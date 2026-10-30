@@ -857,6 +857,7 @@
   }
   $("save").addEventListener("click", function () { save(false); });
   $("saveAs").addEventListener("click", saveAs);
+  $("openLocation").hidden = Boolean(scribe.file.remote);
   $("openLocation").addEventListener("click", function () {
     scribe.file.openLocation().then(function (res) {
       setError(res && res.ok ? "" : (res && res.error) || "Could not open file location");

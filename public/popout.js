@@ -59,7 +59,8 @@ window.scribePopout = (() => {
   function open(tab, at) {
     if (invoke) {
       children.set(tab.id, null);
-      invoke("child_window", { action: "open", id: tab.id, title: tab.title || "Scribe", x: at?.x ?? null, y: at?.y ?? null }).catch((err) => {
+      // From another device's view (#905) the window opens that device's board, through the gateway.
+      invoke("child_window", { action: "open", id: tab.id, title: tab.title || "Scribe", x: at?.x ?? null, y: at?.y ?? null, origin: window.scribeHost?.remote ? location.origin : null }).catch((err) => {
         console.error(err);
         forget(tab.id);
       });

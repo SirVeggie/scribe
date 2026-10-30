@@ -15,6 +15,11 @@
   <script src="/api/appearance/bootstrap.js"></script>
   <script src="./appearance.js"></script>
   <script>
+    // Another device's UI, shown through this device's gateway (#905): its board is d-<device>.localhost
+    // and its pages <label>.d-<device>.localhost, where this device's own use <label>.localhost.
+    window.scribeHost = /^d-[0-9a-f]{12}\.localhost$/.test(location.hostname)
+      ? { remote: true, suffix: "." + location.hostname }
+      : { remote: false, suffix: ".localhost" };
     (() => {
       // Settings saved before the rename from Agent Board keep working.
       for (const key of Object.keys(localStorage)) {

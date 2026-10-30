@@ -1,7 +1,7 @@
 import express, { Router } from "express";
 import { identify } from "../callers.js";
-import { shellOrigins } from "../config.js";
 import type { PeerService } from "./peers.js";
+import { shellOrigin } from "../contentOrigin.js";
 
 /**
  * /api/devices for Settings → Devices and `scribe pair` (#904): this device, the paired ones, Add
@@ -17,7 +17,7 @@ export function devicesRouter(peers: PeerService): Router {
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
       const origin = req.get("origin");
-      if (origin && !shellOrigins().includes(origin)) {
+      if (origin && !shellOrigin(req, origin)) {
         res.status(403).json({ error: "Devices can only be changed from the board" });
         return;
       }
@@ -28,14 +28,16 @@ export function devicesRouter(peers: PeerService): Router {
     }
     next();
   });
+  // viewer: the device this UI is being viewed from, through its gateway (#905); unset here.
+  const view = (req: express.Request) => ({ ...peers.view(), viewer: identify(req).device ?? null });
   const guarded = (fn: (req: express.Request) => unknown) => async (req: express.Request, res: express.Response) => {
     try {
-      res.json((await fn(req)) ?? peers.view());
+      res.json((await fn(req)) ?? view(req));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }
   };
-  router.get("/", (_req, res) => res.json(peers.view()));
+  router.get("/", (req, res) => res.json(view(req)));
   router.put("/self", guarded((req) => peers.rename(req.body?.name)));
   router.post("/offer", guarded(async () => ({ offer: await peers.createOffer() })));
   router.delete("/offer", guarded(() => peers.cancelOffer()));

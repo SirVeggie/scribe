@@ -233,18 +233,30 @@ fn is_component(url: &str, board_port: u16) -> bool {
     let Ok(url) = tauri::Url::parse(url) else {
         return false;
     };
-    url.port_or_known_default() == Some(board_port)
-        && url.host_str().and_then(|host| host.strip_suffix(".localhost")).is_some_and(is_component_label)
+    url.port_or_known_default() == Some(board_port) && url.host_str().and_then(page_label).is_some_and(is_component_label)
 }
 
-/// The board and its tab pages (127.0.0.1, 127.0.0.2 and each page's own <label>.localhost, on the board port).
+/// The first label of <label>.localhost, or of <label>.d-<id>.localhost for another device's page
+/// through the peer gateway (#905).
+fn page_label(host: &str) -> Option<&str> {
+    let rest = host.strip_suffix(".localhost")?;
+    match rest.split_once('.') {
+        Some((label, device)) if crate::board::is_gateway_label(device) => Some(label),
+        Some(_) => None,
+        None => Some(rest),
+    }
+}
+
+/// The board and its tab pages (127.0.0.1, 127.0.0.2 and each page's own <label>.localhost, on the board
+/// port), and another device's through the gateway (d-<id>.localhost, c.d-<id>.localhost, <label>.d-<id>.localhost).
 fn is_board_page(url: &str, board_port: u16) -> bool {
     let Ok(url) = tauri::Url::parse(url) else {
         return false;
     };
     let board_host = match url.host_str() {
         Some("127.0.0.1" | "127.0.0.2") => true,
-        Some(host) => host.strip_suffix(".localhost").is_some_and(is_page_label),
+        Some(host) if host.strip_prefix("c.").unwrap_or(host).strip_suffix(".localhost").is_some_and(crate::board::is_gateway_label) => true,
+        Some(host) => page_label(host).is_some_and(is_page_label),
         None => false,
     };
     board_host && url.port_or_known_default() == Some(board_port)
@@ -405,6 +417,13 @@ mod tests {
         assert!(!is_board_page("http://t-ab12cd34.localhost:8188/", 4747));
         assert!(!is_board_page("http://app.localhost:4747/", 4747));
         assert!(!is_board_page("http://127.0.0.1:8188/", 4747));
+        assert!(is_board_page("http://d-0123456789ab.localhost:4747/", 4747));
+        assert!(is_board_page("http://c.d-0123456789ab.localhost:4747/blob/x", 4747));
+        assert!(is_board_page("http://t-ab12cd34.d-0123456789ab.localhost:4747/view/t_ab12cd34", 4747));
+        assert!(is_board_page("http://w-it-012345abcdef.d-0123456789ab.localhost:4747/component/it_012345abcdef", 4747));
+        assert!(!is_board_page("http://t-ab12cd34.d-xyz.localhost:4747/", 4747));
+        assert!(!is_board_page("http://c.localhost:4747/", 4747));
+        assert!(!is_board_page("http://t-ab12cd34.d-0123456789ab.localhost:8188/", 4747));
         assert!(!is_board_page("https://github.com/", 4747));
         assert!(is_board_page("http://w-pc-0123456789abcdef.localhost:4747/component/pc_0123456789abcdef?page=t_1", 4747));
         assert!(!is_board_page("http://w-pc-012345abcdef.localhost:4747/", 4747));

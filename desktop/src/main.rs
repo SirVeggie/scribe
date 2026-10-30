@@ -118,9 +118,10 @@ async fn child_window(
     title: Option<String>,
     x: Option<f64>,
     y: Option<f64>,
+    origin: Option<String>,
 ) -> Result<(), String> {
     match action.as_str() {
-        "open" => open_child(&app, &id, title.as_deref().unwrap_or("Scribe"), x.zip(y)).map_err(|err| err.to_string()),
+        "open" => open_child(&app, &id, title.as_deref().unwrap_or("Scribe"), x.zip(y), origin.as_deref()).map_err(|err| err.to_string()),
         "focus" => {
             if let Some(window) = app.get_webview_window(&child_label(&id)) {
                 raise(&window);
@@ -153,13 +154,19 @@ fn raise(window: &WebviewWindow) {
 }
 
 /// The board again, told to show one page: its own title bar, no tab strip, at `at` on screen.
-fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>) -> Result<(), Box<dyn std::error::Error>> {
+/// `origin` is the board it came from: this device's, or another device's through the gateway (#905).
+fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>, origin: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let label = child_label(id);
     if let Some(window) = app.get_webview_window(&label) {
         raise(&window);
         return Ok(());
     }
-    let mut url: Url = format!("{}/", board::base_url()).parse()?;
+    let base = match origin.map(|origin| format!("{origin}/").parse::<Url>()) {
+        Some(Ok(url)) if board::is_board_origin(&url) => url.origin().ascii_serialization(),
+        Some(_) => return Err("Not a board origin".into()),
+        None => board::base_url(),
+    };
+    let mut url: Url = format!("{base}/").parse()?;
     url.query_pairs_mut().append_pair("popout", id);
     let board_origin = url.origin();
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
@@ -175,7 +182,7 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>) ->
             NewWindowResponse::Deny
         })
         .on_navigation(move |url| {
-            if url.origin() == board_origin {
+            if url.origin() == board_origin || board::is_board_origin(url) {
                 return true;
             }
             board::open_external(url.as_str());
@@ -272,6 +279,9 @@ fn main() {
             app.add_capability(
                 CapabilityBuilder::new("scribe")
                     .remote(format!("{base}/*"))
+                    // Another device's board through the daemon's peer gateway (#905); its pages are on
+                    // <label>.d-<id>.localhost and get no IPC.
+                    .remote(format!("http://d-*.localhost:{}/*", board::port()))
                     .window(MAIN)
                     .window(format!("{CHILD_PREFIX}*"))
                     .permission("core:window:allow-start-dragging")
@@ -313,7 +323,7 @@ fn main() {
                     NewWindowResponse::Deny
                 })
                 .on_navigation(move |url| {
-                    if url.origin() == board_origin || url.origin() == offline_origin {
+                    if url.origin() == board_origin || url.origin() == offline_origin || board::is_board_origin(url) {
                         return true;
                     }
                     board::open_external(url.as_str());

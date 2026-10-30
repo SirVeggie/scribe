@@ -1,9 +1,51 @@
 import type express from "express";
-import { CONTENT_HOST, baseUrl, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost, pageComponentFromHost } from "./config.js";
+import { CONTENT_HOST, PAGE_HOST_SUFFIX, baseUrl, gatewayHost, hostSuffixOf, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost, pageComponentFromHost, shellOrigins } from "./config.js";
+import { peerDeviceOf } from "./devices/link.js";
 
 /** A tab page's origin (t-ab12cd34.localhost) or the shared content origin (127.0.0.2): never the board's. */
 export function isContentHost(req: express.Request): boolean {
-  return req.hostname === CONTENT_HOST || framePageId(req) !== undefined;
+  return req.hostname === CONTENT_HOST || gatewayHost(req.hostname)?.label === "c" || framePageId(req) !== undefined;
+}
+
+/**
+ * The page host suffix the request's browser uses: .localhost, or .d-<device>.localhost when this
+ * daemon's UI is shown on another device through its gateway (#905). Only a peer link carries those
+ * hosts here; the local gateway takes them before they reach this daemon's own routes.
+ */
+export function requestSuffix(req: express.Request): string {
+  return peerDeviceOf(req.socket) ? hostSuffixOf(req.hostname) : PAGE_HOST_SUFFIX;
+}
+
+/** The port the browser reached the board on (the viewing device's, behind the gateway). */
+export function requestPort(req: { get(name: string): string | undefined }): string {
+  return /:(\d+)$/.exec(req.get("host") ?? "")?.[1] ?? "";
+}
+
+/** http://<host>:<port> on the port the request came in on. */
+export function requestOrigin(req: express.Request, host: string): string {
+  const port = requestPort(req);
+  return `http://${host}${port ? `:${port}` : ""}`;
+}
+
+/** The board's origin as the request's browser knows it. */
+export function boardOrigin(req: express.Request): string {
+  const suffix = requestSuffix(req);
+  return suffix === PAGE_HOST_SUFFIX ? baseUrl() : requestOrigin(req, suffix.slice(1));
+}
+
+/**
+ * Whether an Origin header is the board shell's: 127.0.0.1 or localhost here, or, for a request over
+ * a peer link, the gateway origin the viewing device shows this board on (d-<device>.localhost).
+ */
+export function shellOrigin(req: { socket?: object; headers: { host?: string } }, origin: string): boolean {
+  if (shellOrigins().includes(origin)) return true;
+  if (!peerDeviceOf(req.socket)) return false;
+  try {
+    const url = new URL(origin);
+    return isGatewayBoard(url.hostname) && url.host === req.headers.host;
+  } catch {
+    return false;
+  }
 }
 
 /** The tab whose own origin the request came in on (#660), or undefined. */
@@ -31,7 +73,7 @@ const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify|editor|scribe-md)\.js$/
 export const PDFJS_PATH = /^\/(build\/pdf(\.worker)?\.min\.mjs|(cmaps|standard_fonts|wasm)\/[\w.-]+)$/;
 
 /** Data-free files every page may load: the injected tooltip script, the page kit, and the file viewer's libraries. */
-function sharedFile(req: express.Request): boolean {
+export function sharedFile(req: express.Request): boolean {
   if (req.method !== "GET") return false;
   if (
     req.path === "/tooltip.js" ||
@@ -87,9 +129,8 @@ function crossOrigin(req: express.Request): boolean {
 
 /** The same path on another host, keeping the port and query the request came with. */
 function hostRedirect(req: express.Request, host: string, path: string): string {
-  const port = /:(\d+)$/.exec(req.get("host") ?? "")?.[1];
   const query = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
-  return `http://${host}${port ? `:${port}` : ""}${path}${query}`;
+  return `${requestOrigin(req, host)}${path}${query}`;
 }
 
 const PREVIEW_PATH = /^\/preview\/([^/]+)(\/.*)?$/;
@@ -125,7 +166,7 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
       }
       // A page is only served on its own origin, so another page's script cannot load it into its own.
       if (page === id) next();
-      else res.redirect(302, hostRedirect(req, pageHost(id), req.path));
+      else res.redirect(302, hostRedirect(req, pageHost(id, requestSuffix(req)), req.path));
       return;
     }
     // Page routes answer only on a page's own origin, and only to that page's own script. Which
@@ -139,14 +180,15 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
       return;
     }
     if (req.method === "GET" && (req.path === "/" || req.path === "/index.html")) {
-      res.redirect(302, `${baseUrl()}/`);
+      res.redirect(302, `${boardOrigin(req)}/`);
       return;
     }
     res.status(403).json({ error: "This origin only serves tab pages" });
     return;
   }
-  if (!BOARD_HOSTS.has(req.hostname)) {
-    // Another name for loopback is a rebound DNS name: a website reaching for the board.
+  if (!BOARD_HOSTS.has(req.hostname) && !(peerDeviceOf(req.socket) && isGatewayBoard(req.hostname))) {
+    // Another name for loopback is a rebound DNS name: a website reaching for the board. Over a peer
+    // link, the viewing device's gateway name for this board (d-<device>.localhost) is the board too.
     res.status(403).type("text").send("Unknown host.");
     return;
   }
@@ -169,7 +211,7 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
       res.status(404).type("text").send("Not found.");
       return;
     }
-    res.redirect(302, hostRedirect(req, previewHost(thread), preview[2] ?? "/"));
+    res.redirect(302, hostRedirect(req, previewHost(thread, requestSuffix(req)), preview[2] ?? "/"));
     return;
   }
   if (req.path === "/view" || req.path.startsWith("/view/") || req.path.startsWith("/blob/")) {
@@ -180,3 +222,8 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
 }
 
 const BOARD_HOSTS = new Set(["127.0.0.1", "localhost"]);
+
+function isGatewayBoard(hostname: string): boolean {
+  const gateway = gatewayHost(hostname);
+  return Boolean(gateway && !gateway.label);
+}

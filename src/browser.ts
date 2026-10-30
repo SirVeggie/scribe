@@ -1,7 +1,7 @@
 import type { Browser, BrowserContext, CDPSession, Frame, Locator, Page } from "playwright-core";
 import { BROWSER_ACTIONS, type BrowserAction } from "./browserActions.js";
 import { launchChromium } from "./chromium.js";
-import { PORT } from "./config.js";
+import { PORT, gatewayHost } from "./config.js";
 import { embedUrlFromHtml } from "./embed.js";
 import { log } from "./log.js";
 import { pngOrJpeg, screenshotUrl, shotOptions } from "./screenshot.js";
@@ -174,7 +174,9 @@ export function blockedBoardRequest(raw: string, port: number = PORT): boolean {
   if (!allowedBrowserUrl(raw) || url.protocol === "about:" || url.protocol === "data:") {
     return false;
   }
-  return Number(url.port || (url.protocol === "https:" ? 443 : 80)) === port && FILE_OPEN_ROUTES.test(url.pathname);
+  if (Number(url.port || (url.protocol === "https:" ? 443 : 80)) !== port) return false;
+  // Another device's UI through the gateway (#905): agents get no access to other devices.
+  return FILE_OPEN_ROUTES.test(url.pathname) || gatewayHost(url.hostname) !== undefined;
 }
 
 /** A URL the agent passed, or a Scribe page key or id, as the URL to load. */

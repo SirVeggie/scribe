@@ -1,16 +1,16 @@
 import express, { Router } from "express";
 import fs from "node:fs/promises";
 import { identify } from "../callers.js";
-import { shellOrigins } from "../config.js";
 import { AudioService, MAX_AUDIO_BYTES } from "./service.js";
 import type { PageAudio } from "./page.js";
+import { shellOrigin } from "../contentOrigin.js";
 
 /** Shell-only uploads; page calls also pass the permission and rate-limit gate. */
 export function audioRouter(service: AudioService, pagePermission?: PageAudio): Router {
   const router = Router();
   router.use((req, res, next) => {
     const origin = req.get("origin");
-    if (origin && !shellOrigins().includes(origin)) { res.status(403).json({ ok: false, error: "permission", message: "Audio requests must come from the board." }); return; }
+    if (origin && !shellOrigin(req, origin)) { res.status(403).json({ ok: false, error: "permission", message: "Audio requests must come from the board." }); return; }
     if (req.method !== "GET" && req.method !== "HEAD" && !req.is(req.path === "/transcriptions" ? "audio/*" : "application/json")) {
       res.status(415).json({ ok: false, error: "invalid_audio", message: "Send audio bytes for transcription, JSON for settings and tests." }); return;
     }

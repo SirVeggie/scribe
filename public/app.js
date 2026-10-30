@@ -8,6 +8,9 @@
   const refreshOverlay = document.getElementById("refresh-overlay");
   const refreshOverlayToggle = document.getElementById("refresh-overlay-toggle");
   const REFRESH_OVERLAY_KEY = "scribe.refreshOverlay";
+  /** .localhost, or .d-<device>.localhost when this is another device's UI through the gateway (#905). */
+  const HOST_SUFFIX = window.scribeHost?.suffix ?? ".localhost";
+  const REMOTE_VIEW = Boolean(window.scribeHost?.remote);
   let refreshOverlayTimer = setTimeout(() => dismissRefreshOverlay(), 5000);
 
   function dismissRefreshOverlay(fade = false) {
@@ -119,7 +122,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.2.5";
+  const BOARD_VERSION = "3.2.6";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -1222,14 +1225,14 @@
   /** Shared, data-free files and blobs; pages themselves run on pageOrigin. */
   function contentOrigin() {
     const port = location.port ? `:${location.port}` : "";
-    return `${location.protocol}//127.0.0.2${port}`;
+    return `${location.protocol}//${REMOTE_VIEW ? `c${HOST_SUFFIX}` : "127.0.0.2"}${port}`;
   }
 
   /** Each page runs on an origin of its own (#660), as src/config.ts pageHost names it. */
   function pageOrigin(id) {
     const port = location.port ? `:${location.port}` : "";
     const label = /^t_[0-9a-f]+$/.test(id) ? `t-${id.slice(2)}` : `x${Array.from(new TextEncoder().encode(id), (b) => b.toString(16).padStart(2, "0")).join("")}`;
-    return `${location.protocol}//${label}.localhost${port}`;
+    return `${location.protocol}//${label}${HOST_SUFFIX}${port}`;
   }
 
   /** Whether a URL's origin is one of the board's page origins or the shared content origin. */
@@ -1239,7 +1242,7 @@
     }
     try {
       const url = new URL(origin);
-      return url.protocol === location.protocol && url.port === location.port && /^(t-[0-9a-f]+|x[0-9a-f]+)\.localhost$/.test(url.hostname);
+      return url.protocol === location.protocol && url.port === location.port && url.hostname.endsWith(HOST_SUFFIX) && /^(t-[0-9a-f]+|x[0-9a-f]+)$/.test(url.hostname.slice(0, -HOST_SUFFIX.length));
     } catch {
       return false;
     }
@@ -1607,6 +1610,8 @@
     try { renderSearchSettings(await searchSettingsRequest("settings", { enabled })); }
     catch (err) { searchPackStatus.textContent = err.message; searchSwitch.disabled = false; }
   });
+  // It opens a folder window on the device that runs Scribe (#905).
+  document.getElementById("search-open-folder").hidden = REMOTE_VIEW;
   document.getElementById("search-open-folder").addEventListener("click", async () => {
     try { await searchSettingsRequest("open-folder", {}); }
     catch (err) { searchPackStatus.textContent = err.message; }
@@ -3145,7 +3150,7 @@
     // Scribe's own pages run the key script; the desktop app catches shortcuts natively in other frames.
     el.toggleAttribute("data-scribe-page", !tab.embedUrl);
     const url = viewUrl(tab);
-    if (/^https?:\/\/w-it-[0-9a-f]{12}\.localhost(?::\d+)?\/component\//.test(url)) {
+    if (/^https?:\/\/w-it-[0-9a-f]{12}(?:\.d-[0-9a-f]{12})?\.localhost(?::\d+)?\/component\//.test(url)) {
       el.sandbox = "allow-scripts";
       el.dataset.src = url;
       void window.ScribeComponents.attachUrl(el, url).catch(error => showNotice(error.message));
