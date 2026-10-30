@@ -150,7 +150,7 @@ status) and a Bash tool call. Expected needs, to confirm:
 2. **srt-win stays experimental**, as decided. Beyond Schannel, its loopback model blocks Scribe's MCP
    unless the whole machine's sandboxed processes get all of loopback. Decide once srt-win has been run.
 3. **Fix now, independent of engines:** sandboxed commands can read `local-token` and reach the daemon
-   (card filed).
+   (#916).
 
 ## Settings setup row (proposal)
 
