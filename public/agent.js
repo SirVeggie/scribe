@@ -2884,7 +2884,7 @@
     const hit = vcsCache.get(cwd);
     if (hit && Date.now() - hit.at < 60000) return hit.value;
     const entry = { at: Date.now(), known: hit?.known, value: null };
-    entry.value = api("GET", `/vcs?cwd=${encodeURIComponent(cwd)}`).then((r) => r.vcs || null, () => null).then((vcs) => (entry.known = vcs));
+    entry.value = api("GET", `/vcs?cwd=${encodeURIComponent(cwd)}`).then((r) => r?.vcs || null, () => null).then((vcs) => (entry.known = vcs));
     vcsCache.set(cwd, entry);
     return entry.value;
   }
@@ -9588,7 +9588,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       .slice(0, FLYOUT_RECENT_CAP);
     return {
       active: all.filter((t) => t.status === "running"),
-      waiting: all.filter((t) => waitingAsk(t)),
+      // A parent counts while its helper waits: activeThreads() gives it the helper's status, not its ask.
+      waiting: all.filter((t) => t.status === "waiting" || waitingAsk(t)),
       recent,
     };
   }

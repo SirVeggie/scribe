@@ -29,6 +29,7 @@ function slashView(text: string, cursor = text.length, commands: any[] = []) {
   const view = vm.runInNewContext(`${between("  function slashAt(", "  function chipKey(")}\nnew (class {${between("    async updatePicker()", "    showMentions(")}})()`, {
     S: { commands: new Map([["test", commands]]) },
     LOCAL_SLASH: [{ name: "here" }, { name: "clear" }],
+    loadScribeSkills: async () => [],
     activeTab: () => null, pageActions: () => [{ id: "summarise", label: "Summarise" }],
     mentionAt: () => null,
     button: (_label: string, _className: string, click: () => void) => ({ click, append() {} }),
@@ -102,7 +103,7 @@ test("a delayed command response cannot reopen a dismissed picker or use an old 
     const response = new Promise((done) => { resolve = done; });
     // Use the real method with a deferred provider request.
     view.showSlash = vm.runInNewContext(`({${between("    async showSlash(", "    showMentions(")}}).showSlash`, {
-      slashAt, S: { commands: new Map() }, api: () => response,
+      slashAt, S: { commands: new Map() }, api: () => response, loadScribeSkills: async () => [],
     });
     view.threadId = "thread";
     const pending = view.updatePicker();
@@ -268,6 +269,7 @@ test("the floating thread menu explicitly moves the composer", () => {
   const dock = vm.runInNewContext(`({${menu}})`, {
     S: { threads: new Map() }, activeTab: () => ({ id: "page" }),
     hiddenWorkspaceKeys: () => new Set(), setDockPick() {}, spaceFilterId: () => null, dockCompact: () => false,
+    recentOn: () => false, recentThreads: () => [], clearTimeout() {},
     openMenu: (_anchor: any, entries: any[]) => { items = entries; },
   });
   dock.view = { startDraft: (...values: any[]) => { args = values; } };

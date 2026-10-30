@@ -213,7 +213,7 @@ test("helper cards open in place, preserve the parent, and attribute approvals",
     await page.locator(".ag-helper-approval").getByRole("button", { name: "Approve one retry", exact: true }).click();
     assert.deepEqual(approvals, ["helper-approval"]);
     assert.deepEqual(approvalDecisions, [{ optionId: "approveRetry" }]);
-    const active = await page.evaluate(() => (window as any).helperTest.flyoutSnapshot("button").rows.map((r: any) => [r.thread.id, r.thread.status]));
+    const active = await page.evaluate(() => (window as any).helperTest.flyoutSnapshot().waiting.map((t: any) => [t.id, t.status]));
     assert.deepEqual(active, [["parent", "waiting"]]);
     if (process.env.SCRIBE_HELPER_SCREENSHOT) await page.screenshot({ path: process.env.SCRIBE_HELPER_SCREENSHOT });
     await page.evaluate(() => {

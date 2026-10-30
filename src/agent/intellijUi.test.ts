@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { launchChromium } from "../chromium.js";
+import { loadShellScripts } from "../testSupport/shell.js";
 
 const source = (name: string) => fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8");
 
@@ -29,8 +30,8 @@ test("IntelliJ settings persist, and diff and code reference actions show for pr
     await page.goto("http://intellij.test/");
     await page.addStyleTag({ content: source("app.css") });
     await page.addStyleTag({ content: source("agent.css") });
-    await page.addScriptTag({ content: source("integrations.js") });
-    await page.addScriptTag({ content: source("agent-render.js") });
+    // Chat markdown renders through the shared renderer, so code references need marked and scribe-md.
+    await loadShellScripts(page, { scripts: ["integrations.js", "/vendor/marked.js", "/vendor/purify.js", "/vendor/scribe-md.js", "agent-render.js"] });
     await page.evaluate(async () => {
       const w = window as any;
       document.body.replaceChildren(...w.scribeIntegrations.sections);
@@ -80,7 +81,7 @@ test("IntelliJ settings persist, and diff and code reference actions show for pr
       { threadId: "t1", workspace: true, path: "src/ref.ts", mode: "file", line: 12, column: 1 },
     ]);
     await page.getByRole("switch", { name: "IntelliJ IDEA" }).click();
-    await page.locator(".ag-intellij-actions").waitFor({ state: "hidden" });
+    await page.waitForFunction(() => [...document.querySelectorAll(".ag-intellij-actions")].every(node => (node as HTMLElement).hidden));
     assert.equal(settings.enabled, false);
   } finally { await browser.close(); }
 });
