@@ -392,11 +392,23 @@
   forms.forEach(function (form, i) {
     var key = formKey(form, i);
     restoreDraft(form, key);
-    form.addEventListener("input", function () { saveDraft(form, key); });
-    form.addEventListener("change", function () { saveDraft(form, key); });
+    // In flight, and after a send until the answers change, so a double click or Enter
+    // doesn't post the same answers twice.
+    var pending = false;
+    var sent = false;
+    function edited() {
+      saveDraft(form, key);
+      if (!sent || pending || replyClosed()) return;
+      sent = false;
+      var submit = form.querySelector('button[type="submit"], button:not([type])');
+      if (submit) submit.disabled = false;
+    }
+    form.addEventListener("input", edited);
+    form.addEventListener("change", edited);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      if (replyClosed()) return;
+      if (replyClosed() || pending || sent) return;
+      pending = true;
       var answers = answersOf(form);
       var summary = summaryOf(answers);
       var submit = event.submitter || form.querySelector('button[type="submit"], button:not([type])');
@@ -406,6 +418,7 @@
         if (result && result.ok) {
           var target = result.target && result.target.title;
           show(form, target ? "Sent to " + target : "Sent", "ok");
+          sent = true;
           return;
         }
         var error = (result && result.error) || "unknown error";
@@ -413,13 +426,15 @@
           // A page without replyTo: the agent waits on this signal instead.
           scribe.signal("submitted", { form: key, answers: answers, summary: summary });
           show(form, "Sent", "ok");
+          sent = true;
           return;
         }
         show(form, "Not sent: " + error, "error");
       }, function (err) {
         show(form, "Not sent: " + ((err && err.message) || err), "error");
       }).then(function () {
-        if (submit && !replyClosed()) submit.disabled = false;
+        pending = false;
+        if (submit && !replyClosed() && !sent) submit.disabled = false;
       });
     });
   });
