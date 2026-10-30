@@ -10,6 +10,7 @@ import { Link, PROTOCOL, type Control } from "./link.js";
 import { MAX_ATTEMPTS, decodeCode, makeOffer, pairProof, pairWords, sameProof, type Offer } from "./pairing.js";
 import { qrSvg } from "./qr.js";
 import { rememberName, type NamedDevice } from "./references.js";
+import type { AgentGrant } from "./agentAccess.js";
 
 /**
  * Paired devices and the links to them (#904). Each device listens for peers with TLS on a port of its
@@ -31,6 +32,8 @@ export type Peer = {
   lastSeen?: number;
   /** Names it had before, newest first, so links written with them still resolve (#908). */
   formerNames?: string[];
+  /** What this device lets that device's agents do here (#911). Off when unset; pairing again clears it. */
+  agents?: AgentGrant;
 };
 
 type Saved = { peers: Peer[]; revoked: string[] };
@@ -44,6 +47,7 @@ export type PeerView = {
   lastSeen?: number;
   pairedAt: number;
   error?: string;
+  agents: AgentGrant;
 };
 
 export type DevicesView = {
@@ -150,6 +154,7 @@ export class PeerService extends EventEmitter {
           ...(link?.rtt !== undefined ? { rtt: link.rtt } : {}),
           ...(peer.lastSeen ? { lastSeen: link ? Date.now() : peer.lastSeen } : link ? { lastSeen: Date.now() } : {}),
           pairedAt: peer.pairedAt,
+          agents: this.agentGrant(peer.id),
           ...(!link && this.errors.get(peer.id) ? { error: this.errors.get(peer.id) } : {}),
         };
       }),
@@ -164,6 +169,25 @@ export class PeerService extends EventEmitter {
     this.identity.name = name;
     if (formerNames) this.identity.formerNames = formerNames;
     for (const link of this.links.values()) link.control({ type: "update", name, hosts: this.hosts(), port: this.options.port });
+    this.changed();
+  }
+
+  /** What a paired device's agents may do on this device (#911); nothing for an unknown one. */
+  agentGrant(id: string): AgentGrant {
+    const grant = this.peer(id)?.agents;
+    return { read: grant?.read === true, write: grant?.write === true, run: grant?.run === true };
+  }
+
+  /** Settings → Devices: turn agent access for a paired device on or off, one switch at a time. */
+  setAgentGrant(id: string, value: unknown): void {
+    const peer = this.peer(id);
+    if (!peer) throw new Error("No such device.");
+    const next: AgentGrant = { ...this.agentGrant(id) };
+    const body = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    for (const key of ["read", "write", "run"] as const) if (typeof body[key] === "boolean") next[key] = body[key] as boolean;
+    peer.agents = Object.fromEntries(Object.entries(next).filter(([, on]) => on)) as AgentGrant;
+    if (!Object.keys(peer.agents).length) delete peer.agents;
+    this.persist();
     this.changed();
   }
 

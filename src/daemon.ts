@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -14,6 +15,7 @@ export function setAgentLabel(label: string): void {
   agentLabel = label.replace(/[^\x20-\x7e]/g, "").slice(0, 60);
 }
 import { log } from "./log.js";
+import { DEVICE_HEADER } from "./devices/agentAccess.js";
 
 /** The data folder's local token (src/callers.ts), read each time: the daemon makes it when it starts. */
 function localHeader(): Record<string, string> {
@@ -108,6 +110,13 @@ async function stopDaemon(): Promise<void> {
 }
 
 /** node:http rather than fetch: fetch gives up on a response after 5 minutes, which would cut page_wait short. */
+/** The paired device a tool call is for (#911): every api() call inside onDevice names it. */
+const deviceScope = new AsyncLocalStorage<string>();
+
+export function onDevice<T>(device: string, run: () => T): T {
+  return deviceScope.run(device, run);
+}
+
 export async function api(
   method: string,
   pathname: string,
@@ -135,6 +144,7 @@ export async function api(
                 // An MCP with no Scribe chat proves it runs as the user's own client (#682).
                 ...(process.env.SCRIBE_THREAD ? {} : localHeader()),
                 ...(agentLabel ? { [AGENT_LABEL_HEADER]: agentLabel } : {}),
+                ...(deviceScope.getStore() ? { [DEVICE_HEADER]: encodeURIComponent(deviceScope.getStore()!) } : {}),
               }),
           ...(payload === undefined
             ? {}

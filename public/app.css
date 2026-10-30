@@ -5359,6 +5359,8 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .device-list .ml-source { gap: 10px; }
 .device-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
 .device-dot.online { background: var(--ag-ok, #8fd19e); opacity: 1; }
+.device-agents { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: -2px 0 8px 18px; color: var(--muted); font-size: 12px; }
+.device-agents .ag-check { margin: 0; }
 .device-actions[hidden] { display: none; }
 .device-panel { display: flex; flex-direction: column; gap: 8px; margin: 8px 2px 12px; }
 .device-panel[hidden] { display: none; }

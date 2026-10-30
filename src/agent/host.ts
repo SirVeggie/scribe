@@ -14,6 +14,7 @@ import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
 import { isBlankPage, type AccessTarget, type PageEvent, type Tab } from "../types.js";
 import { addTargets, effectiveLevel, pageKeysInText, pageReach, sameTarget, type AccessPage, type PageReader, type Reach, type ThreadPageGrant } from "../pageAccess.js";
+import { deviceKeysInText, type RemoteAgent } from "../devices/agentAccess.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
@@ -86,7 +87,7 @@ import { allowedGrants, canReadThread, grantScopes, isMessage, itemMatches, item
 import { grantRows, revokeGrant } from "./grants.js";
 import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, withGrantOptions } from "./toolGrants.js";
 import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, memoryPlace, saveMemory, type Memory } from "./memory.js";
-import { WEB_IMPORTANCE_WAIT_MS, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
+import { WEB_IMPORTANCE_WAIT_MS, parseWebImportance, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
   ApprovalOption,
@@ -2748,6 +2749,16 @@ export class AgentHost {
         return tab ? [{ kind: "page", id: tab.id, read: true }] : [];
       });
       this.grantPages(threadId, [...mentioned, ...named]);
+      // The same for a page on another device (scribe:@laptop/notes, #911): that device resolves the key.
+      const remote = input.card ? [] : deviceKeysInText(text);
+      if (remote.length) {
+        const have = thread.deviceKeys ?? [];
+        const next = [...have, ...remote.filter((r) => !have.some((h) => h.device === r.device && h.key === r.key))].slice(-200);
+        if (next.length !== have.length) {
+          thread.deviceKeys = next;
+          this.db.saveThread(thread);
+        }
+      }
     }
     if (!input.from && thread.draft) {
       // The user sent what they had left in the composer.
@@ -3280,6 +3291,216 @@ export class AgentHost {
       if (timer) clearTimeout(timer);
       opts.signal?.removeEventListener("abort", onAbort);
     }
+  }
+
+  // ---------- other devices (#911) ----------
+
+  /**
+   * The chat as another device sees its calls: whether its model is trusted, its rung, and what the
+   * user let it reach there. A helper uses its parent's grants, as it does here. A chat with no page
+   * tools (a workspace helper) reaches no pages there either.
+   */
+  remoteAgentFor(threadId: string, device: string, writtenFor: (token: string) => boolean): RemoteAgent | string {
+    const thread = this.threads.get(threadId);
+    if (!thread || thread.noTools) return "Only Scribe chats on this device can reach other devices.";
+    const parent = thread.helperOf ? this.threads.get(thread.helperOf) : undefined;
+    const keys = [...(thread.deviceKeys ?? []), ...(parent?.deviceKeys ?? [])].filter((k) => writtenFor(k.device)).map((k) => k.key);
+    return {
+      thread: thread.id,
+      title: thread.title,
+      trusted: this.threadTrusted(thread),
+      ...(thread.tainted ? { tainted: true } : {}),
+      ...(thread.scope.kind === "workspace" ? { noPages: true } : {}),
+      rung: thread.approval,
+      grants: addTargets<ThreadPageGrant>(thread.deviceGrants?.[device], parent?.deviceGrants?.[device] ?? []),
+      keys: [...new Set(keys)],
+    };
+  }
+
+  /** The chat read Trusted only or Restricted content on another device: it and the chats it reports to are tainted. */
+  taintThread(threadId: string): void {
+    const seen = new Set<string>();
+    for (let t = this.threads.get(threadId); t && !seen.has(t.id); t = t.helperOf ? this.threads.get(t.helperOf) : undefined) {
+      seen.add(t.id);
+      if (t.tainted) continue;
+      t.tainted = true;
+      this.db.saveThread(t);
+      this.emitThread(t.id);
+    }
+  }
+
+  /**
+   * Ask in the chat (its running turn) and wait for the answer; a board worker's chat waits only as
+   * long as importance says. "timeout" when nobody answered in time, "cancelled" when the call went away.
+   */
+  private async askInChat(threadId: string, ask: { title: string; detail: string; tool: "read" | "task" | "other"; options: ApprovalOption[] }, importance: WebImportance, signal?: AbortSignal): Promise<ApprovalDecision | "timeout" | "cancelled" | "idle"> {
+    const run = this.runs.get(threadId);
+    if (!run) return "idle";
+    const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
+    const deadline = waitMs === null ? "" : `\nRefused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.`;
+    this.closeBlocks(run);
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: ask.tool, title: ask.title.slice(0, 300), detail: ask.detail + deadline, options: ask.options, status: "pending" });
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    signal?.addEventListener("abort", onAbort);
+    let timedOut = false;
+    const timer = waitMs === null ? null : setTimeout(() => { timedOut = true; abort.abort(); }, waitMs);
+    try {
+      return await this.waitPending<ApprovalDecision>(threadId, run, "approval", item.id, abort.signal);
+    } catch {
+      return timedOut ? "timeout" : "cancelled";
+    } finally {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * page_access for a page on another device: asked in this chat, like one here. The grant is the
+   * chat's own (for this thread); that device applies its page levels to it on every call.
+   */
+  async requestDevicePageAccess(
+    threadId: string,
+    device: { id: string; name: string },
+    page: { id: string; key: string; title: string; folderId?: string; folder?: string | null; reach: string },
+    opts: { folder?: boolean; importance?: string; reason?: string; signal?: AbortSignal }
+  ): Promise<{ allowed: boolean; message: string }> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("page_access only works in Scribe chat threads.");
+    const folder = opts.folder && page.folderId;
+    if (page.reach === "allow" && !folder) return { allowed: true, message: "Already allowed." };
+    const target: ThreadPageGrant = folder ? { kind: "folder", id: page.folderId! } : { kind: "page", id: page.id };
+    const what = folder ? `folder “${page.folder ?? page.folderId}” on ${device.name}` : `“${page.title}” on ${device.name}`;
+    const importance = parseWebImportance(opts.importance) ?? "useful";
+    const answer = await this.askInChat(threadId, {
+      tool: "read",
+      title: `Page access: ${what}`,
+      detail: [
+        `The agent asks to read and change ${what}. ${device.name}'s own settings still decide whether agents from here may change its pages, and its page levels apply.`,
+        page.reach === "request" ? "It is Trusted only and this chat's model is not trusted." : undefined,
+        `Importance: ${importance}.`,
+        opts.reason?.trim(),
+      ].filter(Boolean).join("\n"),
+      options: [
+        { id: "thread", label: "Allow for this thread", kind: "allow_once" },
+        { id: "deny", label: "Deny", kind: "reject_once" },
+      ],
+    }, importance, opts.signal);
+    if (answer === "idle") return { allowed: false, message: "With no turn running the user cannot be asked." };
+    if (answer === "timeout") return { allowed: false, message: "Nobody answered in time. Carry on without that page." };
+    if (answer === "cancelled") return { allowed: false, message: "The request was cancelled." };
+    if (answer.optionId !== "thread") return { allowed: false, message: answer.note ? `The user denied access to ${what}: ${answer.note}` : `The user denied access to ${what}. Carry on without it.` };
+    const t = this.threads.get(threadId);
+    if (t) {
+      t.deviceGrants = { ...(t.deviceGrants ?? {}), [device.id]: addTargets<ThreadPageGrant>(t.deviceGrants?.[device.id], [target]).slice(-200) };
+      this.db.saveThread(t);
+      this.emitThread(threadId);
+    }
+    return { allowed: true, message: `Allowed: ${what}. Make the call again.` };
+  }
+
+  /**
+   * agent_run on another device: the rung its helper gets (this chat's or lower, never above Auto
+   * review), asked in this chat once per device and folder. A later helper there at that rung or
+   * lower goes ahead. Throws when the user says no.
+   */
+  async deviceHelperAccess(threadId: string, device: { id: string; name: string }, folder: string, requested: string | undefined, signal?: AbortSignal): Promise<ApprovalPolicy> {
+    const thread = this.helperParent(threadId);
+    const wanted = requested === undefined ? thread.approval : parseApproval(requested);
+    if (!wanted) throw new Error(`Unknown helper access "${requested}". Choose: ${APPROVALS.slice(0, approvalRank(thread.approval) + 1).join(", ")}.`);
+    if (approvalRank(wanted) > approvalRank(thread.approval)) throw new Error(`A helper may not exceed this thread's ${thread.approval} rung.`);
+    const rung = minApproval(wanted, "auto");
+    const same = (a: string) => a.replace(/[\\/]+$/, "").toLowerCase() === folder.replace(/[\\/]+$/, "").toLowerCase();
+    const held = (thread.deviceHelpers ?? []).find((h) => h.device === device.id && same(h.folder));
+    if (held && approvalRank(held.rung) >= approvalRank(rung)) return rung;
+    const edits = approvalRank(rung) >= approvalRank("edits");
+    const answer = await this.askInChat(threadId, {
+      tool: "task",
+      title: `Run helpers on ${device.name} in ${folder}`,
+      detail: [
+        `Helpers this chat starts there work in that folder with ${APPROVAL_LABEL[rung]} access${edits ? ", so they can change its files" : ""}, on ${device.name}'s own accounts. Their approvals show on ${device.name} and as toasts on the device you are using.`,
+        "Asked once for this thread: later helpers there at this access or lower start without asking.",
+      ].join("\n"),
+      options: [
+        { id: "thread", label: "Allow for this thread", kind: "allow_always" },
+        { id: "deny", label: "Deny", kind: "reject_once" },
+      ],
+    }, "necessary", signal);
+    if (answer === "idle") throw new Error("With no turn running the user cannot be asked.");
+    if (answer === "timeout" || answer === "cancelled") throw new Error("cancelled");
+    if (answer.optionId !== "thread") throw new Error(answer.note ? `The user declined: ${answer.note}` : `The user declined helpers on ${device.name} in ${folder}. Do the task another way.`);
+    const t = this.threads.get(threadId);
+    if (t) {
+      t.deviceHelpers = [...(t.deviceHelpers ?? []).filter((h) => !(h.device === device.id && same(h.folder))), { device: device.id, folder, rung }].slice(-50);
+      this.db.saveThread(t);
+    }
+    return rung;
+  }
+
+  /**
+   * agent_run from a chat on another device (#911): a helper here, in a folder this device already
+   * has chats in, never in a worktree, at the rung that device's user allowed (at most Auto review).
+   * It is a thread of this device's (its approvals show here and as toasts there); the chat on the
+   * other device follows it up and waits for its report through the same call.
+   */
+  async runRemoteHelper(
+    from: { device: string; name: string; agent: RemoteAgent },
+    opts: { title?: string; task: string; provider?: string; model?: string; effort?: string; access?: string; cwd?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
+  ): Promise<Record<string, unknown>> {
+    if (!this.prefs().helpers) throw new Error("Helper agents are turned off on that device (Agent settings, Helper agents).");
+    const task = opts.task.trim();
+    if (opts.signal?.aborted) throw new Error("cancelled");
+    if (opts.stop && (!opts.thread || task)) throw new Error("Stopping a helper requires thread and no task.");
+    if (!task && !opts.thread) throw new Error("task is required: a brief the helper can work from on its own.");
+    const mine = (t: Thread) => t.remoteParent?.device === from.device && t.remoteParent.thread === from.agent.thread;
+    let helper: Thread;
+    if (opts.thread) {
+      const existing = this.threads.get(opts.thread);
+      if (!existing || !mine(existing)) throw new Error(`No helper ${opts.thread} of this chat on that device. Leave thread out to start a new one.`);
+      if (opts.stop) await this.cancel(existing.id);
+      if (!task && !this.loadTurns(existing.id).length) throw new Error("That helper has not run yet. Pass a task.");
+      if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
+      if (task && from.agent.tainted && !this.modelTrusted(existing.provider, existing.model)) throw new Error("This chat read Trusted only content, so it can't brief that helper's untrusted model.");
+      helper = existing;
+    } else {
+      const title = opts.title?.replace(/\s+/g, " ").trim();
+      if (!title) throw new Error("title is required for a new helper: a short name describing its task.");
+      const dir = opts.cwd ? [...this.workspaceFolders().values()].find((d) => workspaceKey(d) === workspaceKey(opts.cwd!)) : undefined;
+      if (!dir) throw new Error(`${opts.cwd ?? "That folder"} is not a folder this device has chats in. Pick one of its workspace folders.`);
+      const rung = minApproval(minApproval(parseApproval(opts.access) ?? "readonly", parseApproval(from.agent.rung) ?? "readonly"), "auto");
+      if (!opts.provider || !isProviderId(opts.provider)) throw new Error(`provider is required: one of ${Object.keys(this.providers).join(", ")}. agent_models with device lists that device's models.`);
+      const provider = opts.provider;
+      const status = (await this.providerStatus()).find((s) => s.id === provider);
+      if (!status?.available) throw new Error(`${status?.label ?? provider} is not available there${status?.detail ? `: ${status.detail}` : "."}`);
+      const model = await this.helperModel(provider, opts.model);
+      if (opts.effort && model && !model.efforts.some((e) => e.id === opts.effort)) {
+        throw new Error(model.efforts.length ? `${model.id} has no effort "${opts.effort}". Its efforts: ${model.efforts.map((e) => e.id).join(", ")}.` : `${model.id} has no effort setting; leave effort out.`);
+      }
+      if (from.agent.tainted && !this.modelTrusted(provider, model?.id ?? this.prefs().models[provider] ?? "default")) throw new Error("This chat read Trusted only content, so its helpers there need a trusted model.");
+      const busy = [...this.threads.values()].filter((t) => mine(t) && (this.runs.has(t.id) || this.queues.get(t.id)?.length)).length;
+      if (busy >= MAX_HELPERS) throw new Error(`This chat already has ${busy} helpers working there. Wait for one to finish.`);
+      const draft = this.draftThread({
+        title: `Helper (${from.name}): ${title.slice(0, 200)}`,
+        provider,
+        ...(model ? { model: model.id } : {}),
+        ...(opts.effort ? { effort: opts.effort } : {}),
+        ...settleAccess("code", rung),
+        web: "off",
+        scope: { kind: "workspace", ref: dir },
+        cwd: dir,
+        useWorktree: false,
+      });
+      draft.remoteParent = { device: from.device, name: from.name, thread: from.agent.thread };
+      this.threads.set(draft.id, draft);
+      this.items.set(draft.id, []);
+      this.turns.set(draft.id, []);
+      this.seq.set(draft.id, 0);
+      this.db.saveThread(draft);
+      this.emit({ type: "agent_thread", thread: this.view(draft) });
+      helper = draft;
+    }
+    if (opts.signal?.aborted) throw new Error("cancelled");
+    return this.helperTurn(helper, task, opts);
   }
 
   /** Grant pages or folders to a thread for the rest of the thread. */
@@ -3836,8 +4057,10 @@ export class AgentHost {
   // ---------- helper agents ----------
 
   /** agent_models: the providers and models agent_run can use. */
-  async helperModels(threadId: string, provider?: string): Promise<{ providers: Array<Record<string, unknown>> }> {
-    this.helperParent(threadId);
+  async helperModels(threadId: string | null, provider?: string): Promise<{ providers: Array<Record<string, unknown>> }> {
+    // null: a chat on another device asks what this one has (#911).
+    if (threadId) this.helperParent(threadId);
+    else if (!this.prefs().helpers) throw new Error("Helper agents are turned off on that device (Agent settings, Helper agents).");
     if (provider !== undefined && !isProviderId(provider)) throw new Error(`Unknown provider ${provider}. Providers: ${Object.keys(this.providers).join(", ")}.`);
     const status = await this.providerStatus();
     const rows: Array<Record<string, unknown>> = [];
@@ -4094,6 +4317,11 @@ export class AgentHost {
     }
     if (opts.signal?.aborted) throw new Error("cancelled");
     this.linkHelperCall(threadId, helper.id, task);
+    return this.helperTurn(helper, task, opts);
+  }
+
+  /** Send a helper its brief (or follow-up), and return its report: at once in the background, else when its turn ends. */
+  private async helperTurn(helper: Thread, task: string, opts: { thread?: string; background?: boolean; signal?: AbortSignal }): Promise<Record<string, unknown>> {
     // A follow-up to a helper still at work steers it: into its running turn when the provider can
     // take it, else queued to run right after that turn. Either way the report is the one after it.
     let sent = false;

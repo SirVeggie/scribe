@@ -21,7 +21,7 @@ import { parseHtmlEdits, RevisionConflictError } from "./htmlEdit.js";
 import { log } from "./log.js";
 import { checkPermission, isPermissionValue, permissionViews } from "./pagePermissions.js";
 import { PageFileError, deletePageFile, listPageFolder, readPageFile, resolvePageFile, statPageFile, writePageFile, type FileOp } from "./pageFiles.js";
-import { frameReach, isAccessLevel, normalizeTarget, pageReach, reachMessage, type PageReader, type Reach } from "./pageAccess.js";
+import { effectiveLevel, frameReach, isAccessLevel, normalizeTarget, pageReach, reachMessage, type PageReader, type Reach } from "./pageAccess.js";
 import { clampWaitMs, parseCursor, parseEventNames, parseWhere } from "./signal.js";
 import type { StateOp } from "./stateOps.js";
 import { locationLabel, matchRecord, qualityLabel } from "./pageSearch.js";
@@ -80,6 +80,8 @@ import { devicesRouter } from "./devices/routes.js";
 import { peerGateway } from "./devices/gateway.js";
 import { embedLabel, embedProxy } from "./devices/embedProxy.js";
 import { AskSource, AskWatcher } from "./devices/attention.js";
+import { TAINT_HEADER, remoteReader } from "./devices/agentAccess.js";
+import { agentForwarder, remoteAgentGate, remoteAgentRouter, type AgentDevicesHost } from "./devices/agentRoutes.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { copyRouter } from "./devices/copy.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
@@ -128,6 +130,8 @@ const startedAt = Date.now();
 const sockets = new Set<WebSocket>();
 const viewers = new ViewerHub();
 let agentHost: AgentHost | null = null;
+/** A paired device's name, for labelling what its chats do here (#911). */
+let peerNames: ((id: string) => string | undefined) | null = null;
 let pluginActions: PluginActions | null = null;
 
 function refreshPluginTemplates(): void {
@@ -214,6 +218,12 @@ export async function startHttp(): Promise<http.Server> {
     switchSpace: (id) => store.switchSpace(id),
     asks: askSource,
     watcher: askWatcher,
+    answerApproval: (request, optionId) => {
+      if (!agentHost) throw new Error("This device has no chats.");
+      const thread = agentHost.pendingThreadId(request);
+      if (thread) agentHost.interact(thread);
+      agentHost.resolveApproval(request, optionId);
+    },
     describe: (pages, threads) => ({
       pages: Object.fromEntries(pages.map((ref) => {
         const tab = store.get(ref) ?? store.get(`scribe:${ref}`);
@@ -244,6 +254,9 @@ export async function startHttp(): Promise<http.Server> {
   const embeds = embedProxy({ allowed: embedOriginKnown, ports: [PORT, PEER_PORT], name: () => peers.identity.name });
   const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)), devices: devicesApi, embeds });
   app.use(gateway.http);
+  // Agents on other devices (#911): only the calls their grant here covers.
+  app.use(remoteAgentGate(peers));
+  peerNames = (id) => peers.nameOf(id);
   app.use(contentOriginGate);
   // These open a window on this device's own screen: not for someone viewing it from another device.
   app.post(["/api/tabs/:id/file/open-location", "/api/agent/integrations/intellij/open", "/api/search/open-folder"], (req, res, next) => {
@@ -322,6 +335,22 @@ export async function startHttp(): Promise<http.Server> {
     received: (event) => broadcast({ type: "copy_received", ...event }),
   }, dataDir()));
   app.use(express.json({ limit: "6mb" }));
+  // A chat here reaching another device (#911): device_list, and calls that name a device go over the link.
+  const agentDevices: AgentDevicesHost = {
+    remoteAgent: (thread, device, writtenFor) => agentHost?.remoteAgentFor(thread, device, writtenFor) ?? "Only Scribe chats can reach other devices.",
+    pageAccess: (thread, device, page, opts) => agentHost!.requestDevicePageAccess(thread, device, page, opts),
+    helperAccess: (thread, device, folder, access, signal) => agentHost!.deviceHelperAccess(thread, device, folder, access, signal),
+    taint: (thread) => agentHost?.taintThread(thread),
+    describePage: (req, which) => {
+      const tab = store.get(which) ?? store.get(`scribe:${which}`);
+      const reach = tab && !tab.temp ? reachFor(req)?.(tab) : undefined;
+      if (!tab || !reach || reach === "hidden") return null;
+      const titled = reach !== "request";
+      return { id: tab.id, key: tab.key, title: titled ? tab.title : tab.key, ...(tab.folderId && titled ? { folderId: tab.folderId, folder: store.folderPath(tab.folderId) } : {}), reach };
+    },
+  };
+  app.use("/api/remote-agent", remoteAgentRouter(peers, () => agentDevices));
+  app.use(agentForwarder(peers, () => agentDevices));
   app.use("/api/plugins",pluginRouter(pluginService,store,agentHost));
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
@@ -1626,8 +1655,25 @@ export async function startHttp(): Promise<http.Server> {
     };
     res.on("close", onClientGone);
     const op = req.params.op;
+    const { remote, device } = identify(req);
     const run = (): Promise<unknown> => {
-      if (op === "models") return host.helperModels(thread, str(body.provider, 40));
+      if (op === "models") return host.helperModels(remote ? null : thread, str(body.provider, 40));
+      // A chat on another device starts a helper here (#911); its device asked the user and capped the rung.
+      if (op === "run" && remote && device) {
+        return host.runRemoteHelper({ device, name: peerNames?.(device) ?? "another device", agent: remote }, {
+          title: str(body.title, 200),
+          task: typeof body.task === "string" ? body.task : "",
+          provider: str(body.provider, 40),
+          model: str(body.model, 200),
+          effort: str(body.effort, 40),
+          access: str(body.access, 20),
+          cwd: str(body.cwd, 1000),
+          thread: str(body.thread, 60),
+          background: body.background === true,
+          stop: body.stop === true,
+          signal: abort.signal,
+        });
+      }
       if (op === "run") {
         return host.runHelper(thread, {
           title: str(body.title, 200),
@@ -2875,9 +2921,18 @@ function callerOf(req: express.Request): ActionCaller {
   }
   const session = req.get(SESSION_HEADER)?.slice(0, 40);
   const thread = threadOf(req);
-  const chat = thread && agentHost ? agentHost.getThread(thread) : null;
-  const label = chat ? `Scribe chat: ${chat.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
+  const remote = remoteLabel(req);
+  const chat = thread && agentHost && !remote ? agentHost.getThread(thread) : null;
+  const label = remote ? `Scribe chat on ${remote}` : chat ? `Scribe chat: ${chat.title}` : req.get(AGENT_LABEL_HEADER)?.slice(0, 60) || "agent";
   return { by: "agent", label, ...(chat?.provider ? { provider: chat.provider } : {}), ...(session ? { session } : {}), ...(thread ? { thread } : {}) };
+}
+
+/** A chat on another device (#911), as pages and cards name it: "Laptop: <chat title>". */
+function remoteLabel(req: express.Request): string | undefined {
+  const { remote, device } = identify(req);
+  if (!remote || !device) return undefined;
+  const name = peerNames?.(device) ?? "another device";
+  return remote.title ? `${name}: ${remote.title}` : name;
 }
 
 function actorOf(req: express.Request): PageActor | undefined {
@@ -2885,6 +2940,8 @@ function actorOf(req: express.Request): PageActor | undefined {
     return undefined;
   }
   const thread = threadOf(req);
+  const remote = remoteLabel(req);
+  if (remote) return { at: Date.now(), ...(thread ? { thread } : {}), title: remote.slice(0, 120) };
   const chat = thread && agentHost ? agentHost.getThread(thread) : null;
   const title = chat?.title?.trim().slice(0, 120);
   const workspace = chat && agentHost ? agentHost.threadFolder(chat) : null;
@@ -3259,8 +3316,10 @@ function threadOf(req: express.Request): string | undefined {
  */
 function reachFor(req: express.Request, read = req.method === "GET"): ((tab: Tab) => Reach) | null {
   if (isContentHost(req) || viewerOf(req) !== "agent") return null;
-  const { thread, external } = identify(req);
-  const reader: PageReader | null | undefined = thread
+  const { thread, external, remote, device } = identify(req);
+  const reader: PageReader | null | undefined = remote && device
+    ? remoteReader(device, remote, (key) => store.get(key)?.id)
+    : thread
     ? agentHost?.pageReader(thread)
     : external
       ? { scope: { kind: "global", ref: null }, trusted: false, grants: [] }
@@ -3311,6 +3370,11 @@ function checkReach(req: express.Request, res: express.Response, tab: Tab): bool
     res.locals.readOnlyReach = `${tab.key} ("${tab.title}") is readable but outside this chat's Scribe access for changes, so this action, which changes it, was refused. Ask the user with page_access to change it.`;
   }
   if (reach === "allow") {
+    // Another device's chat read Trusted only or Restricted content here: its device taints it (#911).
+    if (identify(req).remote) {
+      const level = effectiveLevel(tab, store.accessLookup());
+      if (level === "trusted" || level === "restricted") res.setHeader(TAINT_HEADER, "1");
+    }
     const thread = threadOf(req);
     if (thread && agentHost && viewerOf(req) === "agent" && !isContentHost(req)) agentHost.notePageReached(thread, tab);
     return true;

@@ -11,7 +11,8 @@ import type { FileInfo, FileText } from "./filePages.js";
 import type { PdfText } from "./pdfText.js";
 import { VERSION, WAIT_HEARTBEAT_MS, baseUrl, pageViewUrl } from "./config.js";
 import { BROWSER_ACTIONS } from "./browserActions.js";
-import { api, ensureDaemon, health, setAgentLabel } from "./daemon.js";
+import { api, ensureDaemon, health, onDevice, setAgentLabel } from "./daemon.js";
+import { parseDeviceRef } from "./devices/references.js";
 import { SCANNED_TOOLS } from "./agent/injection.js";
 import { log } from "./log.js";
 import { openBoard } from "./openBoard.js";
@@ -267,6 +268,51 @@ function outsideOf(outside: TabMeta[] | undefined): { outside?: Array<{ id: stri
 /** Tools that create or change pages and templates: left out on the Read-only rung. page_action stays, and the daemon refuses an action that would change the page. */
 const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open", "plugin_create", "plugin_patch", "plugin_reload", "plugin_install"]);
 
+/** Page tools that work on another paired device's pages (#911): a device argument, or a key written scribe:@device/key. */
+const DEVICE_TOOLS = new Set(["library_search", "library_folders", "page_read", "page_grep", "page_state", "page_update", "page_action", "page_patch", "page_access"]);
+const DEVICE_ARG = z.string().optional().describe("A paired device (name or id, see device_list) whose pages this is for; its user decides what agents from here may do there. A key written scribe:@device/key names it too.");
+
+type ToolHandler = (input: Record<string, unknown>, extra: unknown) => Promise<ToolResult>;
+
+/**
+ * Give a page tool a device argument (#911). A call for another device runs its daemon calls with
+ * DEVICE_HEADER, so this device's daemon sends them on over the link; results name that device.
+ */
+function onDevices(args: unknown[]): unknown[] {
+  if (!process.env.SCRIBE_THREAD || !DEVICE_TOOLS.has(String(args[0]))) return args;
+  const at = args.findIndex((a, i) => i >= 2 && typeof a === "function");
+  if (at < 0 || !args[2] || typeof args[2] !== "object") return args;
+  const handler = args[at] as ToolHandler;
+  const out = [...args];
+  out[2] = { ...(args[2] as Record<string, unknown>), device: DEVICE_ARG };
+  out[at] = async (input: Record<string, unknown>, extra: unknown) => {
+    const { device, ...rest } = input;
+    const ref = parseDeviceRef(rest.key);
+    if (ref?.kind === "page") rest.key = ref.ref;
+    const target = (typeof device === "string" && device.trim()) || ref?.device;
+    if (!target) return handler(rest, extra);
+    const result = await onDevice(target, () => handler(rest, extra));
+    return remoteResult(result, target);
+  };
+  return out;
+}
+
+/** A result from another device: its view URLs are no use here, and its keys are that device's. */
+function remoteResult(result: ToolResult, device: string): ToolResult {
+  const first = result.content?.[0];
+  if (result.isError || first?.type !== "text") return result;
+  try {
+    const data = JSON.parse(first.text) as Record<string, unknown>;
+    if (!data || typeof data !== "object" || Array.isArray(data)) return result;
+    delete data.viewUrl;
+    data.device = device;
+    data.deviceNote = `Keys here are ${device}'s: pass device again, or write scribe:@${device}/<key>.`;
+    return { ...result, content: [{ ...first, text: JSON.stringify(data, null, 2) }, ...result.content.slice(1)] };
+  } catch {
+    return result;
+  }
+}
+
 export async function startMcp(): Promise<void> {
   await ensureDaemon();
   // A chat thread with no Scribe scope (app scope None) gets no page tools, only its web, thread and browser ones.
@@ -276,7 +322,7 @@ export async function startMcp(): Promise<void> {
   const off = new Set(process.env.SCRIBE_THREAD ? (process.env.SCRIBE_TOOLS_OFF ?? "").split(",") : []);
   const readOnly = off.has("pagewrite");
   const pageTool = ((...args: unknown[]) =>
-    pages && !(readOnly && PAGE_WRITE_TOOLS.has(String(args[0]))) ? (server.tool as (...a: unknown[]) => unknown).apply(server, args) : undefined) as unknown as McpServer["tool"];
+    pages && !(readOnly && PAGE_WRITE_TOOLS.has(String(args[0]))) ? (server.tool as (...a: unknown[]) => unknown).apply(server, onDevices(args)) : undefined) as unknown as McpServer["tool"];
   const revisions = new SeenRevisions();
   // Registered first, so it wraps inside the gate: a denied call returns no result to scan.
   scanTools(server);
@@ -2003,14 +2049,32 @@ function registerMemoryTools(server: McpServer): void {
  * Helper agents on in Agent settings; the host refuses the calls until then.
  */
 function registerHelperTools(server: McpServer): void {
+  if (process.env.SCRIBE_THREAD) {
+    server.tool(
+      "device_list",
+      "The user's other paired devices: name, id, online, and what each lets agents from this device do there (read and change pages, run helpers). Use a device's name as device in page tools, library_search and agent_run, or in keys (scribe:@laptop/notes).",
+      {},
+      { readOnlyHint: true },
+      async () => {
+        const { status, data } = await api("GET", "/api/remote-agent/devices");
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return jsonResult(data);
+      }
+    );
+  }
+
   server.tool(
     "agent_models",
     "List the providers and models agent_run can hand a task to. Only for when the user, or this chat's instructions, told you to use a helper agent on another model.",
-    { provider: z.string().optional().describe("Only this provider: claude, cursor, codex or pi (Native: the user's own model sources, such as a locally hosted model).") },
+    {
+      provider: z.string().optional().describe("Only this provider: claude, cursor, codex or pi (Native: the user's own model sources, such as a locally hosted model)."),
+      device: z.string().optional().describe("A paired device's models, for agent_run with device."),
+    },
     { readOnlyHint: true },
-    async ({ provider }, extra) => {
+    async ({ provider, device }, extra) => {
       try {
-        const { status, data } = await api("POST", "/api/helper/models", { provider }, { signal: extra.signal });
+        const call = () => api("POST", "/api/helper/models", { provider }, { signal: extra.signal });
+        const { status, data } = await (device ? onDevice(device, call) : call());
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }
@@ -2034,8 +2098,10 @@ function registerHelperTools(server: McpServer): void {
       thread: z.string().optional().describe("A helper's thread from an earlier agent_run: send it a follow-up (it keeps context and access; provider, model, effort, access ignored; one still working takes it into its current turn), or with no task wait for its report."),
       background: z.boolean().optional().describe("Default true. false waits for the report during launch."),
       stop: z.boolean().optional().describe("With thread and no task: stop that helper."),
+      device: z.string().optional().describe("Run it on a paired device (device_list), with that device's models (agent_models with device). Pass it again with thread. Never above auto; the user approves each folder there once."),
+      cwd: z.string().optional().describe("With device, for a new helper: a folder that device already has chats in. It works there directly, not in a worktree."),
     },
-    async ({ title, task, provider, model, effort, access, thread, background, stop }, extra) => {
+    async ({ title, task, provider, model, effort, access, thread, background, stop, device, cwd }, extra) => {
       const progressToken = extra._meta?.progressToken;
       const startedAt = Date.now();
       const heartbeat =
@@ -2048,7 +2114,8 @@ function registerHelperTools(server: McpServer): void {
                 .catch(() => {});
             }, WAIT_HEARTBEAT_MS);
       try {
-        const { status, data } = await api("POST", "/api/helper/run", { title, task, provider, model, effort, access, thread, stop, background: background ?? true }, { signal: extra.signal });
+        const call = () => api("POST", "/api/helper/run", { title, task, provider, model, effort, access, thread, stop, background: background ?? true, ...(device ? { cwd } : {}) }, { signal: extra.signal });
+        const { status, data } = await (device ? onDevice(device, call) : call());
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
         }

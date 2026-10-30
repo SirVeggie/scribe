@@ -11,10 +11,12 @@ import type { PeerService } from "./peers.js";
  * toasts on whichever device the user is at.
  */
 
-export type Ask = { thread: string; title: string; kind: "approval" | "question" | "plan"; text: string; detail?: string };
+/** request and options: an approval that can be answered from the toast (#911). */
+export type Ask = { thread: string; title: string; kind: "approval" | "question" | "plan"; text: string; detail?: string; request?: string; options?: AskOption[] };
+export type AskOption = { id: string; label: string; kind: string };
 export type DeviceAsk = Ask & { device: string; name: string };
 
-type ThreadLike = { id: string; title: string; status: string; helperOf?: string; asking?: { kind: string; title?: string; detail?: string } };
+type ThreadLike = { id: string; title: string; status: string; helperOf?: string; asking?: { kind: string; title?: string; detail?: string; itemId?: string; options?: AskOption[] } };
 
 /** The chats on this device that wait on the user. Usage limits are not asks: nothing to answer remotely. */
 export function asksOf(threads: ThreadLike[]): Ask[] {
@@ -22,7 +24,18 @@ export function asksOf(threads: ThreadLike[]): Ask[] {
   for (const t of threads) {
     const kind = t.asking?.kind;
     if (t.status !== "waiting" || (kind !== "approval" && kind !== "question" && kind !== "plan")) continue;
-    out.push({ thread: t.id, title: t.title, kind, text: (t.asking!.title || "").slice(0, 300), ...(t.asking!.detail ? { detail: t.asking!.detail.slice(0, 300) } : {}) });
+    const asking = t.asking!;
+    const options = kind === "approval" && asking.itemId && Array.isArray(asking.options)
+      ? asking.options.slice(0, 4).map((o) => ({ id: String(o.id), label: String(o.label).slice(0, 60), kind: String(o.kind) }))
+      : undefined;
+    out.push({
+      thread: t.id,
+      title: t.title,
+      kind,
+      text: (asking.title || "").slice(0, 300),
+      ...(asking.detail ? { detail: asking.detail.slice(0, 300) } : {}),
+      ...(options?.length ? { request: asking.itemId, options } : {}),
+    });
   }
   return out;
 }

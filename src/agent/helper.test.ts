@@ -470,3 +470,66 @@ test("a tainted thread is asked before an untrusted helper, even with full acces
   assert.equal((await allowed).status, "done");
   (host as unknown as Internals).runs.delete(id);
 });
+
+test("a chat on another device runs a helper here only in a known folder, capped by its rung, never in a worktree (#911)", async () => {
+  host.setPrefs({ helpers: true });
+  const site = fs.mkdtempSync(path.join(dir, "site-"));
+  host.createThread({ provider: "codex", mode: "code", approval: "edits", cwd: site, scope: { kind: "workspace", ref: site } });
+  const agent = { thread: "th_remote", trusted: true, rung: "edits", grants: [], keys: [] };
+  const from = { device: "dev_laptop", name: "Laptop", agent };
+  await assert.rejects(host.runRemoteHelper(from, { task: "x", title: "Tidy", provider: "pi", cwd: path.join(dir, "elsewhere") }), /not a folder this device has chats in/);
+  const result = await host.runRemoteHelper(from, { task: "tidy the readme", title: "Tidy", provider: "pi", cwd: site, access: "full" });
+  assert.equal(result.reply, "did: tidy the readme");
+  const helper = host.getThread(String(result.thread))!;
+  assert.equal(helper.title, "Helper (Laptop): Tidy");
+  assert.deepEqual(helper.remoteParent, { device: "dev_laptop", name: "Laptop", thread: "th_remote" });
+  assert.equal(helper.helperOf, undefined);
+  assert.equal(helper.approval, "edits", "no higher than the chat on the other device");
+  assert.equal(helper.web, "off");
+  assert.equal(helper.useWorktree, false);
+  assert.equal(helper.cwd, site);
+  assert.equal((await host.runRemoteHelper(from, { task: "and the license", thread: helper.id })).reply, "did: and the license");
+  await assert.rejects(host.runRemoteHelper({ ...from, agent: { ...agent, thread: "th_other" } }, { task: "x", thread: helper.id }), /No helper/);
+  await assert.rejects(host.runRemoteHelper({ ...from, agent: { ...agent, tainted: true, trusted: false } }, { task: "x", title: "T", provider: "pi", cwd: site }), /trusted model/);
+});
+
+test("helpers on another device are approved once per folder and rung in the asking chat (#911)", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent("full");
+  const laptop = { id: "dev_laptop", name: "Laptop" };
+  await assert.rejects(host.deviceHelperAccess(id, laptop, "S:\site", "edits"), /cannot be asked/);
+  running(id);
+  const first = host.deviceHelperAccess(id, laptop, "S:\site", "edits");
+  host.resolveApproval((await approvalFor(id)).itemId, "thread");
+  assert.equal(await first, "edits");
+  assert.equal(await host.deviceHelperAccess(id, laptop, "s:\site\\", "readonly"), "readonly", "lower, same folder: not asked again");
+  const higher = host.deviceHelperAccess(id, laptop, "S:\site", undefined);
+  host.resolveApproval((await approvalFor(id)).itemId, "deny");
+  await assert.rejects(higher, /declined/);
+  const full = host.deviceHelperAccess(id, laptop, "S:\site", "full");
+  host.resolveApproval((await approvalFor(id)).itemId, "thread");
+  assert.equal(await full, "auto", "never Full access on another device");
+});
+
+test("pages on another device: page_access grants and written keys go with the chat and its helpers (#911)", async () => {
+  host.setPrefs({ helpers: true });
+  const id = parent("full");
+  running(id);
+  const laptop = { id: "dev_laptop", name: "Laptop" };
+  const asking = host.requestDevicePageAccess(id, laptop, { id: "t_plan", key: "plan", title: "Plan", reach: "ask" }, {});
+  host.resolveApproval((await approvalFor(id)).itemId, "thread");
+  assert.equal((await asking).allowed, true);
+  assert.deepEqual((await host.requestDevicePageAccess(id, laptop, { id: "t_plan", key: "plan", title: "Plan", reach: "allow" }, {})).message, "Already allowed.");
+  const thread = host.getThread(id)!;
+  thread.deviceKeys = [{ device: "laptop", key: "scribe:notes" }, { device: "phone", key: "scribe:x" }];
+  const agent = host.remoteAgentFor(id, "dev_laptop", (token) => token === "laptop");
+  assert.ok(typeof agent !== "string");
+  assert.deepEqual(agent.grants, [{ kind: "page", id: "t_plan" }]);
+  assert.deepEqual(agent.keys, ["scribe:notes"]);
+  assert.equal(agent.rung, "full");
+  const helper = await host.runHelper(id, { task: "x", title: "Look", provider: "pi" });
+  const fromHelper = host.remoteAgentFor(String(helper.thread), "dev_laptop", (token) => token === "laptop");
+  assert.ok(typeof fromHelper !== "string");
+  assert.deepEqual(fromHelper.grants, [{ kind: "page", id: "t_plan" }]);
+  assert.equal(fromHelper.noPages, true, "a workspace helper reaches no pages there either");
+});

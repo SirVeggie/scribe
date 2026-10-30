@@ -13,6 +13,8 @@ export type DevicesHost = {
   switchSpace(id: string): void;
   asks: AskSource;
   watcher: AskWatcher;
+  /** Answer one of this device's approvals, from a toast on another device (#911). */
+  answerApproval?(requestId: string, optionId: string): void;
   /** This device's pages (by key or id) and threads, for references from other devices (#908). */
   describe?(pages: string[], threads: string[]): Described;
 };
@@ -207,6 +209,31 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
     }
     res.set("Cache-Control", "no-store").json({ targets: out });
   });
+  // Allow / Deny on a toast (#911): this device's own approval, or another device's over the link.
+  router.post("/:id/approvals/:request", guarded(async (req) => {
+    const { id, request } = req.params;
+    const optionId = typeof req.body?.optionId === "string" ? req.body.optionId : "";
+    if (!optionId) throw new Error("Pick an answer.");
+    if (id === peers.identity.id) {
+      if (!host.answerApproval) throw new Error("This device has no chats.");
+      host.answerApproval(request, optionId);
+      return { ok: true };
+    }
+    const reply = await withTimeout(peers.request(id, {
+      method: "POST",
+      path: `/api/devices/${encodeURIComponent(id)}/approvals/${encodeURIComponent(request)}`,
+      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ optionId }),
+    }));
+    if (reply.status !== 200) {
+      let message = "";
+      try { message = String(JSON.parse(reply.body.toString("utf8")).error ?? ""); } catch { /* not JSON */ }
+      throw new Error(message || `${peers.nameOf(id) ?? "The device"} did not take the answer.`);
+    }
+    return { ok: true };
+  }));
+  // What this device lets a paired device's agents do here (#911).
+  router.put("/:id/agents", guarded((req) => peers.setAgentGrant(req.params.id, req.body)));
   router.put("/self", guarded((req) => peers.rename(req.body?.name)));
   router.post("/offer", guarded(async () => ({ offer: await peers.createOffer() })));
   router.delete("/offer", guarded(() => peers.cancelOffer()));

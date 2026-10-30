@@ -90,6 +90,25 @@
     return new Date(at).toLocaleDateString();
   }
 
+  /** What that device's agents may do on this one (#911); each box saves at once. */
+  function agentRow(peer) {
+    const row = el("div", "device-agents");
+    row.append(el("span", null, "Its agents may"));
+    const grant = peer.agents || {};
+    for (const [key, label] of [["read", "Read pages"], ["write", "Change pages"], ["run", "Run helpers"]]) {
+      const box = el("input");
+      box.type = "checkbox";
+      box.checked = grant[key] === true;
+      box.addEventListener("change", async () => {
+        try { render(await request("PUT", `/${encodeURIComponent(peer.id)}/agents`, { [key]: box.checked })); } catch (err) { box.checked = !box.checked; say(err.message); }
+      });
+      const check = el("label", "ag-check");
+      check.append(box, el("span", null, label));
+      row.append(check);
+    }
+    return row;
+  }
+
   function render(next) {
     view = next;
     if (document.activeElement !== name.input) name.input.value = view.self.name;
@@ -121,7 +140,7 @@
       const open = button(home ? "Back" : "Open", () => { location.href = home ? `${location.protocol}//127.0.0.1${port}/` : `${location.protocol}//d-${peer.id}.localhost${port}/`; });
       open.disabled = !peer.online && !home;
       row.append(dot, text, open, revoke);
-      list.append(row);
+      list.append(row, agentRow(peer));
     }
     if (showing === "offer") {
       if (view.offer) renderOffer();

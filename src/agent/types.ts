@@ -197,6 +197,14 @@ export type Thread = {
   noTools?: true;
   /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
   helperOf?: string;
+  /** A helper a chat on another device started here with agent_run (#911): that device and its chat. */
+  remoteParent?: { device: string; name: string; thread: string };
+  /** Pages and folders on other devices the user let this chat reach (page_access, #911), by device id. */
+  deviceGrants?: Record<string, ThreadPageGrant[]>;
+  /** Page keys on other devices the user wrote in the chat (scribe:@laptop/notes): readable (#818, #911). The device as written. */
+  deviceKeys?: Array<{ device: string; key: string }>;
+  /** Folders on other devices where the user let this chat run helpers, with the highest rung allowed (#911). */
+  deviceHelpers?: Array<{ device: string; folder: string; rung: ApprovalPolicy }>;
   /** The user let this thread's agent start helpers (agent_run) without asking again: Allow for this thread, or a board worker set to use helpers unasked. */
   helpersAllowed?: boolean;
   /** The user let this thread's agent change the agent setup (harness_change, #79) without asking again. */

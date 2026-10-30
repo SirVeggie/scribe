@@ -5,6 +5,7 @@ import type express from "express";
 import { AGENT_CLIENT, CLIENT_HEADER, LOCAL_TOKEN_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, dataDir } from "./config.js";
 import { isContentHost } from "./contentOrigin.js";
 import { peerDeviceOf } from "./devices/link.js";
+import { REMOTE_AGENT_HEADER, decodeRemoteAgent, remoteThreadId, type RemoteAgent } from "./devices/agentAccess.js";
 import type { Viewer } from "./types.js";
 
 /**
@@ -20,9 +21,10 @@ import type { Viewer } from "./types.js";
  *
  * A request that came over a paired device's peer link (#904) is that device's user: { viewer: "user",
  * device }. Its socket is the link's stream, which only a pinned key can open, so no header can claim it
- * and the browser rule below (`sec-fetch-site`) never applies to it.
+ * and the browser rule below (`sec-fetch-site`) never applies to it. One that carries the remote-agent
+ * header is that device's chat instead (#911): { viewer: "agent", thread: "@device/thread", device, remote }.
  */
-export type Caller = { viewer: Viewer; thread?: string; external?: true; device?: string };
+export type Caller = { viewer: Viewer; thread?: string; external?: true; device?: string; remote?: RemoteAgent };
 
 const known = new WeakMap<express.Request, Caller>();
 
@@ -37,7 +39,11 @@ export function identify(req: express.Request): Caller {
 
 function decide(req: express.Request): Caller {
   const device = peerDeviceOf(req.socket);
-  if (device) return { viewer: "user", device };
+  if (device) {
+    // A chat on that device, sent on by its daemon (#911): an agent here, held to this device's grant.
+    const remote = decodeRemoteAgent(req.get(REMOTE_AGENT_HEADER));
+    return remote ? { viewer: "agent", thread: remoteThreadId(device, remote.thread), device, remote } : { viewer: "user", device };
+  }
   // A page's own script on its own origin; what it may reach is the page's (frameReach).
   if (isContentHost(req)) return { viewer: "user" };
   const thread = req.get(THREAD_HEADER)?.slice(0, 60);

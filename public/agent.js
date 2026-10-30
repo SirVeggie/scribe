@@ -9939,7 +9939,27 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const port = location.port ? `:${location.port}` : "";
         location.href = `${location.protocol}//${ask.home ? "127.0.0.1" : `d-${ask.device}.localhost`}${port}/?thread=${encodeURIComponent(ask.thread)}`;
       };
-      body.append(elWith("div", "ag-toast-actions", button("Open", "ag-btn tiny", open)));
+      // An approval answers from here (#911), through this device's daemon and the link.
+      const answers = ask.kind === "approval" && ask.request && Array.isArray(ask.options) ? ask.options : [];
+      const answer = async (option, btn) => {
+        btn.disabled = true;
+        try {
+          const response = await fetch(`/api/devices/${encodeURIComponent(ask.device)}/approvals/${encodeURIComponent(ask.request)}`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ optionId: option.id }),
+          });
+          if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "Not answered");
+          this.remoteSnoozed.add(ask.key);
+          this.render();
+        } catch (err) {
+          btn.disabled = false;
+          notice(err.message || "Not answered");
+        }
+      };
+      const answerButtons = answers.map((option) => {
+        const btn = button(option.label, `ag-btn tiny${option.kind === "reject_once" || option.kind === "reject_always" ? "" : " primary"}`, () => answer(option, btn));
+        return btn;
+      });
+      body.append(elWith("div", "ag-toast-actions", ...answerButtons, button("Open", "ag-btn tiny", open)));
       node.addEventListener("click", (event) => {
         if (!event.target.closest("button, a")) open();
       });

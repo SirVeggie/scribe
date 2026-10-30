@@ -25,6 +25,7 @@ import type { PeerService } from "./peers.js";
 const DROP = new Set([
   "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer",
   "x-scribe-local-token", "x-scribe-token", "x-scribe-thread", "x-scribe-client", "x-scribe-session", "x-scribe-agent",
+  "x-scribe-device", "x-scribe-remote-agent",
 ]);
 
 const CACHE_MAX_BYTES = 32 * 1024 * 1024;

@@ -193,3 +193,41 @@ that implement it.
   is "Title · Laptop" or "Laptop is offline".
 - Generic for synced pages: nothing past the lookup is page specific, so a Library entry that points at
   `scribe:@pi/board` can use the same resolve and open later. The mirror fallback comes with the always-on device.
+
+## Agent access (#911)
+
+Decided by the user: the whole Library (no per-space or per-folder grant), the target's Trusted only pages follow
+the asking model's trust, any Scribe chat may use a grant, grants last until turned off, helpers in folders the
+target already has chats in, never in a worktree, approvals answered from the toast, one switch for writes.
+The access model is the same as for chats on one device: a chat on A reaches nothing on B by place, so it asks.
+
+- The grant is B's, per paired device: Settings → Devices, under each device, "Its agents may" Read pages /
+  Change pages / Run helpers (`Peer.agents` in `device/peers.json`, `PUT /api/devices/:id/agents`). All off until
+  turned on; pairing again clears it.
+- `src/devices/agentAccess.ts`, `src/devices/agentRoutes.ts`. A chat's MCP names the device with
+  `x-scribe-device` (`onDevice` in `daemon.ts`). A's daemon (`agentForwarder`) sends on only the calls in
+  `remoteRequestKind` (library and semantic search, folder tree, page read/state/guide, board actions, page patch
+  and state writes, helper run and models), with `x-scribe-remote-agent`: the chat's id, title, model trust, taint,
+  rung, the page grants it holds for B and the `scribe:@device/key` keys its user wrote. Callers that are not
+  Scribe chats, and file pages, never cross. The gateway drops both headers.
+- On B (`remoteAgentGate`, before every route), a link request with that header is `{ viewer: "agent", thread:
+  "@<A>/<thread>", device, remote }`, never the user. The gate refuses calls outside the list or the grant;
+  without Change pages (or from a Read-only chat) a board action answers reads and refuses changes. Page
+  reach is `pageReach` with `remoteReader`: no scope, A's grants, written keys as read grants, B's levels. So
+  search lists other pages under `outside`, Open to all agents pages are open, Restricted pages stay hidden.
+  Trusted only or Restricted content read there sends `x-scribe-taint`, and A taints the chat.
+- page_access with a device asks in A's chat (`requestDevicePageAccess`) about the page B describes
+  (`POST /api/remote-agent/page`); the grant is the chat's (`Thread.deviceGrants`), for this thread only.
+- agent_run with device and cwd: A asks in the chat once per device and folder ("Run helpers on Laptop in
+  S:\site", `deviceHelperAccess`), stating the rung and whether it can change files; the rung is the chat's or
+  lower, at most Auto review. B (`runRemoteHelper`) needs the folder among its workspace folders, makes a thread
+  of its own (`remoteParent`, web off, no worktree), and answers follow-ups and waits only for that chat. Its
+  approvals are B's, shown as toasts on A.
+- Toasts: an approval in `/api/devices/asks` carries its request id and options, and the toast offers them
+  (`POST /api/devices/:id/approvals/:request`, over the link to that device's own route).
+- MCP: `device_list` (each device's grant for this one), and `device` on library_search, library_folders,
+  page_read, page_grep, page_state, page_update, page_action, page_patch, page_access, agent_models, agent_run.
+  A key written `scribe:@laptop/notes` names the device too. Results from B drop `viewUrl` and say whose keys they are.
+- Tests: `src/devices/agentAccess.test.ts` (two daemons on loopback), the remote cases in `src/agent/helper.test.ts`.
+- Not done: revoking a chat's grants for another device from its permissions menu (they end with the chat),
+  remote `page_show` / `page_wait`, and thread references (`thread:@device/id`) as read grants.
