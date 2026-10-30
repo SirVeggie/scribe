@@ -708,6 +708,8 @@ export type AgentEvent =
    * Page-creation intent (pageIntent.ts) is name "page_create" with stage "hint" or "confirmed", and the new page's title when the agent gave one.
    */
   | { type: "agent_intent"; threadId: string; turnId: string | null; itemId?: string; name: string; stage?: string; title?: string; detector: string; event: string; early?: boolean; confidence?: number }
+  /** The OS sandbox refused one of the thread's commands (#899): what it blocked, for the warning triggers (#893). */
+  | { type: "agent_sandbox"; threadId: string; turnId: string | null; command: string; blocks: import("./sandbox.js").SandboxBlock[] }
   /** The thread's agent browser opened, navigated, or closed (view null). */
   | { type: "agent_browser"; threadId: string; view: BrowserView | null }
   /** A chat the daemon started for a page (a Kanban worker's card) that asks to be shown: windows showing that page open it there. */

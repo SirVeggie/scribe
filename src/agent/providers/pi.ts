@@ -18,6 +18,7 @@ import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
 import { checkPath, policyFor } from "../access.js";
+import { sandboxed, sandboxedRun, type SandboxHooks } from "../sandbox.js";
 import { pathInside } from "../toolGrants.js";
 import { outputImages } from "../outputImages.js";
 
@@ -146,6 +147,20 @@ export function splitPiModel(id: string): { provider: string; model: string } | 
   const at = id.indexOf("/");
   if (at <= 0 || at === id.length - 1) return null;
   return { provider: id.slice(0, at), model: id.slice(at + 1) };
+}
+
+/** Pi's bash with its commands run under the thread's sandbox; what the sandbox refused ends its output. */
+function sandboxedBash(sdk: Sdk, cwd: string, hooks: SandboxHooks): ToolDefinition {
+  const local = sdk.createLocalBashOperations();
+  return sdk.createBashToolDefinition(cwd, {
+    operations: {
+      exec: async (command, dir, opts) => {
+        const { result, note } = await sandboxedRun(hooks, command, { signal: opts.signal }, (line) => local.exec(line, dir, opts));
+        if (note) opts.onData(Buffer.from(`\n${note}\n`));
+        return result;
+      },
+    },
+  }) as unknown as ToolDefinition;
 }
 
 /** Pi's built-in tools for a thread's mode. Read-only and Board read only with a workspace, and get no shell: nothing sandboxes it (#733). */
@@ -715,7 +730,7 @@ class PiSession implements ProviderSession {
 
   private key(): string {
     const t = this.thread;
-    return JSON.stringify([t.id, t.mode, customKey(t), t.web, this.cwd(), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, this.cwd(), sandboxed(t), noPages(t.scope), this.instructions, serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /** Who answers an approval: the running turn, else the host from the thread's rules. */
@@ -1080,6 +1095,10 @@ class PiSession implements ProviderSession {
     // A thread without tools (#729) gets neither Scribe's tools nor the built-ins.
     const none = Boolean(this.thread.noTools);
     const custom = none ? [] : await this.customTools();
+    const builtins = none ? [] : builtinTools(this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread));
+    // Its shell under the OS sandbox (#899): a custom "bash" takes the built-in's place.
+    const sandbox = builtins.includes("bash") ? this.ctx.sandbox?.(this.thread.id, cwd) ?? null : null;
+    if (sandbox) custom.push(sandboxedBash(sdk, cwd, sandbox));
     const { session } = await sdk.createAgentSession({
       cwd,
       agentDir: agentDir(),
@@ -1089,7 +1108,7 @@ class PiSession implements ProviderSession {
       settingsManager,
       resourceLoader,
       sessionManager,
-      tools: none ? [] : [...builtinTools(this.thread.mode, piToolsOff(this.thread), pagesReadsFiles(this.thread)), ...custom.map((t) => t.name)],
+      tools: [...new Set([...builtins, ...custom.map((t) => t.name)])],
       customTools: custom,
     });
     await session.bindExtensions({});

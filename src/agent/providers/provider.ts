@@ -1,4 +1,5 @@
 import type { PolicyEnv } from "../access.js";
+import type { SandboxHooks } from "../sandbox.js";
 import type { EffectivePermissions, WorkerToolRequirements } from "../effectivePermissions.js";
 import type {
   ApprovalOption,
@@ -173,6 +174,8 @@ export type SessionContext = {
   scratchDir: string;
   /** The user's settings that access.ts reads (protected paths), for Native's file gate (#898). */
   accessEnv?: () => PolicyEnv;
+  /** The OS sandbox for the shell commands Scribe spawns for this thread (#899), or null where it does not apply (not Linux, Full access). */
+  sandbox?(threadId: string, cwd: string): SandboxHooks | null;
   /** Domains a thread with limited web access may reach. Read on each call, so edits apply at once. */
   webAllowlist(): string[];
   /** The SearXNG instance web_search goes through (Agent settings), or "" for no web_search tool. Read when a session opens. */

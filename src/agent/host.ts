@@ -3,6 +3,7 @@ import type { EffectivePermissions } from "./effectivePermissions.js";
 import type { LaunchSettings, PageRunInput, ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PORT, dataDir } from "../config.js";
@@ -116,7 +117,8 @@ import type {
 import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, planAccess, readsOnly, settleAccess, wantsPlan } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
-import { cleanProtectedPaths, type PolicyEnv } from "./access.js";
+import { cleanProtectedPaths, policyFor, type PolicyEnv } from "./access.js";
+import { blockSummary, resetSandbox, sandboxed, sandboxNet, type SandboxBlock, type SandboxHooks } from "./sandbox.js";
 import { injectionDetectors } from "./injection.js";
 
 import { parseComponentInput, componentJson, componentString, componentText, componentLink, type ComponentAnswer, type ComponentItem, type ComponentInput } from "./componentTool.js";
@@ -507,6 +509,8 @@ export class AgentHost {
   private threads = new Map<string, Thread>();
   private sessions = new Map<string, ProviderSession>();
   private effectivePermissions = new Map<string, EffectivePermissions>();
+  /** Threads already told that the sandbox could not start (#899): said once. */
+  private sandboxMissingSaid = new Set<string>();
   private runs = new Map<string, RunState>();
   private status = new Map<string, RunStatus>();
   private unread = new Set<string>();
@@ -610,6 +614,7 @@ export class AgentHost {
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
       accessEnv: () => this.accessEnv(),
+      sandbox: (threadId, cwd) => this.sandboxHooks(threadId, cwd),
       // Page workers run unattended; helpers do not hand anything in themselves.
       isWorker: (id) => !this.threads.get(id)?.helperOf && this.unattended(id),
       workerTools: (id) => {
@@ -1088,6 +1093,7 @@ export class AgentHost {
     this.flushNow();
     for (const session of this.sessions.values()) session.dispose();
     for (const provider of Object.values(this.providers)) provider.dispose();
+    void resetSandbox();
     this.db.close();
   }
 
@@ -2078,6 +2084,83 @@ export class AgentHost {
     } catch {
       return false;
     }
+  }
+
+  /** The OS sandbox for a thread's shell commands (#899), or null where it does not apply. Read per command, so grants count at once. */
+  private sandboxHooks(threadId: string, cwd: string): SandboxHooks | null {
+    const initial = this.threads.get(threadId);
+    if (!initial || !sandboxed(initial)) return null;
+    return {
+      spec: () => {
+        const t = this.threads.get(threadId);
+        if (!t || !sandboxed(t)) return null;
+        return { policy: policyFor({ ...t, cwd }, { ...this.accessEnv(), tmp: os.tmpdir() }), net: sandboxNet(t, this.prefs().webAllowlist, PORT) };
+      },
+      blocked: (command, blocks, signal) => this.sandboxBlocked(threadId, command, blocks, signal),
+      missing: (reason) => {
+        if (this.sandboxMissingSaid.has(threadId)) return;
+        this.sandboxMissingSaid.add(threadId);
+        log(`Sandbox unavailable for ${threadId}: ${reason}`);
+        const run = this.runs.get(threadId);
+        if (run) this.closeBlocks(run);
+        this.addItem(threadId, run?.turn.id ?? null, { kind: "notice", level: "warn", text: `Sandbox not enforced: ${reason}. This thread's commands run without it.` });
+      },
+    };
+  }
+
+  /**
+   * What the sandbox refused a command (#899): one chat row. Where a grant would let it through and
+   * someone is watching, the row offers "Allow … for this thread" and the agent waits for the answer;
+   * otherwise it is a notice. The agent gets a short reason either way. The agent_sandbox event carries
+   * the blocks for the warning triggers (#893).
+   */
+  async sandboxBlocked(threadId: string, command: string, blocks: SandboxBlock[], signal?: AbortSignal): Promise<string> {
+    const run = this.runs.get(threadId);
+    this.emit({ type: "agent_sandbox", threadId, turnId: run?.turn.id ?? null, command: command.slice(0, 2000), blocks });
+    const summary = blockSummary(blocks);
+    if (!run) return summary;
+    const what = (b: SandboxBlock) => (b.op === "network" ? `connect to ${b.target}` : `${b.op} to ${b.target}`);
+    const title = `Sandbox blocked: ${what(blocks[0])}${blocks.length > 1 ? ` (+${blocks.length - 1} more)` : ""}`.slice(0, 300);
+    const detail = [command.length > 500 ? `${command.slice(0, 500)}…` : command, ...blocks.slice(1, 10).map(what)].join("\n");
+    const grants = blocks.flatMap((b) => (b.grant ? [b.grant] : []));
+    this.closeBlocks(run);
+    if (!grants.length || this.unattended(threadId)) {
+      this.addItem(threadId, run.turn.id, { kind: "notice", level: "warn", text: `${title}\n${detail}` });
+      return grants.length
+        ? `${summary} Nobody can allow it in this unattended run: keep to the workspace, or say what you needed.`
+        : `${summary} Protected paths and private addresses stay blocked, whatever is granted.`;
+    }
+    const one = grants.length === 1 ? grants[0] : null;
+    const label = one ? `Allow ${one.kind === "folder" ? one.path : one.host} for this thread` : "Allow these for this thread";
+    const item = this.addItem(threadId, run.turn.id, {
+      kind: "approval",
+      requestId: "",
+      tool: "execute",
+      title,
+      detail,
+      options: [
+        { id: "allow", label, kind: "allow_always" },
+        { id: "keep", label: "Keep blocked", kind: "reject_once" },
+      ],
+      status: "pending",
+    });
+    let decision: ApprovalDecision;
+    try {
+      decision = await this.waitPending<ApprovalDecision>(threadId, run, "approval", item.id, signal);
+    } catch {
+      return summary;
+    }
+    if (decision.optionId !== "allow") return `${summary} The user kept it blocked${decision.note ? `: ${decision.note}` : ""}. Work around it, or say what you needed.`;
+    const t = this.threads.get(threadId);
+    if (t) {
+      const folders = grants.flatMap((g) => (g.kind === "folder" ? [{ kind: "folder" as const, path: g.path, access: "write" as const }] : []));
+      const hosts = grants.flatMap((g) => (g.kind === "host" ? [g.host] : []));
+      if (folders.length) t.toolGrants = addToolGrants(t.toolGrants, folders);
+      if (hosts.length) t.webGrants = { ...t.webGrants, domains: cleanAllowlist([...(t.webGrants?.domains ?? []), ...hosts]) };
+      this.db.saveThread(t);
+      this.emitThread(threadId);
+    }
+    return `${summary} The user allowed it for this thread: run the command again.`;
   }
 
   /** Keep what one of Scribe's lasting tool options granted (#743): on the thread, or on the command allowlist. */

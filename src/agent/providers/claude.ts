@@ -11,6 +11,7 @@ import { log } from "../../log.js";
 import type { ModelOption, ProviderStatus, SlashCommand, TaskInfo, Thread, ToolKind } from "../types.js";
 import { APPROVAL_LABEL, isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { webCallAllowed, type WebCall } from "../webAccess.js";
+import { claudeSandbox, sandboxed } from "../sandbox.js";
 import { claudeServerConfig, serversKey, toolPolicy, type ResolvedMcpServer } from "../mcpConfig.js";
 import { McpPermissions, mcpApprovalOptions } from "../mcpPermissions.js";
 import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
@@ -812,7 +813,7 @@ class ClaudeSession implements ProviderSession {
 
   /** Options that need a new process when they change. */
   private restartKey(thread: Thread): string {
-    return JSON.stringify([thread.id, thread.mode, customKey(thread), thread.web, thread.cwd, noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers()), thread.claudeAccount ?? null]);
+    return JSON.stringify([thread.id, thread.mode, customKey(thread), thread.web, thread.cwd, sandboxed(thread), noPages(thread.scope), this.instructions, this.ctx.claudeHooks?.() ?? false, serversKey(this.userServers()), thread.claudeAccount ?? null]);
   }
 
   update(thread: Thread): void {
@@ -954,6 +955,9 @@ class ClaudeSession implements ProviderSession {
       // Plans are Scribe's plan turns (#721), so Claude's own plan mode stays off.
       options.disallowedTools = ["EnterWorktree", "ExitWorktree", "EnterPlanMode", "ExitPlanMode"];
     }
+    // Its Bash under srt with the thread's policy (#899): Linux, short of Full access. Settled when the session starts.
+    const sandbox = board ? null : this.ctx.sandbox?.(thread.id, this.cwd())?.spec();
+    if (sandbox) options.sandbox = claudeSandbox(sandbox);
     if (disabledTools.length) {
       options.allowedTools = options.allowedTools?.filter((name) => !disabledTools.includes(name));
       options.disallowedTools = [...(options.disallowedTools ?? []), ...disabledTools];

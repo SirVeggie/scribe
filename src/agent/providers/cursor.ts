@@ -24,6 +24,7 @@ import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage
 import { isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
+import { sandboxed } from "../sandbox.js";
 import { cursorAccessToken } from "./cursorAuth.js";
 import { SqliteCursorStore } from "./cursorStore.js";
 import { McpBridge } from "../mcpBridge.js";
@@ -597,7 +598,7 @@ class CursorSession implements ProviderSession {
     const t = this.thread;
     // The SDK fixes Auto-review at open time. Ask/Edits/Auto share that setting;
     // hostShell below still reconnects when an approval change changes the tool setup.
-    return JSON.stringify([t.id, t.mode, customKey(t), t.web, cursorAutoReview(t), this.cwd(), this.hostShell(), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
+    return JSON.stringify([t.id, t.mode, customKey(t), t.web, cursorAutoReview(t), this.cwd(), this.hostShell(), sandboxed(t), noPages(t.scope), serversKey(this.ctx.mcpServers?.(t) ?? []), this.ctx.webSearchUrl?.() ?? ""]);
   }
 
   /**
@@ -696,6 +697,8 @@ class CursorSession implements ProviderSession {
         // Pages: nothing from Cursor's own config, so a user MCP server can't bring file tools in.
         settingSources: t.mode === "board" ? [] : ["user", "project"],
         autoReview: cursorAutoReview(t),
+        // Cursor's own sandbox for its shell and tools, on Linux short of Full access (#899).
+        ...(sandboxed(t) ? { sandboxOptions: { enabled: true } } : {}),
         customTools,
         // Subagents get the same tool restrictions as the thread, and with the host shell no shell of their own.
         subagentInherit: hostShell ? { resourceProviderOptions: { suppressDefaultShellExecutor: true } } : {},
@@ -1123,7 +1126,7 @@ class CursorSession implements ProviderSession {
         abort.signal
       );
       if (decision.optionId !== "allow") return fail(decision.note ? `The user denied this command: ${decision.note}` : "The user denied this command.");
-      const result = await runCommand({ command, cwd, timeoutMs: clampTimeout(args.timeout_ms), signal: abort.signal });
+      const result = await runCommand({ command, cwd, timeoutMs: clampTimeout(args.timeout_ms), signal: abort.signal, sandbox: this.ctx.sandbox?.(this.thread.id, this.cwd()) });
       const call = toolId ? this.shellCalls.get(toolId) : undefined;
       if (call) call.exitCode = result.exitCode;
       const status = result.cancelled ? "Cancelled by the user." : result.timedOut ? "Timed out and stopped." : `Exit code: ${result.exitCode ?? "none"}`;

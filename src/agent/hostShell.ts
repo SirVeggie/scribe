@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { sandboxedRun, type SandboxHooks } from "./sandbox.js";
 
 /**
  * Shell commands Scribe runs itself on an agent's behalf, after the user approved them. Used where
@@ -41,8 +42,16 @@ function killTree(pid: number | undefined): void {
   }
 }
 
-/** Run one command line to the end (or the timeout, or the signal), with stdout and stderr interleaved. */
-export function runCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal }): Promise<CommandResult> {
+/**
+ * Run one command line to the end (or the timeout, or the signal), with stdout and stderr interleaved.
+ * With the thread's sandbox (#899) it runs under srt, and what it refused is added to the output.
+ */
+export async function runCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal; sandbox?: SandboxHooks | null }): Promise<CommandResult> {
+  const { result, note } = await sandboxedRun(opts.sandbox, opts.command, { signal: opts.signal }, (line) => spawnCommand({ ...opts, command: line }));
+  return note ? { ...result, output: clipOutput(`${result.output}${result.output ? "\n" : ""}${note}`) } : result;
+}
+
+function spawnCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal }): Promise<CommandResult> {
   return new Promise((resolve) => {
     const { file, args } = shellFor(opts.command);
     let output = "";

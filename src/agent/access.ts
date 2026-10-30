@@ -208,14 +208,16 @@ export function checkPath(policy: AccessPolicy, file: string, op: AccessOp): Pat
 /** How each rule is enforced for a provider, for the effective-permissions view (#277). */
 export type Enforcement = "os" | "scribe" | "approval" | "none";
 
-export function effective(provider: ProviderId): Array<{ surface: string; enforced: Enforcement }> {
+export function effective(provider: ProviderId, platform: NodeJS.Platform = process.platform): Array<{ surface: string; enforced: Enforcement }> {
+  // The OS sandbox for the shells Scribe spawns (#899); Windows waits for #900.
+  const shell: Enforcement = platform === "linux" ? "os" : "approval";
   const rows: Array<{ surface: string; enforced: Enforcement }> = [
     { surface: "Scribe's read_file, file search and page_open", enforced: "scribe" },
   ];
-  if (provider === "pi") rows.push({ surface: "Native read, edit and write", enforced: "scribe" }, { surface: "Native shell", enforced: "approval" });
+  if (provider === "pi") rows.push({ surface: "Native read, edit and write", enforced: "scribe" }, { surface: "Native shell", enforced: shell });
   if (provider === "codex") rows.push({ surface: "Codex shell and edits (writes)", enforced: "os" }, { surface: "Codex reads", enforced: "none" });
-  if (provider === "claude") rows.push({ surface: "Claude file tools and shell", enforced: "approval" });
-  if (provider === "cursor") rows.push({ surface: "Cursor built-in file tools", enforced: "none" }, { surface: "Cursor host shell", enforced: "approval" });
+  if (provider === "claude") rows.push({ surface: "Claude file tools", enforced: "approval" }, { surface: "Claude shell", enforced: shell });
+  if (provider === "cursor") rows.push({ surface: "Cursor built-in file tools", enforced: "none" }, { surface: "Cursor host shell", enforced: shell });
   return rows;
 }
 
