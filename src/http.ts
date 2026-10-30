@@ -12,7 +12,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
-import { AGENT_LABEL_HEADER, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl } from "./config.js";
+import { AGENT_LABEL_HEADER, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PEER_PORT, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl, dataDir, peerHostsOverride } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
@@ -75,6 +75,8 @@ import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { identify, prepareSecrets, socketAllowed } from "./callers.js";
+import { PeerService } from "./devices/peers.js";
+import { devicesRouter } from "./devices/routes.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
 import { browserViewHtml } from "./browserPage.js";
@@ -251,6 +253,17 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
+  const peerHosts = peerHostsOverride();
+  const peers = new PeerService({ home: dataDir(), port: PEER_PORT, hosts: peerHosts === "off" ? [] : peerHosts, version: VERSION, log });
+  let devicesQueued = false;
+  peers.on("change", () => {
+    // Heartbeats and several links coming up at once fold into one refetch.
+    if (devicesQueued) return;
+    devicesQueued = true;
+    setTimeout(() => { devicesQueued = false; broadcast({ type: "devices" }); }, 250).unref();
+  });
+  peers.on("paired", (result) => broadcast({ type: "device_paired", ...result }));
+  app.use("/api/devices", devicesRouter(peers));
   const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [] });
   const pageAudio = new PageAudio(id => store.pagePermissions(id));
   const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
@@ -2511,6 +2524,7 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/shutdown", async (_req, res) => {
     await pluginService.close();
+    void peers.stop();
     searchEmbedder.stop();
     res.json({ ok: true });
     try {
@@ -2530,7 +2544,7 @@ export async function startHttp(): Promise<http.Server> {
   server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
   const contentServer = http.createServer(app);
   // A page's script or a website must not read every page off the board's socket (#660).
-  const wss = new WebSocketServer({ noServer: true, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers) });
+  const wss = new WebSocketServer({ noServer: true, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers, req.socket) });
   // Two servers attached to one HTTP server abort each other's upgrades, so upgrades are routed by path.
   server.on("upgrade", (req, socket, head) => {
     if (audioStream.handle(req, socket, head)) return;
@@ -2617,6 +2631,8 @@ export async function startHttp(): Promise<http.Server> {
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
+  peers.attach(server);
+  await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));
   void prebuildEditorBundle();
 
   log(`Scribe listening on ${baseUrl()} (tab pages on their own *${PAGE_HOST_SUFFIX} origins)`);

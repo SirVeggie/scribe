@@ -469,6 +469,10 @@ export type BoardEvent =
   | { type: "page_asset_warning"; id: string; title: string; usage: PageAssetUsage }
   | { type: "persist_error"; error: string }
   | { type: "persist_ok" }
+  /** Paired devices or their links changed (#904): Settings → Devices refetches /api/devices. */
+  | { type: "devices" }
+  /** A device paired with this one by its code: the words to compare, and the other paired devices it could meet. */
+  | { type: "device_paired"; device: { id: string; name: string }; words: string[]; others: { id: string; name: string }[] }
   | AgentEvent;
 
 export type UpsertInput = {

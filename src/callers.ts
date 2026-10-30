@@ -4,6 +4,7 @@ import path from "node:path";
 import type express from "express";
 import { AGENT_CLIENT, CLIENT_HEADER, LOCAL_TOKEN_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, dataDir } from "./config.js";
 import { isContentHost } from "./contentOrigin.js";
+import { peerDeviceOf } from "./devices/link.js";
 import type { Viewer } from "./types.js";
 
 /**
@@ -16,8 +17,12 @@ import type { Viewer } from "./types.js";
  *
  * This stops callers that leave the agent header out or forge a thread id. A process with the user's
  * file access can still read the token files, or scribe.sqlite itself; that is outside what HTTP can stop.
+ *
+ * A request that came over a paired device's peer link (#904) is that device's user: { viewer: "user",
+ * device }. Its socket is the link's stream, which only a pinned key can open, so no header can claim it
+ * and the browser rule below (`sec-fetch-site`) never applies to it.
  */
-export type Caller = { viewer: Viewer; thread?: string; external?: true };
+export type Caller = { viewer: Viewer; thread?: string; external?: true; device?: string };
 
 const known = new WeakMap<express.Request, Caller>();
 
@@ -31,6 +36,8 @@ export function identify(req: express.Request): Caller {
 }
 
 function decide(req: express.Request): Caller {
+  const device = peerDeviceOf(req.socket);
+  if (device) return { viewer: "user", device };
   // A page's own script on its own origin; what it may reach is the page's (frameReach).
   if (isContentHost(req)) return { viewer: "user" };
   const thread = req.get(THREAD_HEADER)?.slice(0, 60);
@@ -44,8 +51,9 @@ function decide(req: express.Request): Caller {
   return { viewer: "agent" };
 }
 
-/** Whether a WebSocket upgrade may join the board: the board UI (its own origin) or a local tool with the token. */
-export function socketAllowed(headers: { origin?: string; host?: string; [name: string]: unknown }): boolean {
+/** Whether a WebSocket upgrade may join the board: the board UI (its own origin), a local tool with the token, or a paired device's link. */
+export function socketAllowed(headers: { origin?: string; host?: string; [name: string]: unknown }, socket?: object): boolean {
+  if (peerDeviceOf(socket)) return true;
   const origin = headers.origin;
   if (!origin) {
     const token = headers[LOCAL_TOKEN_HEADER];

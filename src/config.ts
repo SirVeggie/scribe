@@ -11,6 +11,15 @@ export const HOST = "127.0.0.1";
 /** Loopback origin for data-free shared files (tooltip, vendor libraries) and blobs; pages run on their own (pageHost). */
 export const CONTENT_HOST = "127.0.0.2";
 export const PORT = Number(process.env.SCRIBE_PORT || 4747);
+/** The peer link's TLS port (#904), on LAN and tailnet addresses only; the API above stays loopback. */
+export const PEER_PORT = Number(process.env.SCRIBE_PEER_PORT || PORT + 1);
+/** Addresses to listen for peers on instead of the LAN and tailnet ones (comma separated), or "off". */
+export function peerHostsOverride(): string[] | "off" | undefined {
+  const value = process.env.SCRIBE_PEER_HOSTS?.trim();
+  if (!value) return undefined;
+  if (value === "off") return "off";
+  return value.split(",").map((host) => host.trim()).filter(Boolean);
+}
 export const MAX_HTML_BYTES = 2 * 1024 * 1024;
 export const MAX_STATE_BYTES = 4 * 1024 * 1024;
 /** Events each page keeps for waits to read; older ones drop off. */
