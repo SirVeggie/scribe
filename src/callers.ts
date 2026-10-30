@@ -23,6 +23,10 @@ import type { Viewer } from "./types.js";
  * device }. Its socket is the link's stream, which only a pinned key can open, so no header can claim it
  * and the browser rule below (`sec-fetch-site`) never applies to it. One that carries the remote-agent
  * header is that device's chat instead (#911): { viewer: "agent", thread: "@device/thread", device, remote }.
+ *
+ * Scribe chats' MCP calls on the agent port (AGENT_PORT, #915), which a sandbox lets through instead of the
+ * board's. Every caller there is an agent: a thread with its token, else anonymous. No browser rule, page
+ * origin or local token applies, so a sandboxed shell that reaches it is never the user.
  */
 export type Caller = { viewer: Viewer; thread?: string; external?: true; device?: string; remote?: RemoteAgent };
 
@@ -37,6 +41,30 @@ export function identify(req: express.Request): Caller {
   return caller;
 }
 
+const agentSockets = new WeakSet<object>();
+
+/** A connection to the agent port (AGENT_PORT): http.ts marks each one as it comes in. */
+export function markAgentSocket(socket: object): void {
+  agentSockets.add(socket);
+}
+
+export function onAgentPort(socket: object | undefined): boolean {
+  return Boolean(socket) && agentSockets.has(socket!);
+}
+
+/**
+ * The agent port serves the MCP's /api calls on the plain loopback host, nothing else: no page origins, no
+ * gateway hosts (#905), no board UI.
+ */
+export function agentPortGate(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (!onAgentPort(req.socket)) {
+    next();
+    return;
+  }
+  if ((req.hostname === "127.0.0.1" || req.hostname === "localhost") && req.path.startsWith("/api/")) next();
+  else res.status(404).type("text").send("This port only serves Scribe chats' MCP.");
+}
+
 function decide(req: express.Request): Caller {
   const device = peerDeviceOf(req.socket);
   if (device) {
@@ -44,11 +72,13 @@ function decide(req: express.Request): Caller {
     const remote = decodeRemoteAgent(req.get(REMOTE_AGENT_HEADER));
     return remote ? { viewer: "agent", thread: remoteThreadId(device, remote.thread), device, remote } : { viewer: "user", device };
   }
-  // A page's own script on its own origin; what it may reach is the page's (frameReach).
-  if (isContentHost(req)) return { viewer: "user" };
   const thread = req.get(THREAD_HEADER)?.slice(0, 60);
   const token = req.get(THREAD_TOKEN_HEADER);
-  if (thread && token && sameToken(token, threadToken(thread))) return { viewer: "agent", thread };
+  const chat = thread && token && sameToken(token, threadToken(thread)) ? thread : undefined;
+  if (onAgentPort(req.socket)) return chat ? { viewer: "agent", thread: chat } : { viewer: "agent" };
+  // A page's own script on its own origin; what it may reach is the page's (frameReach).
+  if (isContentHost(req)) return { viewer: "user" };
+  if (chat) return { viewer: "agent", thread: chat };
   const agent = req.get(CLIENT_HEADER) === AGENT_CLIENT;
   if (hasLocalToken(req.get(LOCAL_TOKEN_HEADER))) return agent ? { viewer: "agent", external: true } : { viewer: "user" };
   if (agent) return { viewer: "agent" };
@@ -60,6 +90,7 @@ function decide(req: express.Request): Caller {
 /** Whether a WebSocket upgrade may join the board: the board UI (its own origin), a local tool with the token, or a paired device's link. */
 export function socketAllowed(headers: { origin?: string; host?: string; [name: string]: unknown }, socket?: object): boolean {
   if (peerDeviceOf(socket)) return true;
+  if (onAgentPort(socket)) return false;
   const origin = headers.origin;
   if (!origin) {
     const token = headers[LOCAL_TOKEN_HEADER];

@@ -12,7 +12,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
-import { AGENT_LABEL_HEADER, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PEER_PORT, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl, dataDir, peerHostsOverride } from "./config.js";
+import { AGENT_LABEL_HEADER, AGENT_PORT, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PEER_PORT, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl, dataDir, peerHostsOverride } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
@@ -74,7 +74,7 @@ import { audioStreamServer } from "./audio/stream.js";
 import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
-import { identify, prepareSecrets, socketAllowed } from "./callers.js";
+import { agentPortGate, identify, markAgentSocket, prepareSecrets, socketAllowed } from "./callers.js";
 import { PeerService } from "./devices/peers.js";
 import { devicesRouter } from "./devices/routes.js";
 import { peerGateway } from "./devices/gateway.js";
@@ -253,6 +253,8 @@ export async function startHttp(): Promise<http.Server> {
   };
   const embeds = embedProxy({ allowed: embedOriginKnown, ports: [PORT, PEER_PORT], name: () => peers.identity.name });
   const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)), devices: devicesApi, embeds });
+  // The agent port (#915) only reaches the API, before any host-based routing.
+  app.use(agentPortGate);
   app.use(gateway.http);
   // Agents on other devices (#911): only the calls their grant here covers.
   app.use(remoteAgentGate(peers));
@@ -2673,6 +2675,9 @@ export async function startHttp(): Promise<http.Server> {
   const server = http.createServer(app);
   server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
   const contentServer = http.createServer(app);
+  // Scribe chats' MCP (callers.ts): the one loopback port a sandbox lets agents reach. No upgrades, no UI.
+  const agentServer = http.createServer(app);
+  agentServer.on("connection", markAgentSocket);
   // A page's script or a website must not read every page off the board's socket (#660).
   const wss = new WebSocketServer({ noServer: true, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers, req.socket) });
   // Two servers attached to one HTTP server abort each other's upgrades, so upgrades are routed by path.
@@ -2761,9 +2766,13 @@ export async function startHttp(): Promise<http.Server> {
   // Covers receiving the request (large imports), not a slow response, so it does not bound page_wait.
   server.requestTimeout = REQUEST_TIMEOUT_MS;
   contentServer.requestTimeout = REQUEST_TIMEOUT_MS;
+  agentServer.requestTimeout = REQUEST_TIMEOUT_MS;
 
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
+  // Chats' MCP falls back to the board port without it (daemon.ts), and a sandbox then cuts them off.
+  await listen(agentServer, AGENT_PORT, HOST).catch((err) => log(`Agent port ${AGENT_PORT} could not open: ${(err as Error).message}`));
+  server.once("close", () => agentServer.close());
   peers.attach(server);
   await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));
   void prebuildEditorBundle();

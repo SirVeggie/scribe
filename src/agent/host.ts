@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PORT, dataDir } from "../config.js";
+import { AGENT_PORT, PORT, dataDir } from "../config.js";
 import { browserControl, browserActivity, browserTurnEnded, browserUserMessage, closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
 import type { ActionCaller } from "../actions/types.js";
@@ -608,7 +608,7 @@ export class AgentHost {
     const scratchDir = path.join(dataDir(), "agent", "scratch");
     fs.mkdirSync(scratchDir, { recursive: true });
     const entry = fileURLToPath(new URL("../index.js", import.meta.url));
-    const env: Record<string, string> = { SCRIBE_PORT: String(PORT) };
+    const env: Record<string, string> = { SCRIBE_PORT: String(PORT), SCRIBE_AGENT_PORT: String(AGENT_PORT) };
     if (process.env.SCRIBE_HOME) env.SCRIBE_HOME = process.env.SCRIBE_HOME;
     this.ctx = {
       summarizeContext: (thread, prompt, signal) => this.summarizeContext(thread, prompt, signal),
@@ -2111,7 +2111,7 @@ export class AgentHost {
       spec: () => {
         const t = this.threads.get(threadId);
         if (!t || !sandboxed(t)) return null;
-        return { policy: policyFor({ ...t, cwd }, { ...this.accessEnv(), tmp: os.tmpdir() }), net: sandboxNet(t, this.prefs().webAllowlist, PORT) };
+        return { policy: policyFor({ ...t, cwd }, { ...this.accessEnv(), tmp: os.tmpdir() }), net: sandboxNet(t, this.prefs().webAllowlist, AGENT_PORT) };
       },
       blocked: (command, blocks, signal) => this.sandboxBlocked(threadId, command, blocks, signal),
       missing: (reason) => {

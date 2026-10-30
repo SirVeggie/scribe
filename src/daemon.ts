@@ -4,7 +4,7 @@ import fs from "node:fs";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, INSTALL_ROOT, LOCAL_TOKEN_HEADER, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, baseUrl, dataDir } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, INSTALL_ROOT, LOCAL_TOKEN_HEADER, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, agentBaseUrl, baseUrl, dataDir } from "./config.js";
 
 /** Identifies this MCP process to the daemon, so claims can tell a live agent from one that stopped. */
 const SESSION_ID = randomBytes(6).toString("hex");
@@ -37,9 +37,17 @@ type Health = {
   activeId: string | null;
 };
 
-export async function health(): Promise<Health | null> {
+/** Whether the agent port answered the last health check; a daemon from before #915 has none. */
+let agentPortUp = true;
+
+/** Where api() calls: a Scribe chat's MCP uses the agent port (#915), the one a sandbox lets it reach. */
+function daemonUrl(): string {
+  return process.env.SCRIBE_THREAD && agentPortUp ? agentBaseUrl() : baseUrl();
+}
+
+async function healthAt(url: string): Promise<Health | null> {
   try {
-    const res = await fetch(`${baseUrl()}/api/health`, { signal: AbortSignal.timeout(800) });
+    const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(800) });
     if (!res.ok) {
       return null;
     }
@@ -47,6 +55,19 @@ export async function health(): Promise<Health | null> {
   } catch {
     return null;
   }
+}
+
+export async function health(): Promise<Health | null> {
+  if (!process.env.SCRIBE_THREAD) return healthAt(baseUrl());
+  const agent = await healthAt(agentBaseUrl());
+  if (agent) {
+    agentPortUp = true;
+    return agent;
+  }
+  const board = await healthAt(baseUrl());
+  if (board && agentPortUp) log(`No agent port at ${agentBaseUrl()}; calling ${baseUrl()} instead`);
+  agentPortUp = !board;
+  return board;
 }
 
 /**
@@ -130,7 +151,7 @@ export async function api(
   const payload = body === undefined ? undefined : JSON.stringify(body);
   const { status, text } = await new Promise<{ status: number; text: string }>((resolve, reject) => {
     const req = http.request(
-      `${baseUrl()}${pathname}`,
+      `${options?.user ? baseUrl() : daemonUrl()}${pathname}`,
       {
         method,
         headers: {

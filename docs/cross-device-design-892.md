@@ -89,6 +89,7 @@ that implement it.
   unknown device is 404, an offline one 502 with a link back.
 - Who may pass: only this device's browser. The local caller must be the user, send `Sec-Fetch-Site`, and
   any `Origin` must be one of the same device's gateway origins on this port; sockets need that Origin.
+  Any local process can send those headers; sandboxed agents can't reach this port at all (agent port, #915).
   Scribe's own headers (local token, thread token, client) are dropped. The agent browser blocks every
   gateway host (`blockedBoardRequest`), since agents get no cross-device access in v1.
 - The remote side trusts the link's device (`Caller.device`), not the headers. It reads the suffix from the

@@ -91,11 +91,14 @@ export function providerHosts(thread: Partial<Pick<Thread, "provider" | "model">
   return thread.provider ? PROVIDER_HOSTS[thread.provider] ?? [] : [];
 }
 
-/** The thread's network in the sandbox, from its Web setting and web grants. Loopback only to Scribe's own port. */
-export function sandboxNet(thread: SandboxThread, webAllowlist: string[], scribePort: number): SandboxNet {
+/**
+ * The thread's network in the sandbox, from its Web setting and web grants. Loopback only to Scribe's agent port
+ * (AGENT_PORT, #915), never the board's: there a forged browser header would pass as the user.
+ */
+export function sandboxNet(thread: SandboxThread, webAllowlist: string[], agentPort: number): SandboxNet {
   const open = thread.web === "on" || Boolean(thread.webGrants?.all);
   const domains = cleanAllowlist([...providerHosts(thread), ...(thread.web === "limited" ? webAllowlist : []), ...(thread.webGrants?.domains ?? [])]);
-  return { open, allow: uniq([...domains.flatMap(domainEntries), `127.0.0.1:${scribePort}`, `localhost:${scribePort}`]) };
+  return { open, allow: uniq([...domains.flatMap(domainEntries), `127.0.0.1:${agentPort}`, `localhost:${agentPort}`]) };
 }
 
 function inAny(roots: string[], target: string): boolean {

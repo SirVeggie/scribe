@@ -13,6 +13,11 @@ export const CONTENT_HOST = "127.0.0.2";
 export const PORT = Number(process.env.SCRIBE_PORT || 4747);
 /** The peer link's TLS port (#904), on LAN and tailnet addresses only; the API above stays loopback. */
 export const PEER_PORT = Number(process.env.SCRIBE_PEER_PORT || PORT + 1);
+/**
+ * Loopback port for Scribe chats' MCP only (#915): every caller there is an agent, so a sandbox can allow this
+ * port and never the board's, where a forged browser header passes as the user.
+ */
+export const AGENT_PORT = Number(process.env.SCRIBE_AGENT_PORT || PORT + 2);
 /** Addresses to listen for peers on instead of the LAN and tailnet ones (comma separated), or "off". */
 export function peerHostsOverride(): string[] | "off" | undefined {
   const value = process.env.SCRIBE_PEER_HOSTS?.trim();
@@ -66,6 +71,11 @@ export const AGENT_LABEL_HEADER = "x-scribe-agent";
 
 export function baseUrl(): string {
   return `http://${HOST}:${PORT}`;
+}
+
+/** Where a Scribe chat's MCP calls the daemon (AGENT_PORT). */
+export function agentBaseUrl(): string {
+  return `http://${HOST}:${AGENT_PORT}`;
 }
 
 /** Origins the board shell may be opened from: the desktop app uses baseUrl(), a browser may use localhost. */

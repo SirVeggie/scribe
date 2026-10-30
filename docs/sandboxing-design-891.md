@@ -63,13 +63,23 @@ Ideas borrowed from it: per-binary network rules, audit-before-enforce, and agen
 - srt keeps one configuration per process, so each command carries its thread's part: `srtFilesystem(policy)` as the wrap's own config, and the thread's hosts as a per-command allow list (`registerCommandNetworkLists`, under a random id).
   - Reads: `denyRead` = protected paths and secrets, `allowRead` = the thread's exceptions inside them. A read outside the read roots can't ask from inside the OS sandbox, so there only Scribe's own gates ask.
   - Writes: `allowWrite` = write roots plus temp. `denyWrite` = worktree links, secrets, and protected paths inside a root.
-- Network (`sandboxNet`): web off = the provider's API hosts; limited = also the allowlist; plus web grants; `127.0.0.1`/`localhost` only on Scribe's port. srt has no "any host" entry, so web on (or "all websites" granted) uses a second srt instance: the same module imported under another URL, whose ask callback allows any name and public IP. Both instances refuse private ranges (`deniedResolvedAddresses`), and srt's own check refuses loopback, link-local and this machine's addresses.
+- Network (`sandboxNet`): web off = the provider's API hosts; limited = also the allowlist; plus web grants; `127.0.0.1`/`localhost` only on Scribe's agent port (#915, below). srt has no "any host" entry, so web on (or "all websites" granted) uses a second srt instance: the same module imported under another URL, whose ask callback allows any name and public IP. Both instances refuse private ranges (`deniedResolvedAddresses`), and srt's own check refuses loopback, link-local and this machine's addresses.
 - Native: a custom `bash` tool replaces Pi's built-in, with `BashOperations` that wrap each command (`sandboxedRun`). Cursor's host shell: `runCommand` wraps it the same way. Cursor gets `local.sandboxOptions: { enabled: true }`. Claude: `options.sandbox` from the same lists (`claudeSandbox`): strict allow list unless web is on, no unsandboxed escape. It is fixed when the session starts, and Claude reports its own violations.
 - If srt can't start (no bubblewrap or socat), commands run without it, and the chat says "Sandbox not enforced" once per thread.
 - Violations: srt's Linux monitor reports every write outside its session list, so `sandboxBlocks` keeps only what `checkPath` refuses. One chat row, "Sandbox blocked: …". When a folder or host grant would help and someone is watching, it has "Allow … for this thread" (a write folder grant or a web domain grant) and the agent waits for the answer. Otherwise it is a notice. The agent gets a short reason after the output. Each block set is also emitted as an `agent_sandbox` event for #893.
 - Not tested on Linux yet: it was built on Windows, where only the pure parts run (`sandbox.test.ts`).
 
 A blocked action shows one row in the chat ("Sandbox blocked: write to …"), with "Allow this folder for this thread" or "Allow host for this thread". The agent gets a short reason back. The same events feed #893.
+
+### Agent port (#915)
+
+srt filters loopback by host and port, not path, so allowing the board port let a sandboxed shell reach the whole API and the
+gateway, where a forged `Sec-Fetch-Site` passes as the user (`callers.ts`). The daemon now also listens on `AGENT_PORT`
+(`SCRIBE_AGENT_PORT`, default board port + 2, loopback). There every caller is an agent: a thread with its token, else
+anonymous. No browser header, page origin or local token counts, only the plain loopback host and `/api/` are served, and
+there are no WebSocket upgrades. Scribe chats' MCP (`SCRIBE_THREAD` set) calls it, falling back to the board port when a
+daemon has none, and `sandboxNet` allows only it. Full access and unsandboxed agents are unchanged: they can read the
+local token anyway.
 
 ## Steps
 
