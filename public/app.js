@@ -119,7 +119,7 @@
   const FILE_VIEWS_KEY = "scribe.fileViews";
   const SIDE_WIDTH_KEY = "scribe.archiveWidth";
   /** Must match VERSION in src/config.ts. */
-  const BOARD_VERSION = "3.2.4";
+  const BOARD_VERSION = "3.2.5";
   const BUILTIN_OPEN_KEY = "scribe.builtinTemplatesOpen";
   const TAB_CARD_DELAY = 450;
   const TEMPLATE_CARD_DELAY = 700;
@@ -711,6 +711,16 @@
       if (msg.value !== "allow" && ((msg.perm === "audio.microphone" && pageAudioSessions.get(msg.id)?.mode !== "stream") ||
         (msg.perm === "audio.microphoneStream" && pageAudioSessions.get(msg.id)?.mode === "stream") ||
         (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
+      return;
+    }
+    if (msg.type === "devices") {
+      if (!document.getElementById("settings").hidden) window.scribeDevicesSettings.refresh();
+      return;
+    }
+    if (msg.type === "device_paired") {
+      // Someone used this device's code: compare the words here too.
+      window.scribeDevicesSettings.paired(msg);
+      if (document.getElementById("settings").hidden) showNotice(`Paired with ${msg.device.name}`, { action: { label: "Compare words", run: () => openSettings("Devices") } });
       return;
     }
     if (msg.type === "plugin_event") {
@@ -1555,6 +1565,7 @@
     { label: "Audio", sections: window.scribeAudioSettings.sections },
     { label: "Plugins", sections: window.scribePluginSettings.sections },
     { label: "Integrations", sections: window.scribeIntegrations.sections },
+    { label: "Devices", sections: window.scribeDevicesSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
@@ -1659,12 +1670,15 @@
   window.scribeAudioSettings.init({ confirm: confirmDelete });
   window.scribePluginSettings.init({confirm:confirmDelete});
   window.scribePluginSettings.refresh();
+  window.scribeDevicesSettings.init({ confirm: confirmDelete });
   function openSettings(category) {
     if (isPaletteOpen()) {
       closePalette();
     }
     settingsCategories.open();
     if (category === "Audio") settingsCategories.select(4);
+    if (category === "Devices") settingsCategories.select(7);
+    window.scribeDevicesSettings.refresh();
     window.scribeAudioSettings.refresh();
     window.scribePluginSettings.refresh();
     searchSwitch.disabled = true;

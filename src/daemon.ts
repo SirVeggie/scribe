@@ -112,7 +112,8 @@ export async function api(
   method: string,
   pathname: string,
   body?: unknown,
-  options?: { timeoutMs?: number; signal?: AbortSignal }
+  /** `user`: a command the person runs (`scribe pair`): the local token, without the agent header. */
+  options?: { timeoutMs?: number; signal?: AbortSignal; user?: boolean }
 ): Promise<{ status: number; data: unknown }> {
   const signals = [options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined, options?.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined
@@ -124,13 +125,17 @@ export async function api(
       {
         method,
         headers: {
-          [CLIENT_HEADER]: AGENT_CLIENT,
-          [SESSION_HEADER]: SESSION_ID,
-          ...(process.env.SCRIBE_THREAD ? { [THREAD_HEADER]: process.env.SCRIBE_THREAD } : {}),
-          ...(process.env.SCRIBE_THREAD_TOKEN ? { [THREAD_TOKEN_HEADER]: process.env.SCRIBE_THREAD_TOKEN } : {}),
-          // An MCP with no Scribe chat proves it runs as the user's own client (#682).
-          ...(process.env.SCRIBE_THREAD ? {} : localHeader()),
-          ...(agentLabel ? { [AGENT_LABEL_HEADER]: agentLabel } : {}),
+          ...(options?.user
+            ? localHeader()
+            : {
+                [CLIENT_HEADER]: AGENT_CLIENT,
+                [SESSION_HEADER]: SESSION_ID,
+                ...(process.env.SCRIBE_THREAD ? { [THREAD_HEADER]: process.env.SCRIBE_THREAD } : {}),
+                ...(process.env.SCRIBE_THREAD_TOKEN ? { [THREAD_TOKEN_HEADER]: process.env.SCRIBE_THREAD_TOKEN } : {}),
+                // An MCP with no Scribe chat proves it runs as the user's own client (#682).
+                ...(process.env.SCRIBE_THREAD ? {} : localHeader()),
+                ...(agentLabel ? { [AGENT_LABEL_HEADER]: agentLabel } : {}),
+              }),
           ...(payload === undefined
             ? {}
             : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }),

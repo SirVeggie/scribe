@@ -37,7 +37,7 @@ export function devicesRouter(peers: PeerService): Router {
   };
   router.get("/", (_req, res) => res.json(peers.view()));
   router.put("/self", guarded((req) => peers.rename(req.body?.name)));
-  router.post("/offer", guarded(() => ({ offer: peers.createOffer() })));
+  router.post("/offer", guarded(async () => ({ offer: await peers.createOffer() })));
   router.delete("/offer", guarded(() => peers.cancelOffer()));
   router.post("/pair", guarded((req) => {
     if (typeof req.body?.code !== "string") throw new Error("Enter the code the other device shows.");

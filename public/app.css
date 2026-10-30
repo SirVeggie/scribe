@@ -5268,6 +5268,21 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
   .refresh-overlay-line { opacity: .5; }
 }
 
+/* Settings → Devices (devices-settings.js) */
+.device-detail { font-size: 13px; }
+.device-detail > span { flex: 0 0 76px; color: var(--muted); }
+.device-detail > code { margin-right: auto; overflow-wrap: anywhere; }
+.device-list .ml-source { gap: 10px; }
+.device-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
+.device-dot.online { background: var(--ag-ok, #8fd19e); opacity: 1; }
+.device-actions[hidden] { display: none; }
+.device-panel { display: flex; flex-direction: column; gap: 8px; margin: 8px 2px 12px; }
+.device-panel[hidden] { display: none; }
+.device-qr { align-self: center; width: 180px; height: 180px; border-radius: 8px; overflow: hidden; }
+.device-qr svg { display: block; width: 100%; height: 100%; }
+.device-code { align-self: center; font-size: 14px; letter-spacing: .04em; text-align: center; overflow-wrap: anywhere; user-select: all; }
+.device-words { margin: 0; font-size: 13px; }
+
 /* Settings → Classifier (ml-settings.js) */
 .ml-source { gap: 10px; }
 .ml-source input[type="radio"] { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
