@@ -176,6 +176,22 @@ test("chats keep their account while warm, move after an hour idle, and follow a
   assert.throws(() => p.setUse("acc_unknown"));
 });
 
+test("a chat leaves an account that hit its usage limit, even while warm and with a roomy last reading (#920)", () => {
+  const settings: Record<string, unknown> = {
+    claudeAccounts: { accounts: [{ id: "acc_1", dir: path.join(os.tmpdir(), "nope-acc_1"), addedAt: 1 }], use: "distribute", picked: {} },
+    claudeAccountLimits: { acc_1: { ...limits(0.1, 0.1, 10), at: Date.now() } },
+  };
+  const p = pool(settings);
+  assert.equal(p.resolve({ claudeAccount: "acc_1" }, Date.now() - 60_000), "acc_1");
+  p.limited("acc_1", Date.now() + H);
+  assert.equal(p.resolve({ claudeAccount: "acc_1" }, Date.now() - 60_000), "default", "moves off the limited account");
+  assert.equal(p.peek(), "default", "new chats avoid it too");
+  assert.deepEqual(p.alternative("acc_1"), { account: "default", label: p.label("default") });
+  p.limited("default", Date.now() + 2 * H);
+  assert.equal(p.alternative("acc_1"), null, "no alternative when every account is limited");
+  assert.equal(p.resolve({ claudeAccount: "acc_1" }, Date.now() - 60_000), "acc_1", "all full: stays, it frees up first");
+});
+
 test("adding again replaces a sign-in whose browser was closed, and cancel ends it", async () => {
   const signals: AbortSignal[] = [];
   const provider: AccountProvider = {

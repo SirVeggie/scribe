@@ -98,6 +98,36 @@ test("nothing happens while the thread is busy", async () => {
   assert.equal(state.merges, 0);
 });
 
+test("a plan limit moves the chat to another account with room right away (#920)", async () => {
+  const { state, deps, runs, turn } = harness();
+  let room = true;
+  deps.switchAccount = () => (room ? "b@example.org" : null);
+  runs.register("th", "page1", {});
+  turn({ status: "error", error: "usage limit", limitResetsAt: state.now + 3_600_000 });
+  await runs.check("th");
+  let run = runs.get("th")!;
+  assert.equal(run.phase, "running");
+  assert.equal(state.sent.length, 1);
+  assert.match(state.sent[0], /another Claude account/);
+  assert.equal(state.notes.at(-1)?.kind, "resume");
+  await runs.check("th");
+  assert.equal(state.sent.length, 1, "the same limit turn moves it once");
+  // The other account runs out too and none is left: wait for the reset.
+  room = false;
+  state.now += 1000;
+  turn({ status: "error", error: "usage limit", limitResetsAt: state.now + 3_600_000 });
+  await runs.check("th");
+  run = runs.get("th")!;
+  assert.equal(run.phase, "waiting");
+  assert.equal(run.wait?.count, 2);
+  // An account frees up during the wait: it goes on there before the reset.
+  room = true;
+  await runs.check("th");
+  run = runs.get("th")!;
+  assert.equal(run.phase, "running");
+  assert.equal(state.sent.length, 2);
+});
+
 test("a plan limit waits for the reset, then for the provider's confirmation, then sends the chat on", async () => {
   const { state, runs, turn } = harness();
   runs.register("th", "page1", { resumePrompt: "Go on with #12." });

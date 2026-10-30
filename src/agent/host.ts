@@ -732,6 +732,7 @@ export class AgentHost {
         exists: (id) => this.threads.has(id),
         idle: (id) => this.threads.has(id) && !this.runs.has(id) && !this.resuming.has(id) && (this.status.get(id) ?? "idle") === "idle" && !this.queues.get(id)?.length,
         lastTurn: (id) => this.db.listTurns(id).at(-1),
+        switchAccount: (id) => this.switchClaudeAccount(id),
         recoveryAllowed: (id, turn) => {
           if (this.threads.get(id)?.provider !== "codex") return true;
           const allowed = codexUsageRecoveryAllowed(this.planLimits.codex, turn.endedAt ?? turn.startedAt);
@@ -1327,7 +1328,11 @@ export class AgentHost {
   /** Pick the Claude account a chat's next session runs on (#452) and keep it on the thread. */
   private assignClaudeAccount(thread: Thread): void {
     if (thread.provider !== "claude") return;
-    const ended = this.loadTurns(thread.id).filter((t) => t.status !== "running" && t.endedAt).map((t) => t.endedAt!);
+    const turns = this.loadTurns(thread.id);
+    const ended = turns.filter((t) => t.status !== "running" && t.endedAt).map((t) => t.endedAt!);
+    // The last turn hit a usage limit (also from before a restart): that account is full until the reset.
+    const last = turns.at(-1);
+    if (last?.limitResetsAt) this.claudePool.limited(thread.claudeAccount, last.limitResetsAt);
     const account = this.claudePool.resolve(thread, ended.length ? Math.max(...ended) : null);
     if (account === thread.claudeAccount) return;
     const stored = this.threads.get(thread.id);
@@ -4558,6 +4563,7 @@ export class AgentHost {
       if (!pageOwned(this.loadItems(threadId)) && !latest.helperOf) this.unread.add(threadId);
     }
     const implement = turn.plan && result.status === "done" && latest ? this.endPlanTurn(threadId, turn, run) : null;
+    if (turn.limitResetsAt && latest?.provider === "claude") this.claudePool.limited(latest.claudeAccount, turn.limitResetsAt);
     // Page runs wait out the limit themselves; a user's own thread asks whether to go on after the reset.
     if (turn.limitResetsAt && latest && !latest.helperOf && !this.pageRuns.get(threadId) && !pageOwned(this.loadItems(threadId))) {
       const switchTo = latest.provider === "claude" ? this.claudePool.alternative(latest.claudeAccount) : null;
@@ -5736,6 +5742,23 @@ export class AgentHost {
     this.saveLimitResumes();
     this.emitThread(threadId);
     if (go) this.checkLimitResumes();
+  }
+
+  /**
+   * A page run's chat hit its Claude account's usage limit (#920): move it to another account with
+   * room, shown in the chat as a limit card that went on there. Returns that account's label, or
+   * null when there is none (one account, pinned, or all full).
+   */
+  private switchClaudeAccount(threadId: string): string | null {
+    const thread = this.threads.get(threadId);
+    if (thread?.provider !== "claude") return null;
+    const to = this.claudePool.alternative(thread.claudeAccount);
+    if (!to) return null;
+    thread.claudeAccount = to.account;
+    this.db.saveThread(thread);
+    const turn = this.loadTurns(threadId).at(-1);
+    this.addItem(threadId, turn?.id ?? null, { kind: "usage_limit", resetsAt: turn?.limitResetsAt ?? Date.now(), status: "resumed", switched: to.label });
+    return to.label;
   }
 
   private saveLimitResumes(): void {

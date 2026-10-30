@@ -1,4 +1,5 @@
 import type { Turn } from "./types.js";
+import { SWITCHED_ACCOUNT_PROMPT } from "./claudeAccountPool.js";
 
 /**
  * Agent runs: chats a page hands to Scribe to see through to the end (#285). The page decides what
@@ -101,6 +102,8 @@ export type RunDeps = {
   lastTurn(threadId: string): Turn | undefined;
   /** Whether the provider confirmed the plan let the thread go again after the limit turn. */
   recoveryAllowed(threadId: string, turn: Turn): boolean;
+  /** Move the chat to another plan account with room after a usage limit; its label, or null when there is none. */
+  switchAccount?(threadId: string): string | null;
   hasWorktree(threadId: string): boolean;
   /** The page's reason to keep the branch unmerged, from its template's actions; null to merge. */
   hold(run: PageRun): string | null | Promise<string | null>;
@@ -238,6 +241,8 @@ export class PageRuns {
     const turn = deps.lastTurn(run.threadId);
 
     if (run.phase === "waiting" && run.wait) {
+      // Waiting out a usage limit: another account may have room by now.
+      if (run.wait.reason !== "capacity" && turn?.limitResetsAt && this.moveAccount(run, turn, run.wait.count, now)) return;
       if (now < run.wait.until) return;
       const capacity = run.wait.reason === "capacity";
       if (!capacity && turn && !deps.recoveryAllowed(run.threadId, turn)) {
@@ -283,6 +288,7 @@ export class PageRuns {
         this.update(run, { phase: "waiting", wait: { until, count, turn: turn.id, reason: "capacity" } }, { kind: "limit", text: `Model is at capacity; retrying in 10 minutes (wait ${count} of ${MAX_LIMIT_WAITS})`, resetsAt: until });
         return;
       }
+      if (this.moveAccount(run, turn, count, now)) return;
       const until = turn.limitResetsAt! + RESUME_DELAY_MS;
       this.update(run, { phase: "waiting", wait: { until, count, turn: turn.id } }, { kind: "limit", text: `Out of plan usage until ${new Date(turn.limitResetsAt!).toISOString()} (wait ${count} of ${MAX_LIMIT_WAITS})`, resetsAt: turn.limitResetsAt });
       return;
@@ -326,6 +332,19 @@ export class PageRuns {
       return;
     }
     this.end(run, { kind: "done", merged: true, message });
+  }
+
+  /** Another Claude account has room: go on there now instead of waiting out this one's reset (#920). */
+  private moveAccount(run: PageRun, turn: Turn, count: number, now: number): boolean {
+    const moved = this.deps.switchAccount?.(run.threadId) ?? null;
+    if (!moved) return false;
+    try {
+      this.deps.send(run.threadId, SWITCHED_ACCOUNT_PROMPT);
+    } catch {
+      return false;
+    }
+    this.update(run, { phase: "running", after: now, wait: { until: 0, count, turn: turn.id } }, { kind: "resume", text: `Out of plan usage; went on with ${moved} (move ${count} of ${MAX_LIMIT_WAITS})` });
+    return true;
   }
 
   private update(run: PageRun, patch: Partial<PageRun>, note?: RunNote): void {

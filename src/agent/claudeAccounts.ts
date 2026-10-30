@@ -168,6 +168,8 @@ export type PickCandidate = {
   /** Claude chats running on it now. */
   running: number;
   lastPickedAt?: number;
+  /** A chat on it hit the usage limit, which resets then: full until that time, whatever its last reading says. */
+  limitedUntil?: number;
 };
 
 /** At or above this share of the 5-hour or weekly window, an account takes no new chats while another has room. */
@@ -194,6 +196,7 @@ function windowUse(limits: PlanLimits | undefined, id: string, now: number): { u
 export function accountScore(c: PickCandidate, now: number): number | null {
   const five = windowUse(c.limits, "five_hour", now);
   const week = windowUse(c.limits, "seven_day", now);
+  if (c.limitedUntil && c.limitedUntil > now) return null;
   if (five.used >= FULL || week.used >= FULL) return null;
   const hours = week.resetsAt ? Math.max(1, (week.resetsAt - now) / 3_600_000) : 168;
   const urgency = ((1 - week.used) * c.weight) / hours;
@@ -205,6 +208,7 @@ export function accountScore(c: PickCandidate, now: number): number | null {
 /** When a full account has room again: the soonest reset of the windows that fill it. */
 function freeAt(c: PickCandidate, now: number): number {
   const times = ["five_hour", "seven_day"].map((id) => windowUse(c.limits, id, now)).filter((w) => w.used >= FULL).map((w) => w.resetsAt ?? Infinity);
+  if (c.limitedUntil && c.limitedUntil > now) times.push(c.limitedUntil);
   return times.length ? Math.max(...times) : now;
 }
 

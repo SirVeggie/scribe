@@ -58,6 +58,8 @@ export class ClaudeAccountPool {
   private fetchedAt = new Map<string, number>();
   private timers = new Map<string, NodeJS.Timeout>();
   private fetching = new Map<string, Promise<void>>();
+  /** Accounts a chat hit the usage limit on, until the reset (#920): their last reading can still look roomy. */
+  private limitedUntil = new Map<string, number>();
   /** An account being signed in: its id until the browser sign-in ends. */
   adding: string | null = null;
   private addAbort: AbortController | null = null;
@@ -147,8 +149,27 @@ export class ClaudeAccountPool {
   }
 
   private candidates(exclude?: string): PickCandidate[] {
-    return this.list().filter((r) => r.id !== exclude).map((r) => ({ id: r.id, weight: r.weight, running: this.deps.running(r.id),
-      lastPickedAt: this.state.picked[r.id], ...(r.limits ? { limits: r.limits } : {}) }));
+    return this.list().filter((r) => r.id !== exclude).map((r) => {
+      const until = this.limitedUntil.get(r.id);
+      return { id: r.id, weight: r.weight, running: this.deps.running(r.id), lastPickedAt: this.state.picked[r.id],
+        ...(r.limits ? { limits: r.limits } : {}), ...(until ? { limitedUntil: until } : {}) };
+    });
+  }
+
+  /** A chat on this account hit its usage limit: it takes no chats until the reset while another has room. */
+  limited(id: string | undefined, resetsAt: number, now = Date.now()): void {
+    if (!this.multi() || resetsAt <= now) return;
+    const key = id ?? DEFAULT_ACCOUNT;
+    if ((this.limitedUntil.get(key) ?? 0) >= resetsAt) return;
+    this.limitedUntil.set(key, resetsAt);
+    this.deps.changed();
+  }
+
+  /** Whether an account is full now while another still has room. */
+  private fullWhileOthersOpen(id: string, now: number): boolean {
+    const all = this.candidates();
+    const own = all.find((c) => c.id === id);
+    return Boolean(own && accountScore(own, now) === null && all.some((c) => c.id !== id && accountScore(c, now) !== null));
   }
 
   /**
@@ -159,7 +180,8 @@ export class ClaudeAccountPool {
     if (!this.multi()) return undefined;
     if (this.state.use !== "distribute" && this.valid(this.state.use)) return this.state.use;
     const current = thread.claudeAccount;
-    if (this.valid(current) && (idleSince == null || now - idleSince < STICKY_MS)) return current;
+    // A warm cache is not worth waiting out a usage limit for when another account has room (#920).
+    if (this.valid(current) && (idleSince == null || now - idleSince < STICKY_MS) && !this.fullWhileOthersOpen(current, now)) return current;
     const picked = pickAccount(this.candidates(), now) ?? DEFAULT_ACCOUNT;
     if (picked !== current) {
       this.state.picked = { ...this.state.picked, [picked]: now };
