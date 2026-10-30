@@ -42,7 +42,7 @@ test("listen combines ask permissions in one prompt and stops at a denied permis
   const context = vm.createContext({
     list: async () => ["audio.microphone", "audio.transcribe"].map(id => ({ id, label: id, detail: id })),
     request: async () => ({ result: value }),
-    prompt: async (_tab: unknown, def: any) => { prompts++; assert.match(def.label, /audio.microphone and audio.transcribe/); return "allow"; },
+    prompt: async (_tab: unknown, def: any) => { prompts++; assert.match(def.label, /audio.microphone and audio.transcribe/); return { value: "allow", keep: false }; },
     remember: async (_tab: unknown, def: any) => remembered.push(def.id)
   });
   const source = fs.readFileSync(new URL("../../public/permissions.js", import.meta.url), "utf8");
