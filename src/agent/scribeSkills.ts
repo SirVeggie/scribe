@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
-import { SKILL_DIR } from "../skillDocs.js";
+import { SKILL_DIR, sectionedRead } from "../skillDocs.js";
 import { estimateTokens, skillFrontmatter } from "./harness.js";
 import { noPages, type Thread } from "./types.js";
 
@@ -19,6 +19,8 @@ const BUILTIN_SETTING = "skills.builtin.scribe.enabled";
 
 /** Longest file skill_read returns, and the most a copied or imported skill folder may hold. */
 const MAX_READ_BYTES = 512 * 1024;
+/** Longest markdown file skill_read returns whole; a longer one comes as its opening sections and an outline (#918). */
+const READ_WHOLE_CHARS = 24_000;
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 const MAX_IMPORT_FILES = 2000;
 
@@ -386,8 +388,9 @@ export class ScribeSkills {
   /**
    * skill_read: a skill's SKILL.md (with the list of its other files), or one of its files, for a
    * skill this thread may use. The file must resolve inside the skill's folder, links included.
+   * A long markdown file, or one read with section, goes through sectionedRead.
    */
-  read(thread: Parameters<ScribeSkills["effective"]>[0], name: unknown, file?: unknown): { skill: string; file: string; text: string; files?: string[]; truncated?: boolean } {
+  read(thread: Parameters<ScribeSkills["effective"]>[0], name: unknown, file?: unknown, section?: unknown): { skill: string; file: string; text: string; files?: string[]; truncated?: boolean } {
     if (typeof name !== "string" || !name.trim()) throw new Error("name is required");
     const skills = this.effective(thread);
     const want = name.trim();
@@ -409,15 +412,22 @@ export class ScribeSkills {
     }
     if (!inside(base, real)) throw new Error("file must be inside the skill's folder.");
     const stat = fs.statSync(real);
+    const part = typeof section === "string" && section.trim() ? section.trim() : undefined;
     if (stat.isDirectory()) {
+      if (part) throw new Error("section reads a markdown file's headings, not a folder.");
       const files = walk(real, 200).map((f) => f.rel.split(path.sep).join("/"));
       return { skill: skill.name, file: rel, text: files.length ? files.join("\n") : "(empty folder)" };
     }
     const buffer = fs.readFileSync(real);
     const truncated = buffer.length > MAX_READ_BYTES;
-    const text = buffer.subarray(0, MAX_READ_BYTES).toString("utf8");
+    let text = buffer.subarray(0, MAX_READ_BYTES).toString("utf8");
+    if (part || /\.md$/i.test(rel)) {
+      const sectioned = sectionedRead(text, part, READ_WHOLE_CHARS);
+      if (sectioned.error) throw new Error(sectioned.text);
+      text = sectioned.text;
+    }
     const out: { skill: string; file: string; text: string; files?: string[]; truncated?: boolean } = { skill: skill.name, file: rel, text, ...(truncated ? { truncated } : {}) };
-    if (rel === "SKILL.md") {
+    if (rel === "SKILL.md" && !part) {
       const others = walk(base, 200)
         .map((f) => f.rel.split(path.sep).join("/"))
         .filter((f) => f !== "SKILL.md");

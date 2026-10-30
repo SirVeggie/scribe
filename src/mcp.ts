@@ -1924,15 +1924,16 @@ function registerThreadTools(server: McpServer): void {
 function registerSkillRead(server: McpServer): void {
   server.tool(
     "skill_read",
-    "Read one of the Scribe skills listed in your instructions: its SKILL.md (with a list of its other files) or, with file, one of those files. Read a skill before the task it covers and follow it.",
+    "Read one of the Scribe skills listed in your instructions: its SKILL.md (with a list of its other files) or, with file, one of those files. A long file comes as its opening sections and an outline of the rest; read those with section. Read a skill before the task it covers and follow it.",
     {
       name: z.string().describe("The skill's name as listed (or its id when two share a name)."),
       file: z.string().optional().describe("A file inside the skill's folder, like references/api.md. Omit for SKILL.md."),
+      section: z.string().optional().describe("Only the sections whose ## or ### heading contains this (case-insensitive), or \"all\" for the whole file."),
     },
     { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-    async ({ name, file }, extra) => {
+    async ({ name, file, section }, extra) => {
       try {
-        const { status, data } = await api("POST", "/api/skill-read", { name, file }, { signal: extra.signal });
+        const { status, data } = await api("POST", "/api/skill-read", { name, file, section }, { signal: extra.signal });
         if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
         const out = data as { skill: string; file: string; text: string; files?: string[]; truncated?: boolean };
         const notes = [

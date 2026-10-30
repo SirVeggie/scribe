@@ -1141,7 +1141,7 @@ export async function startHttp(): Promise<http.Server> {
     if (!thread || !agentHost) { res.status(403).json({ error: "skill_read requires a current Scribe chat thread." }); return; }
     try {
       const body = isPlainObject(req.body) ? req.body : {};
-      res.json(agentHost.scribeSkills.read(thread, body.name, body.file));
+      res.json(agentHost.scribeSkills.read(thread, body.name, body.file, body.section));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }

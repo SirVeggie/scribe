@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { BUILTIN_SCRIBE, ScribeSkills, skillIndex } from "./scribeSkills.js";
 import { threadInstructions } from "./prompt.js";
+import { SKILL_DIR } from "../skillDocs.js";
 import type { Thread } from "./types.js";
 
 /** An in-memory stand-in for AgentDb's skill rows and settings. */
@@ -76,6 +77,27 @@ test("skill_read stays inside the thread's skills and each skill's folder", () =
     assert.match(skills.read(pageThread, "scribe").text, /Build Scribe pages/);
   } finally {
     done();
+  }
+});
+
+test("skill_read returns a long skill as its opening sections and an outline, and sections on request (#918)", () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-skills-"));
+  try {
+    const skills = new ScribeSkills(memoryRows(), data, SKILL_DIR);
+    const whole = fs.readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8");
+    const first = skills.read(pageThread, "scribe");
+    assert.ok(first.text.length < 30_000, `first read is ${first.text.length} chars`);
+    assert.match(first.text, /## When to use it/);
+    assert.match(first.text, /- Pages that use the agent \(\d+k chars\)/);
+    assert.ok(first.files?.includes("TEMPLATES.md"));
+    const forms = skills.read(pageThread, "scribe", undefined, "forms for a card");
+    assert.match(forms.text, /^### Forms for a card/);
+    assert.ok(!forms.text.includes("## Waiting for user input"));
+    assert.equal(skills.read(pageThread, "scribe", undefined, "all").text, whole);
+    assert.equal(skills.read(pageThread, "scribe", "TEMPLATES.md").text, fs.readFileSync(path.join(SKILL_DIR, "TEMPLATES.md"), "utf8"));
+    assert.throws(() => skills.read(pageThread, "scribe", undefined, "no such heading"), /No section matches[\s\S]*- Page kit/);
+  } finally {
+    fs.rmSync(data, { recursive: true, force: true });
   }
 });
 
