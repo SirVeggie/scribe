@@ -11220,6 +11220,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       title.id = "ag-perm-title";
       this.web = el("section", "settings-section ag-web-allow");
       this.scribeCommands = el("section", "settings-section");
+      this.protectedPaths = el("section", "settings-section");
       const commands = el("section", "settings-section");
       const pick = el("div", "setting-row");
       const label = el("span", null, "Workspace");
@@ -11239,7 +11240,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         pick
       );
       this.body = el("div", "ag-perm-body");
-      panel.append(title, this.web, this.scribeCommands, commands, this.body);
+      panel.append(title, this.web, this.scribeCommands, this.protectedPaths, commands, this.body);
       root.append(backdrop, panel);
       document.body.append(root);
       this.root = root;
@@ -11259,6 +11260,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.pickerWrap?.syncSelect?.();
       this.renderWeb();
       this.renderCommands();
+      this.renderProtected();
       this.root.hidden = false;
       this.releaseTrap?.();
       this.releaseTrap = window.scribeFocusTrap?.bind(this.root.querySelector(".settings-panel"));
@@ -11337,6 +11339,40 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         ),
         rows
       );
+    },
+    /** Files and folders no agent reads or writes through Scribe's file gates (prefs.protectedPaths, #898), beside the built-in ones. */
+    renderProtected() {
+      const list = prefs().protectedPaths || [];
+      const rows = el("div", "ag-perm-rules");
+      for (const file of list) {
+        const row = el("span", "ag-perm-rule");
+        row.append(el("code", null, file), button(icon("close"), "ag-chip-x", () => this.saveProtected(list.filter((p) => p !== file)), `Remove ${file}`));
+        rows.append(row);
+      }
+      const input = el("input", "ag-input small ag-perm-add");
+      input.placeholder = "Add a full path to a file or folder";
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || !input.value.trim()) return;
+        event.preventDefault();
+        void this.saveProtected([...list, input.value.trim()]);
+      });
+      rows.append(input);
+      this.protectedPaths.replaceChildren(
+        helpHeading(
+          "Protected paths",
+          "Agents can't read or change these through Scribe's file tools, even with a grant. Scribe's data folder, SSH keys, cloud and package credentials and browser profiles are always protected."
+        ),
+        rows
+      );
+    },
+    async saveProtected(list) {
+      try {
+        S.config.prefs = await api("PUT", "/prefs", { protectedPaths: list });
+        this.renderProtected();
+        this.protectedPaths.querySelector(".ag-perm-add")?.focus();
+      } catch (err) {
+        notice(err.message);
+      }
     },
     async saveCommands(list) {
       try {

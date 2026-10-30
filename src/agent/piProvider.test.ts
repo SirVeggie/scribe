@@ -97,6 +97,34 @@ test("Native Auto review sends every command and edit to host approval", async (
   } finally { session.dispose(); provider.dispose(); }
 });
 
+test("Native's file tools go by the access policy: reads outside ask, protected paths are refused, junctions are not the workspace (#898)", async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "scribe-pi-access-")));
+  const cwd = path.join(root, "workspace"), outside = path.join(root, "outside"), home = path.join(root, "home");
+  for (const dir of [cwd, outside, path.join(home, ".ssh")]) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(outside, "b.txt"), "b");
+  fs.symlinkSync(outside, path.join(cwd, "node_modules"), "junction");
+  const requests: import("./providers/provider.js").ApprovalRequest[] = [];
+  const provider = new PiProvider(() => []);
+  const session = provider.createSession({ id: "pi-access-test", provider: "pi", approval: "auto", mode: "code", cwd, scope: { kind: "global", ref: null } } as Thread, {
+    approval: async (_id, req) => { requests.push(req); return { optionId: req.tool === "read" ? "allow" : "reject" }; },
+    accessEnv: () => ({ home, data: path.join(root, "data") }),
+  } as SessionContext) as unknown as { gate(event: unknown): Promise<{ block?: boolean; reason?: string } | undefined>; dispose(): void };
+  try {
+    assert.equal(await session.gate({ toolName: "read", toolCallId: "r1", input: { path: "notes.md" } }), undefined);
+    assert.equal(requests.length, 0);
+    assert.equal(await session.gate({ toolName: "read", toolCallId: "r2", input: { path: path.join(outside, "b.txt") } }), undefined);
+    assert.deepEqual([requests.at(-1)?.tool, requests.at(-1)?.access, requests.at(-1)?.paths], ["read", "read", [path.join(outside, "b.txt")]]);
+    const denied = await session.gate({ toolName: "grep", toolCallId: "r3", input: { path: path.join(home, ".ssh"), pattern: "x" } });
+    assert.equal(denied?.block, true);
+    assert.match(denied?.reason ?? "", /protected/);
+    assert.equal(requests.length, 1);
+    // An edit through the junction is outside the workspace, so "auto" does not cover it as a plain edit.
+    assert.equal((await session.gate({ toolName: "edit", toolCallId: "w1", input: { path: "node_modules/b.txt", oldText: "b", newText: "c" } }))?.block, true);
+    assert.equal(requests.at(-1)?.tool, "other");
+    assert.match(requests.at(-1)?.title ?? "", /outside the workspace/);
+  } finally { session.dispose(); provider.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("openai threads and prefs move to Pi", () => {
   const thread = { provider: "openai", model: "lmstudio/qwen/qwen3-8b", nativeId: "resp_1" } as unknown as Thread;
   assert.equal(migrateOpenaiThread(thread), true);

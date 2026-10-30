@@ -36,6 +36,16 @@ Ideas borrowed from it: per-binary network rules, audit-before-enforce, and agen
 - `checkPath(policy, path, op)` resolves realpaths and junctions. One function is shared by every host-side check.
 - `effective(thread, provider, os)` reports per surface whether a rule is enforced by the OS, by Scribe, by approval only, or not at all (#277).
 
+### As built (#898)
+
+- `policyFor(thread, env)` and `checkPath(policy, path, op)` in `src/agent/access.ts`. `checkPath` answers allow, ask or deny. The order: protected paths (with the thread's own exceptions) first, then the worktree's links (deny for writes), then the roots (ask outside them).
+- Grants are the thread's existing `toolGrants` (#743), not a new `fileGrants` field: file and folder grants, read or write, already listed and revocable in the thread's Permissions menu (#216). Read and write grants are read roots; write grants are write roots.
+- The temp folder is a write root only when the caller passes `env.tmp` (the OS sandbox, #899). Scribe's own gates leave it out, so a Native write there still asks.
+- Exceptions inside Scribe's data folder: the thread's worktree (any workspace under `worktrees/`) or the scratch folder, its attachments, its page checkout, its own Claude account folder (not `.credentials.json`) and the skill folders. Other threads' page checkouts in the temp folder are protected too.
+- Users add protected paths under Allowlists → Protected paths (`prefs.protectedPaths`).
+- Used by `read_file`, `list_files`/`grep_files`, `page_open`'s file and Native's read, grep, find, ls, edit and write. A read outside the roots asks in the chat (`host.requestFileRead`) with "Allow reading <folder> for this thread"; with no turn running it is refused. A search asks only about its start folder; an allowed folder covers its walk.
+- `effective(provider)` is a first table for #277.
+
 ## Enforcement
 
 | Surface | Layer |
