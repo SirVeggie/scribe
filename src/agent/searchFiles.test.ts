@@ -80,7 +80,7 @@ test("search uses read roots for modes, attachments, recorded links and nested e
       await fs.writeFile(path.join(threadFilesDir(id), "attached.txt"), id);
     }
     assert.equal((await searchScopedFiles(scope, { path: threadFilesDir("one") }, false)).results.length, 1);
-    await assert.rejects(searchScopedFiles(scope, { path: threadFilesDir("two") }, false), /outside/);
+    await assert.rejects(searchScopedFiles(scope, { path: threadFilesDir("two") }, false), /outside|protected/);
     await assert.rejects(searchScopedFiles({ ...scope, mode: "board", cwd: null }, {}, false), /mode/);
     await assert.rejects(searchScopedFiles(null, {}, false), /mode/);
     // Retargeting a recorded link cannot grant a new destination.

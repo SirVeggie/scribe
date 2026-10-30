@@ -27,14 +27,14 @@ test("Code threads can read and edit their own page checkout without exposing ot
     assert.deepEqual(readHtmlPath(file), { html: "<h1>Edited</h1>" });
     assert.equal(await fs.readFile(other, "utf8"), tab.html);
     for (const denied of [other, standalone, path.dirname(pageCheckoutDir(scope.id))]) {
-      await assert.rejects(readScopedFile(scope, { path: denied }), /outside/);
+      await assert.rejects(readScopedFile(scope, { path: denied }), /outside|protected/);
     }
     for (const mode of ["board"] as const) {
-      await assert.rejects(readScopedFile({ ...scope, mode }, { path: file }), /outside|mode/);
+      await assert.rejects(readScopedFile({ ...scope, mode }, { path: file }), /outside|mode|protected/);
     }
-    await assert.rejects(readScopedFile({ ...scope, id: undefined }, { path: file }), /outside/);
+    await assert.rejects(readScopedFile({ ...scope, id: undefined }, { path: file }), /outside|protected/);
     await fs.symlink(path.dirname(other), link, "junction");
-    await assert.rejects(readScopedFile(scope, { path: path.join(link, path.basename(other)) }), /link target/);
+    await assert.rejects(readScopedFile(scope, { path: path.join(link, path.basename(other)) }), /link target|protected/);
     // Re-checkout refreshes only this thread's copy.
     assert.equal(writeCheckout(tab, scope.id), file);
     assert.equal(await fs.readFile(file, "utf8"), tab.html);
@@ -72,10 +72,10 @@ test("external skills are readable under auto review without exposing adjacent f
     const scope = { cwd, provider: "codex", mode: "code", approval: "auto" } as const;
     const privateFile = path.join(data, "agent", "codex", "auth.json");
     await fs.writeFile(privateFile, "private");
-    await assert.rejects(readScopedFile(scope, { path: privateFile }), /outside/);
-    await assert.rejects(readScopedFile({ ...scope, provider: "claude" }, { path: path.join(provider, "help", "SKILL.md") }), /outside/);
+    await assert.rejects(readScopedFile(scope, { path: privateFile }), /protected/);
+    await assert.rejects(readScopedFile({ ...scope, provider: "claude" }, { path: path.join(provider, "help", "SKILL.md") }), /outside|protected/);
     await fs.symlink(path.dirname(privateFile), escape, "junction");
-    await assert.rejects(readScopedFile(scope, { path: path.join(escape, "auth.json") }), /link target/);
+    await assert.rejects(readScopedFile(scope, { path: path.join(escape, "auth.json") }), /link target|protected/);
     await assert.rejects(readScopedFile({ ...scope, mode: "board", cwd: null }, { path: path.join(shared, "help", "SKILL.md") }), /mode/);
   } finally {
     homeMock.mock.restore();
@@ -242,7 +242,7 @@ test("recorded worktree links and own attachments are readable without granting 
     const attachment = path.join(threadFilesDir(thread.id), "attached.txt");
     assert.match((await readScopedFile(thread, { path: attachment })).content, /thread-one/);
     assert.match((await readScopedFile({ ...thread, cwd: null }, { path: attachment })).content, /thread-one/);
-    await assert.rejects(readScopedFile(thread, { path: path.join(threadFilesDir("thread-two"), "attached.txt") }), /outside/);
+    await assert.rejects(readScopedFile(thread, { path: path.join(threadFilesDir("thread-two"), "attached.txt") }), /outside|protected/);
     await assert.rejects(readScopedFile({ ...thread, mode: "board", cwd: null }, { path: attachment }), /mode/);
     const escape = path.join(dependency, "escape");
     await fs.symlink(repo, escape, "junction");

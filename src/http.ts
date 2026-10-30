@@ -56,7 +56,7 @@ import type { ActionCaller } from "./actions/index.js";
 import { AgentHost } from "./agent/host.js";
 import { worktreePreviewSite } from "./worktreePreview.js";
 import { agentRouter } from "./agent/routes.js";
-import { readScopedFile } from "./agent/readFile.js";
+import { readScopedFile, type ReadOptions } from "./agent/readFile.js";
 import { openFileForAgent } from "./agent/openFile.js";
 import { searchScopedFiles } from "./agent/searchFiles.js";
 import { formatAnswers, parseQuestionInput } from "./agent/questionTool.js";
@@ -1103,6 +1103,12 @@ export async function startHttp(): Promise<http.Server> {
       });
   });
 
+  /** Scribe's file tools read by the thread's access policy; a read outside its roots asks the user (#898). */
+  const readOptions = (threadId: string, tool: "read" | "search"): ReadOptions => ({
+    env: agentHost?.accessEnv(),
+    ask: (real, reason) => agentHost ? agentHost.requestFileRead(threadId, tool, real, reason) : Promise.resolve(false),
+  });
+
   /** page_open's file (#655): a file the agent's thread may read, opened as a page for the user. */
   app.post("/api/agent-open-file", async (req, res) => {
     const id = threadOf(req);
@@ -1110,7 +1116,7 @@ export async function startHttp(): Promise<http.Server> {
     if (!thread) { res.status(403).json({ error: "Opening a file needs a Scribe chat thread with file access." }); return; }
     try {
       const body = isPlainObject(req.body) ? req.body : {};
-      const { tab, created } = await openFileForAgent(thread, store, body);
+      const { tab, created } = await openFileForAgent(thread, store, body, readOptions(id!, "read"));
       res.status(created ? 201 : 200).json({ tab: toMeta(tab), created });
     } catch (err) {
       res.status(403).json({ error: (err as Error).message });
@@ -1122,7 +1128,7 @@ export async function startHttp(): Promise<http.Server> {
     const thread = id && agentHost ? agentHost.getThread(id) : null;
     if (!thread) { res.status(403).json({ error: "read_file requires a current Scribe chat thread." }); return; }
     try {
-      res.json(await readScopedFile(thread, isPlainObject(req.body) ? req.body : {}));
+      res.json(await readScopedFile(thread, isPlainObject(req.body) ? req.body : {}, readOptions(id!, "read")));
     } catch (err) {
       res.status(403).json({ error: (err as Error).message });
     }
@@ -1146,7 +1152,7 @@ export async function startHttp(): Promise<http.Server> {
       const id = threadOf(req);
       const thread = id && agentHost ? agentHost.getThread(id) : null;
       if (!thread) { res.status(403).json({ error: "File search requires a current Scribe chat thread." }); return; }
-      try { res.json(await searchScopedFiles(thread, isPlainObject(req.body) ? req.body : {}, grep)); }
+      try { res.json(await searchScopedFiles(thread, isPlainObject(req.body) ? req.body : {}, grep, readOptions(id!, "search"))); }
       catch (err) { res.status(403).json({ error: (err as Error).message }); }
     });
   }

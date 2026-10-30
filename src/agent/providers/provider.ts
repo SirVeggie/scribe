@@ -1,3 +1,4 @@
+import type { PolicyEnv } from "../access.js";
 import type { EffectivePermissions, WorkerToolRequirements } from "../effectivePermissions.js";
 import type {
   ApprovalOption,
@@ -170,6 +171,8 @@ export type SessionContext = {
   boardMcp: { command: string; args: string[]; env: Record<string, string> };
   /** Scratch working directory for threads without a workspace. */
   scratchDir: string;
+  /** The user's settings that access.ts reads (protected paths), for Native's file gate (#898). */
+  accessEnv?: () => PolicyEnv;
   /** Domains a thread with limited web access may reach. Read on each call, so edits apply at once. */
   webAllowlist(): string[];
   /** The SearXNG instance web_search goes through (Agent settings), or "" for no web_search tool. Read when a session opens. */

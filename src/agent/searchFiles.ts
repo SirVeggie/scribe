@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
-import { scopedReadResolver, READ_FILE_MAX_BYTES, type ReadScope } from "./readFile.js";
+import { scopedReadResolver, READ_FILE_MAX_BYTES, type ReadOptions, type ReadScope } from "./readFile.js";
 
 type SearchInput = { path?: unknown; glob?: unknown; includeHidden?: unknown; offset?: unknown; limit?: unknown;
   pattern?: unknown; fixedStrings?: unknown; ignoreCase?: unknown };
@@ -54,8 +54,8 @@ function rg(args: string[], cwd: string, onLine?: (line: string) => boolean): Pr
 }
 
 /** Enumerate only checked paths. Never ask rg to follow a directory link on its own. */
-export async function searchScopedFiles(thread: ReadScope | null, input: SearchInput, grep: boolean) {
-  const resolve = await scopedReadResolver(thread);
+export async function searchScopedFiles(thread: ReadScope | null, input: SearchInput, grep: boolean, opts: ReadOptions = {}) {
+  const resolve = await scopedReadResolver(thread, opts);
   const start = await resolve(input.path ?? ".");
   const offset = input.offset ?? 1, limit = input.limit ?? 200;
   if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 1 || offset > 10_000) throw new Error("offset must be between 1 and 10000.");
@@ -71,7 +71,7 @@ export async function searchScopedFiles(thread: ReadScope | null, input: SearchI
   const walk = async (target: string, explicit = false): Promise<void> => {
     if (++entries > 20_000 || Date.now() > deadline) throw new Error("Search scope is too large; narrow path to a subfolder.");
     let checked: Awaited<ReturnType<typeof resolve>>;
-    try { checked = await resolve(target); }
+    try { checked = await resolve(target, explicit); }
     catch (err) {
       if (!explicit && /File read denied|ENOENT|ENOTDIR/.test((err as Error).message)) { skipped++; return; }
       throw err;
@@ -110,7 +110,7 @@ export async function searchScopedFiles(thread: ReadScope | null, input: SearchI
   };
   if (!grep) {
     for (const file of candidates) {
-      await resolve(file);
+      await resolve(file, false);
       if (!take({ path: file })) break;
     }
   } else {
@@ -118,7 +118,7 @@ export async function searchScopedFiles(thread: ReadScope | null, input: SearchI
       if (Date.now() > deadline) throw new Error("Search timed out; narrow path to a subfolder.");
       // Recheck just before passing individual files to rg, including links retargeted during traversal.
       const batch: string[] = [];
-      for (const file of candidates.slice(i, i + 40)) { await resolve(file); batch.push(path.relative(cwd, file)); }
+      for (const file of candidates.slice(i, i + 40)) { await resolve(file, false); batch.push(path.relative(cwd, file)); }
       await rg(["--no-config", "--json", "--sort", "path", "--hidden", "--no-ignore", "--max-count", String(offset + limit),
         ...(input.fixedStrings ? ["--fixed-strings"] : []), ...(input.ignoreCase ? ["--ignore-case"] : []),
         "--regexp", input.pattern as string, "--", ...batch], cwd, (line) => {

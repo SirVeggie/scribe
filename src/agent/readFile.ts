@@ -1,77 +1,50 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { threadFilesDir } from "./attachments.js";
 import type { Thread } from "./types.js";
-import { skillFolders } from "./harness.js";
-import { pageCheckoutDir } from "../pageCheckout.js";
+import { checkPath, policyFor, type PolicyEnv } from "./access.js";
+import { pathInside } from "./toolGrants.js";
 
 export const READ_FILE_MAX_BYTES = 64 * 1024 * 1024;
 export const READ_FILE_MAX_CHARS = 32_000;
 /** Longer lines (minified code, logs) are cut, as Claude Code's read does, instead of refusing the page. */
 export const READ_FILE_MAX_LINE_CHARS = 2_000;
-export type ReadScope = Pick<Thread, "cwd" | "mode" | "approval"> & Partial<Pick<Thread, "id" | "worktree" | "provider">>;
+export type ReadScope = Pick<Thread, "cwd" | "mode" | "approval"> & Partial<Pick<Thread, "id" | "worktree" | "provider" | "claudeAccount" | "toolGrants">>;
 
-function inside(root: string, file: string): boolean {
-  const rel = path.relative(root, file);
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
-}
+export type ReadOptions = {
+  env?: PolicyEnv;
+  /** Ask the user about a read outside the thread's read roots (real path, why); true when they allowed it. Without it such a read is refused. */
+  ask?: (real: string, reason: string) => Promise<boolean>;
+};
 
-async function existingRealPath(root: string): Promise<string | null> {
-  try { return await fs.realpath(root); }
-  catch (err) {
-    if (["ENOENT", "ENOTDIR"].includes((err as NodeJS.ErrnoException).code ?? "")) return null;
-    throw err;
-  }
-}
-
-async function readRoots(thread: ReadScope): Promise<Array<{ lexical: string; real: string }>> {
-  const roots: Array<{ lexical: string; real: string }> = [];
-  const add = async (root: string) => {
-    const real = await existingRealPath(root);
-    if (real) roots.push({ lexical: path.resolve(root), real });
-  };
-  if (thread.cwd) await add(thread.cwd);
-  if (thread.id) await add(threadFilesDir(thread.id));
-  if (thread.id && thread.mode === "code") await add(pageCheckoutDir(thread.id));
-  // Skills are loaded from files on demand, including user/provider folders outside the workspace.
-  // Grant the skills subtree only; credentials and settings next to it remain outside the scope.
-  for (const folder of skillFolders(thread.cwd)) {
-    if (!thread.provider || folder.providers.includes(thread.provider)) await add(folder.dir);
-  }
-  const wt = thread.worktree;
-  if (wt && !wt.closed) {
-    for (const rel of wt.links) {
-      if (!rel || path.isAbsolute(rel)) continue;
-      const link = path.resolve(wt.path, rel);
-      const source = path.resolve(wt.repo, rel);
-      if (!inside(path.resolve(wt.path), link) || !inside(path.resolve(wt.repo), source)) continue;
-      const [real, expected] = await Promise.all([existingRealPath(link), existingRealPath(source)]);
-      // A recorded link cannot grant an arbitrary destination after being retargeted.
-      if (real && expected && path.relative(expected, real) === "") roots.push({ lexical: link, real });
-    }
-  }
-  return roots;
-}
-
-/** Host-side gate: MCP tools run outside Codex's shell sandbox. Never trust a caller-supplied scope. */
-export async function scopedReadResolver(thread: ReadScope | null) {
+/**
+ * Host-side gate: MCP tools run outside any provider sandbox. Never trust a caller-supplied scope.
+ * The thread's access policy (access.ts) decides; explicit=false (entries a search walks into) never asks.
+ */
+export async function scopedReadResolver(thread: ReadScope | null, opts: ReadOptions = {}) {
   if (!thread || (thread.mode === "board" && !thread.cwd)) throw new Error("File reads are unavailable in this thread's mode.");
-  const full = thread.mode === "code" && thread.approval === "full";
-  const roots = full ? [] : await readRoots(thread);
-  return async (inputPath: unknown) => {
+  const policy = policyFor(thread, opts.env);
+  // Folders the user allowed once for this call: a search goes on into them without asking again.
+  const allowedOnce: string[] = [];
+  return async (inputPath: unknown, explicit = true) => {
     if (typeof inputPath !== "string" || !inputPath.trim() || inputPath.includes("\0")) throw new Error("path must be a nonempty local file path.");
-    if (!thread.cwd && !path.isAbsolute(inputPath)) throw new Error("No workspace is available for this relative file read.");
-    const target = path.resolve(thread.cwd ?? process.cwd(), inputPath);
-    const matching = roots.filter((root) => inside(root.lexical, target) || inside(root.real, target));
-    if (!full && !matching.length) throw new Error("File read denied: path is outside the workspace scope and this thread's read roots.");
+    if (!policy.cwd && !path.isAbsolute(inputPath)) throw new Error("No workspace is available for this relative file read.");
+    const target = path.resolve(policy.cwd ?? process.cwd(), inputPath);
+    const check = checkPath(policy, inputPath, "read");
+    if (check.verdict === "deny") throw new Error(`File read denied: ${check.reason}`);
+    if (check.verdict === "ask" && !allowedOnce.some((root) => pathInside(root, check.real))) {
+      if (!(explicit && opts.ask && (await opts.ask(check.real, check.reason)))) {
+        throw new Error(`File read denied: ${check.reason}${explicit && opts.ask ? " The user did not allow it." : ""}`);
+      }
+      allowedOnce.push(check.real);
+    }
+    // Missing files fail here, as before the policy.
     const real = await fs.realpath(target);
-    if (!full && !matching.some((root) => inside(root.real, real))) throw new Error("File read denied: link target is outside this thread's read roots.");
     return { target, real };
   };
 }
 
-export async function readScopedFile(thread: ReadScope | null, input: { path?: unknown; offset?: unknown; limit?: unknown }) {
-  const resolve = await scopedReadResolver(thread);
+export async function readScopedFile(thread: ReadScope | null, input: { path?: unknown; offset?: unknown; limit?: unknown }, opts: ReadOptions = {}) {
+  const resolve = await scopedReadResolver(thread, opts);
   const { target, real } = await resolve(input.path);
   const offset = input.offset ?? 1;
   const limit = input.limit ?? 200;

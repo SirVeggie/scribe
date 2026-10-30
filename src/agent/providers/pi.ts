@@ -17,6 +17,8 @@ import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
+import { checkPath, policyFor } from "../access.js";
+import { pathInside } from "../toolGrants.js";
 import { outputImages } from "../outputImages.js";
 
 type Model = PiModel<Api>;
@@ -151,12 +153,6 @@ export function builtinTools(mode: Thread["mode"], off: string[] = [], pagesRead
   if (mode === "board") return pagesReads ? READ_TOOLS.filter((name) => !off.includes(name)) : [];
   // A custom mode's tool groups (piToolsOff) come off the code set.
   return CODE_TOOLS.filter((name) => !off.includes(name));
-}
-
-/** Whether `target` is inside `root` (both absolute). */
-function inside(root: string, target: string): boolean {
-  const rel = path.relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
 function toolKind(name: string): ToolKind {
@@ -920,19 +916,42 @@ class PiSession implements ProviderSession {
         .catch(() => null);
       if (held && !held.allowed) return { block: true, reason: held.reason };
     }
-    if (READ_TOOLS.includes(name)) return undefined;
-    if (name !== "bash" && name !== "powershell" && name !== "edit" && name !== "write") return undefined;
+    const isRead = READ_TOOLS.includes(name);
+    if (!isRead && name !== "bash" && name !== "powershell" && name !== "edit" && name !== "write") return undefined;
     const sink = this.sink;
     const input = event.input as Record<string, unknown>;
+    // Native's file tools go by the thread's access policy (access.ts): protected paths are refused, and paths
+    // outside its roots ask. Links and junctions resolve first, so a worktree's node_modules is not the workspace.
+    const policy = isRead || name === "edit" || name === "write" ? policyFor({ ...this.thread, cwd: this.cwd() }, this.ctx.accessEnv?.()) : null;
     let req: ApprovalRequest;
-    if (name === "edit" || name === "write") {
+    if (isRead) {
+      const check = checkPath(policy!, str(input.path) ?? ".", "read");
+      if (check.verdict === "deny") return { block: true, reason: check.reason };
+      if (check.verdict === "allow") return undefined;
+      const tool = toolKind(name) === "search" ? "search" : "read";
+      req = {
+        toolId: event.toolCallId,
+        tool,
+        access: "read",
+        paths: [check.real],
+        title: `${tool === "search" ? "Search" : "Read"} outside the workspace: ${check.real}`,
+        options: [
+          { id: "allow", label: "Allow once", kind: "allow_once" },
+          { id: "reject", label: "Deny", kind: "reject_once" },
+        ],
+      };
+    } else if (name === "edit" || name === "write") {
       const target = path.resolve(this.cwd(), str(input.path) ?? "");
+      const check = checkPath(policy!, str(input.path) ?? "", "write");
+      if (check.verdict === "deny") return { block: true, reason: check.reason };
       if (sink) await sink.beforeWrite(event.toolCallId, target).catch(() => undefined);
-      const within = inside(this.cwd(), target);
+      let within = false;
+      try { within = check.verdict === "allow" && pathInside(fs.realpathSync.native(this.cwd()), check.real); }
+      catch { /* no workspace folder: nothing is within it */ }
       const rel = within ? path.relative(this.cwd(), target) || target : target;
       req = {
         toolId: event.toolCallId,
-        // Outside the workspace it is not a plain edit: "edits" does not cover it.
+        // Outside the workspace (through a link too) it is not a plain edit: "edits" does not cover it.
         tool: within ? "edit" : "other",
         access: "write",
         paths: [target],

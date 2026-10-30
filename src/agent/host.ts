@@ -116,6 +116,7 @@ import type {
 import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, planAccess, readsOnly, settleAccess, wantsPlan } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
+import { cleanProtectedPaths, type PolicyEnv } from "./access.js";
 import { injectionDetectors } from "./injection.js";
 
 import { parseComponentInput, componentJson, componentString, componentText, componentLink, type ComponentAnswer, type ComponentItem, type ComponentInput } from "./componentTool.js";
@@ -435,6 +436,8 @@ function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
 
 type RunState = {
   turn: Turn;
+  /** The turn's sink, for asks that come from Scribe's own tools (a read outside the roots, #898). */
+  sink?: RunSink;
   /** A plan turn's answer on its plan page (#721): accept starts the implementation turn after it. */
   plan?: { accepted: boolean; notes?: string; page: string };
   /** Actual Native source after model resolution, including default/fallback models. */
@@ -606,6 +609,7 @@ export class AgentHost {
       summarizeContext: (thread, prompt, signal) => this.summarizeContext(thread, prompt, signal),
       boardMcp: { command: process.execPath, args: [entry], env },
       scratchDir,
+      accessEnv: () => this.accessEnv(),
       // Page workers run unattended; helpers do not hand anything in themselves.
       isWorker: (id) => !this.threads.get(id)?.helperOf && this.unattended(id),
       workerTools: (id) => {
@@ -1105,6 +1109,7 @@ export class AgentHost {
       web: parseWebAccess(saved.web) ?? DEFAULT_PREFS.web,
       webAllowlist: Array.isArray(saved.webAllowlist) ? cleanAllowlist(saved.webAllowlist) : DEFAULT_PREFS.webAllowlist,
       commandAllowlist: cleanCommandAllowlist(saved.commandAllowlist),
+      protectedPaths: cleanProtectedPaths(saved.protectedPaths),
       searxngUrl: cleanSearxngUrl(saved.searxngUrl),
       claudeHooks: saved.claudeHooks === true,
       cursorHostShell: saved.cursorHostShell === true,
@@ -1143,6 +1148,7 @@ export class AgentHost {
     }
     if (patch.webAllowlist !== undefined) next.webAllowlist = patch.webAllowlist === null ? DEFAULT_PREFS.webAllowlist : cleanAllowlist(patch.webAllowlist);
     if (patch.commandAllowlist !== undefined) next.commandAllowlist = cleanCommandAllowlist(patch.commandAllowlist);
+    if (patch.protectedPaths !== undefined) next.protectedPaths = cleanProtectedPaths(patch.protectedPaths);
     this.db.setSetting("prefs", next);
     if (patch.usageWindowStarts !== undefined) this.usageWindowStarts.settingsChanged();
     if (patch.customModes !== undefined) this.refreshCustomModes(next);
@@ -2041,6 +2047,37 @@ export class AgentHost {
       this.db.saveThread(moved);
     }
     return true;
+  }
+
+  /** What access.ts needs from the user's settings. */
+  accessEnv(): PolicyEnv {
+    return { protectedPaths: this.prefs().protectedPaths, scratchDir: this.ctx.scratchDir };
+  }
+
+  /**
+   * A read by Scribe's own tools (read_file, file search, page_open's file) outside the thread's read
+   * roots (#898): asked like a provider's read, so the user can allow its folder for the thread. A
+   * folder grant made earlier answers it. Refused when no turn is running.
+   */
+  async requestFileRead(threadId: string, tool: "read" | "search", real: string, reason: string): Promise<boolean> {
+    const sink = this.runs.get(threadId)?.sink;
+    if (!sink) return false;
+    const req: ApprovalRequest = {
+      tool,
+      access: "read",
+      paths: [real],
+      title: `${tool === "search" ? "Search" : "Read"} outside the workspace: ${real}`,
+      detail: reason,
+      options: [
+        { id: "allow", label: "Allow once", kind: "allow_once" },
+        { id: "reject", label: "Deny", kind: "reject_once" },
+      ],
+    };
+    try {
+      return (await sink.approval(req)).optionId === "allow";
+    } catch {
+      return false;
+    }
   }
 
   /** Keep what one of Scribe's lasting tool options granted (#743): on the thread, or on the command allowlist. */
@@ -4280,6 +4317,7 @@ export class AgentHost {
     }
 
     const sink = this.makeSink(threadId, run);
+    run.sink = sink;
     let result: TurnResult = setupError ? { status: "error", error: setupError } : { status: "cancelled" };
     // Stop can arrive while the snapshot above runs, before the provider has anything to cancel.
     if (!run.cancelled && !setupError) {

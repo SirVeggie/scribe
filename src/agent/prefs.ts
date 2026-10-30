@@ -34,6 +34,8 @@ export type Prefs = {
   webAllowlist: string[];
   /** Commands (their first words) Scribe runs without asking in every thread: Native's and Cursor's host shell (#743). */
   commandAllowlist: string[];
+  /** Extra files and folders no agent may read or write through Scribe's gates, beside the built-in ones (access.ts, #898). */
+  protectedPaths: string[];
   /** A SearXNG instance (base URL) that gives Pi threads, and Cursor threads without full web, a web_search tool. "" for none. */
   searxngUrl: string;
   /**
@@ -93,6 +95,7 @@ export const DEFAULT_PREFS: Prefs = {
   web: "on",
   webAllowlist: DEFAULT_WEB_ALLOWLIST,
   commandAllowlist: [],
+  protectedPaths: [],
   searxngUrl: "",
   claudeHooks: false,
   cursorHostShell: false,

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { scopedReadResolver, type ReadScope } from "./readFile.js";
+import { scopedReadResolver, type ReadOptions, type ReadScope } from "./readFile.js";
 import type { Tab } from "../types.js";
 
 type FilePageStore = {
@@ -14,9 +14,10 @@ type FilePageStore = {
 export async function openFileForAgent(
   thread: ReadScope | null,
   store: FilePageStore,
-  input: { path?: unknown; keep?: unknown }
+  input: { path?: unknown; keep?: unknown },
+  opts: ReadOptions = {}
 ): Promise<{ tab: Tab; created: boolean }> {
-  const resolve = await scopedReadResolver(thread);
+  const resolve = await scopedReadResolver(thread, opts);
   const { target } = await resolve(input.path);
   const stat = await fs.stat(target);
   if (!stat.isFile()) {
