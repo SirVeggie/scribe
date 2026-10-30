@@ -56,7 +56,8 @@ test("a page reads and writes files only in its approved folders, at their acces
   const files = (page: string, op: string, file: string, query = "") => `/api/tabs/${page}/files/${op}?path=${encodeURIComponent(file)}${query}`;
   try {
     let ready = false;
-    for (let i = 0; i < 150 && !ready; i++) {
+    // A full npm test run starts many processes at once, so startup can take far longer than alone.
+    for (const until = Date.now() + 90_000; !ready && Date.now() < until;) {
       try {
         ready = (await fetch(url + "/api/health", { signal: AbortSignal.timeout(300) })).ok;
       } catch {
@@ -96,6 +97,7 @@ test("a page reads and writes files only in its approved folders, at their acces
   } finally {
     child.kill();
     await exited.catch(() => null);
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows can hold the exited daemon's files for a moment.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });

@@ -66,7 +66,8 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     });
   try {
     let ready = false;
-    for (let i = 0; i < 150 && !ready; i++) {
+    // A full npm test run starts many processes at once, so startup can take far longer than alone.
+    for (const until = Date.now() + 90_000; !ready && Date.now() < until;) {
       try {
         ready = (await fetch(url + "/api/health", { signal: AbortSignal.timeout(300) })).ok;
       } catch {
@@ -219,6 +220,7 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     await Promise.race([exited, delay(5000)]);
     if (child.exitCode === null) child.kill();
     await exited;
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows can hold the exited daemon's files for a moment.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
