@@ -24,7 +24,8 @@ export interface ProcInfo { pid: number; commandLine: string }
 export function profileDirOf(commandLine: string): string | undefined {
   const match = commandLine.match(/--user-data-dir=(?:"([^"]+)"|(\S+))/);
   const dir = match?.[1] ?? match?.[2];
-  return dir && path.basename(dir).startsWith(PROFILE_PREFIX) ? dir : undefined;
+  // Either separator: path.basename on Linux would not split a Windows path (#909).
+  return dir && (dir.split(/[\\/]/).pop() ?? "").startsWith(PROFILE_PREFIX) ? dir : undefined;
 }
 
 /**

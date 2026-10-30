@@ -231,3 +231,63 @@ The access model is the same as for chats on one device: a chat on A reaches not
 - Tests: `src/devices/agentAccess.test.ts` (two daemons on loopback), the remote cases in `src/agent/helper.test.ts`.
 - Not done: revoking a chat's grants for another device from its permissions menu (they end with the chat),
   remote `page_show` / `page_wait`, and thread references (`thread:@device/id`) as read grants.
+
+## Headless device as built (#909)
+
+- The daemon already runs with no desktop shell (`node dist/index.js --daemon`). `package.json` now has
+  `"bin": { "scribe": "dist/index.js" }`, so `npm link` (or `npm i -g .`) gives a `scribe` command.
+- CLI (`src/index.ts`, all as the user through the local token, refused inside an agent's chat):
+  `scribe pair <code>`, `scribe add-device` (makes a code on this device and waits until another device
+  uses it), `scribe devices`, `scribe unpair <name | id>` (revokes on both sides), `scribe rename <name>`,
+  `scribe service install | uninstall | status`, `scribe help`.
+- `src/service.ts`: runs as the installing user, never root or SYSTEM, because the data folder, provider
+  logins and worktrees are that user's.
+  - Linux: a systemd user unit (`~/.config/systemd/user/scribe.service`), `Restart=on-failure` so a clean
+    `scribe --stop` stays stopped, `KillMode=mixed` so agent processes stop with it, the install's PATH and
+    `SCRIBE_HOME` / `SCRIBE_PORT` / `SCRIBE_PEER_PORT` / `SCRIBE_PEER_HOSTS` / `SCRIBE_PAGE_HOST`. It turns on
+    lingering (`loginctl enable-linger`) so the unit starts at boot; where that needs root it prints the sudo
+    command.
+  - Windows: a Task Scheduler task "Scribe" at the user's logon, run through `conhost.exe --headless` (no
+    window), restarted every minute if it fails. A real Windows service would run as SYSTEM or need the
+    password; "Run whether user is logged on or not" in Task Scheduler is the user's choice. Only the
+    PowerShell's syntax was checked; the task was not registered on this machine.
+  - macOS: not supported yet (run `npm start` under launchd).
+- Provider logins from another device's UI. A login request that arrives over the link
+  (`identify(req).device`) is "remote":
+  - Codex runs `codex login --device-auth` (its usual callback is `localhost:1455` on the machine whose browser
+    opens the page, which is the wrong one). Settings shows "Enter code XXXX-XXXX on the login page" and Open
+    page. The ChatGPT account must allow device code logins.
+  - Claude: `claude auth login` gets a stdin pipe, and the URL it prints for when no browser opened comes back.
+    That page shows a code; the paste field under the Claude row sends it to `POST /api/agent/claude/login/code`.
+  - Cursor already worked: its SDK login hands back a URL and polls.
+  - Local logins are unchanged.
+- Board opener: `openBoard()` (an agent's `page_show` opening the board) spawned `cmd /c start` on every
+  platform. It now uses `open` / `xdg-open`, does nothing on a Linux box with no `DISPLAY` / `WAYLAND_DISPLAY`,
+  and ignores a missing opener.
+
+### Linux probe (WSL2 Ubuntu 24.04, Node 24.22, 2026-10-30)
+
+- `npm ci` and `tsc` work. The daemon starts, `/api/health` answers, and the log has no errors. Claude, Codex,
+  Cursor and Native all load their Linux binaries and report "Not logged in".
+- Pairing between two Linux daemons with `scribe add-device` and `scribe pair` works, the peer listener binds the
+  LAN and tailnet addresses, and `scribe unpair` revokes on both sides.
+- systemd: install starts the unit; `kill -9` restarts it (NRestarts 1); `scribe --stop` leaves it inactive;
+  uninstall removes it. Under WSL, systemd could not kill the cgroup ("Invalid argument") and reported leftover
+  `codex` / `esbuild` children, which exited on their own. Check this again on a real Linux box.
+- Remote logins: the Claude path returns the claude.com URL and accepts a code on stdin; the Codex path returns
+  `https://auth.openai.com/codex/device` and the code.
+- Desktop-only parts: window hiding is Windows only, and the Chromium sweep lists processes with `ps`.
+  IntelliJ finds no binary and stays off. Reveal in folder uses `xdg-open` and reports a failure as an error.
+  The tray is the desktop shell's (Tauri), so it is not part of a headless install. Plugin secrets
+  need Windows DPAPI and fail with that message.
+- `npm test` on Linux: 1433 tests, 1313 pass, 63 skipped, 56 fail. 52 of the failures (and the hung
+  `pageComponents.test.ts`) are UI tests that need Edge, Chrome or Brave, which this WSL box doesn't have. Agent chats,
+  helpers, kanban workers, worktrees, devices, the gateway and the MCP tests pass. That leaves four:
+  - `chromiumSweep.test.ts` (2): `profileDirOf` used `path.basename`, which on Linux doesn't split the fixtures'
+    Windows paths. It now splits on either separator.
+  - `helper.test.ts` "stopping the caller stops its helper": the test cancelled 30 ms after starting the helper, before
+    a slow first turn had begun, and then hung. It now waits for the turn to start. The same thing happens on Windows
+    when the test runs alone.
+  - `audioUi.test.ts` "listen combines ask permissions…" fails on Windows too: it is not about Linux.
+- The agent's own browser (`browser_*` tools, the browser handoff) needs one of those browsers installed on the
+  headless box. Without one, those tools fail with "Could not launch a Chromium browser".

@@ -379,8 +379,10 @@ test("stopping the caller stops its helper", async () => {
   const id = parent();
   hanging = true;
   try {
+    const waiting = helperWaits.size;
     const call = host.runHelper(id, { task: "long", title: "Inspect files", provider: "pi" });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Stop the caller once the helper's turn is running: a fixed delay raced a slow first start.
+    while (helperWaits.size === waiting) await new Promise((resolve) => setTimeout(resolve, 10));
     await host.cancel(id);
     const report = await call;
     assert.equal(report.status, "cancelled");
