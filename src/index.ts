@@ -77,7 +77,7 @@ async function devicesCommand(): Promise<void> {
     const peers = (await devicesView()).peers;
     const matches = peers.filter((peer) => peer.id === rest || peer.name.toLowerCase() === rest.toLowerCase());
     if (matches.length !== 1) throw new Error(matches.length ? `Several devices are called ${rest}: use the id (scribe devices).` : `No paired device ${rest}.`);
-    await change("DELETE", `/api/devices/${encodeURIComponent(matches[0].id)}`, undefined, "Could not revoke it");
+    await change("DELETE", `/api/devices/${encodeURIComponent(matches[0].id)}`, {}, "Could not revoke it");
     process.stdout.write(`Revoked ${matches[0].name}. It can no longer connect, and drops this device too when it is next online.\n`);
     return;
   }
