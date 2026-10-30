@@ -101,27 +101,30 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     await page.waitForFunction(() => document.querySelector(".dock-orb")?.classList.contains("gl"));
     assert.equal(await page.locator(".dock-orb").evaluate(n => n.classList.contains("gl")), true);
     if (process.env.SCRIBE_ORB_SCREENSHOT) await page.screenshot({ path: process.env.SCRIBE_ORB_SCREENSHOT });
-    const selects = page.locator("dialog select");
+    const select = (label: string) => page.locator(`dialog select[aria-label="${label}"]`);
+    const style = select("Style"), symbol = select("Display"), effectSelect = select("Effect");
+    const provider = (name: string) => page.getByRole("group", { name: "Provider" }).getByRole("button", { name, exact: true }).click();
+    const swatch = (section: string, name: string) => page.locator(".orb-settings-section", { has: page.getByRole("heading", { name: section, exact: true }) }).getByRole("button", { name, exact: true });
     // The native selects are hidden behind the app's dropdowns, so choose through those as a user does.
     const pick = async (select: Locator, value: string) => {
       const label = await select.getAttribute("aria-label");
       await page.getByRole("button", { name: label!, exact: true }).click();
       await page.getByRole("option", { name: (await select.locator(`option[value="${value}"]`).textContent())!, exact: true }).click();
     };
-    assert.equal(await selects.nth(1).locator('option[value="flares"]').count(), 0);
-    assert.equal(await selects.nth(3).locator('option[value="circuit"]').count(), 0);
-    await pick(selects.nth(0), "cursor");
-    assert.equal(await selects.nth(1).inputValue(), "mesh");
-    assert.equal(await selects.nth(3).inputValue(), "flares");
-    await pick(selects.nth(0), "pi");
-    assert.equal(await selects.nth(3).inputValue(), "none");
-    await pick(selects.nth(0), "claude");
+    assert.equal(await style.locator('option[value="flares"]').count(), 0);
+    assert.equal(await effectSelect.locator('option[value="circuit"]').count(), 0);
+    await provider("Cursor");
+    assert.equal(await style.inputValue(), "mesh");
+    assert.equal(await effectSelect.inputValue(), "flares");
+    await provider("Native");
+    assert.equal(await effectSelect.inputValue(), "none");
+    await provider("Claude");
     for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone", "galaxy"]) {
-      await pick(selects.nth(1), shape);
-      for (const symbol of ["none", "glow", "traced", "crt", "dots"]) await pick(selects.nth(2), symbol);
+      await pick(style, shape);
+      for (const value of ["none", "glow", "crt", "dots", "emboss", "glitch"]) await pick(symbol, value);
     }
-    for (const effect of ["none", "dye", "flares", "galaxy", "glow", "breathing", "waveDots", "pulse", "motes"]) {
-      await pick(selects.nth(3), effect);
+    for (const effect of ["none", "dye", "flares", "galaxy", "glow", "waveDots", "pulse", "motes", "motesRise", "embers"]) {
+      await pick(effectSelect, effect);
     }
     assert.deepEqual(await page.evaluate(() => (window as any).shaderErrors), []);
     assert.ok(await page.evaluate(() => (window as any).pixelChecks.every(Boolean)));
@@ -140,7 +143,7 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     await page.waitForTimeout(150);
     assert.ok(await page.evaluate(() => (window as any).draws) > hidden);
     const beforeBusy = await page.evaluate(() => (window as any).draws);
-    await page.getByRole("checkbox", { name: "Preview busy" }).check();
+    await page.getByRole("switch", { name: "Preview while working" }).click();
     await page.waitForTimeout(180);
     assert.ok(await page.evaluate(() => (window as any).draws) > beforeBusy + 2);
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -155,68 +158,67 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     await page.waitForTimeout(120);
     assert.equal(await page.evaluate(() => (window as any).draws), off);
     // Icon colour and size are independent of the shape and survive changing its style.
-    for (const palette of ["white", "amber", "ink"]) await pick(page.locator('dialog select[aria-label="Icon palette"]'), palette);
-    await pick(page.locator('dialog select[aria-label="Icon palette"]'), "ice");
+    for (const palette of ["White", "Amber", "Ink"]) await swatch("Provider icon", palette).click();
+    await swatch("Provider icon", "Ice").click();
     const sizeControl = page.getByRole("slider", { name: "Icon size" });
     await sizeControl.focus();
     await sizeControl.press("End");
     await sizeControl.press("ArrowLeft");
     await sizeControl.press("ArrowLeft");
-    await pick(selects.nth(2), "glow");
-    await pick(selects.nth(1), "mesh");
+    await pick(symbol, "glow");
+    await pick(style, "mesh");
     // A picked setting redraws on the next frame; read the pixels after it, not the frame before.
     const capture = async (): Promise<number[]> => page.locator(".dock-orb-canvas").evaluate(canvas => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve((canvas as any).lastPixels)))));
     // Circular shapes have a soft edge; the galaxy retains its own fading arms.
-    await pick(selects.nth(2), "none");
+    await pick(symbol, "none");
     for (const shape of ["liquid3d", "mesh", "ring", "ink", "plasma", "halftone"]) {
-      await pick(selects.nth(1), shape);
+      await pick(style, shape);
       const pixels = await capture();
       assert.ok(pixels[(38 * 76 + 69) * 4 + 3] > 0, shape + " edge glow");
     }
-    await pick(selects.nth(1), "galaxy");
+    await pick(style, "galaxy");
     assert.equal((await capture())[(38 * 76 + 69) * 4 + 3], 0, "no circular galaxy halo");
-    await pick(selects.nth(1), "none");
-    await pick(selects.nth(3), "none");
+    await pick(style, "none");
+    await pick(effectSelect, "none");
     assert.ok((await capture()).every(v => v === 0), "no shape or icon is transparent");
-    await pick(selects.nth(2), "glow");
+    await pick(symbol, "glow");
     assert.ok((await capture()).some(v => v > 0), "icon works without a shape");
     // Ice shades from cyan to white over time; a white icon counts the same bright pixels at any moment.
-    await pick(page.locator('dialog select[aria-label="Icon palette"]'), "white");
-    await pick(selects.nth(1), "mesh");
+    await swatch("Provider icon", "White").click();
+    await pick(style, "mesh");
     const meshIcon = await capture();
-    await pick(selects.nth(1), "galaxy");
+    await pick(style, "galaxy");
     const galaxyIcon = await capture();
     // Bright white icon pixels keep the same footprint on the larger galaxy coordinate domain.
     const bright = (pixels: number[]) => pixels.reduce((n, v, i) => n + (i % 4 === 0 && v > 200 && pixels[i+1] > 200 && pixels[i+2] > 200 ? 1 : 0), 0);
     assert.ok(bright(galaxyIcon) > 500);
     assert.ok(Math.abs(bright(meshIcon) - bright(galaxyIcon)) < bright(meshIcon) * .05);
-    await pick(page.locator('dialog select[aria-label="Icon palette"]'), "ice");
-    // Surface pixels verify a steady glow and genuinely moving waves, gradients and motes.
-    for (const effect of ["glow", "breathing", "waveDots", "pulse", "motes"]) {
-      await pick(selects.nth(3), effect);
+    await swatch("Provider icon", "Ice").click();
+    // Surface pixels verify a breathing glow and genuinely moving waves, gradients and motes.
+    for (const effect of ["glow", "waveDots", "pulse", "motes"]) {
+      await pick(effectSelect, effect);
       const before: number[] = await page.locator(".dock-orb-surface").evaluate(canvas => (canvas as any).lastPixels);
       assert.ok(before.some(v => v > 0), effect + " renders");
       await page.evaluate(() => { document.documentElement.classList.remove("fx-off"); window.dispatchEvent(new Event("scribe:ui-fx")); });
       await page.waitForTimeout(160);
       await page.evaluate(() => { document.documentElement.classList.add("fx-off"); window.dispatchEvent(new Event("scribe:ui-fx")); });
       const after: number[] = await page.locator(".dock-orb-surface").evaluate(canvas => (canvas as any).lastPixels);
-      if (effect === "glow") assert.deepEqual(after, before);
-      else assert.notDeepEqual(after, before, effect + " animates");
+      assert.notDeepEqual(after, before, effect + " animates");
     }
     if (process.env.SCRIBE_ORB_SCREENSHOT) {
-      await pick(selects.nth(1), "mesh");
-      await pick(selects.nth(4), "ocean");
-      for (const effect of ["flares", "glow", "breathing", "waveDots", "pulse", "motes"]) {
-        await pick(selects.nth(3), effect);
+      await pick(style, "mesh");
+      await swatch("Shape", "Ocean").click();
+      for (const effect of ["flares", "glow", "waveDots", "pulse", "motes"]) {
+        await pick(effectSelect, effect);
         await page.screenshot({ path: process.env.SCRIBE_ORB_SCREENSHOT.replace(/\.png$/, "-" + effect + ".png") });
       }
-      await pick(selects.nth(1), "galaxy");
+      await pick(style, "galaxy");
     }
-    await pick(selects.nth(0), "cursor");
-    await pick(selects.nth(1), "none");
-    await pick(selects.nth(0), "codex");
-    await pick(selects.nth(1), "ring");
-    await pick(selects.nth(4), "ember");
+    await provider("Cursor");
+    await pick(style, "none");
+    await provider("Codex");
+    await pick(style, "ring");
+    await swatch("Shape", "Ember").click();
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("scribe.dock-appearance.v1")!));
     assert.equal(saved.codex.style, "ring");
@@ -228,13 +230,13 @@ test("dock shaders animate while visible, pause when hidden, and save provider a
     assert.equal(saved.cursor.style, "none");
     assert.equal(saved.pi.bleed, "none");
     await page.getByRole("button", { name: "Customize", exact: true }).click();
-    await pick(selects.nth(0), "codex");
-    assert.equal(await selects.nth(1).inputValue(), "ring");
-    await pick(selects.nth(0), "claude");
+    await provider("Codex");
+    assert.equal(await style.inputValue(), "ring");
+    await provider("Claude");
     assert.equal(await page.getByRole("slider", { name: "Icon size" }).inputValue(), "100");
-    assert.equal(await page.locator('dialog select[aria-label="Icon palette"]').inputValue(), "ice");
-    await pick(selects.nth(0), "codex");
-    await pick(selects.nth(1), "plasma");
+    assert.equal(await swatch("Provider icon", "Ice").getAttribute("aria-pressed"), "true");
+    await provider("Codex");
+    await pick(style, "plasma");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("scribe.dock-appearance.v1")!).codex.style), "ring");
     const stopped = await page.evaluate(() => (window as any).draws);
