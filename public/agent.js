@@ -12332,9 +12332,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.status.replaceChildren();
       for (const p of S.config.providers) {
         const loginExpired = p.id === "codex" && S.config.limits?.codex?.availability === "authentication_required";
+        // A login started from another device's UI (#909): a code to enter there, or one to paste here.
+        const pending = this.pendingLogin?.id === p.id ? this.pendingLogin : null;
         const row = el("div", "setting-row");
         const label = el("span");
-        label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${loginExpired ? "Login missing or expired" : p.detail || ""}`));
+        const detail = pending?.userCode ? `Enter code ${pending.userCode} on the login page` : pending?.paste ? "Sign in, then paste the code the page shows" : loginExpired ? "Login missing or expired" : p.detail || "";
+        label.append(el("strong", null, p.label), el("span", "ag-muted", ` · ${detail}`));
         const actions = el("span", "settings-actions");
         row.append(label, actions);
         if (loginExpired || (p.login && !p.available)) {
@@ -12343,13 +12346,17 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
               try {
                 const res = await api("POST", `/${p.id}/login`);
                 if (res?.url) window.open(res.url, "_blank", "noopener");
-                notice("Finish the login in your browser.");
+                const started = res?.userCode || res?.paste ? { id: p.id, ...res } : null;
+                this.pendingLogin = started;
+                if (started) this.renderStatus();
+                else notice("Finish the login in your browser.");
                 // The login finishes in the daemon; pick it up when it does.
                 for (let i = 0; i < 100; i += 1) {
                   await new Promise((resolve) => setTimeout(resolve, 3000));
                   await loadConfig();
                   if (providerAvailable(p.id) && !(p.id === "codex" && S.config.limits?.codex?.availability === "authentication_required")) break;
                 }
+                if (this.pendingLogin === started) this.pendingLogin = null;
                 agentSettings.renderStatus();
                 requestRender();
               } catch (err) {
@@ -12388,6 +12395,28 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           actions.append(logout);
         }
         this.status.append(row);
+        if (pending?.url) actions.prepend(button("Open page", "ag-btn small", () => window.open(pending.url, "_blank", "noopener")));
+        if (pending?.paste) {
+          const field = el("input", "ag-input");
+          field.placeholder = "Paste the code from the sign-in page";
+          field.setAttribute("aria-label", `${p.label} sign-in code`);
+          const submit = button("Submit", "ag-btn small", async () => {
+            if (!field.value.trim()) return;
+            submit.disabled = true;
+            try {
+              await api("POST", `/${p.id}/login/code`, { code: field.value.trim() });
+              field.value = "";
+              notice("Code sent. Finishing the login…");
+            } catch (err) {
+              notice(err.message);
+            } finally {
+              submit.disabled = false;
+            }
+          });
+          const paste = el("div", "setting-row");
+          paste.append(field, submit);
+          this.status.append(paste);
+        }
       }
     },
     async renderSources() {

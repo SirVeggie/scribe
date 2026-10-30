@@ -47,6 +47,21 @@ const MODELS_TTL_MS = 6 * 60 * 60 * 1000;
 /** How long a signed-in answer from `claude auth status` is trusted; a signed-out one is asked again each time. */
 const AUTH_TTL_MS = 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+/** How long a remote login waits for `claude auth login` to print its URL (#909). */
+const LOGIN_URL_WAIT_MS = 15_000;
+
+/** The sign-in URL `claude auth login` prints for when no browser opened ("visit: https://…"). */
+export function printedLoginUrl(output: string): string | null {
+  const plain = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+  // The line must have ended: output comes in chunks, and half a URL would not sign in.
+  const href = plain.match(/visit:\s*(https:\/\/\S+)\s/i)?.[1];
+  if (!href) return null;
+  try {
+    return new URL(href).href;
+  } catch {
+    return null;
+  }
+}
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const BOARD_SERVER = "scribe";
 /** Claude Code's read tools: a Pages thread with a workspace gets these and no others for files (#718). */
@@ -199,6 +214,8 @@ export class ClaudeProvider implements AgentProvider {
   private auth: { at: number; value: ClaudeAuth } | null = null;
   private login: Promise<void> | null = null;
   private loginAbort: AbortController | null = null;
+  /** The running `claude auth login`, while one started from another device waits for its code (#909). */
+  private loginChild: ChildProcess | null = null;
 
   async status(): Promise<ProviderStatus> {
     try {
@@ -234,21 +251,42 @@ export class ClaudeProvider implements AgentProvider {
   /**
    * `claude auth login`: Claude Code opens the browser itself and takes the sign-in on its own
    * localhost callback, so there is no URL to hand back (the one it prints wants a code pasted).
+   *
+   * remote: the login was started from another device's UI (#909). That device's browser can't reach
+   * this machine's callback, so it gets the printed URL instead, and the code the page shows comes
+   * back through pasteLoginCode.
    */
-  async startLogin(): Promise<{ url: string | null }> {
+  async startLogin(options: { remote?: boolean } = {}): Promise<{ url: string | null; paste?: boolean }> {
     // Closing the browser does not end `claude auth login`: logging in again starts a fresh one.
     this.loginAbort?.abort();
     const abort = new AbortController();
     this.loginAbort = abort;
-    const login: Promise<void> = this.runLogin(undefined, abort.signal).then(() => undefined).finally(() => {
-      if (this.login !== login) return;
-      this.auth = null;
-      this.modelCache = null;
-      this.login = null;
-      this.loginAbort = null;
-    });
+    let gotUrl: (url: string | null) => void = () => {};
+    const printed = new Promise<string | null>((resolve) => (gotUrl = resolve));
+    const login: Promise<void> = this.runLogin(undefined, abort.signal, options.remote ? { onChild: (child) => (this.loginChild = child), onUrl: gotUrl } : undefined)
+      .then(() => undefined)
+      .finally(() => {
+        gotUrl(null);
+        if (this.login !== login) return;
+        this.auth = null;
+        this.modelCache = null;
+        this.login = null;
+        this.loginAbort = null;
+        this.loginChild = null;
+      });
     this.login = login;
-    return { url: null };
+    if (!options.remote) return { url: null };
+    const url = await Promise.race([printed, new Promise<null>((resolve) => setTimeout(() => resolve(null), LOGIN_URL_WAIT_MS))]);
+    return url ? { url, paste: true } : { url: null };
+  }
+
+  /** The code the sign-in page shows, for a login started from another device (#909). */
+  pasteLoginCode(code: string): void {
+    const child = this.loginChild;
+    const value = code.trim();
+    if (!child?.stdin || child.exitCode !== null) throw new Error("No Claude login is waiting for a code. Start it again.");
+    if (!value || /[\r\n]/.test(value) || value.length > 2000) throw new Error("Paste the code the sign-in page shows.");
+    child.stdin.write(`${value}\n`);
   }
 
   /** Sign an added account's config folder in (#452). Resolves whether the sign-in went through. */
@@ -257,14 +295,22 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   /** signal: stop the sign-in (the user closed the browser and starts again, or cancels). */
-  private runLogin(dir?: string, signal?: AbortSignal): Promise<boolean> {
+  private runLogin(dir?: string, signal?: AbortSignal, paste?: { onChild: (child: ChildProcess) => void; onUrl: (url: string) => void }): Promise<boolean> {
     if (signal?.aborted) return Promise.resolve(false);
     const binary = claudeBinary();
     if (!binary) return Promise.reject(new Error("The Claude Code binary for this platform is not installed."));
-    const child = spawn(binary, ["auth", "login"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(dir ? { env: accountEnv(dir) } : {}) });
+    const child = spawn(binary, ["auth", "login"], { stdio: [paste ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true, ...(dir ? { env: accountEnv(dir) } : {}) });
+    paste?.onChild(child);
     let output = "";
+    let urlSent = false;
     const take = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-4000);
+      if (!paste || urlSent) return;
+      const url = printedLoginUrl(output);
+      if (url) {
+        urlSent = true;
+        paste.onUrl(url);
+      }
     };
     child.stdout?.on("data", take);
     child.stderr?.on("data", take);

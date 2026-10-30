@@ -1221,13 +1221,16 @@ export class AgentHost {
     return (this.providers.cursor as CursorProvider).startLogin();
   }
 
-  /** Start Codex's ChatGPT login (`codex login`); resolves with the login URL when the CLI prints one. */
-  codexLogin(): Promise<{ url: string | null }> {
+  /**
+   * Start Codex's ChatGPT login (`codex login`); resolves with the login URL when the CLI prints one.
+   * remote: started from another device's UI (#909), so a device code instead of the localhost callback.
+   */
+  codexLogin(options: { remote?: boolean } = {}): Promise<{ url: string | null; userCode?: string }> {
     this.checkLoggingOut("codex");
     return (this.providers.codex as CodexProvider).startLogin(() => {
       this.codexUsageFetchAt = 0;
       void this.refreshCodexUsage();
-    });
+    }, { device: options.remote });
   }
 
   /** Native's subscription logins (Pi's OAuth) and their state. */
@@ -1267,10 +1270,17 @@ export class AgentHost {
     return this.nativePlans()["openai-codex"] ?? thread.provider;
   }
 
-  /** Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. */
-  claudeLogin(): Promise<{ url: string | null }> {
+  /**
+   * Start Claude Code's sign-in (`claude auth login`), which opens the browser itself. remote: started
+   * from another device's UI (#909): its URL comes back, and the page's code through claudeLoginCode.
+   */
+  claudeLogin(options: { remote?: boolean } = {}): Promise<{ url: string | null; paste?: boolean }> {
     this.checkLoggingOut("claude");
-    return (this.providers.claude as ClaudeProvider).startLogin();
+    return (this.providers.claude as ClaudeProvider).startLogin(options);
+  }
+
+  claudeLoginCode(code: string): void {
+    (this.providers.claude as ClaudeProvider).pasteLoginCode(code);
   }
 
   /** Forget a provider's shared login once its chats are idle. */

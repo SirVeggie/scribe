@@ -178,6 +178,14 @@ export function loginEnv(env: NodeJS.ProcessEnv = process.env): Record<string, s
 }
 
 /** HTTPS login page from `codex login` stdout; skip localhost (the OAuth callback). */
+/** The one-time code `codex login --device-auth` prints under "Enter this one-time code". */
+export function deviceCodeFromOutput(text: string): string | null {
+  const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+  const at = plain.search(/one-time code/i);
+  if (at < 0) return null;
+  return plain.slice(at).match(/\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/)?.[1] ?? null;
+}
+
 export function loginUrlFromOutput(text: string): string | null {
   const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
   const matches = plain.match(/https:\/\/[^\s<>"'\\]+/g) ?? [];
@@ -588,7 +596,7 @@ export class CodexProvider implements AgentProvider {
   private modelLoad: Promise<ModelOption[]> | null = null;
   private sessions = new Set<CodexSession>();
   private spares = new SparePool<CodexSession>();
-  private login: { url: string | null; done: Promise<void> } | null = null;
+  private login: { url: string | null; userCode?: string; device: boolean; child: ChildProcess; done: Promise<void> } | null = null;
 
   async status(): Promise<ProviderStatus> {
     try {
@@ -613,24 +621,36 @@ export class CodexProvider implements AgentProvider {
    * Scribe's settings also open that URL. Auth lands in ~/.codex/auth.json, then is copied into
    * Scribe's CODEX_HOME. Resolves with the URL as soon as there is one; the wait goes on in the
    * background.
+   *
+   * device: the login was started from another device's UI (#909), where the CLI's callback on
+   * localhost:1455 can't be reached. `codex login --device-auth` shows a page and a one-time code
+   * instead (the ChatGPT account must allow device code logins).
    */
-  async startLogin(onLogin?: () => void): Promise<{ url: string | null }> {
+  async startLogin(onLogin?: () => void, options: { device?: boolean } = {}): Promise<{ url: string | null; userCode?: string }> {
+    const device = Boolean(options.device);
+    if (this.login && this.login.device !== device) {
+      stopChild(this.login.child);
+      this.login = null;
+    }
     if (!this.login) {
       let gotUrl: (url: string) => void = () => {};
       const urlReady = new Promise<string>((resolve) => (gotUrl = resolve));
-      const entry: { url: string | null; done: Promise<void> } = { url: null, done: Promise.resolve() };
       let output = "";
-      const child = spawn(process.execPath, [codexCliJs(), "login"], {
+      const child = spawn(process.execPath, [codexCliJs(), "login", ...(device ? ["--device-auth"] : [])], {
         env: loginEnv(),
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
+      const entry: NonNullable<CodexProvider["login"]> = { url: null, device, child, done: Promise.resolve() };
       const take = (chunk: Buffer) => {
         output += chunk.toString("utf8");
         if (output.length > 32_000) output = output.slice(-16_000);
-        if (entry.url) return;
+        if (entry.url && (!device || entry.userCode)) return;
         const url = loginUrlFromOutput(output);
-        if (url) {
+        // Device auth prints the page first and the code after it: hand both back together.
+        const userCode = device ? deviceCodeFromOutput(output) : null;
+        if (userCode) entry.userCode = userCode;
+        if (url && (!device || userCode)) {
           entry.url = url;
           gotUrl(url);
         }
@@ -664,7 +684,7 @@ export class CodexProvider implements AgentProvider {
       this.login = entry;
       await Promise.race([urlReady, entry.done, new Promise((resolve) => setTimeout(resolve, LOGIN_URL_WAIT_MS))]);
     }
-    return { url: this.login?.url ?? null };
+    return { url: this.login?.url ?? null, ...(this.login?.userCode ? { userCode: this.login.userCode } : {}) };
   }
 
   async logout(): Promise<void> {

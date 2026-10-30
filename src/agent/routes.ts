@@ -227,8 +227,13 @@ export function agentRouter(host: AgentHost): express.Router {
   // Cursor's browser login (the SDK's Cursor.auth.login); the URL also opens in the system browser.
   router.post("/cursor/login", wrap(() => host.cursorLogin()));
   // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
-  router.post("/codex/login", wrap(() => host.codexLogin()));
-  router.post("/claude/login", wrap(() => host.claudeLogin()));
+  // From another device's UI (#909) the browser is over there: a device code, or Claude's pasted code.
+  router.post("/codex/login", wrap((req) => host.codexLogin({ remote: Boolean(identify(req).device) })));
+  router.post("/claude/login", wrap((req) => host.claudeLogin({ remote: Boolean(identify(req).device) })));
+  router.post("/claude/login/code", wrap((req) => {
+    if (typeof req.body?.code !== "string") throw new Error("Paste the code the sign-in page shows.");
+    host.claudeLoginCode(req.body.code);
+  }));
   // Several Claude accounts (#452): list, add (browser sign-in), log out, and which one chats use.
   router.get("/claude/accounts", wrap(() => host.claudeAccounts()));
   router.post("/claude/accounts", wrap(() => {
