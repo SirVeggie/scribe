@@ -113,3 +113,25 @@ that implement it.
   main and pop-out windows, `child_window` takes the board `origin`, and `embeds.rs` knows the nested hosts.
 - Tests: `src/devices/gateway.test.ts` (three daemons on loopback) and `embeds.rs` cases. Run by hand: two
   daemons through Keeper, B's full UI and a page loaded through A's gateway in Brave.
+
+## Step 3 as built (#906)
+
+- `/api/devices` is this device's in every view: the gateway hands `/api/devices/*` on a `d-<id>.localhost`
+  board host to the local devices router (`res.locals.gatewayDevice`), which adds `viewing` (the device whose
+  UI asked). Changes from that view are accepted when the Origin is that same gateway board, which the gateway
+  already checked.
+- `GET /api/devices/spaces`: this device's spaces and each online device's (fetched over the link from its
+  `/api/spaces`, 3 s timeout). `POST /api/devices/:id/spaces/:sid/switch` makes it that device's current
+  space; the UI then goes to `127.0.0.1` or `d-<id>.localhost` on the same port.
+- Space selector (`spaces.js`): with paired devices, a section per device, this one first. The device being
+  shown keeps the full cards (keys, drag, menu); the others get compact cards. Offline devices show
+  "offline · last seen" and no spaces (nothing is mirrored in v1).
+- Remote chrome: a device chip before the space chip in another device's UI, in a color derived from its id;
+  its tooltip has the round trip, and it turns hollow when the link or the board socket drops. The startup
+  "Could not connect" message names the device.
+- Asks: `src/devices/attention.ts`. Each daemon streams its chats waiting on an approval, question or plan
+  (not usage limits) at `/api/devices/asks` (SSE). The local daemon keeps one stream per online peer
+  (`AskWatcher`) and the board reads `/api/devices/attention`: every other device's asks, plus this device's
+  own when the board is another device's UI. Toasts reuse `.ag-toast`; Open goes to that device's UI with
+  `?thread=`, which the agent UI opens at boot. Approving from the toast itself is left for later.
+- Tests: `src/devices/devicesView.test.ts` (two daemons on loopback).
