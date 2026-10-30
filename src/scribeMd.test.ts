@@ -45,6 +45,12 @@ test("the shared markdown renderer handles Scribe's syntax and controls", async 
     assert.match(html, /data-scribe-open="scribe:b" data-scribe-mode="split">B<\/a>/);
     assert.match(html, /data-scribe-open="scribe:c">C<\/a>/);
     assert.match(html, /data-scribe-open="scribe:d"><\/a>\./);
+    // Threads, and pages, cards and threads on another device (#908).
+    html = await render("[[thread:th_1]], [[scribe:@laptop/plan]], [T](thread:@laptop/th_2), scribe:@work-laptop/board#card=12 here");
+    assert.match(html, /data-scribe-open="thread:th_1"><\/a>/);
+    assert.match(html, /data-scribe-open="scribe:@laptop\/plan"><\/a>/);
+    assert.match(html, /data-scribe-open="thread:@laptop\/th_2">T<\/a>/);
+    assert.match(html, /data-scribe-open="scribe:@work-laptop\/board#card=12"><\/a> here/);
     html = await render("[[file:C:\\notes\\a.png]] and `scribe:code` and a/scribe:x and wordscribe:y");
     assert.match(html, /data-scribe-open="file:C:\\notes\\a.png"/);
     assert.match(html, /<code>scribe:code<\/code>/);

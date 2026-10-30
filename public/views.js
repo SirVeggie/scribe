@@ -1562,6 +1562,13 @@ window.createViews = function createViews(host) {
       const [name, hash] = splitAnchor(raw);
       raw = name;
       anchor = anchor || hash;
+      const thread = localThreadOf(raw);
+      if (thread) {
+        return openThreadLink(thread);
+      }
+      if (deviceRefOf(raw)) {
+        return openOnDevice(raw, anchor, mode, { source, background });
+      }
       const page = findPage(String(raw || "").replace(/\|auto$/, "").trim());
       if (!page) {
         const trashed = await inTrash(String(raw || "").trim());
@@ -1673,6 +1680,120 @@ window.createViews = function createViews(host) {
     const res = await fetch(`/api/trash/${encodeURIComponent(id)}/restore`, { method: "POST" }).catch(() => null);
     const data = res && !res.ok ? await res.json().catch(() => ({})) : {};
     host.showNotice(res?.ok ? "Restored to the Library" : data.error || "Could not restore");
+  }
+
+  /* ---------- threads and other devices (#908) ---------- */
+
+  /** `scribe:@laptop/key` or `thread:@laptop/th_…` (no #anchor): { device, kind, ref }, or null. */
+  function deviceRefOf(raw) {
+    const m = /^(scribe|thread):@([^/\s#]+)\/([^#\s]+)$/i.exec(String(raw || "").trim());
+    const ref = m ? m[3].replace(/^(scribe:)+/i, "") : "";
+    return ref ? { device: m[2], kind: m[1].toLowerCase() === "thread" ? "thread" : "page", ref } : null;
+  }
+
+  /** The thread id of a `thread:th_…` link on this device, or "". */
+  function localThreadOf(raw) {
+    const m = /^thread:([^@\s#][^\s#]*)$/i.exec(String(raw || "").trim());
+    return m ? m[1] : "";
+  }
+
+  function openThreadLink(id) {
+    if (window.scribeChat?.openThread?.(id)) {
+      return { ok: true, mode: "thread", thread: id };
+    }
+    host.showNotice("That thread is gone");
+    return { ok: false, error: "not_found" };
+  }
+
+  /** What this device's daemon knows about device references: { [target]: resolved } (src/devices/references.ts). */
+  async function resolveDevices(targets) {
+    if (!targets.length) {
+      return {};
+    }
+    try {
+      const res = await fetch("/api/devices/resolve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets }) });
+      return res.ok ? (await res.json()).targets || {} : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** The same target as a link on the device that owns it. */
+  function localTarget(ref) {
+    return ref.kind === "thread" ? `thread:${ref.ref}` : `scribe:${ref.ref}`;
+  }
+
+  /**
+   * A page or thread on another device opens in that device's own UI, through this device's gateway (#905),
+   * in this window: the space selector leads back. A link to the device this UI belongs to is a local link.
+   */
+  async function openOnDevice(raw, anchor, mode, opts) {
+    const ref = deviceRefOf(raw);
+    const info = (await resolveDevices([raw]))[raw];
+    if (!info || info.unknown) {
+      host.showNotice(`No paired device called “${ref.device}”`);
+      return { ok: false, error: "not_found" };
+    }
+    if (info.here) {
+      return open(localTarget(ref), mode, { ...opts, anchor });
+    }
+    const device = info.device.name;
+    if (!info.online) {
+      host.showNotice(`${device} is offline`);
+      return { ok: false, error: "offline" };
+    }
+    if (info.missing) {
+      host.showNotice(ref.kind === "thread" ? `That thread is gone on ${device}` : `No page called “${ref.ref}” on ${device}`);
+      return { ok: false, error: "not_found" };
+    }
+    const url = new URL(`http://d-${info.device.id}.localhost:${location.port}/`);
+    if (ref.kind === "thread") {
+      url.searchParams.set("thread", ref.ref);
+    } else {
+      url.searchParams.set("open", (info.key || ref.ref) + (anchor ? `#${anchor}` : ""));
+    }
+    location.href = url.href;
+    return { ok: true, mode: "device", device: info.device.id };
+  }
+
+  /**
+   * resolve, plus threads and other devices' pages and threads (#908), which need a round trip. Those come back as
+   * { id: null, title, device?, offline?, thread? }; a target on the device this UI belongs to resolves as a local one.
+   */
+  async function resolveAll(targets) {
+    const list = Array.isArray(targets) ? targets.slice(0, 500).map((raw) => String(raw || "").trim()).filter(Boolean) : [];
+    const remote = list.filter((key) => deviceRefOf(splitAnchor(key)[0]));
+    const pages = resolve(list.filter((key) => !remote.includes(key) && !localThreadOf(splitAnchor(key)[0])));
+    const threadOf = (key, id) => {
+      const title = window.scribeChat?.threadTitle?.(id);
+      pages[key] = title ? { id: null, title, open: false, thread: true } : null;
+    };
+    for (const key of list) {
+      const thread = localThreadOf(splitAnchor(key)[0]);
+      if (thread) {
+        threadOf(key, thread);
+      }
+    }
+    const answers = await resolveDevices([...new Set(remote.map((key) => splitAnchor(key)[0]))]);
+    for (const key of remote) {
+      const name = splitAnchor(key)[0];
+      const ref = deviceRefOf(name);
+      const info = answers[name];
+      if (!info || info.unknown) {
+        pages[key] = null;
+      } else if (info.here) {
+        if (ref.kind === "thread") {
+          threadOf(key, ref.ref);
+        } else {
+          pages[key] = resolve([localTarget(ref)])[localTarget(ref)];
+        }
+      } else if (info.missing) {
+        pages[key] = null;
+      } else {
+        pages[key] = { id: null, title: info.title || ref.ref, open: false, device: info.device.name, offline: !info.online, ...(ref.kind === "thread" ? { thread: true } : {}) };
+      }
+    }
+    return pages;
   }
 
   /** Look pages up for a page's link labels: { [target]: { id, title, open } | null }. */
@@ -2010,6 +2131,7 @@ window.createViews = function createViews(host) {
     layout,
     open,
     resolve,
+    resolveAll,
     escape,
     closePeek,
     shownIds,

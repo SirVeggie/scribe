@@ -7779,6 +7779,7 @@
 
   const mdCtx = {
     resolvePages: (targets) => app()?.resolvePages?.(targets) || {},
+    resolveLinks: (targets) => app()?.resolveLinks?.(targets) || Promise.resolve({}),
     codeRef: (head, ref) => window.scribeIntegrations?.decorateRef(head, () => codeRefSource(head), ref, notice),
   };
 

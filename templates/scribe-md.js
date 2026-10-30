@@ -6,6 +6,7 @@
  * On top of marked (GFM) and DOMPurify it adds Scribe's syntax and controls:
  * - page links: [[scribe:key]] (the page's title), [[target|label]], [[peek:target]] / [[split:target]],
  *   [label](scribe:key) / (peek:…) / (split:…) / (file:…), and a key or page id written on its own;
+ *   [[thread:th_…]] for a chat, and scribe:@laptop/key / thread:@laptop/th_… on another device (#908);
  * - #12 card links and #img- images, resolved by the caller (opts.card, opts.image);
  * - task list checkboxes that know their source line (data-line), and toggleTask to tick one in the text:
  *   ticking an item ticks its sub-items, and a parent is ticked once all of its sub-items are;
@@ -40,8 +41,9 @@
   // ---------- page links ----------
   var LINK_MODES = { tab: "tab", peek: "peek", split: "split" };
   var WIKI_LINK = /^\[\[\s*(?:(tab|peek|split):)?([^\]|\n]+?)\s*(?:\|([^\]\n]*))?\]\]/;
-  var BARE_KEY = /^(?:scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?:#[\w=&%.:-]*\w)?(?![\w-])/;
-  var BARE_KEY_AT = /(^|[^\w\/#:-])(?:scribe:[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?![\w-])/;
+  // scribe:@laptop/key is a page on another device (#908).
+  var BARE_KEY = /^(?:scribe:(?:@[\w.-]+\/)?[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?:#[\w=&%.:-]*\w)?(?![\w-])/;
+  var BARE_KEY_AT = /(^|[^\w\/#:-])(?:scribe:(?:@[\w.-]+\/)?[a-z0-9._-]*[a-z0-9_-]|t_[0-9a-f]{8})(?![\w-])/;
   var CARD_AT = /(^|[\s(])#\d/;
 
   function pageLinkHtml(target, labelHtml, mode) {
@@ -116,7 +118,7 @@
           if (mode) return pageLinkHtml(mode[2], label, LINK_MODES[mode[1]]);
           // board:key is the old form of scribe:key, still in older chat transcripts.
           if (/^board:/i.test(href)) return pageLinkHtml(href.slice(6), label, "");
-          if (/^(?:scribe|file):/i.test(href)) return pageLinkHtml(href, label, "");
+          if (/^(?:scribe|file|thread):/i.test(href)) return pageLinkHtml(href, label, "");
           if (/^(?:https?:|mailto:)/i.test(href)) {
             return '<a href="' + escapeHtml(href) + '"' + (token.title ? ' title="' + escapeHtml(token.title) + '"' : "") +
               ' target="_blank" rel="noopener">' + label + "</a>";

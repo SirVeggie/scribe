@@ -214,6 +214,16 @@ export async function startHttp(): Promise<http.Server> {
     switchSpace: (id) => store.switchSpace(id),
     asks: askSource,
     watcher: askWatcher,
+    describe: (pages, threads) => ({
+      pages: Object.fromEntries(pages.map((ref) => {
+        const tab = store.get(ref) ?? store.get(`scribe:${ref}`);
+        return [ref, tab && !tab.temp ? { id: tab.id, key: tab.key, title: tab.title } : null];
+      })),
+      threads: Object.fromEntries(threads.map((id) => {
+        const thread = agentHost?.getThread(id);
+        return [id, thread && !thread.archived ? { title: thread.title } : null];
+      })),
+    }),
   }));
   // The origins this device's embed pages show, for the embed proxy (#917). Rebuilt when a target is
   // missing (a page made a moment ago), at most once a second.

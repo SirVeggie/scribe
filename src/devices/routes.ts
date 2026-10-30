@@ -6,12 +6,15 @@ import { shellOrigin } from "../contentOrigin.js";
 import type { SpacesView } from "../spaces.js";
 import { peerDeviceOf } from "./link.js";
 import { sseStream, type AskSource, type AskWatcher } from "./attention.js";
+import { findDevice, parseDeviceRef, type Described, type DeviceRef, type Resolved } from "./references.js";
 
 export type DevicesHost = {
   spaces(): SpacesView;
   switchSpace(id: string): void;
   asks: AskSource;
   watcher: AskWatcher;
+  /** This device's pages (by key or id) and threads, for references from other devices (#908). */
+  describe?(pages: string[], threads: string[]): Described;
 };
 
 /** A space as the selector's device sections show it (#906). */
@@ -130,6 +133,79 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       host.asks.off("change", relay);
     });
     sseStream(req, res, value, both);
+  });
+  // References to pages and threads on a device (#908): the titles last seen, by device, kind and target,
+  // so a link to a device that went offline keeps its label.
+  const seen = new Map<string, string>();
+  const describeHere = (pages: string[], threads: string[]): Described => host.describe?.(pages, threads) ?? { pages: {}, threads: {} };
+  router.post("/describe", (req, res) => {
+    const list = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string").slice(0, 200) : []);
+    res.set("Cache-Control", "no-store").json(describeHere(list(req.body?.pages), list(req.body?.threads)));
+  });
+  router.post("/resolve", async (req, res) => {
+    const targets: string[] = Array.isArray(req.body?.targets) ? req.body.targets.filter((t: unknown) => typeof t === "string").slice(0, 200) : [];
+    const devices = peers.devices();
+    // The device whose UI asked: a link to it is a link to a page right there.
+    const here = viewingOf(req) ?? peers.identity.id;
+    const out: Record<string, Resolved> = {};
+    const found: Array<{ target: string; ref: DeviceRef; device: (typeof devices)[number] }> = [];
+    const wanted = new Map<string, { pages: Set<string>; threads: Set<string> }>();
+    for (const target of targets) {
+      const ref = parseDeviceRef(target);
+      if (!ref) continue;
+      const device = findDevice(ref.device, devices);
+      if (!device) {
+        out[target] = { unknown: true };
+      } else if (device.id === here) {
+        out[target] = { here: true, device: { id: device.id, name: device.name } };
+      } else {
+        found.push({ target, ref, device });
+        const want = wanted.get(device.id) ?? { pages: new Set(), threads: new Set() };
+        (ref.kind === "page" ? want.pages : want.threads).add(ref.ref);
+        wanted.set(device.id, want);
+      }
+    }
+    const answers = new Map<string, Described | null>();
+    await Promise.all([...wanted].map(async ([id, want]) => {
+      const pages = [...want.pages];
+      const threads = [...want.threads];
+      if (id === peers.identity.id) {
+        answers.set(id, describeHere(pages, threads));
+        return;
+      }
+      if (!devices.find((d) => d.id === id)?.online) return;
+      try {
+        const reply = await withTimeout(peers.request(id, {
+          method: "POST",
+          path: "/api/devices/describe",
+          headers: { host: "127.0.0.1", "content-type": "application/json" },
+          body: JSON.stringify({ pages, threads }),
+        }));
+        answers.set(id, reply.status === 200 ? JSON.parse(reply.body.toString("utf8")) as Described : null);
+      } catch {
+        /* shown as offline, with the title seen last */
+      }
+    }));
+    for (const { target, ref, device } of found) {
+      const answer = answers.get(device.id);
+      const memo = `${device.id}|${ref.kind}|${ref.ref}`;
+      const base = { device: { id: device.id, name: device.name } };
+      if (!answer) {
+        const title = seen.get(memo);
+        out[target] = { ...base, online: false, ...(title ? { title } : {}) };
+        continue;
+      }
+      const hit = ref.kind === "page" ? answer.pages?.[ref.ref] : answer.threads?.[ref.ref];
+      if (!hit) {
+        seen.delete(memo);
+        out[target] = { ...base, online: true, missing: true };
+        continue;
+      }
+      seen.set(memo, hit.title);
+      if (seen.size > 2000) seen.delete(seen.keys().next().value!);
+      out[target] = { ...base, online: true, title: hit.title, ...(ref.kind === "page" && "key" in hit ? { key: String(hit.key) } : {}) };
+    }
+    res.set("Cache-Control", "no-store").json({ targets: out });
   });
   router.put("/self", guarded((req) => peers.rename(req.body?.name)));
   router.post("/offer", guarded(async () => ({ offer: await peers.createOffer() })));

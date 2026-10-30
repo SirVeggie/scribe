@@ -25,7 +25,7 @@ test("plugin templates stay grouped outside collapsed built-ins, including local
       const builtinGroup = document.querySelector('#builtin'), builtinHead = document.querySelector('#head'), builtinList = document.querySelector('#builtins');
       let templatesDrawn = '', freshTemplateId = null;
       const activeTab = () => null, isBlank = () => false;
-      const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} };
+      const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} }, newPageView = { refresh() {} };
       const findTemplateMeta = id => [...state.templates, ...state.builtinTemplates].find(t => t.id === id);
       const createFromTemplate = template => window.opened = template.id;
       ${app.slice(app.indexOf('  function renderTemplates('), app.indexOf('  function toggleBuiltinGroup('))}
@@ -235,7 +235,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
         ${agent.slice(agent.indexOf('    renderComposerBar() {'), agent.indexOf('\n    /**', agent.indexOf('    renderComposerBar() {')))}
       };
       const state = { templates: [{ id: 'one', title: 'Template', fields: [{ key: 'old' }] }], builtinTemplates: [] };
-      const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} };
+      const FILE_SVG = '', BUILTIN_SVG = '', TEMPLATE_CARD_DELAY = 0, hoverCard = { bind() {} }, newPageView = { refresh() {} };
       const findTemplateMeta = id => state.templates.find(t => t.id === id);
       const createFromTemplate = template => window.opened = template;
       const library = { openMenu: (at, items) => window.menuItems = items };

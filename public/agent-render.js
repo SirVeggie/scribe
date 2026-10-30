@@ -296,10 +296,13 @@
         a.dataset.tooltip = href;
       }
     }
+    // Threads and other devices' pages (#908) take a round trip: label those once it is back, with the device in the tip.
+    const later = [...root.querySelectorAll(".ag-board-link")].filter((a) => /^(?:thread:|scribe:@)/i.test(a.dataset.boardTarget || ""));
     if (autoLinks.length && ctx?.resolvePages) {
       try {
-        const pages = ctx.resolvePages(autoLinks.map((a) => a.dataset.boardTarget));
+        const pages = ctx.resolvePages(autoLinks.filter((a) => !later.includes(a)).map((a) => a.dataset.boardTarget));
         for (const a of autoLinks) {
+          if (later.includes(a)) continue;
           const page = pages[a.dataset.boardTarget];
           if (page?.title) a.textContent = page.title;
           if (!page) a.classList.add("missing");
@@ -307,6 +310,16 @@
       } catch {
         /* resolve is best effort */
       }
+    }
+    if (later.length && ctx?.resolveLinks) {
+      ctx.resolveLinks(later.map((a) => a.dataset.boardTarget)).then((pages) => {
+        for (const a of later) {
+          const page = pages[a.dataset.boardTarget];
+          if (page?.title && autoLinks.includes(a)) a.textContent = page.title;
+          a.classList.toggle("missing", !page);
+          if (page?.device) a.dataset.tooltip = page.offline ? `${page.device} is offline` : `${page.title} · ${page.device}`;
+        }
+      }, () => undefined);
     }
     for (const pre of root.querySelectorAll("pre")) codeBlock(pre, opts.highlight !== false, ctx);
     for (const table of root.querySelectorAll("table")) {

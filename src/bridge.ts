@@ -889,7 +889,10 @@ ${POINTER_DRAG_JS}
         el.textContent = text;
       }
     }
-    if (page && !el.getAttribute("title")) {
+    // A page or thread on another device (#908) names the device, or says it is offline.
+    if (page && page.device) {
+      el.setAttribute("title", page.offline ? page.device + " is offline" : page.title + " · " + page.device);
+    } else if (page && !el.getAttribute("title")) {
       el.setAttribute("title", page.title);
     }
   }

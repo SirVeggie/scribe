@@ -175,3 +175,21 @@ that implement it.
   (`copy_received`), with Review when plugins came.
 - Tests: `src/devices/copy.test.ts` (two daemons on loopback, a fake store). Checked by hand with two daemons: a page
   with an image copied twice gives `thesis-plan` and a suffixed key, the second copy sending no blob bytes.
+
+## References (#908)
+
+- Syntax: `scribe:@<device>/<key>` (with `#card=12` or any other anchor), `thread:@<device>/<thread id>`, in every link
+  form (`[[…]]`, `[[peek:…]]`, `[label](…)`, a bare `scribe:@laptop/key`). `[[thread:th_…]]` is a chat on this device.
+  `templates/scribe-md.js` renders them; `src/devices/references.ts` parses them.
+- The device part is an id or a name, written as a slug ("Work laptop" is `@work-laptop`). A device keeps up to five
+  former names (`formerNames` in `identity.json` and `peers.json`), so links written before a rename still resolve.
+- `POST /api/devices/resolve { targets }` on the viewing device's daemon (so the gateway answers it in a remote view too):
+  each target is `{ here }` (the device whose UI asked: a local link), `{ unknown }`, or `{ device, online, title?, key?,
+  missing? }`. Titles come from the owner's `POST /api/devices/describe { pages, threads }` over the link, and the last
+  one seen is kept in memory, so an offline device's links keep their label.
+- Board: `views.resolveAll` (page bridge `scribe.resolve`, the chat's links) and `views.open`. Opening goes to that
+  device's UI in this window: `d-<id>.localhost/?open=<key#anchor>` or `?thread=<id>`; the gateway sends `d-<this device>`
+  home. Offline: a notice "Laptop is offline". The hover tip (the link's title in pages, the custom tooltip in the chat)
+  is "Title · Laptop" or "Laptop is offline".
+- Generic for synced pages: nothing past the lookup is page specific, so a Library entry that points at
+  `scribe:@pi/board` can use the same resolve and open later. The mirror fallback comes with the always-on device.

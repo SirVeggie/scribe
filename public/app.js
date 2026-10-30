@@ -699,6 +699,7 @@
         finishRefreshOverlay();
         document.documentElement.removeAttribute("data-restoring");
         window.dispatchEvent(new Event("scribe:restored"));
+        openWantedPage();
       }
       reportViewer();
       showPersistError(msg.persistError);
@@ -5340,6 +5341,18 @@
     }
   }
 
+  /** A page to open at boot: a reference on another device sent the user here (`?open=key#card=12`, #908). */
+  function openWantedPage() {
+    const url = new URL(location.href);
+    const wanted = url.searchParams.get("open");
+    if (!wanted || childId) {
+      return;
+    }
+    url.searchParams.delete("open");
+    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+    void views.open(wanted, "tab");
+  }
+
   /** A link clicked inside a page: open it and tell the page how it went. */
   function onPageLink(event) {
     const data = event.data;
@@ -5348,7 +5361,7 @@
       event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result }, "*");
     };
     if (data.type === "scribe-resolve") {
-      reply({ ok: true, pages: views.resolve(data.targets) });
+      views.resolveAll(data.targets).then((pages) => reply({ ok: true, pages }), () => reply({ ok: true, pages: views.resolve(data.targets) }));
       return;
     }
     const mode = ["tab", "peek", "split"].includes(data.mode) ? data.mode : null;
@@ -6207,6 +6220,8 @@
     connected: () => state.connected,
     openLink: (target, event, { anchor = "", mode = null } = {}) => views.open(target, views.modeFromEvent(event) || mode, { anchor, background: event?.button === 1 }),
     resolvePages: (targets) => views.resolve(targets),
+    /** resolvePages for threads and other devices' pages too (#908), as a promise. */
+    resolveLinks: (targets) => views.resolveAll(targets),
     showNotice,
     confirm: confirmDelete,
     closeSettings,

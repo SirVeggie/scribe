@@ -2,6 +2,7 @@ import { createHash, createPublicKey, generateKeyPairSync, randomBytes, sign, ty
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { rememberName } from "./references.js";
 
 /**
  * This device's identity (#904): an id, a name, and an Ed25519 key pair made on first start. The
@@ -11,6 +12,8 @@ import path from "node:path";
 export type Identity = {
   id: string;
   name: string;
+  /** Names it had before a rename, newest first: links written with them still find it (#908). */
+  formerNames?: string[];
   /** SubjectPublicKeyInfo DER of the public key. */
   publicKey: Buffer;
   fingerprint: string;
@@ -18,7 +21,7 @@ export type Identity = {
   certPem: string;
 };
 
-type Saved = { id: string; name: string; createdAt: number };
+type Saved = { id: string; name: string; createdAt: number; formerNames?: string[] };
 
 export function deviceDir(home: string): string {
   return path.join(home, "device");
@@ -59,13 +62,16 @@ export function loadIdentity(home: string): Identity {
     certPem = selfSignedCert(keyPem, saved.id);
     fs.writeFileSync(certFile, certPem);
   }
-  return { id: saved.id, name: saved.name, publicKey, fingerprint: fingerprintOf(publicKey), keyPem, certPem };
+  return { id: saved.id, name: saved.name, ...(saved.formerNames?.length ? { formerNames: saved.formerNames } : {}), publicKey, fingerprint: fingerprintOf(publicKey), keyPem, certPem };
 }
 
-export function saveName(home: string, name: string): void {
+/** Save a new name; returns the former names, the old one first. */
+export function saveName(home: string, name: string): string[] | undefined {
   const file = path.join(deviceDir(home), "identity.json");
   const saved = JSON.parse(fs.readFileSync(file, "utf8")) as Saved;
-  fs.writeFileSync(file, JSON.stringify({ ...saved, name }, null, 2));
+  const formerNames = rememberName(saved.formerNames, saved.name, name);
+  fs.writeFileSync(file, JSON.stringify({ ...saved, name, ...(formerNames ? { formerNames } : {}) }, null, 2));
+  return formerNames;
 }
 
 export function cleanName(value: unknown): string | undefined {

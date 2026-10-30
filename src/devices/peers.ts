@@ -9,6 +9,7 @@ import { cleanName, deviceDir, displayFingerprint, fingerprintOf, loadIdentity, 
 import { Link, PROTOCOL, type Control } from "./link.js";
 import { MAX_ATTEMPTS, decodeCode, makeOffer, pairProof, pairWords, sameProof, type Offer } from "./pairing.js";
 import { qrSvg } from "./qr.js";
+import { rememberName, type NamedDevice } from "./references.js";
 
 /**
  * Paired devices and the links to them (#904). Each device listens for peers with TLS on a port of its
@@ -28,6 +29,8 @@ export type Peer = {
   port: number;
   pairedAt: number;
   lastSeen?: number;
+  /** Names it had before, newest first, so links written with them still resolve (#908). */
+  formerNames?: string[];
 };
 
 type Saved = { peers: Peer[]; revoked: string[] };
@@ -157,8 +160,9 @@ export class PeerService extends EventEmitter {
   rename(value: unknown): void {
     const name = cleanName(value);
     if (!name) throw new Error("Give the device a name.");
-    saveName(this.options.home, name);
+    const formerNames = saveName(this.options.home, name);
     this.identity.name = name;
+    if (formerNames) this.identity.formerNames = formerNames;
     for (const link of this.links.values()) link.control({ type: "update", name, hosts: this.hosts(), port: this.options.port });
     this.changed();
   }
@@ -272,6 +276,14 @@ export class PeerService extends EventEmitter {
   /** The Scribe VERSION a linked device runs, from its hello. */
   versionOf(id: string): string | undefined {
     return this.links.has(id) ? this.versions.get(id) : undefined;
+  }
+
+  /** This device and the paired ones, with their former names, for device references (#908). */
+  devices(): Array<NamedDevice & { self: boolean; online: boolean }> {
+    return [
+      { id: this.identity.id, name: this.identity.name, formerNames: this.identity.formerNames, self: true, online: true },
+      ...this.saved.peers.map((peer) => ({ id: peer.id, name: peer.name, formerNames: peer.formerNames, self: false, online: this.links.has(peer.id) })),
+    ];
   }
 
   /** A paired device's name, for the gateway's offline page. */
@@ -566,7 +578,11 @@ export class PeerService extends EventEmitter {
 
   private learn(peer: Peer, message: Control): void {
     const name = cleanName(message.name);
-    if (name) peer.name = name;
+    if (name && name !== peer.name) {
+      const formerNames = rememberName(peer.formerNames, peer.name, name);
+      if (formerNames) peer.formerNames = formerNames;
+      peer.name = name;
+    }
     const hosts = cleanHosts(message.hosts);
     if (hosts.length) peer.hosts = hosts;
     if (validPort(message.port)) peer.port = message.port;
@@ -591,9 +607,12 @@ export class PeerService extends EventEmitter {
     const name = cleanName(info.name);
     if (!id || !name || id === this.identity.id || !validPort(info.port)) return undefined;
     const old = this.links.get(id);
+    const before = this.peer(id);
     this.saved.peers = this.saved.peers.filter((p) => p.id !== id);
     old?.close();
     const peer: Peer = { id, name, publicKey: spki.toString("base64"), fingerprint: fingerprintOf(spki), hosts: [...new Set(cleanHosts(info.hosts))], port: info.port, pairedAt: Date.now() };
+    const formerNames = before ? rememberName(before.formerNames, before.name, name) : undefined;
+    if (formerNames) peer.formerNames = formerNames;
     this.saved.peers.push(peer);
     this.persist();
     void this.bind();
