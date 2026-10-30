@@ -330,6 +330,18 @@ export type PageProvenance = {
   created?: PageActor;
   /** Last agent write (HTML, title, template values, or state). */
   changed?: PageActor;
+  /** The page this one was copied from on another device (#907): an independent fork, not a link. */
+  copiedFrom?: PageCopySource;
+};
+
+/** Where a copied page came from (#907). `device` and `name` come from the peer link, not the bundle. */
+export type PageCopySource = {
+  device: string;
+  /** The device's name when the copy was made. */
+  name: string;
+  key: string;
+  revision: number;
+  at: number;
 };
 
 export type TabMeta = Omit<Tab, "html" | "state" | "events" | "eventSeq" | "stripSeq"> & {
@@ -471,6 +483,8 @@ export type BoardEvent =
   | { type: "persist_ok" }
   /** Paired devices or their links changed (#904): Settings → Devices refetches /api/devices. */
   | { type: "devices" }
+  /** Another device copied pages, templates or plugins here (#907). */
+  | { type: "copy_received"; from: { id: string; name: string }; pages: number; templates: number; plugins: number }
   /** A device paired with this one by its code: the words to compare, and the other paired devices it could meet. */
   | { type: "device_paired"; device: { id: string; name: string }; words: string[]; others: { id: string; name: string }[] }
   | AgentEvent;
@@ -646,10 +660,24 @@ export function normalizeProvenance(value: unknown): PageProvenance | undefined 
   }
   const created = normalizeActor(value.created);
   const changed = normalizeActor(value.changed);
-  if (!created && !changed) {
+  const copiedFrom = normalizeCopySource(value.copiedFrom);
+  if (!created && !changed && !copiedFrom) {
     return undefined;
   }
-  return { ...(created ? { created } : {}), ...(changed ? { changed } : {}) };
+  return { ...(created ? { created } : {}), ...(changed ? { changed } : {}), ...(copiedFrom ? { copiedFrom } : {}) };
+}
+
+export function normalizeCopySource(value: unknown): PageCopySource | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const { device, name, key, revision, at } = value;
+  if (typeof device !== "string" || !/^[0-9a-f]{12}$/.test(device) || typeof key !== "string" || !key.trim()) return undefined;
+  return {
+    device,
+    name: typeof name === "string" && name.trim() ? name.trim().slice(0, ACTOR_TITLE_MAX) : device,
+    key: key.trim().slice(0, 200),
+    revision: typeof revision === "number" && Number.isInteger(revision) && revision >= 0 ? revision : 0,
+    at: typeof at === "number" && Number.isFinite(at) ? at : 0,
+  };
 }
 
 /** Record an agent write on a page. `created` is only set when this call creates the page. */
