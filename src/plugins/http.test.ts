@@ -21,11 +21,11 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
   await seed.install(oldBundle,packageHash(oldBundle));await seed.enable("git-history",false);
   await seed.patch("git-history","local.txt","Keep this local edit");await seed.close();
   const probe=net.createServer();await new Promise<void>(resolve=>probe.listen(0,"127.0.0.1",resolve));const port=(probe.address() as net.AddressInfo).port;await new Promise<void>(resolve=>probe.close(()=>resolve()));
-  const child=spawn(process.execPath,["--import","tsx",path.resolve("src/index.ts"),"--daemon"],{env:{...process.env,SCRIBE_HOME:root,SCRIBE_PORT:String(port),SCRIBE_FAKE_AGENTS:"1"},windowsHide:true,stdio:["ignore","pipe","pipe"]});
+  const child=spawn(process.execPath,["--import","tsx",path.resolve("src/index.ts"),"--daemon"],{env:{...process.env,SCRIBE_HOME:root,SCRIBE_PORT:String(port),SCRIBE_AGENT_PORT:"0",SCRIBE_FAKE_AGENTS:"1"},windowsHide:true,stdio:["ignore","pipe","pipe"]});
   let output="";child.stdout.on("data",data=>{output+=String(data);});child.stderr.on("data",data=>{output+=String(data);});
   const exited=new Promise(resolve=>child.once("exit",resolve));
   const url=`http://127.0.0.1:${port}`;let browser:Awaited<ReturnType<typeof launchChromium>>|undefined;
-  const userHeaders=()=>({"x-scribe-local-token":fs.readFileSync(path.join(root,"local-token"),"utf8").trim()});
+  const userHeaders=()=>({"sec-fetch-site":"same-origin",origin:url});
   async function call(route:string,method="GET",body?:unknown,headers:Record<string,string>=userHeaders()){
     const response=await fetch(url+route,{method,headers:{...headers,...(body?{"Content-Type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json()};
   }

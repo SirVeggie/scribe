@@ -15,9 +15,10 @@ export const PORT = Number(process.env.SCRIBE_PORT || 4747);
 export const PEER_PORT = Number(process.env.SCRIBE_PEER_PORT || PORT + 1);
 /**
  * Loopback port for Scribe chats' MCP only (#915): every caller there is an agent, so a sandbox can allow this
- * port and never the board's, where a forged browser header passes as the user.
+ * port and never the board's, where a forged browser header passes as the user. 0 turns it off (test daemons,
+ * whose ports are picked next to each other): chats' MCP then calls the board port.
  */
-export const AGENT_PORT = Number(process.env.SCRIBE_AGENT_PORT || PORT + 2);
+export const AGENT_PORT = process.env.SCRIBE_AGENT_PORT ? Number(process.env.SCRIBE_AGENT_PORT) || 0 : PORT + 2;
 /** Addresses to listen for peers on instead of the LAN and tailnet ones (comma separated), or "off". */
 export function peerHostsOverride(): string[] | "off" | undefined {
   const value = process.env.SCRIBE_PEER_HOSTS?.trim();

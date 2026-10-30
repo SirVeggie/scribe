@@ -31,12 +31,8 @@ const wants = (name) => !only || only.has(name);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const round = (n, d = 1) => Math.round(n * 10 ** d) / 10 ** d;
 
-// The daemon treats requests without this token as an anonymous agent.
-function localToken() {
-  const home = process.env.SCRIBE_HOME || path.join(process.env.LOCALAPPDATA || process.env.HOME || process.cwd(), "scribe");
-  try { return fs.readFileSync(path.join(home, "local-token"), "utf8").trim(); } catch { return ""; }
-}
-const token = localToken();
+// The board UI's headers: a local tool acts as the user with them on the board port (src/callers.ts, #916).
+const user = { "sec-fetch-site": "same-origin", origin: new URL(base).origin };
 
 const health = await (await fetch(`${base}/api/health`)).json();
 if (new URL(base).port === "4747" && !args.live) {
@@ -289,8 +285,8 @@ if (wants("load")) {
 const { context, page, ws } = await newShell();
 await loadShell(page);
 const shell = await Probe.on(context, page, "shell");
-const threads = await (await fetch(`${base}/api/agent/threads`, { headers: { "x-scribe-local-token": token } })).json();
-const tabs = await (await fetch(`${base}/api/tabs`, { headers: { "x-scribe-local-token": token } })).json();
+const threads = await (await fetch(`${base}/api/agent/threads`, { headers: { ...user } })).json();
+const tabs = await (await fetch(`${base}/api/tabs`, { headers: { ...user } })).json();
 results.data = { threads: threads.threads.length, openTabs: tabs.tabs?.length };
 
 async function idle(name, seconds = 10) {
@@ -333,14 +329,14 @@ if (wants("board")) {
     const inner = await Probe.on(context, frame, "frame").catch(() => null);
     if (inner) {
       // A change another client makes: the whole board state comes back over the socket.
-      const card = await (await fetch(`${base}/api/tabs/${boardId}/action`, { method: "POST", headers: { "content-type": "application/json", "x-scribe-local-token": token }, body: JSON.stringify({ action: "create", args: { title: "perf probe card" } }) })).json().catch(() => null);
+      const card = await (await fetch(`${base}/api/tabs/${boardId}/action`, { method: "POST", headers: { "content-type": "application/json", ...user }, body: JSON.stringify({ action: "create", args: { title: "perf probe card" } }) })).json().catch(() => null);
       const num = card?.result?.card?.num ?? card?.card?.num ?? card?.result?.num;
       results.scenarios["board-probe-card"] = { num, raw: num ? undefined : JSON.stringify(card).slice(0, 300) };
       if (num) {
         const before = { ...ws.types };
         await measure("board-remote-update-x10", page, [shell, inner], async () => {
           for (let i = 0; i < 10; i += 1) {
-            await fetch(`${base}/api/tabs/${boardId}/action`, { method: "POST", headers: { "content-type": "application/json", "x-scribe-local-token": token }, body: JSON.stringify({ action: "comment", args: { card: num, text: `perf ${i}` } }) });
+            await fetch(`${base}/api/tabs/${boardId}/action`, { method: "POST", headers: { "content-type": "application/json", ...user }, body: JSON.stringify({ action: "comment", args: { card: num, text: `perf ${i}` } }) });
             await sleep(150);
           }
           await settle(frame);

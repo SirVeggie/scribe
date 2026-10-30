@@ -7,7 +7,6 @@ import path from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { LOCAL_TOKEN_HEADER } from "./config.js";
 import { launchChromium } from "./chromium.js";
 
 test("page writes report visible and background first renders, original lines, clean patches and deadlines", async () => {
@@ -17,14 +16,14 @@ test("page writes report visible and background first renders, original lines, c
   const port = (probe.address() as net.AddressInfo).port;
   await new Promise<void>(resolve => probe.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./index.ts", import.meta.url)), "--daemon"], {
-    env: {...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_FAKE_AGENTS: "1"},
+    env: {...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_AGENT_PORT: "0", SCRIBE_FAKE_AGENTS: "1"},
     windowsHide: true, stdio: "ignore",
   });
   const exited = new Promise(resolve => child.once("exit", resolve));
   const url = `http://127.0.0.1:${port}`;
   const call = async (route: string, body: unknown) => {
     const response = await fetch(url + route, {method: "POST", headers: {
-      [LOCAL_TOKEN_HEADER]: fs.readFileSync(path.join(root, "local-token"), "utf8").trim(),
+      "sec-fetch-site": "same-origin", origin: url,
       "Content-Type": "application/json",
     }, body: JSON.stringify(body)});
     const result = await response.json() as any;

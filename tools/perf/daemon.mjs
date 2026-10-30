@@ -19,12 +19,8 @@ const thread = String(args.thread || "th_65ebdd0c74d4");
 const board = String(args.board || "t_d93be87b");
 const round = (n) => Math.round(n * 10) / 10;
 
-// The daemon treats requests without this token as an anonymous agent.
-function localToken() {
-  const home = process.env.SCRIBE_HOME || path.join(process.env.LOCALAPPDATA || process.env.HOME || process.cwd(), "scribe");
-  try { return fs.readFileSync(path.join(home, "local-token"), "utf8").trim(); } catch { return ""; }
-}
-const token = localToken();
+// The board UI's headers: a local tool acts as the user with them on the board port (src/callers.ts, #916).
+const user = { "sec-fetch-site": "same-origin", origin: new URL(base).origin };
 
 /** A minimal inspector client: enough to start and stop the profiler. */
 async function inspector(port) {
@@ -96,8 +92,8 @@ async function time(label, request, n = runs) {
   return row;
 }
 
-const get = (path) => () => fetch(`${base}${path}`, { headers: { "x-scribe-local-token": token } });
-const post = (path, body) => (i) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-scribe-local-token": token }, body: JSON.stringify(typeof body === "function" ? body(i) : body) });
+const get = (path) => () => fetch(`${base}${path}`, { headers: { ...user } });
+const post = (path, body) => (i) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...user }, body: JSON.stringify(typeof body === "function" ? body(i) : body) });
 
 const debug = args.inspect ? await inspector(Number(args.inspect)) : null;
 if (debug) {
@@ -113,7 +109,7 @@ rows.push(await time("GET /api/search?q=kanban", get("/api/search?q=kanban")));
 rows.push(await time("GET /api/agent/config", get("/api/agent/config")));
 rows.push(await time("GET /api/agent/threads", get("/api/agent/threads")));
 rows.push(await time(`GET /api/agent/threads/${thread}`, get(`/api/agent/threads/${thread}`)));
-rows.push(await time(`GET /view/${board} (page HTML)`, () => fetch(`http://127.0.0.2:${new URL(base).port}/view/${board}`, { headers: { "x-scribe-local-token": token } })));
+rows.push(await time(`GET /view/${board} (page HTML)`, () => fetch(`http://127.0.0.2:${new URL(base).port}/view/${board}`, { headers: { "sec-fetch-site": "same-origin" } })));
 rows.push(await time(`GET /api/tabs/${board}/state`, get(`/api/tabs/${board}/state`)));
 rows.push(await time(`POST action list (board)`, post(`/api/tabs/${board}/action`, { action: "list", args: {} })));
 const made = await (await post(`/api/tabs/${board}/action`, { action: "create", args: { title: "perf probe card (daemon.mjs)" } })()).json();

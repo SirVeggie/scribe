@@ -79,7 +79,8 @@ gateway, where a forged `Sec-Fetch-Site` passes as the user (`callers.ts`). The 
 anonymous. No browser header, page origin or local token counts, only the plain loopback host and `/api/` are served, and
 there are no WebSocket upgrades. Scribe chats' MCP (`SCRIBE_THREAD` set) calls it, falling back to the board port when a
 daemon has none, and `sandboxNet` allows only it. Full access and unsandboxed agents are unchanged: they can read the
-local token anyway.
+local token anyway, though since #916 that token makes a caller the user only on `/api/devices*` (the `scribe` CLI's device
+commands). Local tools that act as the user elsewhere send the board UI's headers, which work only on the board port.
 
 ## Steps
 

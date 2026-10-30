@@ -21,7 +21,7 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
   const port = (probe.address() as net.AddressInfo).port;
   await new Promise<void>((resolve) => probe.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./index.ts", import.meta.url)), "--daemon"], {
-    env: { ...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_FAKE_AGENTS: "1" },
+    env: { ...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_AGENT_PORT: "0", SCRIBE_FAKE_AGENTS: "1" },
     windowsHide: true,
     stdio: "ignore",
   });
@@ -31,10 +31,10 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
   });
   const url = `http://127.0.0.1:${port}`;
   const secret = (name: string) => fs.readFileSync(path.join(root, name), "utf8").trim();
-  /** No thread: the user (a local tool with the local token). "": an external MCP client. Else that chat's MCP (#682). */
+  /** No thread: the user (the board UI's headers, #916). "": an external MCP client. Else that chat's MCP (#682). */
   const call = async (method: string, route: string, body?: unknown, thread?: string, extra: Record<string, string> = {}) => {
     const headers: Record<string, string> = body ? { "Content-Type": "application/json" } : {};
-    if (thread === undefined) headers[LOCAL_TOKEN_HEADER] = secret("local-token");
+    if (thread === undefined) Object.assign(headers, { "sec-fetch-site": "same-origin", origin: url });
     else {
       headers[CLIENT_HEADER] = AGENT_CLIENT;
       if (thread) {
@@ -123,12 +123,17 @@ test("a page chat's MCP reaches its page, is told to ask for others, and never s
     assert.equal((await call("GET", `/api/tabs/${secret.id}`)).status, 200, "the user sees everything");
 
     // A thread id without its token, or no credential at all, reaches no page and none of the board's routes (#682).
-    const forged = { [THREAD_TOKEN_HEADER]: "", [LOCAL_TOKEN_HEADER]: "" };
+    const forged = { [THREAD_TOKEN_HEADER]: "", [LOCAL_TOKEN_HEADER]: "", "sec-fetch-site": "", origin: "" };
     assert.equal((await call("GET", `/api/tabs/${home.id}`, undefined, thread.id, { [THREAD_TOKEN_HEADER]: "0".repeat(64) })).status, 404, "a forged token");
     assert.equal((await call("GET", `/api/tabs/${other.id}`, undefined, "", forged)).status, 404, "the agent header alone");
     assert.equal((await call("GET", `/api/tabs/${other.id}`, undefined, undefined, forged)).status, 404, "no header at all");
     assert.deepEqual((await call("GET", "/api/library", undefined, undefined, forged)).data.tabs, []);
     assert.equal((await call("GET", "/api/agent/threads", undefined, undefined, forged)).status, 403);
+    // A bare local token is the user only for the device CLI (#916); elsewhere an external client.
+    const bare = { ...forged, [LOCAL_TOKEN_HEADER]: fs.readFileSync(path.join(root, "local-token"), "utf8").trim() };
+    assert.equal((await call("GET", "/api/agent/threads", undefined, undefined, bare)).status, 403);
+    assert.equal((await call("GET", `/api/tabs/${secret.id}`, undefined, undefined, bare)).status, 404);
+    assert.equal((await call("GET", "/api/devices", undefined, undefined, bare)).status, 200);
     assert.equal((await call("GET", "/api/agent/threads", undefined, thread.id)).status, 403, "a chat cannot read other chats or answer its own approvals");
     assert.equal((await call("GET", "/api/export", undefined, "")).status, 403);
     assert.equal((await call("GET", `/api/export?page=${home.id}`, undefined, thread.id)).status, 403);

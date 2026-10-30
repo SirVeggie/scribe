@@ -1,5 +1,14 @@
 # Migrations
 
+## Agent port and a narrower local token (#915, #916, no version bump)
+
+- **What changed:** The daemon also listens on `AGENT_PORT` (`SCRIBE_AGENT_PORT`, default board port + 2, loopback). Every caller there is an agent; Scribe chats' MCP calls it and the sandbox allows only it, never the board port. On the board port, the `local-token` file now makes a caller the user only on `/api/devices*` (the `scribe` CLI's device commands); anywhere else it is an external MCP client, and it no longer opens a board WebSocket.
+- **Callers to update:** scripts that act as the user on other routes send the board UI's headers instead: `Sec-Fetch-Site: same-origin` and `Origin: <board origin>`, as `tools/perf/*.mjs`, `tools/eval-rerank.mjs`, `tools/probe-*.ts` and the HTTP tests do. They work only on the board port, which a sandbox never opens.
+- **Why no version bump:** The shell and pages are unchanged. A chat's MCP falls back to the board port when an older daemon has no agent port.
+- **Where:** `src/callers.ts`, `src/http.ts`, `src/daemon.ts`, `src/config.ts`, `src/agent/sandbox.ts`.
+- **How to verify:** `src/callers.test.ts`, `src/pageAccessHttp.test.ts`.
+- **When to remove:** Keep.
+
 ## `message_text` table and triggers (`agent.sqlite`, #602, additive, schema still 1)
 
 - **What changed:** Thread message search (the thread menu, the palette's thread search, and `thread_list` with `messages: true`) reads a new `message_text` table instead of scanning every item's JSON. It holds one row per searchable item (`item_id`, `thread_id`, `seq`, `text`): the user's messages and the agent's own replies, not dropped and not a subagent's. On the real history that is about 5 MB of 195 MB, and queries went from 250–300 ms to 9–37 ms.

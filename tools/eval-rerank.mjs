@@ -18,18 +18,14 @@ const limit = Number(option("--limit", "8"));
 const verbose = args.includes("--verbose");
 const queries = JSON.parse(fs.readFileSync(file, "utf8"));
 
-// The daemon treats requests without this token as an anonymous agent.
-function localToken() {
-  const home = process.env.SCRIBE_HOME || path.join(process.env.LOCALAPPDATA || process.env.HOME || process.cwd(), "scribe");
-  try { return fs.readFileSync(path.join(home, "local-token"), "utf8").trim(); } catch { return ""; }
-}
-const token = localToken();
+// The board UI's headers: a local tool acts as the user with them on the board port (src/callers.ts, #916).
+const user = { "sec-fetch-site": "same-origin", origin: new URL(url).origin };
 
 async function search(query, rerank) {
   const params = new URLSearchParams({ q: query.q, scope: query.card ? "chunks" : "pages", limit: String(limit) });
   if (!rerank) params.set("rerank", "0");
   const started = Date.now();
-  const res = await fetch(`${url}/api/search/semantic?${params}`, { headers: { "x-scribe-local-token": token } });
+  const res = await fetch(`${url}/api/search/semantic?${params}`, { headers: { ...user } });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Search failed (${res.status}): ${body.error || "no answer"}. Is Search by meaning on in the Scribe at ${url}?`);
   return { hits: body.hits, info: body.rerank, ms: Date.now() - started };

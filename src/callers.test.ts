@@ -70,3 +70,18 @@ test("the agent port never takes a caller for the browser or a page, and serves 
     close();
   }
 });
+
+test("a bare local token is the user only on the device CLI's routes (#916)", async () => {
+  const { board, close } = await servers();
+  try {
+    const local = { "x-scribe-local-token": fs.readFileSync(path.join(process.env.SCRIBE_HOME!, "local-token"), "utf8").trim() };
+    assert.deepEqual(JSON.parse((await call(board, "/api/devices", local)).body), { viewer: "user" });
+    assert.deepEqual(JSON.parse((await call(board, "/api/devices/pair?x=1", local)).body), { viewer: "user" });
+    assert.deepEqual(JSON.parse((await call(board, "/api/devicesx", local)).body), { viewer: "agent", external: true });
+    assert.deepEqual(JSON.parse((await call(board, "/api/tabs", local)).body), { viewer: "agent", external: true });
+    assert.deepEqual(JSON.parse((await call(board, "/api/devices", { ...local, "x-scribe-client": "agent" })).body), { viewer: "agent", external: true });
+    assert.equal(socketAllowed({ host: `127.0.0.1:${board}`, ...local }), false, "no board socket for the token");
+  } finally {
+    close();
+  }
+});

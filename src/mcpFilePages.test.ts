@@ -45,7 +45,7 @@ test("page tools read saved file content through page access, without local file
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", "tsx", fileURLToPath(new URL("./index.ts", import.meta.url))],
-    env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), SCRIBE_PORT: String(port), SCRIBE_THREAD: "file-page-test", SCRIBE_PROVIDER: "claude", SCRIBE_PAGES: "on" },
+    env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), SCRIBE_PORT: String(port), SCRIBE_AGENT_PORT: "0", SCRIBE_THREAD: "file-page-test", SCRIBE_PROVIDER: "claude", SCRIBE_PAGES: "on" },
     stderr: "pipe",
   });
   const client = new Client({ name: "file-page-test", version: "1" });

@@ -12,9 +12,11 @@ import type { Viewer } from "./types.js";
  * Who is calling the daemon (#682). A chat's MCP proves its thread with a token the daemon gave it
  * (SCRIBE_THREAD_TOKEN), so a thread id alone is worth nothing. The board UI is a browser on the
  * board's origin (contentOriginGate refuses other origins' writes). The data folder's local-token
- * file makes a local tool the user, or with the agent header an external MCP client (one with no
- * Scribe chat: Open pages, untrusted). Anything else is an anonymous agent: no pages, and none of
- * the board's own routes. So leaving the token out never reaches more than sending it.
+ * file makes a local tool an external MCP client (one with no Scribe chat: Open pages, untrusted),
+ * and the user only on the device CLI's routes (#916). Anything else is an anonymous agent: no pages,
+ * and none of the board's own routes. So leaving the token out never reaches more than sending it.
+ * A local tool that should act as the user on other routes sends what the board UI sends
+ * (Sec-Fetch-Site: same-origin, Origin: the board's): the board port is one a sandbox never opens (#915).
  *
  * This stops callers that leave the agent header out or forge a thread id. A process with the user's
  * file access can still read the token files, or scribe.sqlite itself; that is outside what HTTP can stop.
@@ -80,22 +82,26 @@ function decide(req: express.Request): Caller {
   if (isContentHost(req)) return { viewer: "user" };
   if (chat) return { viewer: "agent", thread: chat };
   const agent = req.get(CLIENT_HEADER) === AGENT_CLIENT;
-  if (hasLocalToken(req.get(LOCAL_TOKEN_HEADER))) return agent ? { viewer: "agent", external: true } : { viewer: "user" };
+  // The token makes a local tool the user only for the device CLI (#916); anywhere else it is an external client.
+  if (hasLocalToken(req.get(LOCAL_TOKEN_HEADER))) return !agent && devicesRoute(req) ? { viewer: "user" } : { viewer: "agent", external: true };
   if (agent) return { viewer: "agent" };
   // Browsers mark every request; a cross-origin write never got this far.
   if (req.get("sec-fetch-site")) return { viewer: "user" };
   return { viewer: "agent" };
 }
 
-/** Whether a WebSocket upgrade may join the board: the board UI (its own origin), a local tool with the token, or a paired device's link. */
+/** The `scribe` CLI's device commands (pair, devices, add-device): the routes a bare local token reaches as the user. */
+function devicesRoute(req: express.Request): boolean {
+  const pathname = req.originalUrl.split("?")[0];
+  return pathname === "/api/devices" || pathname.startsWith("/api/devices/");
+}
+
+/** Whether a WebSocket upgrade may join the board: the board UI (its own origin) or a paired device's link. */
 export function socketAllowed(headers: { origin?: string; host?: string; [name: string]: unknown }, socket?: object): boolean {
   if (peerDeviceOf(socket)) return true;
   if (onAgentPort(socket)) return false;
   const origin = headers.origin;
-  if (!origin) {
-    const token = headers[LOCAL_TOKEN_HEADER];
-    return typeof token === "string" && hasLocalToken(token);
-  }
+  if (!origin) return false;
   try {
     const url = new URL(origin);
     return url.host === headers.host && (url.hostname === "127.0.0.1" || url.hostname === "localhost");

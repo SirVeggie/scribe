@@ -4,7 +4,7 @@ import fs from "node:fs";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, CLIENT_HEADER, INSTALL_ROOT, LOCAL_TOKEN_HEADER, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, agentBaseUrl, baseUrl, dataDir } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, AGENT_PORT, CLIENT_HEADER, INSTALL_ROOT, LOCAL_TOKEN_HEADER, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, agentBaseUrl, baseUrl, dataDir } from "./config.js";
 
 /** Identifies this MCP process to the daemon, so claims can tell a live agent from one that stopped. */
 const SESSION_ID = randomBytes(6).toString("hex");
@@ -42,7 +42,7 @@ let agentPortUp = true;
 
 /** Where api() calls: a Scribe chat's MCP uses the agent port (#915), the one a sandbox lets it reach. */
 function daemonUrl(): string {
-  return process.env.SCRIBE_THREAD && agentPortUp ? agentBaseUrl() : baseUrl();
+  return process.env.SCRIBE_THREAD && AGENT_PORT && agentPortUp ? agentBaseUrl() : baseUrl();
 }
 
 async function healthAt(url: string): Promise<Health | null> {
@@ -58,7 +58,7 @@ async function healthAt(url: string): Promise<Health | null> {
 }
 
 export async function health(): Promise<Health | null> {
-  if (!process.env.SCRIBE_THREAD) return healthAt(baseUrl());
+  if (!process.env.SCRIBE_THREAD || !AGENT_PORT) return healthAt(baseUrl());
   const agent = await healthAt(agentBaseUrl());
   if (agent) {
     agentPortUp = true;

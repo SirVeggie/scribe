@@ -57,6 +57,7 @@ test("page_show forwards base with html or htmlPath, and page writes forward opt
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
       SCRIBE_PORT: String(port),
+      SCRIBE_AGENT_PORT: "0",
       SCRIBE_THREAD: "page-base-test",
       SCRIBE_PROVIDER: "claude",
       SCRIBE_PAGES: "on",

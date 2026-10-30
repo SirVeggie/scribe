@@ -160,7 +160,7 @@ test("daemon starts, serves the shell and stops normally without a search pack",
   const port = (probe.address() as net.AddressInfo).port;
   await new Promise<void>(resolve => probe.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("../index.ts", import.meta.url)), "--daemon"], {
-    env: { ...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port) }, windowsHide: true, stdio: "ignore",
+    env: { ...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_AGENT_PORT: "0" }, windowsHide: true, stdio: "ignore",
   });
   const exited = new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
   const url = `http://127.0.0.1:${port}`;

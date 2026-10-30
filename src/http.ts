@@ -2771,7 +2771,7 @@ export async function startHttp(): Promise<http.Server> {
   await listen(server, PORT, HOST);
   await listen(contentServer, PORT, CONTENT_HOST);
   // Chats' MCP falls back to the board port without it (daemon.ts), and a sandbox then cuts them off.
-  await listen(agentServer, AGENT_PORT, HOST).catch((err) => log(`Agent port ${AGENT_PORT} could not open: ${(err as Error).message}`));
+  if (AGENT_PORT) await listen(agentServer, AGENT_PORT, HOST).catch((err) => log(`Agent port ${AGENT_PORT} could not open: ${(err as Error).message}`));
   server.once("close", () => agentServer.close());
   peers.attach(server);
   await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));

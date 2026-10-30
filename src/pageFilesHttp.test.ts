@@ -8,7 +8,6 @@ import path from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { LOCAL_TOKEN_HEADER } from "./config.js";
 
 // scribe.files (#882): only a page's own script, only in the folders the user approved for it.
 test("a page reads and writes files only in its approved folders, at their access", async () => {
@@ -23,7 +22,7 @@ test("a page reads and writes files only in its approved folders, at their acces
   const port = (probe.address() as net.AddressInfo).port;
   await new Promise<void>((resolve) => probe.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./index.ts", import.meta.url)), "--daemon"], {
-    env: { ...process.env, SCRIBE_HOME: home, SCRIBE_PORT: String(port), SCRIBE_FAKE_AGENTS: "1" },
+    env: { ...process.env, SCRIBE_HOME: home, SCRIBE_PORT: String(port), SCRIBE_AGENT_PORT: "0", SCRIBE_FAKE_AGENTS: "1" },
     windowsHide: true,
     stdio: "ignore",
   });
@@ -35,7 +34,7 @@ test("a page reads and writes files only in its approved folders, at their acces
   const user = async (method: string, route: string, body?: unknown) => {
     const res = await fetch(url + route, {
       method,
-      headers: { [LOCAL_TOKEN_HEADER]: fs.readFileSync(path.join(home, "local-token"), "utf8").trim(), ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "sec-fetch-site": "same-origin", origin: url, ...(body ? { "Content-Type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     return (await res.json()) as Record<string, any>;

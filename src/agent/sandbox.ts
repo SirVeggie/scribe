@@ -98,7 +98,8 @@ export function providerHosts(thread: Partial<Pick<Thread, "provider" | "model">
 export function sandboxNet(thread: SandboxThread, webAllowlist: string[], agentPort: number): SandboxNet {
   const open = thread.web === "on" || Boolean(thread.webGrants?.all);
   const domains = cleanAllowlist([...providerHosts(thread), ...(thread.web === "limited" ? webAllowlist : []), ...(thread.webGrants?.domains ?? [])]);
-  return { open, allow: uniq([...domains.flatMap(domainEntries), `127.0.0.1:${agentPort}`, `localhost:${agentPort}`]) };
+  const loopback = agentPort ? [`127.0.0.1:${agentPort}`, `localhost:${agentPort}`] : [];
+  return { open, allow: uniq([...domains.flatMap(domainEntries), ...loopback]) };
 }
 
 function inAny(roots: string[], target: string): boolean {

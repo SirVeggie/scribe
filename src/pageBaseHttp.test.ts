@@ -7,7 +7,6 @@ import path from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { LOCAL_TOKEN_HEADER } from "./config.js";
 
 // page_show base (#630): a new page starts from a starter page's HTML, with the agent's html in its slot.
 test("page_show base fills the starter's slot, and a download inlines the page kit", async () => {
@@ -17,7 +16,7 @@ test("page_show base fills the starter's slot, and a download inlines the page k
   const port = (probe.address() as net.AddressInfo).port;
   await new Promise<void>((resolve) => probe.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./index.ts", import.meta.url)), "--daemon"], {
-    env: { ...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_FAKE_AGENTS: "1" },
+    env: { ...process.env, SCRIBE_HOME: root, SCRIBE_PORT: String(port), SCRIBE_AGENT_PORT: "0", SCRIBE_FAKE_AGENTS: "1" },
     windowsHide: true,
     stdio: "ignore",
   });
@@ -26,11 +25,10 @@ test("page_show base fills the starter's slot, and a download inlines the page k
     child.once("error", reject);
   });
   const url = `http://127.0.0.1:${port}`;
-  const token = () => fs.readFileSync(path.join(root, "local-token"), "utf8").trim();
   const call = async (method: string, route: string, body?: unknown) => {
     const res = await fetch(url + route, {
       method,
-      headers: { [LOCAL_TOKEN_HEADER]: token(), ...(body ? { "Content-Type": "application/json" } : {}) },
+      headers: { "sec-fetch-site": "same-origin", origin: url, ...(body ? { "Content-Type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     return { status: res.status, text: await res.text() };

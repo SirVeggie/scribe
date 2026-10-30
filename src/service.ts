@@ -29,7 +29,7 @@ export type ServicePlan = {
 /** The command line and settings the service runs with: this install's node and dist/index.js. */
 export function servicePlan(env: NodeJS.ProcessEnv = process.env): ServicePlan {
   const kept = Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => /^SCRIBE_(HOME|PORT|PEER_PORT|PEER_HOSTS|PAGE_HOST)$/.test(entry[0]) && !!entry[1])
+    Object.entries(env).filter((entry): entry is [string, string] => /^SCRIBE_(HOME|PORT|PEER_PORT|PEER_HOSTS|PAGE_HOST|AGENT_PORT)$/.test(entry[0]) && !!entry[1])
   );
   return { node: process.execPath, entry: path.join(INSTALL_ROOT, "dist", "index.js"), cwd: INSTALL_ROOT, env: kept };
 }

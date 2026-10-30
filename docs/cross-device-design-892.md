@@ -237,7 +237,7 @@ The access model is the same as for chats on one device: a chat on A reaches not
 
 - The daemon already runs with no desktop shell (`node dist/index.js --daemon`). `package.json` now has
   `"bin": { "scribe": "dist/index.js" }`, so `npm link` (or `npm i -g .`) gives a `scribe` command.
-- CLI (`src/index.ts`, all as the user through the local token, refused inside an agent's chat):
+- CLI (`src/index.ts`, all as the user through the local token, which reaches only `/api/devices*` as the user (#916), refused inside an agent's chat):
   `scribe pair <code>`, `scribe add-device` (makes a code on this device and waits until another device
   uses it), `scribe devices`, `scribe unpair <name | id>` (revokes on both sides), `scribe rename <name>`,
   `scribe service install | uninstall | status`, `scribe help`.
