@@ -377,6 +377,7 @@
       downloadHref(`/api/export?${query}`);
     },
     downloadAll: () => downloadExport(),
+    copyItems: (selection) => copyMenuItems(selection),
     showNotice,
     choose,
     confirm: (message, confirmLabel) => confirmDelete(message, confirmLabel),
@@ -723,6 +724,16 @@
     }
     if (msg.type === "devices") {
       if (!document.getElementById("settings").hidden) window.scribeDevicesSettings.refresh();
+      void refreshCopyTargets();
+      return;
+    }
+    if (msg.type === "copy_received") {
+      const parts = [];
+      if (msg.pages) parts.push(countOf(msg.pages, "page"));
+      if (msg.templates) parts.push(countOf(msg.templates, "template"));
+      if (msg.plugins) parts.push(countOf(msg.plugins, "plugin"));
+      showNotice(`${msg.from.name} copied ${parts.join(", ") || "nothing new"} here`, msg.plugins ? { action: { label: "Review", run: () => openSettings("Plugins") } } : {});
+      if (msg.plugins && !document.getElementById("settings").hidden) window.scribePluginSettings.refresh();
       return;
     }
     if (msg.type === "device_paired") {
@@ -1734,6 +1745,7 @@
     settingsCategories.open();
     if (category === "Audio") settingsCategories.select(4);
     if (category === "Devices") settingsCategories.select(7);
+    if (category === "Plugins") settingsCategories.select(5);
     window.scribeDevicesSettings.refresh();
     window.scribeAudioSettings.refresh();
     window.scribePluginSettings.refresh();
@@ -2804,6 +2816,7 @@
       { label: "Copy template ID", action: () => copyTemplateId(template.id) },
     ] : [
       { label: "Export", action: () => downloadHref(`/api/export/template/${encodeURIComponent(template.id)}`) },
+      ...copyMenuItems({ templates: [template.id] }),
       { label: "Copy template ID", action: () => copyTemplateId(template.id) },
       { label: "Delete", danger: true, action: () => deleteTemplate(template) },
     ]);
@@ -3729,6 +3742,8 @@
     }
     const madeBy = pageActorView(tab.provenance?.created);
     const changedBy = pageActorView(tab.provenance?.changed);
+    const source = tab.provenance?.copiedFrom;
+    const copiedFrom = source ? { text: `${source.name} · ${source.key}, rev ${source.revision}`, at: source.at } : null;
     return {
       title: tab.title,
       id: tab.key,
@@ -3737,6 +3752,7 @@
       folder: tab.folderId ? library.pathOf(tab.folderId) : "",
       ...(madeBy ? { madeBy } : {}),
       ...(changedBy ? { changedBy } : {}),
+      ...(copiedFrom ? { copiedFrom } : {}),
     };
   }
 
@@ -3745,7 +3761,8 @@
       return null;
     }
     if (!actor.thread) {
-      return { text: "external agent", at: actor.at };
+      // A copy from another device keeps the chat's title, not its id (#907).
+      return { text: actor.title ? `agent · ${actor.title}` : "external agent", at: actor.at };
     }
     const name = window.scribeChat?.threadTitle?.(actor.thread) || actor.title || "thread";
     return { text: `agent · ${name}`, threadId: actor.thread, at: actor.at };
@@ -3965,6 +3982,65 @@
     persistBanner.hidden = !message;
     persistBannerDetail.textContent = message;
   }
+
+  /* ---------- Copy to another device (#907) ---------- */
+
+  /** /api/copy/targets of the daemon whose UI this is: its paired devices, and the device viewing it (if another). */
+  let copyTargets = null;
+  async function refreshCopyTargets() {
+    try {
+      const res = await fetch("/api/copy/targets", { cache: "no-store" });
+      if (res.ok) copyTargets = await res.json();
+    } catch {
+      /* offline: keep the last list */
+    }
+  }
+  void refreshCopyTargets();
+
+  const countOf = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  /** Menu items to copy `selection` ({ pages, folders, templates, plugins }) to a device; none without paired devices. */
+  function copyMenuItems(selection) {
+    const devices = copyTargets?.devices ?? [];
+    if (!devices.length) return [];
+    const item = (device) => ({ label: device.name, disabled: !device.online, detail: device.online ? "" : "Offline", action: () => copyToDevice(device, selection) });
+    const viewer = devices.find((device) => device.id === copyTargets.viewer);
+    const others = devices.filter((device) => device !== viewer);
+    return [
+      viewer && { label: "Copy to this device", action: () => copyToDevice(viewer, selection) },
+      others.length > 0 && { label: viewer ? "Copy to another device" : "Copy to device", submenu: () => others.map(item) },
+    ];
+  }
+
+  async function copyToDevice(device, selection) {
+    showNotice(`Copying to ${device.name}…`);
+    try {
+      const res = await fetch("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device: device.id, ...selection }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Could not copy to ${device.name}`);
+      const parts = [];
+      if (data.pages) parts.push(countOf(data.pages, "page"));
+      if (data.templatesCreated) parts.push(countOf(data.templatesCreated, "template"));
+      if (data.plugins?.length) parts.push(`${countOf(data.plugins.length, "plugin")} to review there`);
+      const already = data.pluginsPresent?.length && !data.pages && !data.templatesCreated && !data.plugins?.length;
+      showNotice(already ? `${device.name} already has that plugin` : `Copied ${parts.join(", ") || "nothing new"} to ${device.name}`);
+    } catch (err) {
+      showNotice(err.message || `Could not copy to ${device.name}`);
+    }
+  }
+
+  window.scribeCopy = {
+    items: copyMenuItems,
+    /** For buttons outside the menus (the plugin settings): the same items, as a menu at the button. */
+    menu: (anchor, selection) => {
+      const items = copyMenuItems(selection);
+      if (!items.some(Boolean)) return false;
+      const rect = anchor.getBoundingClientRect();
+      library.openMenu({ x: rect.left, y: rect.bottom + 4 }, items);
+      return true;
+    },
+    available: () => Boolean(copyTargets?.devices?.length),
+  };
 
   async function importScribeFile(file,destination){
     const headers={"Content-Type":"application/octet-stream","X-Filename":encodeURIComponent(file.name||"import")};

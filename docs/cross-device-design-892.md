@@ -152,3 +152,26 @@ that implement it.
   placeholder in the frame. `/api/frame-check` answers framable for these, since the proxy drops the headers.
 - Limits: an app that calls itself by an absolute URL (`fetch("http://127.0.0.1:8188/api")`) still reaches the
   viewing device; a peek of a private link that no embed page names shows the refusal placeholder.
+
+## Copy (#907)
+
+- `src/devices/copy.ts`. The device that owns the data pushes. "Copy to this device" in another device's UI is the
+  same push: that UI calls its own daemon's `/api/copy` (not taken by the gateway), which pushes to the viewer.
+- `POST /api/copy { device, pages?, folders?, templates?, plugins? }` (board only; agents 403) exports like a file
+  export (`store.exportFile`), swaps every blob (page images, saved page assets, plugin archives) for its SHA-256,
+  asks the target `POST /api/copy/incoming/check` which hashes it lacks and which plugins it has with the same code,
+  `PUT`s only the missing blobs, then `POST /api/copy/incoming` the bundle. `/incoming/*` answers link callers only.
+- The target keeps incoming blobs in `<data>/device/blobs/<hash>` for a week after they were last asked for, so a copy
+  that is sent again (or retried) moves only its JSON. Blobs already inside existing pages are not indexed.
+- The target imports with `store.importBoard(…, "closed")`: into the Library, key clashes suffixed, templates matched
+  by content, folder paths recreated. Each page gets `provenance.copiedFrom: { device, name, key, revision, at }`; the
+  device and name come from the link, not the bundle. Thread ids in `created`/`changed` are dropped (titles kept).
+  The hover card shows "Copied from". A copy is a fork: nothing links it back.
+- Plugins the pages or templates declare (or the one asked for) travel as their archive (code + source) unless the
+  target has the same code. They are not installed: they wait in `<data>/device/pending-plugins.json`, listed at the
+  top of Settings → Plugins ("From Laptop · not installed", Review… / Dismiss); Review runs the usual install consent.
+- UI: "Copy to device" submenus on the page (Library row and tab), folder, multi-selection and template menus, and a
+  "Copy to device…" button in a plugin's settings; offline devices are disabled. The target's board shows a notice
+  (`copy_received`), with Review when plugins came.
+- Tests: `src/devices/copy.test.ts` (two daemons on loopback, a fake store). Checked by hand with two daemons: a page
+  with an image copied twice gives `thesis-plan` and a suffixed key, the second copy sending no blob bytes.

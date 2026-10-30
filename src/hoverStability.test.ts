@@ -241,6 +241,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       const library = { openMenu: (at, items) => window.menuItems = items };
       const downloadHref = href => window.downloaded = href;
       const copyTemplateId = id => window.copied = id;
+      const copyMenuItems = () => [];
       const deleteTemplate = template => window.deleted = template;
       ${app.slice(app.indexOf('  function templateRow('), app.indexOf('  function toggleBuiltinGroup('))}
       window.check = () => {

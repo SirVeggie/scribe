@@ -1111,6 +1111,10 @@ window.createLibrary = function createLibrary(host) {
       { label: `${plural(items.length, "item")} selected`, disabled: true },
       { label: "Move to…", action: () => openMovePicker(items, point) },
       { label: "Export", action: () => host.downloadSelectionExport(items) },
+      ...(host.copyItems?.({
+        pages: items.filter((item) => item.kind === "page").map((item) => item.id),
+        folders: items.filter((item) => item.kind === "folder").map((item) => item.id),
+      }) ?? []),
       { label: "Agent access", submenu: () => ACCESS_LEVELS.map((level) => ({
         label: level.label, detail: level.detail,
         action: async () => {
@@ -1997,6 +2001,7 @@ window.createLibrary = function createLibrary(host) {
       fromStrip && !tab.temp && { label: "Show in Library", action: () => reveal(id) },
       "sep",
       { label: "Export", action: () => host.downloadExport(id) },
+      ...(host.copyItems?.({ pages: [id] }) ?? []),
       { label: "Agent access", submenu: () => agentAccessItems({ kind: "page", id }) },
       !tab.embedUrl && { label: "Permissions…", action: () => host.managePermissions(id) },
       { label: tab.workspace ? "Change workspace…" : "Set workspace…", action: () => host.pickPageWorkspace(id) },
@@ -2190,6 +2195,7 @@ window.createLibrary = function createLibrary(host) {
       window.scribeFiles.diskPath(model.folders, id) && { label: "Rescan disk folder", action: () => rescanDiskFolder(id) },
       "sep",
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
+      ...(host.copyItems?.({ folders: [id] }) ?? []),
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
       { label: "Agent access", submenu: () => agentAccessItems({ kind: "folder", id }) },
       "sep",

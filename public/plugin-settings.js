@@ -15,7 +15,9 @@
   async function request(path="",method="GET",body){const res=await fetch(`/api/plugins${path}`,{method,headers:body===undefined?{}:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});const data=await res.json();if(!res.ok)throw new Error(data.error||"Plugin request failed");return data;}
   const enabled=toggle(true,value=>request("/","PUT",{enabled:value}));
   const enableRow=row(overview,"Enable plugins",enabled,"Off stops every plugin.");enableRow.classList.add("plugin-master");
-  overview.append(list);
+  // Plugins another device copied here (#907): not installed until reviewed.
+  const incoming=el("div","plugin-list plugin-incoming");incoming.hidden=true;
+  overview.append(incoming,list);
   const picker=el("input");picker.type="file";picker.accept=".scribeplugin,.zip";picker.hidden=true;
   const actions=el("div","settings-actions plugin-import");actions.append(button("Import plugin…",()=>picker.click()));overview.append(actions);section.append(overview,panels,status,picker);
   function markDrafts(){for(const entry of list.children)entry.classList.toggle("has-draft",!!panels.querySelector(`[data-plugin="${entry.dataset.plugin}"] form[data-dirty="true"]`));}
@@ -117,6 +119,18 @@
     await request("/install","POST",{archive,hash:preview.hash,replace:!!preview.previous,approvePaths});return true;
   }
   async function importFile(file){if(file.size>64*1024**2)throw new Error("Plugin packages must be under 64 MiB");const archive=await base64(file),preview=await request("/preview","POST",{archive});const installed=await reviewPackage(preview,archive,{allowOlder:true});await refresh();return installed;}
+  async function copyRequest(path,method="GET"){const res=await fetch(`/api/copy/plugins${path}`,{method,cache:"no-store"});const data=await res.json();if(!res.ok)throw new Error(data.error||"Plugin request failed");return data;}
+  async function reviewCopied(id){const {preview,archive}=await copyRequest(`/${encodeURIComponent(id)}`);if(await reviewPackage(preview,archive,{allowOlder:true}))await copyRequest(`/${encodeURIComponent(id)}`,"DELETE");await refresh();}
+  async function renderIncoming(){
+    const {plugins}=await copyRequest("");incoming.hidden=!plugins.length;
+    incoming.replaceChildren(...plugins.map(item=>{
+      const entry=el("div","plugin-entry setting-row"),info=el("span","plugin-identity"),title=el("span","plugin-name");
+      title.append(el("strong","",item.name),el("span","plugin-version",item.version));info.append(title,el("span","plugin-meta",`From ${item.from.name} · not installed`));
+      const review=button("Review…",()=>reviewCopied(item.id));
+      const dismiss=button("Dismiss",async()=>{await copyRequest(`/${encodeURIComponent(item.id)}`,"DELETE");await refresh();});
+      entry.append(pluginMark(),info,review,dismiss);return entry;
+    }));
+  }
   async function reviewBundled(id){const {preview,archive}=await request(`/${id}/bundled-update`);await reviewPackage(preview,archive);await refresh();}
   picker.addEventListener("change",()=>{const file=picker.files[0];picker.value="";if(file)importFile(file).catch(error=>{status.textContent=error.message;});});
   async function details(view,parent){
@@ -136,11 +150,12 @@
     form.addEventListener("submit",event=>event.preventDefault());parent.append(form);
     const controls=el("div","settings-actions"),logs=el("pre","plugin-source");logs.hidden=true;logs.dataset.pluginLogs="";
     const remove=button("Remove",async()=>{if(await confirmRemove(`Remove “${view.name}”? Its source and data stay on disk.`,"Remove")){await request(`/${view.id}`,"DELETE");form.dataset.dirty="false";await refresh();}});remove.classList.add("plugin-remove");
-    controls.append(button("Restart",async()=>{await request(`/${view.id}/restart`,"POST",{});await refresh();}),button("Logs",async()=>{const result=await request(`/${view.id}/logs`),current=panels.querySelector(`[data-plugin="${view.id}"] [data-plugin-logs]`);if(current){current.textContent=result.logs.join("\n")||"No backend log yet.";current.hidden=!current.hidden;}}),button("Export…",()=>exportPlugin(view.id)),button("Update from file…",()=>picker.click()),remove);parent.append(controls,logs);
+    controls.append(button("Restart",async()=>{await request(`/${view.id}/restart`,"POST",{});await refresh();}),button("Logs",async()=>{const result=await request(`/${view.id}/logs`),current=panels.querySelector(`[data-plugin="${view.id}"] [data-plugin-logs]`);if(current){current.textContent=result.logs.join("\n")||"No backend log yet.";current.hidden=!current.hidden;}}),button("Export…",()=>exportPlugin(view.id)),...(window.scribeCopy?.available()?[copyButton(view.id)]:[]),button("Update from file…",()=>picker.click()),remove);parent.append(controls,logs);
     if(view.readme){const readme=el("details"),summary=el("summary","","README"),text=el("pre","plugin-source",view.readme);readme.dataset.pluginView="readme";readme.append(summary,text);parent.append(readme);}
     const methods=Object.entries(view.methods).filter(([,def])=>def.agent);
     if(methods.length){const methodsView=el("details","plugin-methods");methodsView.dataset.pluginView="methods";methodsView.append(el("summary","","Agent methods"));for(const [name,def]of methods)methodsView.append(el("p","settings-hint",`${name} · ${def.agent} — ${def.description}`));parent.append(methodsView);}
   }
+  function copyButton(id){const node=button("Copy to device…",()=>window.scribeCopy.menu(node,{plugins:[id]}));return node;}
   async function exportPlugin(id){const parts=await chooseParts();if(!parts)return;const query=new URLSearchParams(parts),link=el("a");link.href=`/api/plugins/${id}/export?${query}`;link.download="";document.body.append(link);link.click();link.remove();}
   async function chooseParts(){
     const dialog=el("dialog","confirm"),form=el("form");form.method="dialog";form.append(el("h2","","Export plugin"));
@@ -175,7 +190,7 @@
   async function refresh(){
     if(refreshing){refreshAgain=true;return refreshDone;}refreshing=true;
     let finish;refreshDone=new Promise(resolve=>{finish=resolve;});
-    try{const data=await request("/");enabled.setAttribute("aria-checked",String(data.enabled));
+    try{await renderIncoming().catch(()=>{incoming.hidden=true;});const data=await request("/");enabled.setAttribute("aria-checked",String(data.enabled));
       const entries=[],views=[];
       for(const item of data.plugins){
         const view=await request(`/${item.id}`),entry=el("div","plugin-entry setting-row");entry.dataset.plugin=item.id;

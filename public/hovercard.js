@@ -1,8 +1,8 @@
 /**
  * Shared hover card for strip tabs, Library rows, and templates.
- * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder?, madeBy?, changedBy? }` or null,
+ * `describe(el)` returns `{ title, id, description?, createdAt, updatedAt, folder?, madeBy?, changedBy?, copiedFrom? }` or null,
  * or `{ title, description, note: true }` for a short explanation shown under a small anchor.
- * `madeBy` / `changedBy`: `{ text, threadId?, at? }`. `openThread(id)` runs on a click.
+ * `madeBy` / `changedBy` / `copiedFrom`: `{ text, threadId?, at? }`. `openThread(id)` runs on a click.
  */
 window.createHoverCard = function createHoverCard({ describe, openThread }) {
   const card = document.createElement("div");
@@ -135,6 +135,7 @@ window.createHoverCard = function createHoverCard({ describe, openThread }) {
     if (!sameActor(info.madeBy, info.changedBy)) {
       addActorRow(rows, "Changed by", info.changedBy);
     }
+    addActorRow(rows, "Copied from", info.copiedFrom);
     card.appendChild(rows);
     if (info.folder) {
       const folder = document.createElement("div");
