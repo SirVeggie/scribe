@@ -3203,6 +3203,69 @@ html.fx-off .ag-slash { transition: none; }
   min-height: 0;
 }
 
+/* A menu with a group rail (the full model list): a fixed height, so hovering another group doesn't resize it. */
+.ag-menu-body {
+  display: flex;
+  gap: 5px;
+  height: min(420px, calc(100vh - 80px));
+  min-height: 0;
+}
+
+.ag-menu-body > .ag-menu-list {
+  flex: 1;
+  min-width: 0;
+}
+
+.ag-menu-rail {
+  width: 108px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 5px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.ag-menu-rail-item {
+  height: 32px;
+  padding: 0 8px;
+  justify-content: flex-start;
+  gap: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  border-radius: 7px;
+  flex-shrink: 0;
+  transition: none;
+}
+
+.ag-menu-rail-item > .ag-prov {
+  width: 16px;
+  height: 16px;
+}
+
+.ag-menu-rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-menu-rail-item:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.ag-menu-rail-item.on {
+  background: var(--accent-soft);
+  color: var(--heading);
+}
+
+.ag-menu-rail-item.dim > .ag-prov,
+.ag-menu-rail-item.none {
+  opacity: 0.45;
+}
+
 .ag-menu-head {
   font-size: 10.5px;
   text-transform: uppercase;

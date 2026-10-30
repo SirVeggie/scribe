@@ -1503,10 +1503,12 @@
   });
 
   /**
-   * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator? }
+   * items: { label, detail?, checked?, icon?, danger?, disabled?, run?, header?, separator?, rail? }
+   * rail: [{ id, label, provider?, dim?, note? }] adds a sidebar of groups; hovering one lists only the
+   * items whose `rail` is its id, and a search looks through all of them.
    * Opening again from the anchor whose menu is already open closes it instead.
    */
-  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null, tools = null, className = "" } = {}) {
+  function openMenu(anchor, items, { search = false, width = 260, placeholder = "Search", pageSize = Infinity, onClose = null, tools = null, className = "", rail = null, railActive = null } = {}) {
     // A re-render can swap the menu's button for a new one of the same kind while the menu stays open.
     if (openMenuEl && (openMenuAnchor === anchor || (!openMenuAnchor?.isConnected && openMenuAnchor?.className === anchor.className))) {
       closeMenu();
@@ -1515,9 +1517,33 @@
     closeMenu();
     // Keep the opening position when a selection re-renders and detaches the anchor.
     const anchorRect = anchor.getBoundingClientRect();
-    const menu = el("div", `ag-menu${search ? " ag-menu-keyed" : ""}${className ? ` ${className}` : ""}`);
+    if (rail && !rail.length) rail = null;
+    const menu = el("div", `ag-menu${search ? " ag-menu-keyed" : ""}${rail ? " ag-menu-railed" : ""}${className ? ` ${className}` : ""}`);
+    const RAIL_WIDTH = 116;
+    if (rail) width += RAIL_WIDTH;
     menu.style.width = `${width}px`;
     const list = el("div", "ag-menu-list");
+    let railAt = rail ? Math.max(0, rail.findIndex((group) => group.id === railActive)) : 0;
+    const railEl = rail ? el("div", "ag-menu-rail") : null;
+    const railButtons = (rail || []).map((group, i) => {
+      const btn = el("button", `ag-menu-rail-item${group.dim ? " dim" : ""}`);
+      btn.type = "button";
+      btn.tabIndex = -1;
+      if (group.provider) btn.append(providerIcon(group.provider));
+      btn.append(el("span", "ag-menu-rail-label", group.label));
+      if (group.note) btn.dataset.tooltip = group.note;
+      const choose = () => {
+        if (railAt === i && !filter.trim()) return;
+        railAt = i;
+        if (filter.trim()) clearSearch?.();
+        renderItems();
+      };
+      btn.addEventListener("pointerenter", () => { if (!filter.trim()) choose(); });
+      btn.addEventListener("click", choose);
+      railEl.append(btn);
+      return btn;
+    });
+    let clearSearch = null;
     let filter = "";
     let visibleLimit = pageSize;
     let active = 0;
@@ -1534,8 +1560,14 @@
       list.replaceChildren();
       const q = filter.trim().toLowerCase();
       // searchOnly: a row left out of the plain list that a search still finds.
-      const matches = items.filter((item) => item.header || item.separator || (!q ? !(typeof item.searchOnly === "function" ? item.searchOnly() : item.searchOnly) :
-        `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q)));
+      // With a rail and no search, only the hovered group's items; its own name is on the rail, so no heading for it.
+      const railed = rail && !q ? rail[railAt].id : null;
+      const matches = items.filter((item) => (!railed || item.rail === railed) && (item.header || item.separator || (!q ? !(typeof item.searchOnly === "function" ? item.searchOnly() : item.searchOnly) :
+        `${item.label} ${item.detail || ""} ${item.search || ""}`.toLowerCase().includes(q))));
+      railButtons.forEach((btn, i) => {
+        btn.classList.toggle("on", i === railAt && !q);
+        btn.classList.toggle("none", Boolean(q) && !matches.some((item) => item.rail === rail[i].id && !item.header && !item.separator));
+      });
       let count = 0;
       const visible = matches.filter((item) => item.header || item.separator || item.fixed || ++count <= visibleLimit);
       const nativeSources = new Set(visible.map((item) => item.nativeSource).filter(Boolean));
@@ -1548,10 +1580,14 @@
       let lastHeader = null;
       for (const item of visible) {
         if (item.header) {
-          const heading = item.sourceName && nativeSources.size > 1
-            ? `Native (${item.sourceName})${item.suffix || ""}` : item.header;
+          const several = item.sourceName && nativeSources.size > 1;
+          if (railed && !several) {
+            lastHeader = null;
+            continue;
+          }
+          const heading = railed ? item.sourceName : several ? `Native (${item.sourceName})${item.suffix || ""}` : item.header;
           lastHeader = el("div", "ag-menu-head", heading);
-          if (item.provider) lastHeader.prepend(providerIcon(item.provider));
+          if (item.provider && !railed) lastHeader.prepend(providerIcon(item.provider));
           continue;
         }
         if (item.separator) {
@@ -1638,7 +1674,19 @@
         visibleLimit = pageSize;
         renderItems();
       });
+      clearSearch = () => {
+        input.value = "";
+        filter = "";
+        visibleLimit = pageSize;
+      };
       input.addEventListener("keydown", (event) => {
+        // Left and right step through the rail's groups while there's no search text to move through.
+        if (rail && !input.value && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+          event.preventDefault();
+          railAt = (railAt + (event.key === "ArrowRight" ? 1 : -1) + rail.length) % rail.length;
+          renderItems();
+          return;
+        }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           const items = rows();
@@ -1657,7 +1705,8 @@
       setTimeout(() => input.focus(), 0);
     }
     if (tools) menu.append(tools(renderItems));
-    menu.append(list);
+    if (rail) menu.append(elWith("div", "ag-menu-body", railEl, list));
+    else menu.append(list);
     renderItems();
     // Inside a modal dialog the menu must sit in its top layer, or the dialog covers it and makes it inert.
     (anchor.closest?.("dialog[open]") || document.body).append(menu);
@@ -10115,16 +10164,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const favs = new Set(favoriteModels());
     const showAll = all || !favs.size;
     const items = [];
+    // The full list: a provider rail on the left, and hovering one lists its models.
+    const rail = showAll ? [] : null;
     for (const provider of PROVIDERS) {
       const status = S.config.providers.find((p) => p.id === provider);
       const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (current.provider === provider && current.model === m.id));
       if (!showAll && !models.length) continue;
+      rail?.push({ id: provider, provider, label: PROVIDER_LABEL[provider], dim: !status?.available });
+      const at = items.length;
       if (!models.length) {
         items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
         items.push({ label: status?.available ? "Loading models…" : status?.detail || "Not available", disabled: true });
-        continue;
-      }
-      items.push(...modelMenuItems(provider, models, (m) => ({
+      } else items.push(...modelMenuItems(provider, models, (m) => ({
         label: m.label,
         detail: m.id !== m.label ? m.id : m.description,
         search: `${provider} ${PROVIDER_LABEL[provider] || ""} ${m.id}`,
@@ -10133,11 +10184,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
         run: () => pick(provider, m.id),
       }), status && !status.available ? " — unavailable" : ""));
+      for (const item of items.slice(at)) item.rail = provider;
     }
     if (!showAll) {
       items.push({ separator: true }, { label: "Show all models", icon: "more", run: () => openModelMenu(anchor, current, pick, { all: true, onClose }) });
     }
-    return openMenu(anchor, items, { search: showAll, width: 300, placeholder: "Search models · ☆ to favourite", onClose });
+    const railActive = rail?.some((group) => group.id === current.provider) ? current.provider : rail?.find((group) => !group.dim)?.id;
+    return openMenu(anchor, items, { search: showAll, width: 300, placeholder: "Search models · ☆ to favourite", onClose, rail, railActive });
   }
 
   /**
