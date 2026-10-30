@@ -15,11 +15,11 @@ on loopback) under each engine and prints one JSON line per probe. Secrets print
 
 | Engine | State |
 |---|---|
-| Codex MXC | Probed. Works here without setup. |
-| Codex unelevated | Probed. Scribe's current default. |
-| Codex elevated | Not probed: its setup UAC prompt was cancelled (`ShellExecuteExW … 1223`). Needs the user. |
-| srt-win | Not probed: `windows-install` needs one UAC prompt. `initialize()` refuses until then ("Sandbox user is not provisioned"). |
-| Claude under srt | Not probed: needs srt-win. The probe (`claude` case) is ready. |
+| Codex MXC | Probed. Works here without setup. **Recommended.** |
+| Codex unelevated | Probed. Scribe's current default; network-off and reads are not enforced (#916). |
+| Codex elevated | Skipped (user's choice): its setup UAC prompt was cancelled once (`ShellExecuteExW … 1223`), and MXC covers this machine. |
+| srt-win | Probed after `windows-install --allow-loopback --skip-profile-grant` (left installed). |
+| Claude under srt | Probed. Login, Scribe MCP and the Bash tool work, but only with two workarounds (stdin relay, env relay). |
 
 ## Codex
 
@@ -86,71 +86,126 @@ Through the app server (what Scribe uses), `thread/start` with
 | **daemon on loopback** | **200** |
 
 "Network off" under unelevated stops only clients that honour proxy variables. Together with the readable
-`local-token`, any sandboxed Codex command can call the Scribe daemon's API as the user today.
+`local-token`, any sandboxed Codex command can call the Scribe daemon's API as the user today (#916).
 
 ### Elevated
 
-Not reached: running a command with `windows.sandbox = "elevated"` in a scratch `CODEX_HOME` launches the
-setup helper through UAC; the prompt was cancelled, and Codex reported
+Skipped by the user's choice. A first attempt (a command with `windows.sandbox = "elevated"` in a scratch
+`CODEX_HOME`) launched the setup helper through UAC; the prompt was cancelled and Codex reported
 `orchestrator_helper_launch_canceled: ShellExecuteExW failed to launch setup helper: 1223`.
 `CreateRestrictedToken failed: 87` is a third-party report (see the #891 investigation); it is not in
 this machine's Codex logs and not in OpenAI's docs. Given MXC, elevated matters only for machines without
 MXC (Windows 10, older 11 builds).
 
-## srt-win (from the package and `srt-win status`; behaviour not yet run)
+## srt-win
 
-- `windows-install` (one UAC prompt) creates the local user `srt-sandbox` (random password,
-  DPAPI-encrypted in `HKLM\SOFTWARE\sandbox-runtime`), the group `sandbox-runtime-users`, and a
-  machine-wide WFP filter set keyed on that user's SID (allow loopback to the proxy port range
-  60080–60089, block everything else). Then, unelevated, it grants the sandbox group read on the user's
-  profile except credential stores (minutes on a big profile; `--skip-profile-grant` skips it).
-- Undo: `npx @anthropic-ai/sandbox-runtime windows-uninstall` (one UAC prompt) removes the filters, the
-  account and its profile, the group, the kept write grants, the profile grant and the registry key.
-  `%ProgramData%\sandbox-runtime` and `%LOCALAPPDATA%\sandbox-runtime` stay; delete by hand.
-- Writes: a write-restricted token, so only `allowWrite` roots, the sandbox user's profile and
-  Everyone-writable places. Write grants on project folders are **kept between sessions** (ACEs on every
-  file; any sandboxed session can then read those folders).
-- **Loopback is all-or-nothing and machine-wide**: `--allow-loopback` at install opens every loopback port
-  to every sandboxed process; without it, nothing but srt's own proxies. Scribe's MCP bridge (a
-  `node dist/index.js` child of `claude`) talks to the daemon on `127.0.0.1:4747`, so Claude under srt needs
-  `--allow-loopback`, which also opens the daemon's whole API (and Keeper, dev servers…) to sandboxed code.
-  The design's "never loopback except Scribe's MCP endpoint" is not expressible with srt-win.
-- Schannel clients (System32 `curl.exe`, `Invoke-WebRequest`, WinHTTP tools, git with
-  `http.sslBackend=schannel`) cannot do TLS under the restricted token; no workaround. Node, Python, Git
-  for Windows (srt forces its OpenSSL backend) work through the proxy.
-- Per-user tools: without the profile grant the sandbox user cannot open nvm's Node
-  (`%LOCALAPPDATA%\nvm`, this machine's Node), so Scribe must add the Node and tool folders to `allowRead`
-  (the probe does) or take the profile grant.
-- Data folder: Scribe's worktrees live under `%LOCALAPPDATA%\scribe\worktrees`, inside the data folder the
-  design denies. A deny on the whole folder would hide the workspace; deny the specific files and
-  folders (`local-token`, `agent-secret`, `*.sqlite`, `agent\claude-accounts\<others>`) instead. This
-  applies to Codex profiles too.
+### Install and undo
 
-## Claude under srt (design, not yet run)
+`npx @anthropic-ai/sandbox-runtime windows-install --allow-loopback --skip-profile-grant` (one UAC prompt,
+exit 0, about a minute):
 
-The `claude` probe wraps the SDK's spawn in `spawnClaudeCodeProcess` → `wrapWithSandboxArgv` (PowerShell
-shell, the CLI and its args single-quoted) and checks the `init` message (login source, MCP server
-status) and a Bash tool call. Expected needs, to confirm:
+- creates the local user `srt-sandbox` (hidden from the logon screen, member of `Users`; random password,
+  DPAPI-encrypted in `HKLM\SOFTWARE\sandbox-runtime`) and the group `sandbox-runtime-users`;
+- installs a machine-wide WFP filter set keyed on that user's SID: loopback to srt's proxy ports
+  (60080–60089) allowed, all other direct connects blocked; with `--allow-loopback` every loopback port
+  but port 1 is allowed too;
+- without `--skip-profile-grant` it would also grant the sandbox group read on the whole user profile
+  except credential stores (minutes on a big profile). Skipped: Scribe grants what it needs per session.
 
-- `allowWrite` the account's `CLAUDE_CONFIG_DIR` (transcripts, credentials refresh).
-- `allowRead` the Claude binary, Node, the main checkout (`dist/index.js` for the MCP bridge).
-- `allowedDomains` for `api.anthropic.com`, `claude.ai` and the OAuth refresh host.
-- `--allow-loopback` for the MCP bridge (above), and `local-token` readable for the bridge, which the
-  deny list forbids. Alternative: give Claude Scribe's MCP as an HTTP server with the token in a header
-  set by the host, so nothing in the sandbox reads `local-token`.
+Undo: `npx @anthropic-ai/sandbox-runtime windows-uninstall` (one UAC prompt) removes the filters, the account
+and its profile, the group, the kept write grants, the profile grant and the registry key.
+`%ProgramData%\sandbox-runtime` and `%LOCALAPPDATA%\sandbox-runtime` stay; delete by hand. Kept write grants
+alone: `srt-win acl forget --all` (no prompt).
 
-## Recommendation (so far)
+`verifyWindowsWfpEgress` (`srt-win wfp verify`) after install: direct egress blocked under the plain,
+low-integrity and untrusted-integrity tokens, open loopback connects, no residuals reported.
 
-1. **Codex: MXC first.** Bump `@openai/codex` to ≥ 0.166 and send a permission profile
+### Behaviour (`srt` case, worktree as cwd, loopback open)
+
+| Probe | Result |
+|---|---|
+| whoami | `carrotbox\srt-sandbox` |
+| write cwd / outside / `%TEMP%` | allowed / denied / allowed (the sandbox user's own temp) |
+| git status, worktree git dir (`update-ref`) | work (git dir as an `allowWrite` root) |
+| read planted secret / `local-token` (`denyRead`) | **denied** |
+| read `~/.gitconfig` (not granted) | denied: without the profile grant nothing in the profile is readable |
+| Node in nvm (`%LOCALAPPDATA%\nvm`) | "not recognized" unless its folder is in `allowRead` |
+| **Node script in the worktree** | **fails**: `EPERM: lstat 'C:\Users\veggie\AppData'` (problem 2) |
+| Node fetch, workspace outside the profile | allowed host 200, other host refused by the proxy, daemon on loopback 200 |
+| git over HTTPS | works (srt forces Git for Windows onto OpenSSL) |
+| System32 `curl.exe` | `SEC_E_NO_CREDENTIALS` (Schannel, as documented) |
+| `Invoke-WebRequest` | "forbidden by its access permissions": it ignores the proxy variables, so the WFP fence blocks it before TLS |
+
+### Problems found
+
+1. **srt-win.exe must be readable by the sandbox user.** The packaged binary of a package installed in
+   the user profile (here `%LOCALAPPDATA%\Temp\…\node_modules`) fails every session start with
+   `CreateProcessWithLogonW(srt-sandbox): Access is denied`, although seclogon runs. A copy in
+   `C:\ProgramData\…` works (`windows.srtWin.path`, the probe's `--srt-win`). Scribe's own install must sit
+   outside the profile, or Scribe copies the exe out.
+2. **Scribe's worktrees live under the user profile** (`%LOCALAPPDATA%\scribe\worktrees`). srt grants the
+   worktree itself, not its parents, and Node resolves a script's real path by `lstat`ing every parent:
+   `C:\Users\veggie\AppData` is not readable to `srt-sandbox`, so `node script.js` fails. Workarounds:
+   `node --preserve-symlinks-main` (works, but every tool that resolves real paths hits the same wall), the
+   profile read grant (opens the whole profile), or worktrees outside the profile. The same applies to
+   Scribe's Claude account folders.
+3. **First grants are slow, and write grants leak reads.** A grant writes an ACE on every file below the
+   root: granting nvm's folder (with global npm packages) took several minutes. Write grants are kept
+   between sessions, and **a kept root is readable by every later sandboxed session**, whatever its own
+   lists say. Granting a Claude account folder for writing therefore exposes its credentials to all
+   sandboxed commands until `srt-win acl forget`. (The probe's grants were removed afterwards.)
+4. **No stdin.** `srt-win exec` does not pass a piped or file stdin to the sandboxed process (0.0.81;
+   confirmed with `srt-win exec -- findstr x`). The Claude CLI takes the SDK's stream-json input on stdin,
+   so it exits at once. The same goes for anything else that reads stdin.
+5. **The caller's environment is dropped.** The child gets the sandbox user's environment plus `PATH`,
+   `PATHEXT`, srt's proxy and git variables and `setEnvVars`. `CLAUDE_CONFIG_DIR`, `SCRIBE_*` and the
+   SDK's own variables are lost unless passed explicitly.
+6. **Loopback is all-or-nothing and machine-wide.** `--allow-loopback` is an install-time mode for every
+   sandboxed process on the machine; a session asking for the other mode does not start. Scribe's MCP
+   bridge needs the daemon on 127.0.0.1, so it needs the open mode, which also exposes Keeper, dev servers
+   and the daemon's whole API to sandboxed commands. "Never loopback except Scribe's MCP endpoint" is not
+   expressible.
+7. **Host-side quoting.** With srt's `cmd` shell the command line is cmd's (8191 characters, msvcrt
+   quoting). Its `powershell` shell (Windows PowerShell 5.1) drops embedded double quotes from native
+   arguments and does not forward stdin. A product wrapper should use `cmd` and msvcrt-quote each argument.
+   srt's proxies run in the host process: a sync spawn of a sandboxed command deadlocks its network calls.
+8. Running sandboxed processes belong to `srt-sandbox`: the user's own `taskkill` gets "Access is denied".
+   srt-win ends them when the session's parent process exits (`--held-by`), which worked.
+
+## Claude under srt
+
+`tools/probe-windows-sandbox.ts claude --stdin-relay --loopback --srt-win <copy> --config-dir <account>`
+runs the SDK's `query()` with `spawnClaudeCodeProcess` → `wrapWithSandboxArgv(cmd)`. Allowed: write to the
+worktree, its git dir and the account folder; read the main checkout (CLI binary, `dist/index.js` for the MCP
+bridge) and nvm's Node; hosts `api.anthropic.com`, `*.anthropic.com`, `claude.ai`, `*.claude.ai`.
+
+| Step | Result |
+|---|---|
+| Plain wrapper | CLI exits 0 with no output: no stdin (problem 4) |
+| + stdin relay (Node inside the sandbox reads the SDK's input from a loopback socket) | starts; `Not logged in`: `CLAUDE_CONFIG_DIR` dropped (problem 5) |
+| + env relay (the relay sets the SDK's extra variables) | **works**: `init` with the Scribe MCP server `connected`, Bash tool output `srt-sandbox` / `SANDBOX_BASH_OK`, a `mcp__scribe__page_list` call answered |
+
+So login from a Scribe account folder, MCP to the daemon and the Bash tool all work under srt-win, but only
+through a relay that needs open loopback and an account folder kept writable (and so readable to every
+sandboxed session), and the worktree's Node scripts fail unless run with `--preserve-symlinks-main`.
+`local-token` was denied and the MCP bridge still answered: it gets the daemon port from the MCP config's
+`env`, which the CLI sets for its own child.
+
+## Recommendation
+
+1. **Codex: MXC first** (user's choice). Bump `@openai/codex` to ≥ 0.166 and send a permission profile
    (`default_permissions` + `permissions.scribe`: `:workspace`, the git common dir as a workspace root,
    network from the Web setting, deny entries for Scribe's secrets) instead of
-   `sandbox`/`sandbox_workspace_write`. Fall back to `elevated` when set up, then `unelevated` (and show
-   "network not enforced, reads not protected" for it in the effective view). Probe MXC with the
-   documented `echo MXC_OK` check at startup and cache the result.
-2. **srt-win stays experimental**, as decided. Beyond Schannel, its loopback model blocks Scribe's MCP
-   unless the whole machine's sandboxed processes get all of loopback. Decide once srt-win has been run.
-3. **Fix now, independent of engines:** sandboxed commands can read `local-token` and reach the daemon
-   (#916).
+   `sandbox`/`sandbox_workspace_write`. Fall back to `elevated` when set up, then `unelevated`, and show
+   "network and reads not enforced" for it in the effective view. Detect MXC with the documented
+   `echo MXC_OK` check and cache it.
+2. **srt-win: experimental, off by default, and not yet for Claude.** For one-shot commands (Native bash,
+   the host shell) it is solid: writes, deny-read, the network fence and git all behave. Before Claude can
+   run under it, upstream needs stdin forwarding and an environment passthrough (or Scribe ships the
+   relay), and Scribe needs worktrees outside the profile or an answer to the parent-`lstat` problem. Run it
+   only with `--skip-profile-grant`, `srt-win.exe` outside the profile, and the loopback mode as an
+   explicit, machine-wide choice in the setup row. Never keep a write grant on an account folder.
+3. **Fix independent of engines:** sandboxed commands can read `local-token` and reach the daemon (#916).
 
 ## Settings setup row (proposal)
 
@@ -160,4 +215,7 @@ status) and a Bash tool call. Expected needs, to confirm:
   not set up`, `srt-win: installed (loopback on/off) / not installed` (`srt-win status`).
 - Buttons: **Set up** (runs the elevated step; shows "Windows will ask for administrator permission"),
   **Verify** (reruns the probes and `verifyWindowsWfpEgress`), **Remove** (the uninstall, one UAC prompt).
-- The experimental srt-win switch sits under it, disabled until installed.
+- The experimental srt-win switch sits under it, disabled until installed. The loopback mode is chosen in
+  the Set up dialog (it is machine-wide) and shown in the status line.
+- Verify also checks that `srt-win.exe` is readable by the sandbox user and that no account folder carries
+  a kept grant.

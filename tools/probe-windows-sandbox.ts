@@ -3,12 +3,18 @@
  *
  *   npx tsx tools/probe-windows-sandbox.ts codex [--modes mxc,unelevated,elevated] [--net] [--codex-cli <codex.js>]
  *   npx tsx tools/probe-windows-sandbox.ts codex-rpc [--codex-cli <codex.js>]
- *   npx tsx tools/probe-windows-sandbox.ts srt --pkg <dir of @anthropic-ai/sandbox-runtime> [--loopback]
- *   npx tsx tools/probe-windows-sandbox.ts claude --pkg <dir> [--loopback] [--config-dir <CLAUDE_CONFIG_DIR>]
- *   npx tsx tools/probe-windows-sandbox.ts status --pkg <dir>
+ *   npx tsx tools/probe-windows-sandbox.ts srt --pkg <dir of @anthropic-ai/sandbox-runtime> [--loopback] [--srt-win <exe>]
+ *   npx tsx tools/probe-windows-sandbox.ts claude --pkg <dir> [--loopback] [--srt-win <exe>] [--config-dir <CLAUDE_CONFIG_DIR>]
+ *                                         [--stdin-relay] [--prompt <text>] [--debug]
+ *   npx tsx tools/probe-windows-sandbox.ts status --pkg <dir> [--loopback] [--srt-win <exe>]
+ *
+ * The Claude CLI under srt-win needs --stdin-relay (and so --loopback): srt-win passes neither stdin nor the
+ * caller's environment. Write grants are kept between sessions and readable by every later sandboxed
+ * session: run `srt-win acl forget --all` after probing with --config-dir.
  *
  * sandbox-runtime is not a dependency of the repo: install it in a scratch folder and pass --pkg.
- * srt needs its one-time elevated `windows-install` (`--loopback` must match `--allow-loopback` there).
+ * srt needs its one-time elevated `windows-install` (`--loopback` must match `--allow-loopback` there), and
+ * `--srt-win <path>` to a copy of srt-win.exe outside the user profile when the package is installed under it.
  * `--modes elevated` may run Codex's elevated setup (a UAC prompt) for Scribe's CODEX_HOME.
  * Output: one JSON line per probe with { ok, exit, out } (out is clipped; secrets print only a byte count).
  * The `claude` case sends one short model turn.
@@ -59,6 +65,10 @@ const probes: { name: string; cmd: string }[] = [
   { name: "read-secret", cmd: len(secretFile) },
   { name: "read-scribe-token", cmd: len(path.join(scribeData, "local-token")) },
   { name: "read-codex-auth", cmd: len(path.join(os.homedir(), ".codex", "auth.json")) },
+  // The same reads without Node: under srt-win, Node scripts in a worktree under the profile fail before reading.
+  { name: "read-secret-cmd", cmd: `type ${secretFile}` },
+  { name: "read-scribe-token-cmd", cmd: `type ${path.join(scribeData, "local-token")} > NUL && echo readable` },
+  { name: "read-git-config-cmd", cmd: `type ${path.join(os.homedir(), ".gitconfig")} > NUL && echo readable` },
   { name: "net-node-allowed", cmd: fetchJs("https://registry.npmjs.org/") },
   { name: "net-node-other", cmd: fetchJs("https://www.iana.org") },
   { name: "net-curl-schannel", cmd: "%SystemRoot%\\System32\\curl.exe -sS -o NUL -w %{http_code} https://registry.npmjs.org/" },
@@ -178,9 +188,19 @@ async function loadSrt(): Promise<Srt> {
   return import(pathToFileURL(path.join(dir, "dist", "index.js")).href) as Promise<Srt>;
 }
 
+/** The sandbox user starts srt-win's runner, so the exe must sit where it can read it: not under the user's profile. */
+function srtWinPath(lib: Srt) {
+  return opt("srt-win") ?? lib.VENDORED_SRT_WIN_EXE;
+}
+
+/** A worktree's node_modules is a junction into the main checkout, whose dist/ the MCP bridge runs from. */
+function mainCheckoutDir() {
+  return path.dirname(fs.realpathSync(path.join(cwd, "node_modules")));
+}
+
 function srtConfig(lib: Srt) {
   const gitDir = gitCommonDir();
-  const mainCheckout = fs.realpathSync(path.join(cwd, "node_modules", ".."));
+  const mainCheckout = mainCheckoutDir();
   const nodeDir = path.dirname(fs.realpathSync(process.execPath));
   return {
     network: {
@@ -191,11 +211,11 @@ function srtConfig(lib: Srt) {
     filesystem: {
       denyRead: [secretDir, path.join(scribeData, "local-token")],
       // The worktree's node_modules is a junction into the main checkout; srt grants the real target.
-      allowRead: [cwd, path.join(fs.realpathSync(path.join(cwd, "node_modules"))), mainCheckout, nodeDir, ...(opt("config-dir") ? [opt("config-dir")!] : [])],
+      allowRead: [cwd, mainCheckout, nodeDir, ...(opt("config-dir") ? [opt("config-dir")!] : [])],
       allowWrite: [cwd, gitDir, ...(opt("config-dir") ? [opt("config-dir")!] : [])],
       denyWrite: [],
     },
-    windows: { srtWin: { path: lib.VENDORED_SRT_WIN_EXE } },
+    windows: { srtWin: { path: srtWinPath(lib) } },
   };
 }
 
@@ -214,8 +234,9 @@ async function srt() {
 
 async function status() {
   const lib = await loadSrt();
-  console.log(JSON.stringify(await lib.checkWindowsSandboxStatusAsync()));
-  console.log(JSON.stringify(await lib.verifyWindowsWfpEgress()));
+  const srtWin = { exe: srtWinPath(lib), prependArgs: [] };
+  console.log(JSON.stringify(await lib.checkWindowsSandboxStatusAsync({ srtWin })));
+  console.log(JSON.stringify(await lib.verifyWindowsWfpEgress({ srtWin, allowLoopback: flag("loopback") } as never)));
 }
 
 // ---------- Claude under srt ----------
@@ -224,12 +245,19 @@ async function claude() {
   const lib = await loadSrt();
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
   await lib.SandboxManager.initialize(srtConfig(lib) as never);
-  const ps = (s: string) => `'${s.replace(/'/g, "''")}'`;
+  // cmd.exe, not PowerShell: Windows PowerShell 5.1 does not hand its redirected stdin to a native child, so the CLI
+  // never gets its stream-json input. Arguments are quoted for the CLI's own (msvcrt) parser.
+  const quote = (arg: string) => /[\s"]/.test(arg) ? `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"` : arg;
   const configDir = opt("config-dir");
+  // srt-win exec does not forward a piped stdin (0.0.81), and the CLI takes its stream-json input there. With
+  // --stdin-relay a small Node relay inside the sandbox reads it from a loopback socket instead (needs --loopback).
+  const net = await import("node:net");
+  const relayFile = path.join(cwd, ".scratch", "stdin-relay.cjs");
+  fs.writeFileSync(relayFile, RELAY);
   try {
-    const entry = path.join(fs.realpathSync(path.join(cwd, "node_modules", "..")), "dist", "index.js");
+    const entry = path.join(mainCheckoutDir(), "dist", "index.js");
     const messages = query({
-      prompt: "Run the Bash command `whoami && echo SANDBOX_BASH_OK` and reply with its output only.",
+      prompt: opt("prompt") ?? "Run the Bash command `whoami && echo SANDBOX_BASH_OK` and reply with its output only.",
       options: {
         cwd,
         model: "haiku",
@@ -243,7 +271,16 @@ async function claude() {
         env: { ...process.env, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) },
         stderr: (line) => process.stderr.write(`[claude stderr] ${line}`),
         spawnClaudeCodeProcess: (o) => {
-          const command = `& ${[o.command, ...o.args].map(ps).join(" ")}`;
+          let relayPort = 0;
+          const server = flag("stdin-relay") ? net.createServer((socket) => { stdin.pipe(socket); socket.on("error", () => {}); server!.close(); }) : undefined;
+          const listening = server ? new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => { relayPort = (server.address() as { port: number }).port; resolve(); })) : Promise.resolve();
+          // node --preserve-symlinks-main: the relay sits in the worktree, under the profile, whose parents the sandbox user cannot stat.
+          // srt-win gives the child the sandbox user's environment plus only srt's own overlay, so the relay sets the
+          // variables the SDK added (CLAUDE_CONFIG_DIR, its entrypoint flags) from a file.
+          const envFile = path.join(cwd, ".scratch", "claude-env.json");
+          fs.writeFileSync(envFile, JSON.stringify(Object.fromEntries(Object.entries(o.env).filter(([k, v]) => v !== undefined && process.env[k] !== v))));
+          const commandFor = () => [...(server ? [process.execPath, "--preserve-symlinks-main", "--preserve-symlinks", relayFile, String(relayPort), envFile] : []), o.command, ...o.args].map(quote).join(" ");
+          let command = "";
           let child: ReturnType<typeof spawn> | undefined;
           // wrapWithSandboxArgv is async; hand the SDK a process whose streams are wired once it starts.
           const { PassThrough } = require("node:stream") as typeof import("node:stream");
@@ -257,11 +294,16 @@ async function claude() {
             once: (event: string, fn: (...a: unknown[]) => void) => { (listeners[event] ??= []).push(fn); },
             off: () => {},
           };
-          void lib.SandboxManager.wrapWithSandboxArgv(command, "powershell", undefined, undefined, o.cwd ?? cwd).then((w) => {
-            child = spawn(w.argv[0], w.argv.slice(1), { cwd: o.cwd ?? cwd, env: { ...w.env, ...o.env }, windowsHide: true, stdio: ["pipe", "pipe", "inherit"] });
-            stdin.pipe(child.stdin!);
+          void listening.then(() => { command = commandFor(); return lib.SandboxManager.wrapWithSandboxArgv(command, "cmd", undefined, undefined, o.cwd ?? cwd); }).then((w) => {
+            // srt's proxy variables win over the SDK's copy of the environment.
+            child = spawn(w.argv[0], w.argv.slice(1), { cwd: o.cwd ?? cwd, env: { ...o.env, ...w.env }, windowsHide: true, stdio: ["pipe", "pipe", "inherit"] });
+            if (flag("debug")) {
+              console.error(`[probe] spawned ${w.argv[0]} (${w.argv.length} args), CLI command ${command.length} chars`);
+              fs.writeFileSync(path.join(cwd, ".scratch", "claude-argv.json"), JSON.stringify({ command, argv: w.argv.map((a) => a.replace(/srt:[^@]*@/, "srt:<token>@")) }, null, 1));
+            }
+            if (!server) stdin.pipe(child.stdin!);
             child.stdout!.pipe(stdout);
-            child.on("exit", (code, sig) => { proxy.exitCode = code; for (const fn of listeners.exit ?? []) fn(code, sig); });
+            child.on("exit", (code, sig) => { if (flag("debug")) console.error(`[probe] claude exit ${code} ${sig}`); proxy.exitCode = code; for (const fn of listeners.exit ?? []) fn(code, sig); });
             child.on("error", (err) => { for (const fn of listeners.error ?? []) fn(err); });
           }, (err) => { for (const fn of listeners.error ?? []) fn(err); });
           return proxy as never;
@@ -278,6 +320,16 @@ async function claude() {
     await lib.SandboxManager.reset();
   }
 }
+
+/** Runs inside the sandbox: connect to the host's port, pipe it into the command's stdin, pass stdout and stderr through. */
+const RELAY = `const net = require("net"), { spawn } = require("child_process");
+const [port, envFile, file, ...args] = process.argv.slice(2);
+const env = { ...process.env, ...JSON.parse(require("fs").readFileSync(envFile, "utf8")) };
+const child = spawn(file, args, { env, stdio: ["pipe", "inherit", "inherit"], windowsHide: true });
+const socket = net.connect(Number(port), "127.0.0.1", () => socket.pipe(child.stdin));
+socket.on("error", (e) => { console.error("relay: " + e.message); child.kill(); });
+child.on("exit", (code) => { socket.destroy(); process.exit(code ?? 1); });
+`;
 
 setup();
 const engine = argv[0];
