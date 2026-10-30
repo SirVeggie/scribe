@@ -135,3 +135,20 @@ that implement it.
   own when the board is another device's UI. Toasts reuse `.ag-toast`; Open goes to that device's UI with
   `?thread=`, which the agent UI opens at boot. Approving from the toast itself is left for later.
 - Tests: `src/devices/devicesView.test.ts` (two daemons on loopback).
+
+## Embeds (#917)
+
+- An embed page points its tab frame straight at its URL, so in another device's UI `http://127.0.0.1:8188` was the
+  viewing device's loopback. Now, in a remote view, `viewUrl()` (`public/app.js`) sends embeds of private hosts
+  (loopback, RFC 1918, tailnet 100.64/10, link-local, ULA, `localhost` / `.local` / `.lan` / `.home.arpa` /
+  `.internal` and single-label names) to `eh-<base32 of host:port>.d-<id>.localhost` (`es-` for https): one origin
+  per target. Public sites still load directly.
+- The viewing device's gateway forwards that host like any other label (never from its own `public/`). The device
+  that owns the page proxies it in `src/devices/embedProxy.ts`, for link callers only: Host, Origin and Referer go
+  to the target (dev servers check Host), redirects and cookie domains come back to the embed origin, X-Frame-Options
+  and `frame-ancestors` are dropped, and WebSocket upgrades (hot reload) are piped.
+- Only origins one of that device's embed pages names (`http.ts`, rebuilt at most once a second on a miss), never
+  its own board or peer port. Refused targets, a target nothing answers on, and an offline device show a short
+  placeholder in the frame. `/api/frame-check` answers framable for these, since the proxy drops the headers.
+- Limits: an app that calls itself by an absolute URL (`fetch("http://127.0.0.1:8188/api")`) still reaches the
+  viewing device; a peek of a private link that no embed page names shows the refusal placeholder.

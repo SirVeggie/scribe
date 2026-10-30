@@ -78,6 +78,7 @@ import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PeerService } from "./devices/peers.js";
 import { devicesRouter } from "./devices/routes.js";
 import { peerGateway } from "./devices/gateway.js";
+import { embedLabel, embedProxy } from "./devices/embedProxy.js";
 import { AskSource, AskWatcher } from "./devices/attention.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
@@ -213,7 +214,24 @@ export async function startHttp(): Promise<http.Server> {
     asks: askSource,
     watcher: askWatcher,
   }));
-  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)), devices: devicesApi });
+  // The origins this device's embed pages show, for the embed proxy (#917). Rebuilt when a target is
+  // missing (a page made a moment ago), at most once a second.
+  let embedOrigins = new Set<string>();
+  let embedOriginsAt = 0;
+  const embedOriginKnown = (origin: string) => {
+    if (!embedOrigins.has(origin) && Date.now() - embedOriginsAt > 1000) {
+      const next = new Set<string>();
+      for (const tab of [...store.listOpenTabs(), ...store.listClosedTabs()]) {
+        const href = embedUrlFromHtml(tab.html);
+        if (href) next.add(new URL(href).origin);
+      }
+      embedOrigins = next;
+      embedOriginsAt = Date.now();
+    }
+    return embedOrigins.has(origin);
+  };
+  const embeds = embedProxy({ allowed: embedOriginKnown, ports: [PORT, PEER_PORT], name: () => peers.identity.name });
+  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)), devices: devicesApi, embeds });
   app.use(gateway.http);
   app.use(contentOriginGate);
   // These open a window on this device's own screen: not for someone viewing it from another device.
@@ -342,6 +360,11 @@ export async function startHttp(): Promise<http.Server> {
   /** Whether an external link can be shown in a peek or split, or needs the browser. */
   app.get("/api/frame-check", (req, res) => {
     const url = typeof req.query.url === "string" ? req.query.url : "";
+    // Another device's view shows this device's private sites through the embed proxy, which drops framing headers (#917).
+    if (identify(req).device && embedLabel(url)) {
+      res.json({ framable: true });
+      return;
+    }
     checkFramable(url)
       .then((result) => res.json(result))
       .catch((err: Error) => res.json({ framable: null, reason: err.message }));

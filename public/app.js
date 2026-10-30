@@ -1212,9 +1212,55 @@
 
   function viewUrl(tab) {
     if (tab.embedUrl) {
-      return tab.embedUrl;
+      return REMOTE_VIEW ? embedProxyUrl(tab.embedUrl) : tab.embedUrl;
     }
     return `${pageOrigin(tab.id)}/view/${encodeURIComponent(tab.id)}?r=${tab.revision}&viewer=${viewerId()}`;
+  }
+
+  /**
+   * In another device's UI, an embed of a private address (its 127.0.0.1:8188, a LAN or tailnet host)
+   * means that device's, not this one's: it loads through the gateway as eh-<base32 of host:port>
+   * (es- for https), which that device proxies to the target (#917, src/devices/embedProxy.ts).
+   * Public sites load directly. Keep the label in step with embedLabel there.
+   */
+  function embedProxyUrl(href) {
+    let url;
+    try {
+      url = new URL(href);
+    } catch {
+      return href;
+    }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || !privateHost(url.hostname)) return href;
+    const bytes = new TextEncoder().encode(`${url.hostname}:${url.port || (url.protocol === "https:" ? "443" : "80")}`);
+    const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+    let bits = 0;
+    let value = 0;
+    let encoded = "";
+    for (const byte of bytes) {
+      value = ((value << 8) | byte) & 0xffff;
+      bits += 8;
+      while (bits >= 5) {
+        encoded += alphabet[(value >>> (bits - 5)) & 31];
+        bits -= 5;
+      }
+    }
+    if (bits) encoded += alphabet[(value << (5 - bits)) & 31];
+    if (encoded.length > 60) return href;
+    const port = location.port ? `:${location.port}` : "";
+    return `${location.protocol}//e${url.protocol === "https:" ? "s" : "h"}-${encoded}${HOST_SUFFIX}${port}${url.pathname}${url.search}${url.hash}`;
+  }
+
+  /** Loopback, LAN, tailnet and link-local addresses, and local-network names (isPrivateHost in embedProxy.ts). */
+  function privateHost(hostname) {
+    const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
+    if (v4) {
+      const [p, q] = [Number(v4[1]), Number(v4[2])];
+      return p === 127 || p === 10 || (p === 172 && q >= 16 && q <= 31) || (p === 192 && q === 168) || (p === 100 && q >= 64 && q <= 127) || (p === 169 && q === 254);
+    }
+    if (host.includes(":")) return host === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host);
+    if (!host || /[^a-z0-9.-]/.test(host)) return false;
+    return !host.includes(".") || /(?:^|\.)localhost$|\.(?:local|lan|home\.arpa|internal)$/.test(host);
   }
 
   /** Names this app or browser to pages, so scribe.local keeps one copy per place you view them from. */

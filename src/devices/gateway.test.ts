@@ -11,6 +11,7 @@ import { identify, socketAllowed } from "../callers.js";
 import { componentItemFromHost, gatewayHost, hostSuffixOf, pageHost, pageIdFromHost, previewThreadFromHost } from "../config.js";
 import { boardOrigin, contentOriginGate, isContentHost, requestSuffix, shellOrigin } from "../contentOrigin.js";
 import { blockedBoardRequest } from "../browser.js";
+import { embedLabel, embedProxy } from "./embedProxy.js";
 import { peerGateway } from "./gateway.js";
 import { peerDeviceOf } from "./link.js";
 import { PeerService } from "./peers.js";
@@ -22,6 +23,8 @@ import { PeerService } from "./peers.js";
  */
 type Node = { peers: PeerService; server: http.Server; port: number; id: string; hits: Map<string, number> };
 const nodes: Node[] = [];
+/** Origins the nodes' embed pages name (#917). */
+const embedOrigins = new Set<string>();
 
 async function freePort(): Promise<number> {
   const probe = net.createServer();
@@ -42,7 +45,8 @@ async function node(version: string): Promise<Node> {
     if (req.path === "/app.js") res.type("js").send(`// local copy on ${peers.identity.id}`);
     else next();
   };
-  const gateway = peerGateway(peers, { version, port, local });
+  const embeds = embedProxy({ allowed: (origin) => embedOrigins.has(origin), ports: [port], name: () => peers.identity.name });
+  const gateway = peerGateway(peers, { version, port, local, embeds });
   app.use(gateway.http);
   app.use(contentOriginGate);
   app.use(express.json());
@@ -260,6 +264,73 @@ test("the board's socket opens through the gateway, compressed", async () => {
       refused.on("error", () => resolve(-1));
     });
     assert.equal(status, 403);
+  }
+});
+
+test("B's embeds of its own private sites load through A's gateway (#917)", async () => {
+  // A dev server on B's loopback: it checks Host, redirects, sets a cookie, refuses framing and takes sockets.
+  const site = http.createServer((req, res) => {
+    if (req.url === "/go") {
+      res.writeHead(302, { location: `http://${req.headers.host}/there` }).end();
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "x-frame-options": "DENY",
+      "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+      "set-cookie": "sid=1; Domain=127.0.0.1; Path=/",
+    }).end(JSON.stringify({ host: req.headers.host, origin: req.headers.origin ?? null, path: req.url }));
+  });
+  const siteWss = new WebSocketServer({ server: site });
+  siteWss.on("connection", (ws, req) => ws.send(`hmr on ${req.headers.host}`));
+  await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
+  const target = `http://127.0.0.1:${(site.address() as net.AddressInfo).port}`;
+  const label = embedLabel(`${target}/app?x=1`)!;
+  const host = `${label}.d-${b.id}.localhost`;
+  const origin = `http://${host}:${a.port}`;
+  try {
+    // Not until one of B's embed pages names it.
+    const refused = await get(a, host, "/app");
+    assert.equal(refused.status, 403);
+    assert.match(refused.body, /No embed page/);
+
+    embedOrigins.add(target);
+    const page = await get(a, host, "/app?x=1", { headers: { origin, "sec-fetch-site": "same-origin" } });
+    assert.equal(page.status, 200);
+    assert.deepEqual(JSON.parse(page.body), { host: target.slice(7), origin: target, path: "/app?x=1" });
+    assert.equal(page.headers["x-frame-options"], undefined);
+    assert.equal(page.headers["content-security-policy"], "default-src 'self'");
+    assert.deepEqual(page.headers["set-cookie"], ["sid=1; Path=/"]);
+
+    const moved = await get(a, host, "/go");
+    assert.equal(moved.headers.location, `${origin}/there`);
+
+    // Hot reload's socket, from the embed's own origin.
+    const ws = new WebSocket(`ws://127.0.0.1:${a.port}/`, { headers: { host: `${host}:${a.port}`, origin } });
+    const hello = await new Promise<string>((resolve, reject) => {
+      ws.on("message", (data) => resolve(String(data)));
+      ws.on("error", reject);
+    });
+    assert.equal(hello, `hmr on ${target.slice(7)}`);
+    ws.close();
+
+    // B's own board is never a target, and nothing listening shows a placeholder.
+    embedOrigins.add(`http://127.0.0.1:${b.port}`);
+    const self = await get(a, `${embedLabel(`http://127.0.0.1:${b.port}/`)}.d-${b.id}.localhost`, "/");
+    assert.equal(self.status, 403);
+    const gone = `http://127.0.0.1:${await freePort()}`;
+    embedOrigins.add(gone);
+    const down = await get(a, `${embedLabel(gone)}.d-${b.id}.localhost`, "/");
+    assert.equal(down.status, 502);
+    assert.match(down.body, /Nothing answers/);
+
+    // The label only works over the link: B's own browser gets no proxy.
+    const direct = await get(b, host, "/app");
+    assert.notEqual(direct.status, 200);
+  } finally {
+    siteWss.close();
+    site.closeAllConnections();
+    await new Promise((resolve) => site.close(resolve));
   }
 });
 

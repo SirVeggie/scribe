@@ -5,6 +5,7 @@ import type express from "express";
 import { identify } from "../callers.js";
 import { CONTENT_HOST, PAGE_HOST_SUFFIX, gatewayHost } from "../config.js";
 import { requestPort, sharedFile } from "../contentOrigin.js";
+import { isEmbedLabel, type EmbedProxy } from "./embedProxy.js";
 import { peerDeviceOf } from "./link.js";
 import type { PeerService } from "./peers.js";
 
@@ -43,6 +44,8 @@ export function peerGateway(peers: PeerService, options: {
   local: express.RequestHandler;
   /** This device's /api/devices routes, which answer on the gateway hosts too (#906). */
   devices?: express.RequestHandler;
+  /** This device's embeds as another device shows them (#917): eh-/es- hosts that came over the link. */
+  embeds?: EmbedProxy;
 }): Gateway {
   const cache = new Map<string, Cached>();
   let cacheBytes = 0;
@@ -75,9 +78,15 @@ export function peerGateway(peers: PeerService, options: {
     }
   }
 
-  function offline(res: express.Response, device: string): void {
+  function offline(res: express.Response, device: string, embed = false): void {
     const name = peers.nameOf(device);
     const text = name ? `${name} is not connected right now.` : "No paired device has that id.";
+    if (embed) {
+      // An embed frame in that device's UI (#917): the board around it already leads back.
+      res.status(name ? 502 : 404).set("Cache-Control", "no-store").type("html")
+        .send(`<!doctype html><meta charset="utf-8"><title>Embed</title><body style="font:14px system-ui;background:#1a1a1d;color:#e8e8ea;padding:40px"><p>${escapeHtml(text)} This embed runs there.</p></body>`);
+      return;
+    }
     res.status(name ? 502 : 404).set("Cache-Control", "no-store").type("html")
       .send(`<!doctype html><meta charset="utf-8"><title>Scribe</title><body style="font:14px system-ui;background:#1a1a1d;color:#e8e8ea;padding:40px"><p>${escapeHtml(text)}</p><p><a style="color:#c9c9d0" href="http://127.0.0.1:${options.port}/">Back to this device</a></p></body>`);
   }
@@ -85,7 +94,7 @@ export function peerGateway(peers: PeerService, options: {
   function forward(req: express.Request, res: express.Response, device: string, cacheKey?: string): void {
     const link = peers.linkTo(device);
     if (!link?.open) {
-      offline(res, device);
+      offline(res, device, isEmbedLabel(gatewayHost(req.hostname)?.label));
       return;
     }
     const headers: http.OutgoingHttpHeaders = {};
@@ -113,7 +122,7 @@ export function peerGateway(peers: PeerService, options: {
       });
     });
     proxied.on("error", () => {
-      if (!res.headersSent) offline(res, device);
+      if (!res.headersSent) offline(res, device, isEmbedLabel(gatewayHost(req.hostname)?.label));
       else res.destroy();
     });
     res.on("close", () => { if (!res.writableFinished) proxied.destroy(); });
@@ -122,6 +131,10 @@ export function peerGateway(peers: PeerService, options: {
 
   const handler: express.RequestHandler = (req, res, next) => {
     const gateway = gatewayHost(req.hostname);
+    if (gateway && options.embeds && isEmbedLabel(gateway.label) && peerDeviceOf(req.socket)) {
+      options.embeds.http(req, res, gateway.label!);
+      return;
+    }
     // Over a link these hosts are this daemon's own UI as the other device shows it (contentOriginGate).
     if (!gateway || peerDeviceOf(req.socket)) {
       next();
@@ -151,7 +164,7 @@ export function peerGateway(peers: PeerService, options: {
     }
     const read = req.method === "GET" || req.method === "HEAD";
     // The UI's own files: the board's static files, and the shared files every page origin loads.
-    const uiFile = read && (gateway.label === undefined || sharedFile(req)) && !req.path.startsWith("/api/") && !req.path.startsWith("/view/") && !req.path.startsWith("/blob/");
+    const uiFile = read && !isEmbedLabel(gateway.label) && (gateway.label === undefined || sharedFile(req)) && !req.path.startsWith("/api/") && !req.path.startsWith("/view/") && !req.path.startsWith("/blob/");
     if (uiFile && peers.versionOf(gateway.device) === options.version) {
       options.local(req, res, () => forward(req, res, gateway.device));
       return;
@@ -168,6 +181,10 @@ export function peerGateway(peers: PeerService, options: {
   function upgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): boolean {
     const host = req.headers.host ?? "";
     const gateway = gatewayHost(host.replace(/:\d+$/, ""));
+    if (gateway && options.embeds && isEmbedLabel(gateway.label) && peerDeviceOf(req.socket)) {
+      options.embeds.upgrade(req, socket, head, gateway.label!);
+      return true;
+    }
     if (!gateway || peerDeviceOf(req.socket)) return false;
     const refuse = (status: string) => {
       socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
