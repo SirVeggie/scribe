@@ -37,7 +37,13 @@ export type Gateway = {
   upgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): boolean;
 };
 
-export function peerGateway(peers: PeerService, options: { version: string; port: number; local: express.RequestHandler }): Gateway {
+export function peerGateway(peers: PeerService, options: {
+  version: string;
+  port: number;
+  local: express.RequestHandler;
+  /** This device's /api/devices routes, which answer on the gateway hosts too (#906). */
+  devices?: express.RequestHandler;
+}): Gateway {
   const cache = new Map<string, Cached>();
   let cacheBytes = 0;
 
@@ -134,6 +140,13 @@ export function peerGateway(peers: PeerService, options: { version: string; port
     }
     if (requestPort(req) !== String(options.port)) {
       res.status(403).type("text").send("Unknown host.");
+      return;
+    }
+    // The device list is this device's, in every view (#906): the space selector lists every device, and
+    // the way back home, from here. The routes see which device's UI asked.
+    if (gateway.label === undefined && options.devices && (req.path === "/api/devices" || req.path.startsWith("/api/devices/"))) {
+      res.locals.gatewayDevice = gateway.device;
+      options.devices(req, res, () => res.status(404).json({ error: "Not found" }));
       return;
     }
     const read = req.method === "GET" || req.method === "HEAD";

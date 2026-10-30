@@ -2,6 +2,9 @@
  * Spaces: named sets of tabs (src/spaces.ts). The chip beside the logo names the current space;
  * it, or Ctrl+E, fades the board away to the space cards. Picking one swaps the whole strip.
  * Ctrl+Shift+PageUp / PageDown switches to the previous / next space without the overview.
+ * With paired devices (#906) the overview has a section per device: this one first, then the others,
+ * whose spaces open that device's own UI in this window. In another device's UI, a device chip in its
+ * color sits before the space chip.
  */
 window.createSpaces = function createSpaces(host) {
   const COLORS = {
@@ -38,6 +41,13 @@ window.createSpaces = function createSpaces(host) {
   // Set while a switch is on its way: the overview closes on the old view rather than redrawing the new one (#65).
   let switching = false;
   let animTimer = 0;
+  /** /api/devices/spaces, answered by this device's daemon in every view (#906). Null until fetched. */
+  let devices = null;
+  /** The device whose UI this is, when it is another device's through this one's gateway (#905). */
+  const remoteId = /^d-([0-9a-f]{12})\./.exec(location.hostname)?.[1] ?? null;
+  /** The viewed device as /api/devices last described it, for the chip. */
+  let remoteDevice = null;
+  let remoteConnected = true;
 
   /* ---------- DOM ---------- */
 
@@ -48,6 +58,14 @@ window.createSpaces = function createSpaces(host) {
   chip.setAttribute("aria-haspopup", "dialog");
   chip.addEventListener("click", () => toggle());
   host.chipSlot.after(chip);
+
+  // In another device's UI, the one place that says so (#906): its name, in its color.
+  const deviceChip = document.createElement("button");
+  deviceChip.type = "button";
+  deviceChip.className = "space-chip named device-chip";
+  deviceChip.hidden = true;
+  deviceChip.addEventListener("click", () => toggle());
+  if (remoteId) chip.before(deviceChip);
 
   const root = el("div", "spaces");
   root.hidden = true;
@@ -61,13 +79,16 @@ window.createSpaces = function createSpaces(host) {
   const grid = el("div", "spaces-grid");
   grid.setAttribute("role", "listbox");
   grid.setAttribute("aria-label", "Spaces");
+  // The grid alone, or with paired devices a section per device around it.
+  const area = el("div", "spaces-area");
+  area.append(grid);
   const deletedRow = el("div", "spaces-deleted");
   const keys = el("div", "spaces-keys");
   keys.innerHTML =
     "<span><kbd>←</kbd><kbd>→</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>1</kbd>–<kbd>9</kbd> jump</span>" +
     "<span><kbd>N</kbd> new</span><span><kbd>F2</kbd> rename</span><span><kbd>Del</kbd> delete</span>" +
     "<span><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo delete</span><span><kbd>Esc</kbd> back</span>";
-  inner.append(head, grid, deletedRow, keys);
+  inner.append(head, area, deletedRow, keys);
   root.append(inner);
   document.body.append(root);
 
@@ -143,10 +164,47 @@ window.createSpaces = function createSpaces(host) {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (open) root.classList.add("shown");
     }));
+    const listed = loadDevices();
     await run("POST", "/api/spaces/ensure");
     selected = Math.max(0, data.spaces.findIndex((space) => space.id === data.activeId));
     render();
     focusSelected();
+    await listed;
+    if (open && !drag && !renaming && !switching) render();
+  }
+
+  async function loadDevices() {
+    try {
+      const res = await fetch("/api/devices/spaces", { cache: "no-store" });
+      if (res.ok) devices = await res.json();
+    } catch {
+      /* keep the last list */
+    }
+  }
+
+  /** This device's base URL, or another one's through the gateway. */
+  function deviceUrl(id) {
+    const port = location.port ? `:${location.port}` : "";
+    return id === devices?.self.id ? `${location.protocol}//127.0.0.1${port}/` : `${location.protocol}//d-${id}.localhost${port}/`;
+  }
+
+  /** A space on another device than the one showing: make it that device's current space and go there. */
+  async function openOnDevice(device, space) {
+    if (busy) return;
+    busy = true;
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(device.id)}/spaces/${encodeURIComponent(space.id)}/switch`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      location.href = deviceUrl(device.id);
+    } catch (err) {
+      host.showNotice(String(err.message || err));
+      busy = false;
+    }
   }
 
   function close() {
@@ -298,8 +356,97 @@ window.createSpaces = function createSpaces(host) {
     }
   }
 
+  function deviceColor(id) {
+    const hues = Object.values(COLORS).slice(1);
+    let hash = 0;
+    for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return hues[hash % hues.length];
+  }
+
+  function renderDeviceChip() {
+    if (!remoteId) return;
+    deviceChip.hidden = !remoteDevice;
+    if (!remoteDevice) return;
+    const online = remoteDevice.online && remoteConnected;
+    deviceChip.style.setProperty("--space", deviceColor(remoteId));
+    deviceChip.classList.toggle("offline", !online);
+    deviceChip.replaceChildren(el("span", "space-chip-dot"), el("span", "space-chip-name", remoteDevice.name));
+    deviceChip.dataset.tooltip = online
+      ? `On ${remoteDevice.name}${remoteDevice.rtt !== undefined ? ` · ${remoteDevice.rtt} ms` : ""}`
+      : `${remoteDevice.name} is offline${remoteDevice.lastSeen ? ` · last seen ${ago(remoteDevice.lastSeen)}` : ""}`;
+  }
+
+  async function pollDevice() {
+    try {
+      const res = await fetch("/api/devices", { cache: "no-store" });
+      if (res.ok) remoteDevice = (await res.json()).peers?.find((peer) => peer.id === remoteId) ?? remoteDevice;
+    } catch {
+      /* this device's daemon is down too: keep the last state */
+    }
+    renderDeviceChip();
+  }
+
+  if (remoteId) {
+    void pollDevice();
+    setInterval(() => void pollDevice(), 15000);
+    addEventListener("scribe:connection", (event) => {
+      remoteConnected = Boolean(event.detail?.connected);
+      if (remoteConnected) void pollDevice();
+      else renderDeviceChip();
+    });
+  }
+
+  /** The device sections (#906): this device first, then the paired ones; the grid sits in the shown device's. */
+  function renderDevices() {
+    const peers = devices?.peers ?? [];
+    if (!devices || !peers.length) {
+      if (area.firstChild !== grid || area.childNodes.length > 1) area.replaceChildren(grid);
+      return;
+    }
+    const showing = remoteId ?? devices.self.id;
+    const list = [{ ...devices.self, online: true, self: true }, ...peers];
+    area.replaceChildren();
+    for (const device of list) {
+      const section = el("section", "spaces-device" + (device.online ? "" : " offline"));
+      section.style.setProperty("--space", deviceColor(device.id));
+      const label = el("div", "spaces-device-head");
+      label.append(el("span", `device-dot${device.online ? " online" : ""}`), el("span", "spaces-device-name", device.self ? `This device · ${device.name}` : device.name));
+      const state = device.self ? "" : device.online
+        ? (device.rtt !== undefined ? `${device.rtt} ms` : "")
+        : device.lastSeen ? `offline · last seen ${ago(device.lastSeen)}` : "offline";
+      if (state) label.append(el("span", "spaces-device-state", state));
+      section.append(label);
+      if (device.id === showing) {
+        section.append(grid);
+      } else {
+        const row = el("div", "spaces-grid spaces-remote");
+        const spaces = device.spaces ?? [];
+        if (device.online && !spaces.length) row.append(el("p", "spaces-device-empty", device.unreachable ? "Didn't answer." : "No spaces yet."));
+        spaces.forEach((space, index) => row.append(remoteCard(device, space, index)));
+        if (spaces.length || device.online) section.append(row);
+      }
+      area.append(section);
+    }
+  }
+
+  /** A space on another device: its name and tab count. Opening it leaves for that device's UI. */
+  function remoteCard(device, space, index) {
+    const item = el("button", "space-card compact" + (space.active ? " active" : ""));
+    item.type = "button";
+    item.disabled = !device.online;
+    item.style.setProperty("--space", COLORS[space.color] || COLORS.slate);
+    item.style.setProperty("--i", String(index));
+    const top = el("div", "space-top");
+    top.append(el("span", "space-dot"), el("span", "space-name", space.name));
+    if (space.active) top.append(el("span", "space-badge", "Current"));
+    item.append(top, el("div", "space-meta", `${space.tabs} tab${space.tabs === 1 ? "" : "s"}${space.active || !space.usedAt ? "" : ` · ${ago(space.usedAt)}`}`));
+    item.addEventListener("click", () => void openOnDevice(device, space));
+    return item;
+  }
+
   function render() {
     if (drag?.moved) return;
+    renderDevices();
     grid.replaceChildren();
     data.spaces.forEach((space, index) => grid.append(card(space, index)));
     const add = el("button", "space-card space-new");
@@ -777,6 +924,8 @@ window.createSpaces = function createSpaces(host) {
     onKey,
     search,
     isOpen: () => open,
+    /** The device whose UI this is, by name, when it is another device's (#906); else null. */
+    deviceName: () => (remoteId ? remoteDevice?.name ?? null : null),
     /** Tabs and titles changed: redraw the cards if they are showing. */
     refresh: () => {
       if (open && !drag && !renaming) {

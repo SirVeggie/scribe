@@ -78,6 +78,7 @@ import { identify, prepareSecrets, socketAllowed } from "./callers.js";
 import { PeerService } from "./devices/peers.js";
 import { devicesRouter } from "./devices/routes.js";
 import { peerGateway } from "./devices/gateway.js";
+import { AskSource, AskWatcher } from "./devices/attention.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
@@ -201,7 +202,18 @@ export async function startHttp(): Promise<http.Server> {
     "/vendor/scribe-md.js": path.join(publicDir, "..", "templates", "scribe-md.js"),
   });
   const publicFiles = express.static(publicDir);
-  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)) });
+  // /api/devices: this device's, also in another device's UI shown here (#906), so the gateway takes it too.
+  // askSource: this device's chats that wait on the user, for paired devices' toasts.
+  const askSource = new AskSource(() => agentHost?.listThreads() ?? []);
+  const askWatcher = new AskWatcher(peers);
+  const devicesApi = express.Router();
+  devicesApi.use("/api/devices", express.json(), devicesRouter(peers, {
+    spaces: () => store.spacesView(),
+    switchSpace: (id) => store.switchSpace(id),
+    asks: askSource,
+    watcher: askWatcher,
+  }));
+  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)), devices: devicesApi });
   app.use(gateway.http);
   app.use(contentOriginGate);
   // These open a window on this device's own screen: not for someone viewing it from another device.
@@ -226,6 +238,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use(uiAssets);
   agentHost = new AgentHost((event) => {
     broadcast(event);
+    if (event.type === "agent_thread" || event.type === "agent_thread_deleted") askSource.touch();
     // Fresh model output replaces a claimed card's launch status promptly.
     if (event.type === "agent_delta" || (event.type === "agent_item" && event.item.kind === "tool")) {
       scheduleSweep(1000);
@@ -275,7 +288,8 @@ export async function startHttp(): Promise<http.Server> {
     setTimeout(() => { devicesQueued = false; broadcast({ type: "devices" }); }, 250).unref();
   });
   peers.on("paired", (result) => broadcast({ type: "device_paired", ...result }));
-  app.use("/api/devices", devicesRouter(peers));
+  askSource.refresh();
+  app.use(devicesApi);
   const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [] });
   const pageAudio = new PageAudio(id => store.pagePermissions(id));
   const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
@@ -2536,6 +2550,7 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/shutdown", async (_req, res) => {
     await pluginService.close();
+    askWatcher.stop();
     void peers.stop();
     searchEmbedder.stop();
     res.json({ ok: true });

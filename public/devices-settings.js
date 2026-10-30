@@ -114,9 +114,11 @@
         try { render(await request("DELETE", `/${encodeURIComponent(peer.id)}`)); } catch (err) { say(err.message); }
       });
       tip(text, `Fingerprint ${peer.fingerprint}`);
-      // Its own UI in this window, through this device's gateway (#905); from another device's view, the way back.
-      const home = peer.id === view.viewer;
-      const open = button(home ? "Back" : "Open", () => { location.href = `${location.protocol}//d-${peer.id}.localhost${location.port ? `:${location.port}` : ""}/`; });
+      // Its own UI in this window, through this device's gateway (#905). The list is this device's in
+      // every view (#906), so the row of the device being viewed takes you back home.
+      const home = peer.id === view.viewing;
+      const port = location.port ? `:${location.port}` : "";
+      const open = button(home ? "Back" : "Open", () => { location.href = home ? `${location.protocol}//127.0.0.1${port}/` : `${location.protocol}//d-${peer.id}.localhost${port}/`; });
       open.disabled = !peer.online && !home;
       row.append(dot, text, open, revoke);
       list.append(row);

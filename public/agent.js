@@ -9898,11 +9898,59 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     shown: new Map(),
     snoozed: new Set(),
     seen: new Map(),
+    /** Chats on other devices that wait on the user (#906), from this device's daemon. */
+    remote: [],
+    remoteSnoozed: new Set(),
     mount() {
       const main = document.querySelector(".workspace main");
       if (!main) return;
       this.box = el("div", "ag-toasts");
       main.append(this.box);
+      this.listenRemote();
+    },
+    /** /api/devices/attention is answered by this device's daemon in every view, and skips the device showing. */
+    listenRemote() {
+      if (typeof EventSource !== "function") return;
+      const source = new EventSource("/api/devices/attention");
+      source.onmessage = (event) => {
+        let asks;
+        try {
+          asks = JSON.parse(event.data).asks;
+        } catch {
+          return;
+        }
+        if (!Array.isArray(asks)) return;
+        const keyed = asks.map((ask) => ({ ...ask, key: `remote:${ask.device}:${ask.thread}:${ask.kind}:${ask.text}` }));
+        const live = new Set(keyed.map((ask) => ask.key));
+        for (const key of this.remoteSnoozed) if (!live.has(key)) this.remoteSnoozed.delete(key);
+        this.remote = keyed;
+        this.render();
+      };
+    },
+    remoteToast(ask) {
+      const node = el("div", "ag-toast k-ask");
+      const body = el("div", "ag-toast-body");
+      const what = { approval: "wants to:", question: "asks:", plan: "has a plan:" }[ask.kind] || "needs you";
+      body.append(el("b", null, `${ask.name} · ${ask.title}`), ` ${what} `, el("span", "ag-toast-what", ask.text || ""));
+      if (ask.detail) body.append(el("code", "ag-toast-detail", ask.detail));
+      // That device's own UI in this window, on the chat (?thread=, read at boot).
+      const open = () => {
+        const port = location.port ? `:${location.port}` : "";
+        location.href = `${location.protocol}//${ask.home ? "127.0.0.1" : `d-${ask.device}.localhost`}${port}/?thread=${encodeURIComponent(ask.thread)}`;
+      };
+      body.append(elWith("div", "ag-toast-actions", button("Open", "ag-btn tiny", open)));
+      node.addEventListener("click", (event) => {
+        if (!event.target.closest("button, a")) open();
+      });
+      node.append(
+        el("span", "ag-dot s-waiting"),
+        body,
+        button(icon("close"), "ag-icon-btn small ag-toast-x", () => {
+          this.remoteSnoozed.add(ask.key);
+          this.render();
+        }, "Dismiss for now")
+      );
+      return node;
     },
     update() {
       if (!this.box) return;
@@ -9996,6 +10044,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (entries.length > TOAST_CAP) {
         this.box.append(button(`+${entries.length - TOAST_CAP} more`, "ag-toast-more", () => flyout.openAnywhere()));
       }
+      const remote = this.remote.filter((ask) => !this.remoteSnoozed.has(ask.key));
+      for (const ask of remote.slice(0, TOAST_CAP)) this.box.append(this.remoteToast(ask));
+      if (remote.length > TOAST_CAP) this.box.append(el("span", "ag-toast-more", `+${remote.length - TOAST_CAP} more on other devices`));
     },
     toast(entry, t) {
       const node = el("div", `ag-toast k-${entry.kind}`);
@@ -13779,7 +13830,32 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   /* ---------- boot ---------- */
 
+  /** A chat to open once the threads are in: a toast on another device sent the user here (#906). */
+  function openWantedThread() {
+    const wanted = new URLSearchParams(location.search).get("thread");
+    if (!wanted) return;
+    const url = new URL(location.href);
+    url.searchParams.delete("thread");
+    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+    const go = () => {
+      void loadStartupData().then(() => {
+        const t = S.threads.get(wanted);
+        if (t) openActive(t, false);
+      }, () => undefined);
+    };
+    if (app()?.connected?.()) go();
+    else {
+      const once = (event) => {
+        if (!event.detail?.connected) return;
+        removeEventListener("scribe:connection", once);
+        go();
+      };
+      addEventListener("scribe:connection", once);
+    }
+  }
+
   function boot() {
+    openWantedThread();
     sidebar.mount();
     full.mount();
     dock.mount();

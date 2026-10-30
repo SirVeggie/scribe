@@ -556,6 +556,11 @@
   );
   bindSettingHint(librarySideLabel, "When both panes are on the same side, this one sits at the window edge.");
 
+  /** Who the board is waiting for: Scribe, or the device whose UI this is (#906). */
+  function connectTarget() {
+    return (REMOTE_VIEW && spacesReady?.deviceName?.()) || (REMOTE_VIEW ? "the other device" : "Scribe");
+  }
+
   function connect() {
     clearTimeout(reconnectTimer);
     if (socket && socket.readyState < WebSocket.CLOSING) return;
@@ -565,7 +570,7 @@
     if (!state.restored) {
       clearTimeout(startupTimer);
       startupTimer = setTimeout(() => {
-        startupMessage.textContent = "Still connecting to Scribe. Retrying…";
+        startupMessage.textContent = `Still connecting to ${connectTarget()}. Retrying…`;
         startupRetry.hidden = false;
         dismissRefreshOverlay();
         ws.close();
@@ -590,7 +595,7 @@
       }
       state.connected = false;
       if (!state.restored) {
-        startupMessage.textContent = "Could not connect to Scribe. Retrying…";
+        startupMessage.textContent = `Could not connect to ${connectTarget()}. Retrying…`;
         startupRetry.hidden = false;
         dismissRefreshOverlay();
       }

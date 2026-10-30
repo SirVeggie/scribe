@@ -4555,6 +4555,90 @@ html.spaces-open :is(.agent-harness, .agent-full, .ag-modal) {
   transition-delay: 0s;
 }
 
+/* A section per device (#906): this one first, then the paired ones. */
+.spaces-area {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.spaces-device {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spaces-device-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1052px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.spaces-device-name {
+  color: var(--text);
+}
+
+.spaces-device-state {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.spaces-device.offline .spaces-grid {
+  opacity: 0.5;
+}
+
+.spaces-device-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.spaces-device .spaces-grid {
+  justify-content: start;
+}
+
+button.space-card.compact {
+  align-items: stretch;
+  justify-content: flex-start;
+  height: auto;
+  min-height: 0;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+}
+
+button.space-card.compact:hover:not(:disabled),
+button.space-card.compact:focus-visible {
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--space, var(--accent)) 70%, transparent);
+}
+
+button.space-card.compact:disabled {
+  cursor: default;
+}
+
+/* The device chip in another device's UI (#906): the space chip's look, in the device's color. */
+button.device-chip[hidden] {
+  display: none;
+}
+
+button.device-chip {
+  color: var(--text);
+  background: color-mix(in srgb, var(--space) 14%, transparent);
+}
+
+button.device-chip.offline .space-chip-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--space);
+}
+
 .space-top {
   display: flex;
   align-items: center;
