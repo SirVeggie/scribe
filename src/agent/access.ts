@@ -5,6 +5,7 @@ import { dataDir } from "../config.js";
 import { pageCheckoutDir } from "../pageCheckout.js";
 import { threadFilesDir } from "./attachments.js";
 import { accountsRoot } from "./claudeAccounts.js";
+import { windowsSandbox } from "./codexMxc.js";
 import { skillFolders } from "./harness.js";
 import { pathInside, realTarget, threadCwd } from "./toolGrants.js";
 import type { ProviderId, Thread } from "./types.js";
@@ -215,7 +216,9 @@ export function effective(provider: ProviderId, platform: NodeJS.Platform = proc
     { surface: "Scribe's read_file, file search and page_open", enforced: "scribe" },
   ];
   if (provider === "pi") rows.push({ surface: "Native read, edit and write", enforced: "scribe" }, { surface: "Native shell", enforced: shell });
-  if (provider === "codex") rows.push({ surface: "Codex shell and edits (writes)", enforced: "os" }, { surface: "Codex reads", enforced: "none" });
+  // Codex's own sandbox: MXC on Windows denies protected reads (#916); the unelevated fallback can't.
+  const codexReads: Enforcement = windowsSandbox(platform) === "mxc" ? "os" : "none";
+  if (provider === "codex") rows.push({ surface: "Codex shell and edits (writes)", enforced: "os" }, { surface: "Codex reads", enforced: codexReads });
   if (provider === "claude") rows.push({ surface: "Claude file tools", enforced: "approval" }, { surface: "Claude shell", enforced: shell });
   if (provider === "cursor") rows.push({ surface: "Cursor built-in file tools", enforced: "none" }, { surface: "Cursor host shell", enforced: shell });
   return rows;

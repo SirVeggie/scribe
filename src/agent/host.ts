@@ -33,7 +33,7 @@ import { readSnapshot, removeThreadSnapshots, saveSnapshot } from "./fileSnapsho
 import { findSvnRoot, svnEnd, svnStart, type SvnStart } from "./svn.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
 import { UsageWindowStarts, cleanWindowStarts, type WindowStartState } from "./usageWindowStarts.js";
-import { CodexProvider, codexAccountId, fetchCodexPlanUsage } from "./providers/codex.js";
+import { CodexProvider, codexAccountId, codexMxcAvailable, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
 import { PiProvider, type PiLoginView } from "./providers/pi.js";
@@ -616,6 +616,7 @@ export class AgentHost {
       scratchDir,
       accessEnv: () => this.accessEnv(),
       sandbox: (threadId, cwd) => this.sandboxHooks(threadId, cwd),
+      codexMxc: () => codexMxcAvailable(),
       // Page workers run unattended; helpers do not hand anything in themselves.
       isWorker: (id) => !this.threads.get(id)?.helperOf && this.unattended(id),
       workerTools: (id) => {

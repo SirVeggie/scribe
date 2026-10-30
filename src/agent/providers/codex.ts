@@ -25,6 +25,8 @@ import { McpBridge, type BridgeAsk, type BridgedTool } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { threadToken } from "../../callers.js";
 import { outputImages } from "../outputImages.js";
+import { policyFor } from "../access.js";
+import { detectWindowsSandbox, mxcConfig, mxcDenyPaths, mxcProfile } from "../codexMxc.js";
 import { authCommand } from "./authCommand.js";
 
 type ThreadItem = SdkThreadItem | { type: "image_generation"; id: string; status: string; savedPath?: string; result?: string; failure?: unknown };
@@ -211,6 +213,11 @@ export function loginUrlFromOutput(text: string): string | null {
 
 function codexCliJs(): string {
   return createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
+}
+
+/** Whether Codex's MXC sandbox runs here (#916): Windows only, checked once per daemon. */
+export async function codexMxcAvailable(): Promise<boolean> {
+  return process.platform === "win32" && (await detectWindowsSandbox(codexCliJs(), cliEnv())) === "mxc";
 }
 
 function stopChild(child: ChildProcess): void {
@@ -452,6 +459,7 @@ export function gitCommonDir(cwd: string): string | null {
 /**
  * Codex config for a sandboxed thread on Windows. Without a selected Windows sandbox Codex
  * silently turns workspace-write into read-only (#322); the unelevated one needs no admin setup.
+ * Only where MXC doesn't run (#916): unelevated can't deny reads, and Node's fetch ignores its network switch.
  * Read-only selects it too, so the reading rungs' commands run sandboxed without asking (#720).
  */
 export function windowsSandboxConfig(sandbox: SandboxMode, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
@@ -464,12 +472,21 @@ export function windowsSandboxConfig(sandbox: SandboxMode, cwd: string, platform
   };
 }
 
-export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web" | "custom" | "cwd">, cwd: string, platform: NodeJS.Platform = process.platform): RpcRecord {
+/** Whether the thread's commands may use the network: Web on, in Code mode, with workspace writes. */
+function commandNetwork(thread: Pick<Thread, "mode" | "approval" | "web" | "custom">): boolean {
+  return thread.web === "on" && thread.mode === "code" && sandboxFor(thread) === "workspace-write";
+}
+
+/**
+ * `mxc` is the thread's MXC config (codexMxc.ts) on Windows when MXC runs: its profiles then replace
+ * `sandbox` and the sandbox_workspace_write keys, which Codex would otherwise let win over them.
+ */
+export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" | "approval" | "web" | "custom" | "cwd">, cwd: string, platform: NodeJS.Platform = process.platform, mxc: RpcRecord | null = null): RpcRecord {
   const effort = thread.effort && thread.effort in EFFORT_LABELS ? (thread.effort as ModelReasoningEffort) : undefined;
   const sandbox = sandboxFor(thread);
   return {
     ...(thread.model && thread.model !== "default" ? { model: thread.model } : {}),
-    sandbox,
+    ...(mxc ? { permissions: mxcProfile(sandbox, commandNetwork(thread)) } : { sandbox }),
     cwd,
     approvalPolicy: thread.approval === "full" ? "never" : "on-request",
     // Native review only handles actions that need approval; keep the mode's sandbox.
@@ -477,9 +494,11 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
     config: {
       ...(effort ? { model_reasoning_effort: effort } : {}),
       web_search: thread.web === "on" ? "live" : "disabled",
-      "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code" && !codexReadOnly(thread),
-      // Keep Windows ready for a later sandboxed turn after Full access.
-      ...windowsSandboxConfig(thread.mode === "code" && !codexReadOnly(thread) ? "workspace-write" : sandbox, cwd, platform),
+      ...(mxc ?? {
+        "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code" && !codexReadOnly(thread),
+        // Keep Windows ready for a later sandboxed turn after Full access.
+        ...windowsSandboxConfig(thread.mode === "code" && !codexReadOnly(thread) ? "workspace-write" : sandbox, cwd, platform),
+      }),
       // The reading rungs keep the shell only with a workspace (#722): without one the thread runs in
       // the scratch folder and has no file access, and a custom mode can turn it off.
       ...(thread.mode === "board" && !readShell({ ...thread, provider: "codex" }) ? { features: { shell_tool: false, unified_exec: false } } : {}),
@@ -500,12 +519,17 @@ export function turnStartOverrides(thread: Pick<Thread, "model" | "effort">): { 
 }
 
 /** Explicit policies replace sticky turn settings, including a previous Full access turn. */
-export function turnPermissionOverrides(thread: Pick<Thread, "mode" | "approval" | "web" | "custom">, cwd: string): RpcRecord {
+export function turnPermissionOverrides(thread: Pick<Thread, "mode" | "approval" | "web" | "custom">, cwd: string, mxc = false): RpcRecord {
   const sandbox = sandboxFor(thread);
-  const gitDir = process.platform === "win32" ? gitCommonDir(cwd) : null;
-  return {
+  const approvals = {
     approvalPolicy: thread.approval === "full" ? "never" : "on-request",
     approvalsReviewer: thread.approval === "auto" ? "auto_review" : "user",
+  };
+  // A profile id: Codex refuses it alongside a sandboxPolicy.
+  if (mxc) return { ...approvals, permissions: mxcProfile(sandbox, commandNetwork(thread)) };
+  const gitDir = process.platform === "win32" ? gitCommonDir(cwd) : null;
+  return {
+    ...approvals,
     sandboxPolicy: sandbox === "danger-full-access" ? { type: "dangerFullAccess" }
       : sandbox === "read-only" ? { type: "readOnly", networkAccess: false }
       : { type: "workspaceWrite", writableRoots: gitDir ? [gitDir] : [],
@@ -983,6 +1007,8 @@ export class CodexSession implements ProviderSession {
   private sessionKey: string | null = null;
   private effectivePermissions: EffectivePermissions | null = null;
   private permissionKey: string | null = null;
+  /** The thread's MXC config while its session runs under MXC (#916), else null. */
+  private mxc: RpcRecord | null = null;
   private settingsUpdated: ((settings: RpcRecord) => void) | null = null;
   private permissionNotice: string | null = null;
   private nativeId: string | null;
@@ -1089,6 +1115,21 @@ export class CodexSession implements ProviderSession {
     return tools;
   }
 
+  /**
+   * The thread's MXC profiles (#916), made when its session opens: the protected paths are listed
+   * then. Null off Windows, where MXC doesn't run, or with the host's check left out (tests).
+   */
+  private async mxcConfig(): Promise<RpcRecord | null> {
+    if (process.platform !== "win32" || !(await this.ctx.codexMxc?.())) return null;
+    const policy = policyFor({ ...this.thread, cwd: this.cwd() }, this.ctx.accessEnv?.());
+    return mxcConfig(mxcDenyPaths(policy, scribeCodexHome()), gitCommonDir(this.cwd()));
+  }
+
+  /** What codexPermissions compares against: the sandbox mode, also when a profile id was sent. */
+  private requested(options: RpcRecord): RpcRecord {
+    return { ...options, sandbox: sandboxFor(this.thread) };
+  }
+
   private async ensureHandle(): Promise<void> {
     if (this.opening) return this.opening;
     this.opening = this.openHandle().finally(() => { this.opening = null; });
@@ -1116,12 +1157,14 @@ export class CodexSession implements ProviderSession {
       const tools = none ? [] : await this.userTools();
       // thread/resume takes no tool list: a resumed thread keeps the dynamic tools it started with.
       const dynamicTools = tools.length ? { dynamicTools: tools.map(dynamicToolSpec) } : {};
+      this.mxc = await this.mxcConfig();
+      const base = threadOptions(this.thread, this.cwd(), process.platform, this.mxc);
       const options = {
-        ...threadOptions(this.thread, this.cwd()),
+        ...base,
         developerInstructions: this.instructions,
         config: {
           ...(none ? NO_TOOLS_CONFIG : mcpConfig(this.ctx, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread))),
-          ...threadOptions(this.thread, this.cwd()).config as RpcRecord,
+          ...base.config as RpcRecord,
         },
       };
       let result: unknown;
@@ -1137,8 +1180,8 @@ export class CodexSession implements ProviderSession {
       } else result = await rpc.call("thread/start", { ...options, ...dynamicTools });
       if (!isPlainRecord(result) || !isPlainRecord(result.thread) || typeof result.thread.id !== "string") throw new Error("Invalid Codex thread response");
       this.nativeId = result.thread.id;
-      this.effectivePermissions = codexPermissions(result, options);
-      this.permissionKey = JSON.stringify(turnPermissionOverrides(this.thread, this.cwd()));
+      this.effectivePermissions = codexPermissions(result, this.requested(options));
+      this.permissionKey = JSON.stringify(turnPermissionOverrides(this.thread, this.cwd(), Boolean(this.mxc)));
       this.ctx.permissions?.(this.thread.id, this.effectivePermissions);
       this.sessionKey = key;
     } catch (error) {
@@ -1221,7 +1264,7 @@ export class CodexSession implements ProviderSession {
 
   private async streamTurn(payload: RpcRecord[], sink: RunSink): Promise<TurnResult> {
     await this.ensureHandle();
-    const permissions = turnPermissionOverrides(this.thread, this.cwd());
+    const permissions = turnPermissionOverrides(this.thread, this.cwd(), Boolean(this.mxc));
     const permissionKey = JSON.stringify(permissions);
     if (permissionKey !== this.permissionKey) {
       // The start response has no policy observation. Update first and await the native
@@ -1241,7 +1284,7 @@ export class CodexSession implements ProviderSession {
         const [, settings] = await Promise.all([
           this.rpc!.call("thread/settings/update", { threadId: this.nativeId, ...permissions }), observed,
         ]);
-        this.effectivePermissions = codexPermissions(settings, threadOptions(this.thread, this.cwd()));
+        this.effectivePermissions = codexPermissions(settings, this.requested(threadOptions(this.thread, this.cwd(), process.platform, this.mxc)));
         if (this.effectivePermissions.sandbox === "unknown" || this.effectivePermissions.approval !== permissions.approvalPolicy
           || this.effectivePermissions.reviewer !== permissions.approvalsReviewer) {
           throw new Error("Codex did not confirm the requested turn permissions");

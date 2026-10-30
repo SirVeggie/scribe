@@ -176,6 +176,8 @@ export type SessionContext = {
   accessEnv?: () => PolicyEnv;
   /** The OS sandbox for the shell commands Scribe spawns for this thread (#899), or null where it does not apply (not Linux, Full access). */
   sandbox?(threadId: string, cwd: string): SandboxHooks | null;
+  /** Whether Codex's commands run under MXC on this machine (#916); checked once. Without it, Codex keeps the unelevated sandbox on Windows. */
+  codexMxc?(): Promise<boolean>;
   /** Domains a thread with limited web access may reach. Read on each call, so edits apply at once. */
   webAllowlist(): string[];
   /** The SearXNG instance web_search goes through (Agent settings), or "" for no web_search tool. Read when a session opens. */

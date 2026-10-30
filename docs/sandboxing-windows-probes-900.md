@@ -193,7 +193,8 @@ sandboxed session), and the worktree's Node scripts fail unless run with `--pres
 
 ## Recommendation
 
-1. **Codex: MXC first** (user's choice). Bump `@openai/codex` to ≥ 0.166 and send a permission profile
+1. **Codex: MXC first** (user's choice). Done in #916: `src/agent/codexMxc.ts` (the profiles `scribe-read`,
+   `scribe-write`, `scribe-web` and `:danger-full-access`, selected per turn by `permissions`). Bump `@openai/codex` to ≥ 0.166 and send a permission profile
    (`default_permissions` + `permissions.scribe`: `:workspace`, the git common dir as a workspace root,
    network from the Web setting, deny entries for Scribe's secrets) instead of
    `sandbox`/`sandbox_workspace_write`. Fall back to `elevated` when set up, then `unelevated`, and show

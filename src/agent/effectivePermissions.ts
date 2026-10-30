@@ -1,3 +1,4 @@
+import { profileSandbox } from "./codexMxc.js";
 import { isPlainRecord, type Thread } from "./types.js";
 
 /** Provider observations, never a grant or a replacement for the user's settings. */
@@ -16,10 +17,13 @@ export function codexPermissions(result: Record<string, unknown>, requested: Rec
   const policy = isPlainRecord(result.sandbox) ? result.sandbox : isPlainRecord(result.sandboxPolicy) ? result.sandboxPolicy : {};
   const raw = typeof result.sandbox === "string" ? result.sandbox : policy.type;
   const modes: Record<string, string> = { readOnly: "read-only", workspaceWrite: "workspace-write", dangerFullAccess: "danger-full-access", externalSandbox: "external-sandbox" };
+  // Under a permission profile (MXC, #916) the legacy policy is an approximation: :danger-full-access reports workspace writes to C:\.
+  const profile = isPlainRecord(result.activePermissionProfile) && typeof result.activePermissionProfile.id === "string"
+    ? profileSandbox(result.activePermissionProfile.id) : null;
   return {
     provider: "codex",
     requestedSandbox: String(requested.sandbox),
-    sandbox: typeof raw === "string" ? modes[raw] ?? raw : "unknown",
+    sandbox: profile ?? (typeof raw === "string" ? modes[raw] ?? raw : "unknown"),
     requestedApproval: String(requested.approvalPolicy),
     approval: typeof result.approvalPolicy === "string" ? result.approvalPolicy : "unknown",
     reviewer: typeof result.approvalsReviewer === "string" ? result.approvalsReviewer : "unknown",
