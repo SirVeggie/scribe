@@ -15,7 +15,9 @@ export const OFFER_MS = 10 * 60 * 1000;
 export const MAX_ATTEMPTS = 5;
 const SECRET_BYTES = 10;
 const FINGERPRINT_BYTES = 12;
-const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/** Address hint types: 4 and 6 are IPs; NAME is a host name (a device that accepts connections from the internet). */
+const NAME = 100;
+const ALPHABET ="0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 export type Offer = { code: string; secret: Buffer; fingerprint: string; expiresAt: number; attempts: number };
 export type DecodedCode = { secret: Buffer; fingerprintPrefix: string; port: number; hosts: string[] };
@@ -29,6 +31,7 @@ export function makeOffer(fingerprint: string, port: number, hosts: string[]): O
   for (const host of hosts.slice(0, 4)) {
     if (net.isIPv4(host)) parts.push(Buffer.from([4, ...host.split(".").map(Number)]));
     else if (net.isIPv6(host)) parts.push(Buffer.from([6]), ipv6Bytes(host));
+    else if (host.length < 256) parts.push(Buffer.from([NAME, host.length]), Buffer.from(host, "ascii")); // a public device's name (#910)
   }
   return { code: group(base32(Buffer.concat(parts))), secret, fingerprint, expiresAt: Date.now() + OFFER_MS, attempts: 0 };
 }
@@ -49,6 +52,10 @@ export function decodeCode(code: string): DecodedCode {
       const b = bytes.subarray(i + 1, i + 17);
       hosts.push(Array.from({ length: 8 }, (_, k) => b.readUInt16BE(k * 2).toString(16)).join(":"));
       i += 17;
+    } else if (bytes[i] === NAME && i + 2 <= bytes.length && i + 2 + bytes[i + 1] <= bytes.length) {
+      const name = bytes.subarray(i + 2, i + 2 + bytes[i + 1]).toString("ascii");
+      if (/^[a-z0-9.-]+$/i.test(name)) hosts.push(name);
+      i += 2 + bytes[i + 1];
     } else break;
   }
   if (!hosts.length) throw new Error("That pairing code names no address.");

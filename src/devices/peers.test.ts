@@ -69,7 +69,7 @@ test("the device identity is made once and kept", () => {
 test("pairing codes round-trip and the QR code fits", async () => {
   const peers = new PeerService({ home: fs.mkdtempSync(path.join(os.tmpdir(), "scribe-code-")), port: 4748, hosts: [], version: "test" });
   // No address to listen on: Add device says so instead of making a code nobody can use.
-  await assert.rejects(peers.createOffer(), /no LAN or tailnet address/);
+  await assert.rejects(peers.createOffer(), /no LAN, tailnet or public address/);
   const fp = peers.identity.fingerprint;
   const offer = makeOffer(fp, 4748, ["192.168.1.20", "fd7a:115c:a1e0::1"]);
   const decoded = decodeCode(offer.code.toLowerCase());

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
 import { cleanName, deviceDir, displayFingerprint, fingerprintOf, loadIdentity, saveName, type Identity } from "./identity.js";
-import { Link, PROTOCOL, type Control } from "./link.js";
+import { FEATURES, Link, PROTOCOL, peerDeviceOf, type Control } from "./link.js";
 import { MAX_ATTEMPTS, decodeCode, makeOffer, pairProof, pairWords, sameProof, type Offer } from "./pairing.js";
 import { qrSvg } from "./qr.js";
 import { rememberName, type NamedDevice } from "./references.js";
@@ -36,7 +36,13 @@ export type Peer = {
   agents?: AgentGrant;
 };
 
-type Saved = { peers: Peer[]; revoked: string[] };
+/** Accept peer connections from the internet (#910): an always-on device that relays and mirrors. */
+export type PublicListen = { host: string };
+
+type Saved = { peers: Peer[]; revoked: string[]; public?: PublicListen };
+
+/** A device whose mirror another device holds, and when that mirror last matched it (#910). */
+export type MirrorHeld = { id: string; at: number };
 
 export type PeerView = {
   id: string;
@@ -48,10 +54,14 @@ export type PeerView = {
   pairedAt: number;
   error?: string;
   agents: AgentGrant;
+  /** The device this one is reached through, when there is no direct route (#910). */
+  via?: { id: string; name: string };
+  /** Offline, with a mirror on an online device (#910): which one, and when it last matched. */
+  mirror?: { id: string; name: string; at: number };
 };
 
 export type DevicesView = {
-  self: { id: string; name: string; fingerprint: string; port: number; hosts: string[] };
+  self: { id: string; name: string; fingerprint: string; port: number; hosts: string[]; public: PublicListen | null };
   peers: PeerView[];
   offer: { code: string; qr: string; expiresAt: number } | null;
 };
@@ -72,6 +82,8 @@ const HELLO_MS = 10_000;
 const RESCAN_MS = 60_000;
 const BACKOFF_MIN = 1000;
 const BACKOFF_MAX = 60_000;
+/** How often a relayed link tries for a direct route again. */
+const DIRECT_RETRY_MS = 5 * 60_000;
 
 /** LAN (RFC 1918), tailnet (100.64/10 CGNAT) and unique-local IPv6 (fc00::/7, Tailscale's fd7a:…) addresses. */
 export function peerHosts(): string[] {
@@ -106,6 +118,11 @@ export class PeerService extends EventEmitter {
   private rescan: NodeJS.Timeout | undefined;
   private stopped = false;
   private binding: Promise<void> = Promise.resolve();
+  private directTimer: NodeJS.Timeout | undefined;
+  /** The mirrors this device holds, sent to every peer (#910). */
+  private heldHere: MirrorHeld[] = [];
+  /** The mirrors each online peer says it holds. */
+  private readonly heldBy = new Map<string, MirrorHeld[]>();
 
   constructor(private readonly options: PeerOptions) {
     super();
@@ -116,6 +133,8 @@ export class PeerService extends EventEmitter {
   /** Where streams from peers go: the daemon's own HTTP server. */
   attach(server: http.Server): void {
     this.server = server;
+    // Relays (#910): CONNECT over a link, from one paired device to another.
+    server.on("connect", (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => this.onRelay(req, socket, head));
   }
 
   async start(): Promise<void> {
@@ -125,27 +144,73 @@ export class PeerService extends EventEmitter {
       this.rescan.unref();
     }
     for (const peer of this.saved.peers) this.connect(peer.id);
+    this.directTimer = setInterval(() => {
+      for (const [id, link] of this.links) if (link.via) void this.attempt(id, true);
+    }, DIRECT_RETRY_MS);
+    this.directTimer.unref();
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
     clearInterval(this.rescan);
+    clearInterval(this.directTimer);
     for (const entry of this.retry.values()) clearTimeout(entry.timer);
     for (const link of this.links.values()) link.close();
     await Promise.all([...this.servers.values()].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
     this.servers.clear();
   }
 
+  /** The addresses other devices may dial: the public one first, then the LAN and tailnet ones listened on. */
   hosts(): string[] {
-    return [...this.servers.keys()];
+    const bound = [...this.servers.keys()].filter((host) => host !== "::" && host !== "0.0.0.0");
+    const local = this.wildcard() ? (this.options.hosts ?? peerHosts()) : bound;
+    return [...new Set([...(this.saved.public ? [this.saved.public.host] : []), ...local])];
+  }
+
+  /** Settings → Devices: accept connections from the internet on this address (a VPS's IP or name), or stop. */
+  setPublic(value: unknown): void {
+    const host = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (host && !cleanHosts([host]).length) throw new Error("Give an IP address or a host name, like scribe.example.com.");
+    if (host) this.saved.public = { host };
+    else delete this.saved.public;
+    this.persist();
+    void this.bind().then(() => {
+      for (const link of this.links.values()) link.control({ type: "update", name: this.identity.name, hosts: this.hosts(), port: this.options.port });
+    });
+    this.changed();
+  }
+
+  /** The mirrors this device holds (#910); each peer learns them, so its gateway can fall back to one. */
+  setMirrors(list: MirrorHeld[]): void {
+    const same = list.length === this.heldHere.length && list.every((m, i) => m.id === this.heldHere[i].id && m.at === this.heldHere[i].at);
+    if (same) return;
+    this.heldHere = list.map(({ id, at }) => ({ id, at }));
+    for (const link of this.links.values()) link.control({ type: "mirrors", list: this.heldHere });
+  }
+
+  /** An online device that holds a mirror of this (offline) one, the freshest first. */
+  mirrorOf(id: string): { holder: string; at: number } | undefined {
+    let best: { holder: string; at: number } | undefined;
+    for (const [holder, list] of this.heldBy) {
+      if (holder === id || !this.links.get(holder)?.open) continue;
+      const entry = list.find((m) => m.id === id);
+      if (entry && (!best || entry.at > best.at)) best = { holder, at: entry.at };
+    }
+    return best;
+  }
+
+  /** Whether a linked device said in its hello that it does this. */
+  supports(id: string, feature: string): boolean {
+    return this.links.get(id)?.features.includes(feature) === true;
   }
 
   view(): DevicesView {
     this.expireOffer();
     return {
-      self: { id: this.identity.id, name: this.identity.name, fingerprint: displayFingerprint(this.identity.fingerprint), port: this.options.port, hosts: this.hosts() },
+      self: { id: this.identity.id, name: this.identity.name, fingerprint: displayFingerprint(this.identity.fingerprint), port: this.options.port, hosts: this.hosts(), public: this.saved.public ?? null },
       peers: this.saved.peers.map((peer) => {
         const link = this.links.get(peer.id);
+        const mirror = link ? undefined : this.mirrorOf(peer.id);
         return {
           id: peer.id,
           name: peer.name,
@@ -155,6 +220,8 @@ export class PeerService extends EventEmitter {
           ...(peer.lastSeen ? { lastSeen: link ? Date.now() : peer.lastSeen } : link ? { lastSeen: Date.now() } : {}),
           pairedAt: peer.pairedAt,
           agents: this.agentGrant(peer.id),
+          ...(link?.via ? { via: { id: link.via, name: this.peer(link.via)?.name ?? link.via } } : {}),
+          ...(mirror ? { mirror: { id: mirror.holder, name: this.peer(mirror.holder)?.name ?? mirror.holder, at: mirror.at } } : {}),
           ...(!link && this.errors.get(peer.id) ? { error: this.errors.get(peer.id) } : {}),
         };
       }),
@@ -196,7 +263,7 @@ export class PeerService extends EventEmitter {
     this.offer = null;
     await this.bind(true);
     const hosts = this.hosts();
-    if (!hosts.length) throw new Error("This device has no LAN or tailnet address to be reached on.");
+    if (!hosts.length) throw new Error("This device has no LAN, tailnet or public address to be reached on.");
     this.offer = makeOffer(this.identity.fingerprint, this.options.port, hosts);
     const offer = this.offer;
     setTimeout(() => {
@@ -330,7 +397,8 @@ export class PeerService extends EventEmitter {
   private async bindNow(opening: boolean): Promise<void> {
     if (this.stopped) return;
     const needed = opening || !!this.offer || this.saved.peers.length > 0;
-    const wanted = needed ? (this.options.hosts ?? peerHosts()) : [];
+    // A public device listens on every interface; the pinned keys, not the address, decide who gets in.
+    const wanted = !needed ? [] : this.wildcard() ? ["::"] : (this.options.hosts ?? peerHosts());
     for (const [host, server] of this.servers) {
       if (!wanted.includes(host)) {
         server.close();
@@ -354,12 +422,20 @@ export class PeerService extends EventEmitter {
         this.servers.set(host, server);
       } catch (err) {
         this.options.log?.(`Peer listener ${host}:${this.options.port} failed: ${(err as Error).message}`);
+        // No IPv6 here: listen on every IPv4 interface instead.
+        if (host === "::" && !this.servers.has("0.0.0.0")) wanted.push("0.0.0.0");
       }
     }
     this.changed();
   }
 
-  private accept(socket: tls.TLSSocket): void {
+  /** Listening on every interface: a public device, unless tests or SCRIBE_PEER_HOSTS fix the addresses. */
+  private wildcard(): boolean {
+    return !!this.saved.public && !this.options.hosts;
+  }
+
+  /** `via`: the device that relayed this connection; only paired devices come in that way. */
+  private accept(socket: tls.TLSSocket, via?: string): void {
     const spki = peerKey(socket);
     const fp = spki && fingerprintOf(spki);
     if (!fp || fp === this.identity.fingerprint || this.saved.revoked.includes(fp)) {
@@ -371,7 +447,8 @@ export class PeerService extends EventEmitter {
     if (peer) {
       // A paired device says hello, or pairs again with a code (after it lost its copy of this one's key).
       const link = new Link(socket, false, peer.id);
-      this.ask(link, null, (m) => m.type === "hello" || (m.type === "pair" && !!this.offer))
+      if (via) link.via = via;
+      this.ask(link, null, (m) => m.type === "hello" || (m.type === "pair" && !!this.offer && !via))
         .then((message) => {
           if (message.type === "pair") return this.answerPair(link, spki, message);
           link.control(this.hello());
@@ -381,7 +458,7 @@ export class PeerService extends EventEmitter {
       return;
     }
     this.expireOffer();
-    if (!this.offer) {
+    if (!this.offer || via) {
       socket.destroy();
       return;
     }
@@ -430,9 +507,11 @@ export class PeerService extends EventEmitter {
     entry.timer.unref();
   }
 
-  private async attempt(id: string): Promise<void> {
+  /** `direct`: a relayed link looking for a direct route; it stays as it is when there is none. */
+  private async attempt(id: string, direct = false): Promise<void> {
     const peer = this.peer(id);
-    if (!peer || this.stopped || this.links.has(id) || this.dialing.has(id)) return;
+    if (!peer || this.stopped || this.dialing.has(id)) return;
+    if (this.links.has(id) && !(direct && this.links.get(id)!.via)) return;
     this.dialing.add(id);
     try {
       for (const host of peer.hosts) {
@@ -452,15 +531,142 @@ export class PeerService extends EventEmitter {
           link.close();
         }
       }
+      if (direct) return;
+      // No direct route: through any directly linked device that relays (#910).
+      for (const [relay, outer] of this.links) {
+        if (relay === id || outer.via || !outer.open || !outer.features.includes("relay")) continue;
+        let socket: tls.TLSSocket;
+        try {
+          socket = await this.dialVia(relay, id, peer.fingerprint);
+        } catch (err) {
+          this.errors.set(id, (err as Error).message);
+          continue;
+        }
+        const link = new Link(socket, true, id);
+        link.via = relay;
+        try {
+          const hello = await this.ask(link, this.hello(), (m) => m.type === "hello");
+          if (this.adopt(id, link, hello)) return;
+        } catch (err) {
+          this.errors.set(id, (err as Error).message);
+          link.close();
+        }
+      }
     } finally {
       this.dialing.delete(id);
     }
+    if (direct) return;
     const entry = this.retry.get(id);
     if (entry && !this.links.has(id)) {
       // Back off, with jitter, so two devices that both just woke don't dial in lockstep.
       entry.delay = Math.min(BACKOFF_MAX, Math.max(BACKOFF_MIN, entry.delay * 2)) * (0.8 + Math.random() * 0.4);
       this.connect(id);
     }
+  }
+
+  /**
+   * A TLS connection to `target` inside a stream through `relay` (#910): CONNECT /relay/<target> over the
+   * link, then the same pinned-key handshake as a direct dial. The relay only ever sees ciphertext.
+   */
+  private dialVia(relay: string, target: string, fingerprint: string): Promise<tls.TLSSocket> {
+    const outer = this.links.get(relay);
+    if (!outer) return Promise.reject(new Error("The relay is offline."));
+    return new Promise((resolve, reject) => {
+      const req = http.request({
+        method: "CONNECT",
+        path: `/relay/${target}`,
+        headers: { host: "relay" },
+        createConnection: () => outer.openStream() as unknown as net.Socket,
+      });
+      const timer = setTimeout(() => {
+        req.destroy();
+        reject(new Error(`No answer through ${this.peer(relay)?.name ?? relay}`));
+      }, CONNECT_MS);
+      req.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      req.on("connect", (res, stream, head) => {
+        clearTimeout(timer);
+        if (res.statusCode !== 200) {
+          stream.destroy();
+          reject(new Error(`${this.peer(relay)?.name ?? "The relay"} could not reach it (${res.statusCode}).`));
+          return;
+        }
+        if (head.length) stream.unshift(head);
+        const socket = tls.connect({ socket: stream, key: this.identity.keyPem, cert: this.identity.certPem, rejectUnauthorized: false, minVersion: "TLSv1.3" });
+        const fail = (error: Error) => {
+          socket.destroy();
+          reject(error);
+        };
+        const handshake = setTimeout(() => fail(new Error("The relayed device did not answer.")), CONNECT_MS);
+        socket.once("error", (err) => { clearTimeout(handshake); fail(err); });
+        socket.once("secureConnect", () => {
+          clearTimeout(handshake);
+          const spki = peerKey(socket);
+          if (!spki || fingerprintOf(spki) !== fingerprint) return fail(new Error("The relayed device answered with another key"));
+          socket.removeAllListeners("error");
+          socket.on("error", () => {});
+          resolve(socket);
+        });
+      });
+      req.end();
+    });
+  }
+
+  /**
+   * CONNECT on the HTTP server, from a link (#910). `/relay/<target>`: a paired device asks this one to
+   * pipe a stream to another paired device. `/relay-in/<from>`: a relay hands this device a connection
+   * from a device it is paired with, which then shakes hands like any peer.
+   */
+  private onRelay(req: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
+    const refuse = (status: string) => socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
+    const caller = peerDeviceOf(socket);
+    const match = /^\/(relay|relay-in)\/([0-9a-f]{12})$/.exec(req.url ?? "");
+    if (!caller || !match || !this.peer(caller)) return void refuse("403 Forbidden");
+    const [, kind, other] = match;
+    if (kind === "relay-in") {
+      // Only for a device paired here; the handshake checks its key.
+      if (!this.peer(other) || other === caller) return void refuse("403 Forbidden");
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length) socket.unshift(head);
+      const tlsSocket = new tls.TLSSocket(socket, { isServer: true, key: this.identity.keyPem, cert: this.identity.certPem, requestCert: true, rejectUnauthorized: false, minVersion: "TLSv1.3" } as tls.TLSSocketOptions);
+      const timer = setTimeout(() => tlsSocket.destroy(), CONNECT_MS);
+      tlsSocket.on("error", () => tlsSocket.destroy());
+      tlsSocket.once("secure", () => {
+        clearTimeout(timer);
+        this.accept(tlsSocket, caller);
+      });
+      return;
+    }
+    // Any two devices paired with this one, over direct links (no relay chains).
+    const link = this.links.get(other);
+    const from = this.links.get(caller);
+    if (other === caller || other === this.identity.id || !link?.open || link.via || from?.via) return void refuse("502 Bad Gateway");
+    const inner = http.request({
+      method: "CONNECT",
+      path: `/relay-in/${caller}`,
+      headers: { host: "relay" },
+      createConnection: () => link.openStream() as unknown as net.Socket,
+    });
+    inner.on("error", () => refuse("502 Bad Gateway"));
+    inner.on("connect", (res, stream, rest) => {
+      if (res.statusCode !== 200) {
+        stream.destroy();
+        refuse("502 Bad Gateway");
+        return;
+      }
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (rest.length) socket.write(rest);
+      if (head.length) stream.write(head);
+      socket.pipe(stream).pipe(socket);
+      const close = () => { socket.destroy(); stream.destroy(); };
+      socket.on("error", close);
+      stream.on("error", close);
+      socket.on("close", () => stream.destroy());
+      stream.on("close", () => socket.destroy());
+    });
+    inner.end();
   }
 
   private dial(host: string, port: number, check: (fingerprint: string) => boolean): Promise<{ socket: tls.TLSSocket; spki: Buffer }> {
@@ -486,7 +692,7 @@ export class PeerService extends EventEmitter {
   // --- links ---
 
   private hello(): Control {
-    return { type: "hello", protocol: PROTOCOL, version: this.options.version, id: this.identity.id, name: this.identity.name, hosts: this.hosts(), port: this.options.port, revoked: this.saved.revoked };
+    return { type: "hello", protocol: PROTOCOL, features: FEATURES, version: this.options.version, id: this.identity.id, name: this.identity.name, hosts: this.hosts(), port: this.options.port, revoked: this.saved.revoked, mirrors: this.heldHere };
   }
 
   /** Send first (if given), then wait for a control message that matches. */
@@ -527,7 +733,8 @@ export class PeerService extends EventEmitter {
     }
     const existing = this.links.get(id);
     if (existing?.open) {
-      const keepNew = link.dialer === (this.identity.id < id);
+      // A direct link beats a relayed one; between two of a kind, the one dialed by the smaller id stays.
+      const keepNew = !!existing.via !== !!link.via ? !link.via : link.dialer === (this.identity.id < id);
       if (!keepNew) {
         link.close();
         return true;
@@ -537,6 +744,7 @@ export class PeerService extends EventEmitter {
     }
     this.learn(peer, hello);
     this.links.set(id, link);
+    this.heldBy.set(id, cleanMirrors(hello.mirrors));
     if (typeof hello.version === "string") this.versions.set(id, hello.version.slice(0, 40));
     // Revocations made while this device was away reach it from whichever peer it meets first.
     if (Array.isArray(hello.revoked)) for (const fingerprint of hello.revoked.slice(0, 500)) this.onControl(id, link, { type: "revoked", fingerprint });
@@ -555,6 +763,7 @@ export class PeerService extends EventEmitter {
     link.on("close", () => {
       if (this.links.get(id) !== link) return;
       this.links.delete(id);
+      this.heldBy.delete(id);
       const current = this.peer(id);
       if (current) {
         current.lastSeen = Date.now();
@@ -564,6 +773,11 @@ export class PeerService extends EventEmitter {
       this.changed();
     });
     link.ping();
+    // Devices that relay through this one are worth a fresh try now, instead of at their next backoff.
+    if (!link.via && link.features.includes("relay")) {
+      for (const other of this.saved.peers) if (!this.links.has(other.id) && other.id !== id) this.connect(other.id, true);
+    }
+    // The mirrors this device holds changed while the other one was away: hello carried them.
     this.changed();
     return true;
   }
@@ -573,6 +787,9 @@ export class PeerService extends EventEmitter {
     if (!peer) return;
     if (message.type === "update") {
       this.learn(peer, message);
+      this.changed();
+    } else if (message.type === "mirrors") {
+      this.heldBy.set(id, cleanMirrors(message.list));
       this.changed();
     } else if (message.type === "revoke") {
       this.forget(peer);
@@ -707,8 +924,21 @@ function record(peer: Peer): Partial<Peer> {
   return { id: peer.id, name: peer.name, publicKey: peer.publicKey, hosts: peer.hosts, port: peer.port };
 }
 
+/** IP addresses, and host names for a public device (#910). */
 function cleanHosts(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((h): h is string => typeof h === "string" && net.isIP(h) !== 0).slice(0, 8) : [];
+  return Array.isArray(value) ? value.filter((h): h is string => typeof h === "string" && (net.isIP(h) !== 0 || hostName(h))).slice(0, 8) : [];
+}
+
+function hostName(value: string): boolean {
+  return value.length <= 253 && /^(?=.*[a-z])[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(value);
+}
+
+function cleanMirrors(value: unknown): MirrorHeld[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((m): m is MirrorHeld => !!m && typeof m.id === "string" && /^[0-9a-f]{12}$/.test(m.id) && typeof m.at === "number")
+    .slice(0, 100)
+    .map(({ id, at }) => ({ id, at }));
 }
 
 function validPort(value: unknown): value is number {
