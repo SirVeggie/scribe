@@ -45,6 +45,25 @@ test("bundled updates require review and preserve choices, source and a known me
   }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
 });
 
+test("reviewed installs restart an enabled Keep running plugin, and only that",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-keep-alive-install-")),service=new PluginService(root);
+  const files=(version:string)=>({"plugin.json":Buffer.from(JSON.stringify({...manifest,version})),"index.mjs":Buffer.from(`export default {methods:{echo:()=>"${version}"}}`)});
+  const install=(version:string)=>{const f=files(version);return service.install(f,service.preview(f).hash,true);};
+  const status=()=>service.list()[0].status,runtime=()=>(service as unknown as {runtimes:Map<string,unknown>}).runtimes.get("fixture");
+  const until=async(want:string)=>{for(let i=0;i<100&&status()!==want;i++)await new Promise(r=>setTimeout(r,50));assert.equal(status(),want);};
+  const settle=()=>new Promise(r=>setTimeout(r,300));
+  try{
+    await install("1.0.0");await service.enable("fixture",true,true);await until("running");
+    const first=runtime();await install("1.1.0");await until("running");assert.notEqual(runtime(),first);
+    const broken=files("1.2.0"),hash=service.preview(broken).hash,payload=(service as unknown as {payload:unknown}).payload;
+    (service as unknown as {payload:()=>never}).payload=()=>{throw new Error("import failed");};
+    await assert.rejects(()=>service.install(broken,hash,true),/import failed/);(service as unknown as {payload:unknown}).payload=payload;
+    await until("running");assert.equal(service.get("fixture").manifest.version,"1.1.0");
+    await service.enable("fixture",false,true);await install("1.3.0");await settle();assert.equal(status(),"idle");
+    await service.enable("fixture",true,true);await until("running");service.enableAll(false);await install("1.4.0");await settle();assert.equal(status(),"idle");
+  }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test("bundled review exposes installed customizations and uses the bundled ancestor",async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-bundled-custom-")),service=new PluginService(root);
   const files=(version:string,extra={})=>({"plugin.json":Buffer.from(JSON.stringify({...manifest,version})),"index.mjs":Buffer.from("export default {}"),...extra});

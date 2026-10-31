@@ -143,22 +143,24 @@ export class PluginService {
     const record: PluginRecord = { manifest, hash:codeHash, ...(previous&&previous.hash!==codeHash?{baseHash:previous.hash}:{}), ...(bundledHash?{bundledHash}:{}), enabled: previous?.enabled ?? true, keepAlive: previous?.keepAlive ?? false, settings, installedAt: Date.now() };
     writePackage(this.snapshot(record), code);
     await this.stop(manifest.id);
-    const payload=this.payload(files,manifest);Object.assign(record.settings,payload.settings??{});
-    if(payload.state)this.database.replaceState(manifest.id,payload.state);
-    if(payload.hasData){
-      const folder=path.join(this.directory(manifest.id),"data"),staging=path.join(this.directory(manifest.id),`data-import-${randomUUID()}`),backup=path.join(this.directory(manifest.id),`data-previous-${randomUUID()}`);
-      fs.mkdirSync(staging,{recursive:true});writePackage(staging,payload.data);const existed=fs.existsSync(folder);if(existed)fs.renameSync(folder,backup);
-      try{fs.renameSync(staging,folder);}catch(error){if(existed)fs.renameSync(backup,folder);throw error;}
-      if(existed)fs.rmSync(backup,{recursive:true,force:true});
-    }
-    this.database.save(record); this.permission(manifest);
-    this.database.markRemoved(manifest.id,false);
-    const source=this.draft(manifest.id);
-    if(fs.existsSync(source)){
-      await this.history(manifest.id,"Before plugin update");
-      for(const name of Object.keys(readPackage(source)))fs.unlinkSync(packagePath(source,name));
-    }
-    writePackage(source,code);await this.history(manifest.id,`Install ${manifest.version}`);
+    try{
+      const payload=this.payload(files,manifest);Object.assign(record.settings,payload.settings??{});
+      if(payload.state)this.database.replaceState(manifest.id,payload.state);
+      if(payload.hasData){
+        const folder=path.join(this.directory(manifest.id),"data"),staging=path.join(this.directory(manifest.id),`data-import-${randomUUID()}`),backup=path.join(this.directory(manifest.id),`data-previous-${randomUUID()}`);
+        fs.mkdirSync(staging,{recursive:true});writePackage(staging,payload.data);const existed=fs.existsSync(folder);if(existed)fs.renameSync(folder,backup);
+        try{fs.renameSync(staging,folder);}catch(error){if(existed)fs.renameSync(backup,folder);throw error;}
+        if(existed)fs.rmSync(backup,{recursive:true,force:true});
+      }
+      this.database.save(record); this.permission(manifest);
+      this.database.markRemoved(manifest.id,false);
+      const source=this.draft(manifest.id);
+      if(fs.existsSync(source)){
+        await this.history(manifest.id,"Before plugin update");
+        for(const name of Object.keys(readPackage(source)))fs.unlinkSync(packagePath(source,name));
+      }
+      writePackage(source,code);await this.history(manifest.id,`Install ${manifest.version}`);
+    }finally{this.keepRunning(manifest.id);}
     this.event(manifest.id,"changed",null,true);
     return record;
   }
@@ -228,11 +230,13 @@ export class PluginService {
   }
   enabled(id: string): boolean { try { return this.database.enabled() && this.get(id).enabled; } catch { return false; } }
   enableAll(enabled: boolean): void { this.database.enable(enabled); if (!enabled) for (const id of this.runtimes.keys()) this.stop(id);else this.startKeptAlive(); this.event("*","changed",null,true); }
-  startKeptAlive():void {if(!this.database.enabled())return;for(const p of this.database.list())if(p.enabled&&p.keepAlive&&p.manifest.backend)void (async()=>{await this.stopping.get(p.manifest.id);if(this.enabled(p.manifest.id))await this.runtime(p.manifest.id).start();})().catch(()=>{});}
+  startKeptAlive():void {if(!this.database.enabled())return;for(const p of this.database.list())this.keepRunning(p.manifest.id);}
+  /** Starts an enabled Keep running plugin in the background once any stop in progress has finished; installs and toggles use it so a stopped runtime comes back. */
+  private keepRunning(id:string):void {void (async()=>{await this.stopping.get(id);const p=this.database.list().find(p=>p.manifest.id===id);if(p?.keepAlive&&p.manifest.backend&&this.enabled(id))await this.runtime(id).start();})().catch(()=>{});}
   async enable(id: string, enabled: boolean, keepAlive?: boolean): Promise<void> {
     const p=this.get(id);if(keepAlive&&!p.manifest.backend)throw new Error("This plugin has no backend to keep running");
-    p.enabled=enabled;if(keepAlive!==undefined)p.keepAlive=keepAlive;this.database.save(p);await this.stop(id);const latest=this.get(id);
-    if(latest.enabled&&latest.keepAlive&&this.database.enabled())void this.runtime(id).start().catch(()=>{});this.event(id,"changed",null,true);
+    p.enabled=enabled;if(keepAlive!==undefined)p.keepAlive=keepAlive;this.database.save(p);await this.stop(id);
+    this.keepRunning(id);this.event(id,"changed",null,true);
   }
   async configure(id: string, settings: Record<string, unknown>): Promise<void> {
     const p = this.get(id);
