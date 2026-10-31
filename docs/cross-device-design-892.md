@@ -78,7 +78,7 @@ that implement it.
 - Revocation drops the key on both sides and sends `revoked` to every online peer, which drops it and tells
   the revoked device too. Each hello carries the revoked list, so a device that was away catches up.
 - `/api/devices` (user only; agents get 403), Settings → Devices, and `scribe pair <code>` / `scribe devices`
-  (`npm run pair -- <code>`). Events: `devices` (refetch), `device_paired` (words + other devices to introduce).
+  (`npm run pair -- <code>`). Events: `devices` (refetch), `device_paired` (words to compare). Paired devices pass each other's records on whenever a link comes up, so every device reaches every other one (#931).
 
 ## Step 2 as built (#905)
 

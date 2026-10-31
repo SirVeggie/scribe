@@ -774,6 +774,7 @@ export class PeerService extends EventEmitter {
       this.changed();
     });
     link.ping();
+    this.spread(peer, link);
     // Devices that relay through this one are worth a fresh try now, instead of at their next backoff.
     if (!link.via && link.features.includes("relay")) {
       for (const other of this.saved.peers) if (!this.links.has(other.id) && other.id !== id) this.connect(other.id, true);
@@ -781,6 +782,19 @@ export class PeerService extends EventEmitter {
     // The mirrors this device holds changed while the other one was away: hello carried them.
     this.changed();
     return true;
+  }
+
+  /**
+   * Every paired device reaches every other one (#931): a device that comes online learns about this
+   * one's other devices, and the online ones learn about it. Receivers skip keys they already have or
+   * revoked, so the devices converge on a full mesh without the user introducing them.
+   */
+  private spread(peer: Peer, link: Link): void {
+    for (const other of this.saved.peers) {
+      if (other.id === peer.id) continue;
+      link.control({ type: "introduce", peer: record(other) });
+      this.links.get(other.id)?.control({ type: "introduce", peer: record(peer) });
+    }
   }
 
   private onControl(id: string, _link: Link, message: Control): void {

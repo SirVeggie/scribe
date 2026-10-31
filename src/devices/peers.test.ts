@@ -157,7 +157,7 @@ test("five wrong codes close the offer", async () => {
   await assert.rejects(c.peers.pair(offer.code));
 });
 
-test("a new device is introduced to the others, and revocation spreads to every paired device", async () => {
+test("a new device reaches the others on its own (#931), and revocation spreads to every paired device", async () => {
   const [a, b, c] = nodes;
   let shown: { others: { id: string }[] } | undefined;
   a.peers.once("paired", (event) => (shown = event));
@@ -167,9 +167,7 @@ test("a new device is introduced to the others, and revocation spreads to every 
   assert.deepEqual(result.others, []);
   await until(() => !!shown, "a's paired event");
   assert.deepEqual(shown!.others.map((o) => o.id), [b.peers.identity.id]);
-  await until(() => online(a, c), "a–c link");
-  assert.equal(a.peers.introduce(c.peers.identity.id), 1);
-  await until(() => online(b, c) && online(c, b), "b–c link from the introduction");
+  await until(() => online(b, c) && online(c, b), "b–c link without an introduction");
 
   // Revoke b on a: a, b and c all drop the key, and b can't come back.
   a.peers.revoke(b.peers.identity.id);

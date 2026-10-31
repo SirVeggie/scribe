@@ -410,25 +410,11 @@
     code.input.focus();
   }
 
-  /** After pairing, on either side: the words to compare, and the offer to connect the other devices. */
+  /** After pairing, on either side: the words to compare. The other paired devices connect on their own (#931). */
   function showPaired(result) {
     const words = el("p", "device-words");
     words.append(`Paired with ${result.device.name}. Check that it shows the same words: `, el("strong", null, result.words.join(" ")));
     const row = el("div", "settings-actions");
-    const others = result.others || [];
-    if (others.length) {
-      const names = others.map((o) => o.name).join(", ");
-      const connect = button(`Connect it to ${names} too`, async () => {
-        connect.disabled = true;
-        try {
-          const done = await request("POST", `/${encodeURIComponent(result.device.id)}/introduce`, {});
-          say(done.introduced ? `Introduced ${result.device.name} to ${names}.` : `${names} ${others.length > 1 ? "are" : "is"} offline; try again when ${others.length > 1 ? "they are" : "it is"} on.`);
-          if (done.introduced) closePanel();
-        } catch (err) { say(err.message); }
-        connect.disabled = false;
-      });
-      row.append(connect);
-    }
     row.append(el("span", "ml-grow"), button("Done", closePanel));
     delete panel.dataset.code;
     openPanel(result, [words, row]);
