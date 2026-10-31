@@ -1747,7 +1747,7 @@ window.createViews = function createViews(host) {
       host.showNotice(ref.kind === "thread" ? `That thread is gone on ${device}` : `No page called “${ref.ref}” on ${device}`);
       return { ok: false, error: "not_found" };
     }
-    const url = new URL(`http://d-${info.device.id}.localhost:${location.port}/`);
+    const url = new URL(`${window.scribeHost.deviceOrigin(info.device.id)}/`);
     if (ref.kind === "thread") {
       url.searchParams.set("thread", ref.ref);
     } else {

@@ -8,6 +8,7 @@ import { requestPort, sharedFile } from "../contentOrigin.js";
 import { isEmbedLabel, type EmbedProxy } from "./embedProxy.js";
 import { peerDeviceOf } from "./link.js";
 import type { PeerService } from "./peers.js";
+import { WEB_HEADER, webBaseOf } from "../webRequest.js";
 
 /**
  * The peer gateway (#905): this daemon serves another device's own UI on d-<device>.localhost, and its
@@ -25,7 +26,7 @@ import type { PeerService } from "./peers.js";
 const DROP = new Set([
   "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer",
   "x-scribe-local-token", "x-scribe-token", "x-scribe-thread", "x-scribe-client", "x-scribe-session", "x-scribe-agent",
-  "x-scribe-device", "x-scribe-remote-agent",
+  "x-scribe-device", "x-scribe-remote-agent", WEB_HEADER,
 ]);
 
 const CACHE_MAX_BYTES = 32 * 1024 * 1024;
@@ -115,6 +116,9 @@ export function peerGateway(peers: PeerService, options: {
     }
     const headers: http.OutgoingHttpHeaders = {};
     for (const [name, value] of Object.entries(req.headers)) if (!DROP.has(name) && value !== undefined) headers[name] = value;
+    // A browser on the web (#913): the other device builds its URLs on the web domain.
+    const web = webBaseOf(req);
+    if (web) headers[WEB_HEADER] = web;
     const proxied = http.request({
       method: req.method,
       path: req.originalUrl,
@@ -224,6 +228,8 @@ export function peerGateway(peers: PeerService, options: {
       if (lower !== "connection" && lower !== "upgrade" && DROP.has(lower)) continue;
       lines.push(`${name}: ${req.rawHeaders[i + 1]}`);
     }
+    const web = webBaseOf(req);
+    if (web) lines.push(`${WEB_HEADER}: ${web}`);
     stream.write(`${lines.join("\r\n")}\r\n\r\n`);
     if (head.length) stream.write(head);
     socket.pipe(stream).pipe(socket);

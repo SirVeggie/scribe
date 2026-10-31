@@ -19,6 +19,11 @@ export const PEER_PORT = Number(process.env.SCRIBE_PEER_PORT || PORT + 1);
  * whose ports are picked next to each other): chats' MCP then calls the board port.
  */
 export const AGENT_PORT = process.env.SCRIBE_AGENT_PORT ? Number(process.env.SCRIBE_AGENT_PORT) || 0 : PORT + 2;
+/**
+ * Loopback port for web access (#913): a TLS proxy (Caddy) on this machine sends <domain> and *.<domain>
+ * here. It opens only once Settings → Devices → Web access names a domain; 0 keeps it closed.
+ */
+export const WEB_PORT = process.env.SCRIBE_WEB_PORT ? Number(process.env.SCRIBE_WEB_PORT) || 0 : PORT + 3;
 /** Addresses to listen for peers on instead of the LAN and tailnet ones (comma separated), or "off". */
 export function peerHostsOverride(): string[] | "off" | undefined {
   const value = process.env.SCRIBE_PEER_HOSTS?.trim();

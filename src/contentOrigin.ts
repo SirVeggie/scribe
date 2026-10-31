@@ -1,6 +1,7 @@
 import type express from "express";
 import { CONTENT_HOST, PAGE_HOST_SUFFIX, baseUrl, gatewayHost, hostSuffixOf, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost, pageComponentFromHost, shellOrigins } from "./config.js";
 import { peerDeviceOf } from "./devices/link.js";
+import { webBaseOf, webHostOf } from "./webRequest.js";
 
 /** A tab page's origin (t-ab12cd34.localhost) or the shared content origin (127.0.0.2): never the board's. */
 export function isContentHost(req: express.Request): boolean {
@@ -21,8 +22,10 @@ export function requestPort(req: { get(name: string): string | undefined }): str
   return /:(\d+)$/.exec(req.get("host") ?? "")?.[1] ?? "";
 }
 
-/** http://<host>:<port> on the port the request came in on. */
+/** http://<host>:<port> on the port the request came in on; https://<web name> for a browser on the web (#913). */
 export function requestOrigin(req: express.Request, host: string): string {
+  const web = webBaseOf(req);
+  if (web) return `https://${webHostOf(host, web)}`;
   const port = requestPort(req);
   return `http://${host}${port ? `:${port}` : ""}`;
 }
@@ -30,7 +33,8 @@ export function requestOrigin(req: express.Request, host: string): string {
 /** The board's origin as the request's browser knows it. */
 export function boardOrigin(req: express.Request): string {
   const suffix = requestSuffix(req);
-  return suffix === PAGE_HOST_SUFFIX ? baseUrl() : requestOrigin(req, suffix.slice(1));
+  if (suffix === PAGE_HOST_SUFFIX) return webBaseOf(req) ? requestOrigin(req, "127.0.0.1") : baseUrl();
+  return requestOrigin(req, suffix.slice(1));
 }
 
 /**

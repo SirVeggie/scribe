@@ -7,6 +7,7 @@ import { isContentHost } from "./contentOrigin.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { REMOTE_AGENT_HEADER, decodeRemoteAgent, remoteThreadId, type RemoteAgent } from "./devices/agentAccess.js";
 import type { Viewer } from "./types.js";
+import { WEB_HEADER, onWebPort, signedInWeb } from "./webRequest.js";
 
 /**
  * Who is calling the daemon (#682). A chat's MCP proves its thread with a token the daemon gave it
@@ -29,8 +30,13 @@ import type { Viewer } from "./types.js";
  * Scribe chats' MCP calls on the agent port (AGENT_PORT, #915), which a sandbox lets through instead of the
  * board's. Every caller there is an agent: a thread with its token, else anonymous. No browser rule, page
  * origin or local token applies, so a sandboxed shell that reaches it is never the user.
+ *
+ * The web listener (#913) is the public door behind a TLS proxy. A request there is the user only when its
+ * Google session checked out (src/devices/web.ts marks it); no browser header, local token or page origin
+ * makes it one. `web` also marks a web request another device forwarded over its link: still that device's
+ * user here, and like any request from away, it opens nothing on this device's own screen.
  */
-export type Caller = { viewer: Viewer; thread?: string; external?: true; device?: string; remote?: RemoteAgent };
+export type Caller = { viewer: Viewer; thread?: string; external?: true; device?: string; remote?: RemoteAgent; web?: true };
 
 const known = new WeakMap<express.Request, Caller>();
 
@@ -72,8 +78,10 @@ function decide(req: express.Request): Caller {
   if (device) {
     // A chat on that device, sent on by its daemon (#911): an agent here, held to this device's grant.
     const remote = decodeRemoteAgent(req.get(REMOTE_AGENT_HEADER));
-    return remote ? { viewer: "agent", thread: remoteThreadId(device, remote.thread), device, remote } : { viewer: "user", device };
+    if (remote) return { viewer: "agent", thread: remoteThreadId(device, remote.thread), device, remote };
+    return req.get(WEB_HEADER) ? { viewer: "user", device, web: true } : { viewer: "user", device };
   }
+  if (onWebPort(req.socket)) return signedInWeb(req) ? { viewer: "user", web: true } : { viewer: "agent" };
   const thread = req.get(THREAD_HEADER)?.slice(0, 60);
   const token = req.get(THREAD_TOKEN_HEADER);
   const chat = thread && token && sameToken(token, threadToken(thread)) ? thread : undefined;
@@ -100,6 +108,8 @@ function devicesRoute(req: express.Request): boolean {
 export function socketAllowed(headers: { origin?: string; host?: string; [name: string]: unknown }, socket?: object): boolean {
   if (peerDeviceOf(socket)) return true;
   if (onAgentPort(socket)) return false;
+  // The web listener rewrote a signed-in socket's Origin and Host to this board's (#913).
+  if (onWebPort(socket) && !signedInWeb(headers)) return false;
   const origin = headers.origin;
   if (!origin) return false;
   try {

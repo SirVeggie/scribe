@@ -12,7 +12,7 @@ import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewr
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
 import { exportAllFilename, exportFilename, parseImport } from "./boardExport.js";
 import { guideSent, markGuideSent } from "./guideMemory.js";
-import { AGENT_LABEL_HEADER, AGENT_PORT, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PEER_PORT, PORT, REQUEST_TIMEOUT_MS, VERSION, PAGE_HOST_SUFFIX, baseUrl, dataDir, peerHostsOverride } from "./config.js";
+import { AGENT_LABEL_HEADER, AGENT_PORT, CONTENT_HOST, SESSION_HEADER, HOST, INSTALL_ROOT, MAX_IMPORT_BYTES, MAX_PAGE_ASSET_BYTES, PEER_PORT, PORT, REQUEST_TIMEOUT_MS, WEB_PORT, VERSION, PAGE_HOST_SUFFIX, baseUrl, dataDir, pageIdFromHost, peerHostsOverride } from "./config.js";
 import { skipInlinePageImage } from "./mcpImages.js";
 import { pageAssetUrl, type PageAssetMeta, type PageAssetUsage } from "./pageAssets.js";
 import { BOARD_BRIDGE_JS, BOARD_STALE_CSS } from "./bridge.js";
@@ -75,6 +75,9 @@ import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { agentPortGate, identify, markAgentSocket, prepareSecrets, socketAllowed } from "./callers.js";
+import { markWebSocket, onWebPort } from "./webRequest.js";
+import type { Duplex } from "node:stream";
+import { WebAccess, webFront } from "./devices/web.js";
 import { PeerService } from "./devices/peers.js";
 import { devicesRouter } from "./devices/routes.js";
 import { peerGateway } from "./devices/gateway.js";
@@ -214,8 +217,10 @@ export async function startHttp(): Promise<http.Server> {
   // askSource: this device's chats that wait on the user, for paired devices' toasts.
   const askSource = new AskSource(() => agentHost?.listThreads() ?? []);
   const askWatcher = new AskWatcher(peers);
+  const webAccess = new WebAccess(path.join(dataDir(), "device"), WEB_PORT);
   const devicesApi = express.Router();
   devicesApi.use("/api/devices", express.json(), devicesRouter(peers, {
+    web: webAccess,
     spaces: () => store.spacesView(),
     switchSpace: (id) => store.switchSpace(id),
     asks: askSource,
@@ -327,7 +332,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use(contentOriginGate);
   // These open a window on this device's own screen: not for someone viewing it from another device.
   app.post(["/api/tabs/:id/file/open-location", "/api/agent/integrations/intellij/open", "/api/search/open-folder"], (req, res, next) => {
-    if (identify(req).device) res.status(409).json({ error: "This opens on the device's own screen, so it is not available from another device." });
+    if (identify(req).device || identify(req).web) res.status(409).json({ error: "This opens on the device's own screen, so it is not available from another device." });
     else next();
   });
   const pageComponents = new PageComponents(store, pluginService);
@@ -2750,12 +2755,38 @@ export async function startHttp(): Promise<http.Server> {
   // Two servers attached to one HTTP server abort each other's upgrades, so upgrades are routed by path.
   // A socket another device's UI opened over the peer link (#905) is compressed: it crosses the network.
   const linkWss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024 }, verifyClient: ({ req }: { req: http.IncomingMessage }) => socketAllowed(req.headers, req.socket) });
-  server.on("upgrade", (req, socket, head) => {
+  const upgradeBoard = (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     if (gateway.upgrade(req, socket, head)) return;
     if (audioStream.handle(req, socket, head)) return;
     if (new URL(req.url || "/", "http://x").pathname !== "/ws") { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
-    (peerDeviceOf(req.socket) ? linkWss : wss).handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
+    // Sockets that cross a network (a peer link, the web) are compressed.
+    (peerDeviceOf(req.socket) || onWebPort(req.socket) ? linkWss : wss).handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
+  };
+  server.on("upgrade", upgradeBoard);
+  // Web access (#913): a TLS proxy on this machine sends the web domain here; a Google session lets it in.
+  const web = webFront(webAccess, {
+    self: () => peers.identity.id,
+    paired: (id) => peers.nameOf(id) !== undefined,
+    pageExists: async (device, label) => {
+      const id = pageIdFromHost(`${label}${PAGE_HOST_SUFFIX}`);
+      if (!id) return false;
+      if (!device) return Boolean(store.get(id));
+      try {
+        const reply = await peers.request(device, { method: "POST", path: "/api/devices/describe", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ pages: [id], threads: [] }) });
+        return reply.status === 200 && Boolean((JSON.parse(reply.body.toString("utf8")) as Described).pages?.[id]);
+      } catch {
+        return false;
+      }
+    },
+    port: PORT,
+    publicDir,
+    app: (req, res) => app(req as express.Request, res as express.Response),
+    upgrade: upgradeBoard,
   });
+  const webServer = http.createServer(web.request);
+  webServer.on("connection", markWebSocket);
+  webServer.on("upgrade", web.upgrade);
+  webServer.requestTimeout = REQUEST_TIMEOUT_MS;
 
   wss.on("connection", (socket) => {
     sockets.add(socket);
@@ -2840,6 +2871,21 @@ export async function startHttp(): Promise<http.Server> {
   // Chats' MCP falls back to the board port without it (daemon.ts), and a sandbox then cuts them off.
   if (AGENT_PORT) await listen(agentServer, AGENT_PORT, HOST).catch((err) => log(`Agent port ${AGENT_PORT} could not open: ${(err as Error).message}`));
   server.once("close", () => agentServer.close());
+  // The web listener opens while a web domain is set, and closes when it is cleared.
+  const syncWeb = () => {
+    const want = Boolean(WEB_PORT && webAccess.host);
+    if (want && !webServer.listening) {
+      listen(webServer, WEB_PORT, HOST).then(() => { webAccess.listening = true; log(`Web access for ${webAccess.host} on ${HOST}:${WEB_PORT}`); })
+        .catch((err) => log(`Web port ${WEB_PORT} could not open: ${(err as Error).message}`));
+    } else if (!want && webServer.listening) {
+      webServer.close();
+      webServer.closeAllConnections();
+      webAccess.listening = false;
+    }
+  };
+  webAccess.on("changed", syncWeb);
+  syncWeb();
+  server.once("close", () => { webServer.close(); webServer.closeAllConnections(); });
   peers.attach(server);
   await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));
   mirrorPusher.start();

@@ -71,6 +71,27 @@
   let mirrorPicker = null;
   let mirror = null;
 
+  // Web access (#913): an always-on device serves Scribe to any browser after a Google sign-in. Any paired
+  // device sets it up, since the server is usually headless; a browser on the web only reads it.
+  const webSection = section(
+    "Web access",
+    "Open Scribe from any browser, such as a phone, through an always-on device behind a TLS proxy. Sign-in is with Google; only the accounts listed here get in."
+  );
+  const webDeviceWrap = el("label", "ml-field");
+  const webDevice = el("select");
+  webDevice.id = "device-web-on";
+  webDeviceWrap.append(el("span", null, "On"), webDevice);
+  const webHostField = field("Web address", "", "e.g. scribe.example.com");
+  const webClientField = field("Google client id", "", "….apps.googleusercontent.com");
+  const webAccountsField = field("Allowed Google accounts", "", "you@gmail.com, separated by commas");
+  const webStatus = el("p", "settings-hint");
+  const webSessions = el("div", "device-list");
+  const webActions = el("div", "settings-actions");
+  webSection.append(webDeviceWrap, webHostField.wrap, webClientField.wrap, webAccountsField.wrap, webStatus, webSessions, webActions);
+  let webPicker = null;
+  let webTarget = "";
+  let web = null;
+
   const pairedSection = section("Paired devices");
   const list = el("div", "device-list");
   const status = el("p", "settings-hint ml-status");
@@ -148,6 +169,87 @@
     } catch (err) { say(err.message); refreshMirror(); }
   });
 
+  /** This device's web access, or another one's over the link. */
+  const webPath = () => (webTarget && webTarget !== view?.self.id ? `/${encodeURIComponent(webTarget)}/web` : "/web");
+
+  function renderWeb() {
+    if (!view) return;
+    const devices = [[view.self.id, `${view.self.name} (this device)`], ...view.peers.filter((peer) => peer.online).map((peer) => [peer.id, peer.name])];
+    if (!devices.some(([id]) => id === webTarget)) webTarget = view.self.id;
+    webDevice.replaceChildren(...devices.map(([value, label]) => {
+      const option = el("option", null, label);
+      option.value = value;
+      return option;
+    }));
+    webDevice.value = webTarget;
+    if (!webPicker) webPicker = window.createSelect ? window.createSelect(webDevice) : null;
+    else webPicker.syncSelect?.();
+    const editable = !!web?.editable;
+    for (const input of [webHostField.input, webClientField.input, webAccountsField.input]) input.disabled = !web || !editable;
+    if (!web) {
+      webStatus.textContent = "";
+      webSessions.replaceChildren();
+      webActions.replaceChildren();
+      return;
+    }
+    const active = document.activeElement;
+    if (active !== webHostField.input) webHostField.input.value = web.host || "";
+    if (active !== webClientField.input) webClientField.input.value = web.clientId || "";
+    if (active !== webAccountsField.input) webAccountsField.input.value = (web.accounts || []).join(", ");
+    webStatus.textContent = !web.host ? "Off."
+      : web.listening ? `Point your TLS proxy at 127.0.0.1:${web.port} for ${web.host} and *.${web.host}.`
+      : `Not listening on port ${web.port}: see the log on that device.`;
+    webSessions.replaceChildren(...(web.sessions || []).map((session) => {
+      const row = el("div", "setting-row ml-source");
+      const text = el("span", "ml-source-text");
+      text.append(el("strong", null, session.email), el("span", "ml-source-detail", ` ${session.agent}${session.current ? " · this browser" : ""} · ${ago(session.seenAt)}`));
+      row.append(text);
+      if (editable) row.append(button("Sign out", () => saveWeb("DELETE", `/sessions/${encodeURIComponent(session.id)}`)));
+      return row;
+    }));
+    webActions.replaceChildren();
+    // A browser on the web signs itself out on the sign-in host (src/devices/web.ts).
+    if (window.scribeHost?.web) {
+      const form = el("form");
+      form.method = "post";
+      form.action = `https://${window.scribeHost.web}/auth/logout`;
+      const out = el("button", null, "Sign out of this browser");
+      out.type = "submit";
+      form.append(out);
+      webActions.append(form);
+    }
+  }
+
+  async function refreshWeb() {
+    try {
+      web = await request("GET", webPath());
+    } catch (err) {
+      web = null;
+      webStatus.textContent = err.message;
+    }
+    renderWeb();
+  }
+
+  async function saveWeb(method, path, body) {
+    try {
+      web = { ...web, ...(await request(method, `${webPath()}${path}`, body)) };
+      renderWeb();
+    } catch (err) {
+      webStatus.textContent = err.message;
+    }
+  }
+
+  webDevice.addEventListener("change", () => {
+    webTarget = webDevice.value;
+    web = null;
+    renderWeb();
+    void refreshWeb();
+  });
+  for (const [input, key] of [[webHostField.input, "host"], [webClientField.input, "clientId"], [webAccountsField.input, "accounts"]]) {
+    input.addEventListener("change", () => saveWeb("PUT", "", { [key]: input.value.trim() }));
+    input.addEventListener("keydown", (event) => { if (event.key === "Enter") input.blur(); });
+  }
+
   function ago(at) {
     const s = Math.max(0, Math.round((Date.now() - at) / 1000));
     if (s < 60) return "just now";
@@ -206,8 +308,7 @@
       // Its own UI in this window, through this device's gateway (#905). The list is this device's in
       // every view (#906), so the row of the device being viewed takes you back home.
       const home = peer.id === view.viewing;
-      const port = location.port ? `:${location.port}` : "";
-      const open = button(home ? "Back" : "Open", () => { location.href = home ? `${location.protocol}//127.0.0.1${port}/` : `${location.protocol}//d-${peer.id}.localhost${port}/`; });
+      const open = button(home ? "Back" : "Open", () => { location.href = `${home ? window.scribeHost.homeOrigin() : window.scribeHost.deviceOrigin(peer.id)}/`; });
       open.disabled = !peer.online && !home && !peer.mirror;
       row.append(dot, text, open, revoke);
       list.append(row, agentRow(peer));
@@ -217,6 +318,7 @@
       else closePanel();
     }
     renderMirror();
+    renderWeb();
   }
 
   function closePanel() {
@@ -354,10 +456,11 @@
   function refresh() {
     request("GET", "").then(render).catch((err) => say(err.message));
     refreshMirror();
+    void refreshWeb();
   }
 
   window.scribeDevicesSettings = {
-    sections: [selfSection, pairedSection, mirrorSection],
+    sections: [selfSection, pairedSection, mirrorSection, webSection],
     /** `confirm(message, label)` resolves true when the user agrees to revoke a device. */
     init({ confirm }) {
       if (confirm) confirmRevoke = confirm;

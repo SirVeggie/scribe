@@ -184,8 +184,7 @@ window.createSpaces = function createSpaces(host) {
 
   /** This device's base URL, or another one's through the gateway. */
   function deviceUrl(id) {
-    const port = location.port ? `:${location.port}` : "";
-    return id === devices?.self.id ? `${location.protocol}//127.0.0.1${port}/` : `${location.protocol}//d-${id}.localhost${port}/`;
+    return `${id === devices?.self.id ? window.scribeHost.homeOrigin() : window.scribeHost.deviceOrigin(id)}/`;
   }
 
   /** A space on another device than the one showing: make it that device's current space and go there. */
