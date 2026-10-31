@@ -10,6 +10,8 @@
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
   /** How a thread runs, which follows its rung (#719). Older samples can still say ask. */
   const MODE_LABEL = { code: "Code", plan: "Plan", board: "Board" };
+  /** The Mode picker's choices: a plan thread runs on the Board rung, so it has no context of its own. */
+  const PICK_MODES = ["code", "board"];
   const KIND_LABEL = { execute: "Shell commands", mcp: "MCP tools", read: "File reads", search: "Searches", edit: "File edits", fetch: "Web", think: "Thinking", task: "Subagents", todo: "To-dos", delete: "Deletes", move: "Moves", other: "Other" };
   const RANGES = [
     { id: 7, label: "7 days" },
@@ -62,6 +64,7 @@
   try {
     Object.assign(S.pick, JSON.parse(localStorage.getItem(LS.pick) || "{}"));
     Object.assign(S.usageView, JSON.parse(localStorage.getItem(LS.usage) || "{}"));
+    if (!PICK_MODES.includes(S.pick.mode)) S.pick.mode = "board";
   } catch {
     /* keep the defaults */
   }
@@ -451,7 +454,7 @@
     };
     row.append(
       track(PROVIDERS.map((id) => ({ id, label: PROVIDER_LABEL[id] })), S.pick.provider, (provider) => repick({ provider }), "Provider"),
-      track(Object.entries(MODE_LABEL).map(([id, label]) => ({ id, label })), S.pick.mode, (mode) => repick({ mode }), "Mode")
+      track(PICK_MODES.map((id) => ({ id, label: MODE_LABEL[id] })), S.pick.mode, (mode) => repick({ mode }), "Mode")
     );
     const select = el("select");
     select.setAttribute("aria-label", "Workspace");
