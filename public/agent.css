@@ -6200,10 +6200,10 @@ body.resizing-split main.has-split .agent-dock {
 
 /* ---------- tab strip: page threads at work ---------- */
 
-.tab.agent-running::before,
-.tab.agent-waiting::before,
-.lib-page.agent-running::before,
-.lib-page.agent-waiting::before {
+.tab[data-agent="running"]::before,
+.tab[data-agent="waiting"]::before,
+.lib-page[data-agent="running"]::before,
+.lib-page[data-agent="waiting"]::before {
   content: "";
   order: -1;
   width: 7px;
@@ -6215,8 +6215,8 @@ body.resizing-split main.has-split .agent-dock {
   animation: ag-pulse var(--dur-pulse) infinite;
 }
 
-.lib-page.agent-running::before,
-.lib-page.agent-waiting::before {
+.lib-page[data-agent="running"]::before,
+.lib-page[data-agent="waiting"]::before {
   position: absolute;
   left: calc(1.5px + var(--depth, 0) * 14px);
   top: calc(50% - 2.5px);
@@ -6224,8 +6224,8 @@ body.resizing-split main.has-split .agent-dock {
   height: 5px;
 }
 
-.tab.agent-waiting::before,
-.lib-page.agent-waiting::before {
+.tab[data-agent="waiting"]::before,
+.lib-page[data-agent="waiting"]::before {
   background: var(--ag-warn);
   box-shadow: 0 0 8px rgba(232, 196, 122, 0.8);
   animation: none;

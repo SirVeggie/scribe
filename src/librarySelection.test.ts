@@ -284,3 +284,45 @@ test("Library drag moves selected pages in tree order and rejects a selected sub
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
+
+test("Library rows are kept by key: changes patch them in place and other modules' classes stay (#430)", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Library keyed rows test" });
+  try {
+    const { page, errors } = await fixture(browser);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.held = { x: document.querySelector('.lib-row[data-id="x"]'), work: document.querySelector('.lib-row[data-id="work"]') };
+      w.held.x.classList.add("lib-flash");
+      w.observer = new MutationObserver(() => {});
+      w.observer.observe(document.getElementById("library-list"), { childList: true });
+    });
+    // A new title, an agent status and a new page in Work: the rows are patched, nothing else is moved or rebuilt.
+    const after = await page.evaluate(() => {
+      const w = window as any;
+      w.pages.find((p: any) => p.id === "x").title = "X renamed";
+      w.pages.push({ id: "n", title: "N", folderId: "work", libPos: 5 });
+      w.library.render();
+      const x = document.querySelector('.lib-row[data-id="x"]') as HTMLElement;
+      const records = w.observer.takeRecords();
+      return {
+        same: [x === w.held.x, document.querySelector('.lib-row[data-id="work"]') === w.held.work],
+        flash: x.classList.contains("lib-flash"),
+        title: x.querySelector(".tab-title")!.textContent,
+        count: w.held.work.querySelector(".lib-count").textContent,
+        removed: records.reduce((n: number, r: MutationRecord) => n + r.removedNodes.length, 0),
+        added: records.flatMap((r: MutationRecord) => [...r.addedNodes].map(n => (n as HTMLElement).dataset.id)),
+      };
+    });
+    assert.deepEqual(after, { same: [true, true], flash: true, title: "X renamed", count: "4", removed: 0, added: ["n"] });
+    // A rename puts the row's own title back, and the row stays.
+    await page.locator('.lib-row[data-id="y"]').focus();
+    await page.keyboard.press("F2");
+    await page.locator(".lib-rename").fill("Y2");
+    await page.keyboard.press("Enter");
+    assert.deepEqual(await page.evaluate(() => {
+      const row = document.querySelector('.lib-row[data-id="y"]')!;
+      return [row.querySelectorAll(".tab-title").length, row.querySelector(".tab-title")!.textContent, row.classList.contains("renaming"), document.querySelectorAll(".lib-rename").length];
+    }), [1, "Y2", false, 0]);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});

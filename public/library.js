@@ -228,8 +228,8 @@ window.createLibrary = function createLibrary(host) {
     }
     lensView = computeLens();
     const focused = rowKey(document.activeElement);
-    // Rows that did not change stay in the page: a rebuilt row loses its hover and blinks (#407).
-    const rows = document.createDocumentFragment();
+    // Each row is kept by its key and patched in place, so it keeps its hover, transitions and focus (#407, #430).
+    const rows = [];
     if (query && hits) {
       renderHits(rows);
     } else if (lensView) {
@@ -240,7 +240,8 @@ window.createLibrary = function createLibrary(host) {
       none.hidden = !empty;
       none.textContent = "Pages you show appear here";
     }
-    window.scribeSyncChildren(list, [rows, lineEl]);
+    rows.push({ key: "drop-line", create: () => lineEl });
+    window.scribeKeyedList(list, rows);
     invalidateLibrary();
     if (drag?.target) {
       paintTarget(drag.target);
@@ -262,16 +263,31 @@ window.createLibrary = function createLibrary(host) {
         continue;
       }
       const open = !collapsed.has(folder.id);
-      out.appendChild(folderRow(folder, depth, open));
+      out.push(folderRow(folder, depth, open));
       if (open) {
         renderTree(out, folder.id, depth + 1, lens);
       }
     }
     for (const page of pagesOf(folderId)) {
       if (!lens || lens.ids.has(page.id)) {
-        out.appendChild(pageRow(page, depth));
+        out.push(pageRow(page, depth));
       }
     }
+  }
+
+  /** A line of text between the rows: a count, a group heading, an error. */
+  function metaRow(key, className, text) {
+    return {
+      key: `meta:${key}`,
+      create: () => {
+        const el = document.createElement("div");
+        el.className = className;
+        return el;
+      },
+      update: (el) => {
+        if (el.textContent !== text) el.textContent = text;
+      },
+    };
   }
 
   /* ---------- lens (#260) ---------- */
@@ -367,47 +383,51 @@ window.createLibrary = function createLibrary(host) {
 
   /** The line over a lensed Library: whose lens, how much it shows, and the way out. */
   function lensLine(shown) {
-    const line = document.createElement("div");
-    line.className = "lib-lens-line";
-    line.style.setProperty("--space", host.spaceColor?.(lensView.space) || "var(--accent)");
-    const text = document.createElement("span");
-    text.className = "lib-lens-text";
-    text.textContent = `${lensView.space.name} · ${shown} of ${model.pages.length} pages`;
+    const color = host.spaceColor?.(lensView.space) || "var(--accent)";
+    let label = `${lensView.space.name} · ${shown} of ${model.pages.length} pages`;
     if (lensView.waiting && !lensView.aboutError) {
-      text.textContent += " · finding pages…";
+      label += " · finding pages…";
     }
-    const all = document.createElement("button");
-    all.type = "button";
-    all.className = "lib-lens-link";
-    all.textContent = "Show all";
-    all.addEventListener("click", () => void setLensOn(false));
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "lib-lens-link";
-    edit.textContent = "Edit";
-    edit.addEventListener("click", () => openLensEditor());
-    line.append(text, all, edit);
-    return line;
+    return {
+      key: "lens-line",
+      create: () => {
+        const line = document.createElement("div");
+        line.className = "lib-lens-line";
+        const text = document.createElement("span");
+        text.className = "lib-lens-text";
+        const all = document.createElement("button");
+        all.type = "button";
+        all.className = "lib-lens-link";
+        all.textContent = "Show all";
+        all.addEventListener("click", () => void setLensOn(false));
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "lib-lens-link";
+        edit.textContent = "Edit";
+        edit.addEventListener("click", () => openLensEditor());
+        line.append(text, all, edit);
+        return line;
+      },
+      update: (line) => {
+        if (line.style.getPropertyValue("--space") !== color) line.style.setProperty("--space", color);
+        const text = line.querySelector(".lib-lens-text");
+        if (text.textContent !== label) text.textContent = label;
+      },
+    };
   }
 
   function renderLensTree(out) {
-    out.appendChild(lensLine(lensView.ids.size));
+    out.push(lensLine(lensView.ids.size));
     if (lensView.aboutError) {
-      const meta = document.createElement("div");
-      meta.className = "side-meta";
-      meta.textContent = `About: ${lensView.aboutError}`;
-      out.appendChild(meta);
+      out.push(metaRow("about", "side-meta", `About: ${lensView.aboutError}`));
     }
     renderTree(out, null, 0, lensView);
     // The strip is never filtered, so its tabs that the lens leaves out are listed under it.
     const open = model.pages.filter((page) => host.isOpen(page.id) && !page.temp && !lensView.ids.has(page.id));
     if (open.length) {
-      const meta = document.createElement("div");
-      meta.className = "side-meta lib-lens-group";
-      meta.textContent = "Open in this space";
-      out.appendChild(meta);
+      out.push(metaRow("open-here", "side-meta lib-lens-group", "Open in this space"));
       for (const page of open) {
-        out.appendChild(pageRow(page, 0, { path: pathOf(folderOfPage(page)) }));
+        out.push(pageRow(page, 0, { path: pathOf(folderOfPage(page)) }));
       }
     }
     none.hidden = lensView.ids.size > 0 || open.length > 0 || lensView.folders.size > 0;
@@ -777,184 +797,213 @@ window.createLibrary = function createLibrary(host) {
     none.hidden = rows.length > 0 || lensed;
     none.textContent = "No matching pages";
     if (rows.length) {
-      const meta = document.createElement("div");
-      meta.className = "side-meta";
-      meta.textContent = lensed
+      out.push(metaRow("hits", "side-meta", lensed
         ? `${rows.length} matching page${rows.length === 1 ? "" : "s"} in ${lensView.space.name}`
         : rows.length < hitTotal
           ? `Showing ${rows.length} of ${hitTotal} matches`
-          : `${hitTotal} matching page${hitTotal === 1 ? "" : "s"}`;
-      out.appendChild(meta);
+          : `${hitTotal} matching page${hitTotal === 1 ? "" : "s"}`));
     }
     for (const hit of rows) {
       const live = model.pageById.get(hit.id) || hit;
-      out.appendChild(pageRow(live, 0, { path: pathOf(folderOfPage(live)), snippet: hit.snippet }));
+      out.push(pageRow(live, 0, { path: pathOf(folderOfPage(live)) }));
+      if (hit.snippet) {
+        out.push({
+          key: `snippet:${hit.id}`,
+          create: () => {
+            const snippet = document.createElement("div");
+            snippet.className = "side-snippet";
+            return snippet;
+          },
+          update: (snippet) => {
+            if (snippet.textContent !== hit.snippet) snippet.textContent = hit.snippet;
+          },
+        });
+      }
     }
     if (lensed) {
-      const more = document.createElement("button");
-      more.type = "button";
-      more.className = "lib-lens-all";
       const outside = (hits || []).length - rows.length;
-      more.textContent = rows.length ? `Search all pages${outside ? ` (${outside} more)` : ""}` : `No matches in ${lensView.space.name} · Search all pages`;
-      more.addEventListener("click", () => {
-        searchAll = true;
-        render();
+      const label = rows.length ? `Search all pages${outside ? ` (${outside} more)` : ""}` : `No matches in ${lensView.space.name} · Search all pages`;
+      out.push({
+        key: "search-all",
+        create: () => {
+          const more = document.createElement("button");
+          more.type = "button";
+          more.className = "lib-lens-all";
+          more.addEventListener("click", () => {
+            searchAll = true;
+            render();
+          });
+          return more;
+        },
+        update: (more) => {
+          if (more.textContent !== label) more.textContent = label;
+        },
       });
-      out.appendChild(more);
     }
   }
 
   function pageRow(page, depth, extra = {}) {
-    const open = host.isOpen(page.id);
-    const el = document.createElement("div");
-    el.className =
-      "side-row lib-row lib-page" +
-      (open ? " open" : "") +
-      (open && host.activeId() === page.id ? " active" : "") +
-      (page.pinned ? " pinned" : "") +
-      (host.pageStatus?.(page.id) ? ` agent-${host.pageStatus(page.id)}` : "") +
-      (drag?.items.some((item) => item.id === page.id && item.kind === "page") ? " lib-drag-source" : "");
-    el.role = "treeitem";
-    el.tabIndex = 0;
-    el.ariaLabel = page.title + (open ? " (open)" : "") + (page.pinned ? " (pinned)" : "");
-    el.ariaLevel = String(depth + 1);
-    el.dataset.kind = "page";
-    el.dataset.id = page.id;
-    el.dataset.depth = String(depth);
-    el.style.setProperty("--depth", String(depth));
-    selectionControl(el, { kind: "page", id: page.id }, page.title);
-
-    if (page.file) {
-      // A file page shows its kind instead of the page icon (#707).
-      el.appendChild(window.scribeFiles.badge(page.file.path));
-    } else {
-      const icon = document.createElement("span");
-      icon.className = "fileicon";
-      icon.innerHTML = host.icons.file;
-      el.appendChild(icon);
-    }
-
-    if (host.isUnread(page.id)) {
-      const dot = document.createElement("span");
-      dot.className = "tab-updated";
-      el.appendChild(dot);
-    }
-
-    const text = document.createElement("span");
-    text.className = "lib-text";
-    const title = document.createElement("span");
-    title.className = "tab-title";
-    title.textContent = page.title;
-    text.appendChild(title);
-    if (extra.path) {
-      const path = document.createElement("span");
-      path.className = "lib-path";
-      path.textContent = extra.path;
-      text.appendChild(path);
-    }
-    el.appendChild(text);
-
-    const access = accessMarker(page.agentHidden ? "restricted" : page.access?.level, page.folderId);
-    if (access) el.appendChild(access);
-    if(page.plugins?.length){
-      const plugin=document.createElement("span");plugin.className="lib-plugin";plugin.textContent="⌁";
-      plugin.dataset.tooltip=`Plugins: ${page.plugins.join(", ")}`;plugin.setAttribute("aria-label",plugin.dataset.tooltip);el.appendChild(plugin);
-    }
-
-    if (page.pinned) {
-      const pin = document.createElement("span");
-      pin.className = "lib-pin";
-      pin.innerHTML = host.icons.pin;
-      el.appendChild(pin);
-    }
-
-    const del = document.createElement("button");
-    del.className = "tab-close";
-    del.type = "button";
-    del.textContent = "×";
-    del.setAttribute("aria-label", "Delete");
-    del.tabIndex = -1;
-    el.appendChild(del);
-
-    host.hoverCard.bind(el, ROW_CARD_DELAY);
-
-    if (!extra.snippet) {
-      return el;
-    }
-    const wrap = document.createDocumentFragment();
-    wrap.appendChild(el);
-    const snippet = document.createElement("div");
-    snippet.className = "side-snippet";
-    snippet.textContent = extra.snippet;
-    wrap.appendChild(snippet);
-    return wrap;
+    return { key: `page:${page.id}`, create: () => createRow("page", page.id), update: (el) => updatePageRow(el, page, depth, extra) };
   }
 
   function folderRow(folder, depth, open) {
+    return { key: `folder:${folder.id}`, create: () => createRow("folder", folder.id), update: (el) => updateFolderRow(el, folder, depth, open) };
+  }
+
+  /** What a row is for good: its key, role and hover card. The rest is patched by updatePageRow / updateFolderRow. */
+  function createRow(kind, id) {
     const el = document.createElement("div");
-    const unreadInside = !open && hasUnreadPage(folder.id);
-    const onDisk = Boolean(window.scribeFiles.diskPath(model.folders, folder.id));
-    el.className =
-      "side-row lib-row lib-folder" +
-      (open ? " expanded" : "") +
-      (onDisk ? " on-disk" : "") +
-      (drag?.items.some((item) => item.id === folder.id && item.kind === "folder") ? " lib-drag-source" : "");
+    el.className = `side-row lib-row lib-${kind}`;
     el.role = "treeitem";
     el.tabIndex = 0;
-    el.ariaLabel = `${folder.name} (folder${onDisk ? " on disk" : ""})` + (unreadInside ? " (unread)" : "");
-    el.ariaLevel = String(depth + 1);
-    el.dataset.kind = "folder";
-    el.dataset.id = folder.id;
-    el.dataset.depth = String(depth);
-    el.style.setProperty("--depth", String(depth));
-    el.setAttribute("aria-expanded", open ? "true" : "false");
-    selectionControl(el, { kind: "folder", id: folder.id }, folder.name);
-
-    const chevron = document.createElement("span");
-    chevron.className = "lib-chevron";
-    chevron.innerHTML = CHEVRON_SVG;
-    el.appendChild(chevron);
-
-    const icon = document.createElement("span");
-    icon.className = "lib-folder-icon";
-    icon.innerHTML = onDisk ? DISK_FOLDER_SVG : FOLDER_SVG;
-    el.appendChild(icon);
-
-    const text = document.createElement("span");
-    text.className = "lib-text";
-    const title = document.createElement("span");
-    title.className = "tab-title";
-    title.textContent = folder.name;
-    text.appendChild(title);
-    el.appendChild(text);
-    if (folder.disk) {
-      const chip = document.createElement("span");
-      chip.className = "lib-disk-path";
-      chip.textContent = folder.disk;
-      el.appendChild(chip);
+    el.dataset.kind = kind;
+    el.dataset.id = id;
+    if (kind === "page") {
+      host.hoverCard.bind(el, ROW_CARD_DELAY);
     }
-
-    if (unreadInside) {
-      const dot = document.createElement("span");
-      dot.className = "lib-unread-dot";
-      dot.setAttribute("aria-label", "Has unread pages");
-      el.appendChild(dot);
-    }
-    if (folder.description || folder.instructions) {
-      const instructions = document.createElement("span");
-      instructions.className = "lib-instructions-icon";
-      instructions.innerHTML = host.icons.folderInstructions;
-      instructions.setAttribute("aria-label", "Custom agent instructions");
-      instructions.dataset.tooltip = "Custom agent instructions";
-      el.appendChild(instructions);
-    }
-    const access = accessMarker(folder.access?.level, folder.parentId);
-    if (access) el.appendChild(access);
-    const count = document.createElement("span");
-    count.className = "lib-count";
-    count.textContent = String(countPages(folder.id));
-    el.appendChild(count);
     return el;
+  }
+
+  /** Classes and attributes every row has: depth, drag source, selection. Returns the selection state. */
+  function updateRow(el, item, depth, label) {
+    const selection = selectionState(item);
+    window.scribeClasses(el, {
+      "lib-drag-source": Boolean(drag?.items.some((dragged) => dragged.id === item.id && dragged.kind === item.kind)),
+      "lib-selected": Boolean(selection?.checked && !selection.covered),
+      "lib-covered": Boolean(selection?.covered),
+    });
+    window.scribeAttr(el, "aria-label", label);
+    window.scribeAttr(el, "aria-level", depth + 1);
+    window.scribeAttr(el, "aria-selected", selection ? String(selection.checked) : null);
+    window.scribeAttr(el, "data-depth", depth);
+    if (el.style.getPropertyValue("--depth") !== String(depth)) {
+      el.style.setProperty("--depth", String(depth));
+    }
+    return selection;
+  }
+
+  function updatePageRow(el, page, depth, extra) {
+    const open = host.isOpen(page.id);
+    window.scribeClasses(el, { open, active: open && host.activeId() === page.id, pinned: Boolean(page.pinned) });
+    // The agent status dot; agent.js keeps the same attribute current between renders.
+    window.scribeAttr(el, "data-agent", host.pageStatus?.(page.id) || null);
+    const item = { kind: "page", id: page.id };
+    const selection = updateRow(el, item, depth, page.title + (open ? " (open)" : "") + (page.pinned ? " (pinned)" : ""));
+    const unread = host.isUnread(page.id);
+    const access = accessState(page.agentHidden ? "restricted" : page.access?.level, page.folderId);
+    const sig = JSON.stringify([page.title, page.file?.path || "", unread, extra.path || "", access, page.plugins || [], Boolean(page.pinned), selection]);
+    window.scribeFill(el, sig, () => {
+      const parts = [];
+      if (selection) parts.push(selectionControl(selection, page.title));
+      if (page.file) {
+        // A file page shows its kind instead of the page icon (#707).
+        parts.push(window.scribeFiles.badge(page.file.path));
+      } else {
+        const icon = document.createElement("span");
+        icon.className = "fileicon";
+        icon.innerHTML = host.icons.file;
+        parts.push(icon);
+      }
+      if (unread) {
+        const dot = document.createElement("span");
+        dot.className = "tab-updated";
+        parts.push(dot);
+      }
+      const text = document.createElement("span");
+      text.className = "lib-text";
+      const title = document.createElement("span");
+      title.className = "tab-title";
+      title.textContent = page.title;
+      text.appendChild(title);
+      if (extra.path) {
+        const path = document.createElement("span");
+        path.className = "lib-path";
+        path.textContent = extra.path;
+        text.appendChild(path);
+      }
+      parts.push(text);
+      if (access) parts.push(accessMarker(access));
+      if (page.plugins?.length) {
+        const plugin = document.createElement("span");
+        plugin.className = "lib-plugin";
+        plugin.textContent = "⌁";
+        plugin.dataset.tooltip = `Plugins: ${page.plugins.join(", ")}`;
+        plugin.setAttribute("aria-label", plugin.dataset.tooltip);
+        parts.push(plugin);
+      }
+      if (page.pinned) {
+        const pin = document.createElement("span");
+        pin.className = "lib-pin";
+        pin.innerHTML = host.icons.pin;
+        parts.push(pin);
+      }
+      const del = document.createElement("button");
+      del.className = "tab-close";
+      del.type = "button";
+      del.textContent = "×";
+      del.setAttribute("aria-label", "Delete");
+      del.tabIndex = -1;
+      parts.push(del);
+      return parts;
+    });
+  }
+
+  function updateFolderRow(el, folder, depth, open) {
+    const unreadInside = !open && hasUnreadPage(folder.id);
+    const onDisk = Boolean(window.scribeFiles.diskPath(model.folders, folder.id));
+    window.scribeClasses(el, { expanded: open, "on-disk": onDisk });
+    window.scribeAttr(el, "aria-expanded", open ? "true" : "false");
+    const item = { kind: "folder", id: folder.id };
+    const selection = updateRow(el, item, depth, `${folder.name} (folder${onDisk ? " on disk" : ""})` + (unreadInside ? " (unread)" : ""));
+    const access = accessState(folder.access?.level, folder.parentId);
+    const instructions = Boolean(folder.description || folder.instructions);
+    const count = countPages(folder.id);
+    const sig = JSON.stringify([folder.name, onDisk, folder.disk || "", unreadInside, instructions, access, count, selection]);
+    window.scribeFill(el, sig, () => {
+      const parts = [];
+      if (selection) parts.push(selectionControl(selection, folder.name));
+      const chevron = document.createElement("span");
+      chevron.className = "lib-chevron";
+      chevron.innerHTML = CHEVRON_SVG;
+      parts.push(chevron);
+      const icon = document.createElement("span");
+      icon.className = "lib-folder-icon";
+      icon.innerHTML = onDisk ? DISK_FOLDER_SVG : FOLDER_SVG;
+      parts.push(icon);
+      const text = document.createElement("span");
+      text.className = "lib-text";
+      const title = document.createElement("span");
+      title.className = "tab-title";
+      title.textContent = folder.name;
+      text.appendChild(title);
+      parts.push(text);
+      if (folder.disk) {
+        const chip = document.createElement("span");
+        chip.className = "lib-disk-path";
+        chip.textContent = folder.disk;
+        parts.push(chip);
+      }
+      if (unreadInside) {
+        const dot = document.createElement("span");
+        dot.className = "lib-unread-dot";
+        dot.setAttribute("aria-label", "Has unread pages");
+        parts.push(dot);
+      }
+      if (instructions) {
+        const icon = document.createElement("span");
+        icon.className = "lib-instructions-icon";
+        icon.innerHTML = host.icons.folderInstructions;
+        icon.setAttribute("aria-label", "Custom agent instructions");
+        icon.dataset.tooltip = "Custom agent instructions";
+        parts.push(icon);
+      }
+      if (access) parts.push(accessMarker(access));
+      const countEl = document.createElement("span");
+      countEl.className = "lib-count";
+      countEl.textContent = String(count);
+      parts.push(countEl);
+      return parts;
+    });
   }
 
   function rowFor(kind, id) {
@@ -994,22 +1043,23 @@ window.createLibrary = function createLibrary(host) {
     return ordered;
   }
 
-  function selectionControl(row, item, name) {
-    if (!selecting) return;
+  /** While selecting: whether the row is checked, and whether a selected folder above covers it. */
+  function selectionState(item) {
+    if (!selecting) return null;
     const covered = coveredBySelection(item);
-    const checked = covered || selected.has(itemKey(item));
-    row.classList.toggle("lib-selected", checked && !covered);
-    row.classList.toggle("lib-covered", covered);
-    row.setAttribute("aria-selected", String(checked));
+    return { checked: covered || selected.has(itemKey(item)), covered };
+  }
+
+  function selectionControl(selection, name) {
     const check = document.createElement("button");
     check.type = "button";
     check.className = "lib-check";
     check.role = "checkbox";
     check.tabIndex = -1;
     check.setAttribute("aria-label", `Select ${name}`);
-    check.setAttribute("aria-checked", String(checked));
-    check.setAttribute("aria-disabled", String(covered));
-    row.appendChild(check);
+    check.setAttribute("aria-checked", String(selection.checked));
+    check.setAttribute("aria-disabled", String(selection.covered));
+    return check;
   }
 
   function clearSelection() {
@@ -1232,6 +1282,9 @@ window.createLibrary = function createLibrary(host) {
         return;
       }
       renaming = null;
+      // The row is kept, so it gets its title back before the render patches it.
+      input.replaceWith(titleEl);
+      row.classList.remove("renaming");
       const value = input.value.trim();
       if (commit && value && value !== original) {
         commitRename(kind, item, value, original);
@@ -2109,11 +2162,15 @@ window.createLibrary = function createLibrary(host) {
   }
 
   /** The row's access icon (#727): the effective level, dimmed when it comes from a parent folder; null for Normal. */
-  function accessMarker(own, parentId) {
+  /** The access level a row shows (its own, or a stricter one from a folder above), or null for none. */
+  function accessState(own, parentId) {
     const inherited = inheritedLevel(parentId);
     const fromParent = Boolean(inherited && (!own || LEVEL_RANK[inherited] > LEVEL_RANK[own]));
     const level = fromParent ? inherited : own;
-    if (!level || level === "open") return null;
+    return !level || level === "open" ? null : { level, fromParent };
+  }
+
+  function accessMarker({ level, fromParent }) {
     const label = ACCESS_LEVELS.find((l) => l.id === level).label + (fromParent ? " (from parent folder)" : "");
     const marker = document.createElement("span");
     marker.className = "lib-access" + (fromParent ? " inherited" : "");

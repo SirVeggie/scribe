@@ -9471,9 +9471,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     }
     dock.renderHandle();
     for (const rowEl of document.querySelectorAll(".tab[data-id], .lib-page[data-id]")) {
-      const status = pageStatus(rowEl.dataset.id);
-      rowEl.classList.toggle("agent-running", status === "running");
-      rowEl.classList.toggle("agent-waiting", status === "waiting");
+      // The tab strip and the Library write the same attribute when they draw a row (#430).
+      window.scribeAttr(rowEl, "data-agent", pageStatus(rowEl.dataset.id) || null);
     }
     const asks = threads
       .filter((t) => t.status === "waiting")

@@ -1843,8 +1843,8 @@
       ((tab.id !== state.activeId && views.paneOf(tab.id)) || popout.has(tab.id) ? " beside" : "") +
       (popout.has(tab.id) ? " popped" : "") +
       (tab.pinned ? " pinned" : "") +
-      (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "") +
-      (window.scribeChat?.pageStatus(tab.id) ? ` agent-${window.scribeChat.pageStatus(tab.id)}` : "");
+      (unread.has(tab.id) && tab.id !== state.activeId ? " updated" : "");
+    window.scribeAttr(el, "data-agent", window.scribeChat?.pageStatus(tab.id) || null);
     if (drag?.moved && drag.id === tab.id) {
       el.classList.add("dragging");
     }

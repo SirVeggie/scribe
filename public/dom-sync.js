@@ -211,4 +211,98 @@
     kept.set(stub, node);
     return stub;
   };
+
+  /*
+   * Keyed lists (#430): the renderer says what each row is, not what it looks like, so nothing is compared.
+   *
+   * `scribeKeyedList(root, items)` makes the children of `root` one element per item, in order. Each item is
+   * `{ key, create(), update(el) }`: an element whose key was there last time is kept and given to `update`,
+   * a new key gets `create()` and then `update`. Kept elements move only when they are out of order, and never
+   * more of them than needed, so a row that changed keeps its hover, transitions and focus.
+   *
+   * - `create` builds what never changes for that key. Listeners belong on the list root (`data-action`),
+   *   or close over nothing but the key.
+   * - `update` touches only what it owns: `scribeClasses` for its classes, `scribeAttr` for attributes,
+   *   `scribeFill` for children. Classes other code adds to a row (a flash, an open menu) stay put.
+   * - The root holds only the list's elements: anything else in it is removed.
+   */
+  const lists = new WeakMap();
+  const fills = new WeakMap();
+
+  /** Indices into `seq` of a longest increasing run: the elements that can stay where they are. */
+  function steady(seq) {
+    const tails = [];
+    const prev = new Array(seq.length);
+    for (let i = 0; i < seq.length; i += 1) {
+      if (seq[i] < 0) continue;
+      let lo = 0;
+      let hi = tails.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (seq[tails[mid]] < seq[i]) lo = mid + 1;
+        else hi = mid;
+      }
+      prev[i] = lo > 0 ? tails[lo - 1] : -1;
+      tails[lo] = i;
+    }
+    const out = new Set();
+    for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = prev[i]) out.add(i);
+    return out;
+  }
+
+  window.scribeKeyedList = function scribeKeyedList(root, items) {
+    const had = lists.get(root) || new Map();
+    const next = new Map();
+    const nodes = items.map((item) => {
+      let key = String(item.key);
+      for (let n = 2; next.has(key); n += 1) key = `${item.key}#${n}`;
+      let el = had.get(key);
+      if (!el) el = item.create();
+      next.set(key, el);
+      item.update?.(el);
+      return el;
+    });
+    lists.set(root, next);
+    const wanted = new Set(nodes);
+    for (const child of [...root.childNodes]) {
+      if (!wanted.has(child)) child.remove();
+    }
+    const at = new Map([...root.childNodes].map((child, i) => [child, i]));
+    const stay = steady(nodes.map((node) => (at.has(node) ? at.get(node) : -1)));
+    // From the end, so each element goes in before one already in its place.
+    let after = null;
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      if (!stay.has(i) && (node.parentNode !== root || node.nextSibling !== after)) root.insertBefore(node, after);
+      after = node;
+    }
+  };
+
+  /** Turn each named class on or off; other classes on `el` are left alone. */
+  window.scribeClasses = function scribeClasses(el, classes) {
+    for (const [name, on] of Object.entries(classes)) {
+      if (el.classList.contains(name) !== Boolean(on)) el.classList.toggle(name, Boolean(on));
+    }
+  };
+
+  /** Set an attribute (null or false removes it), only when it differs. */
+  window.scribeAttr = function scribeAttr(el, name, value) {
+    if (value === null || value === undefined || value === false) {
+      if (el.hasAttribute(name)) el.removeAttribute(name);
+      return;
+    }
+    const text = value === true ? "" : String(value);
+    if (el.getAttribute(name) !== text) el.setAttribute(name, text);
+  };
+
+  /** Replace the children of `el` with `build()` when `sig` differs from the one they were built from. */
+  window.scribeFill = function scribeFill(el, sig, build) {
+    if (fills.get(el) === sig) return false;
+    fills.set(el, sig);
+    el.replaceChildren(...build());
+    return true;
+  };
+
+  /** Forget what `el` was filled from, so the next scribeFill rebuilds it (its children were changed by hand). */
+  window.scribeFill.forget = (el) => fills.delete(el);
 })();
