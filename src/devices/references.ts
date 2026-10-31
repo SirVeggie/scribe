@@ -62,4 +62,6 @@ export type Resolved =
     title?: string;
     /** For a page, its key on that device. */
     key?: string;
+    /** Offline, and the page is in a mirror an online device keeps (#910): it opens read only. */
+    mirror?: boolean;
   };

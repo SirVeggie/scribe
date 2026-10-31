@@ -78,6 +78,19 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
   router.get("/spaces", async (req, res) => {
     const devices = peers.view();
     const peerSpaces = await Promise.all(devices.peers.map(async (peer) => {
+      if (!peer.online && peer.mirror) {
+        // Offline, with a mirror on another device (#910): its spaces as the mirror last saw them, read only.
+        try {
+          const reply = await withTimeout(peers.request(peer.mirror.id, { method: "GET", path: `/api/mirror/of/${peer.id}/spaces`, headers: { host: "127.0.0.1", accept: "application/json" } }));
+          if (reply.status === 200) {
+            const body = JSON.parse(reply.body.toString("utf8")) as { spaces?: SpaceSummary[] };
+            return { ...peer, spaces: Array.isArray(body.spaces) ? body.spaces : [] };
+          }
+        } catch {
+          /* shown offline, without spaces */
+        }
+        return peer;
+      }
       if (!peer.online) return peer;
       try {
         const reply = await withTimeout(peers.request(peer.id, { method: "GET", path: "/api/spaces", headers: { host: "127.0.0.1", accept: "application/json" } }));
@@ -168,6 +181,7 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       }
     }
     const answers = new Map<string, Described | null>();
+    const mirrored = new Map<string, Described>();
     await Promise.all([...wanted].map(async ([id, want]) => {
       const pages = [...want.pages];
       const threads = [...want.threads];
@@ -175,7 +189,23 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
         answers.set(id, describeHere(pages, threads));
         return;
       }
-      if (!devices.find((d) => d.id === id)?.online) return;
+      if (!devices.find((d) => d.id === id)?.online) {
+        // Offline: titles from the device that keeps its mirror (#910).
+        const mirror = peers.mirrorOf(id);
+        if (!mirror || !pages.length) return;
+        try {
+          const reply = await withTimeout(peers.request(mirror.holder, {
+            method: "POST",
+            path: `/api/mirror/of/${id}/describe`,
+            headers: { host: "127.0.0.1", "content-type": "application/json" },
+            body: JSON.stringify({ pages }),
+          }));
+          if (reply.status === 200) mirrored.set(id, JSON.parse(reply.body.toString("utf8")) as Described);
+        } catch {
+          /* the title seen last */
+        }
+        return;
+      }
       try {
         const reply = await withTimeout(peers.request(id, {
           method: "POST",
@@ -193,8 +223,10 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       const memo = `${device.id}|${ref.kind}|${ref.ref}`;
       const base = { device: { id: device.id, name: device.name } };
       if (!answer) {
+        const copy = ref.kind === "page" ? (mirrored.get(device.id)?.pages?.[ref.ref] as (Described["pages"][string] & { mirrored?: boolean }) | null | undefined) : undefined;
+        if (copy?.title) seen.set(memo, copy.title);
         const title = seen.get(memo);
-        out[target] = { ...base, online: false, ...(title ? { title } : {}) };
+        out[target] = { ...base, online: false, ...(title ? { title } : {}), ...(copy?.mirrored ? { mirror: true, key: String(copy.key) } : {}) };
         continue;
       }
       const hit = ref.kind === "page" ? answer.pages?.[ref.ref] : answer.threads?.[ref.ref];
@@ -235,6 +267,8 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
   // What this device lets a paired device's agents do here (#911).
   router.put("/:id/agents", guarded((req) => peers.setAgentGrant(req.params.id, req.body)));
   router.put("/self", guarded((req) => peers.rename(req.body?.name)));
+  // Accept connections from the internet on this address (#910), or stop: { host } or { host: null }.
+  router.put("/public", guarded((req) => peers.setPublic(req.body?.host)));
   router.post("/offer", guarded(async () => ({ offer: await peers.createOffer() })));
   router.delete("/offer", guarded(() => peers.cancelOffer()));
   router.post("/pair", guarded((req) => {

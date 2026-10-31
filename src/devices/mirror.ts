@@ -73,8 +73,9 @@ export class MirrorPusher {
   private settings: MirrorSettings;
   private acked = new Map<string, string>();
   private status: { at?: number; pages?: number; error?: string } = {};
-  private running: Promise<void> | null = null;
-  private again = false;
+  private running: Promise<void> = Promise.resolve();
+  private queued: Promise<void> | null = null;
+  private busy = false;
   private timer: NodeJS.Timeout | undefined;
   private soon: NodeJS.Timeout | undefined;
 
@@ -102,7 +103,7 @@ export class MirrorPusher {
   }
 
   view(): MirrorStatus {
-    return { ...this.settings, ...this.status, ...(this.running ? { syncing: true } : {}) };
+    return { ...this.settings, ...this.status, ...(this.busy ? { syncing: true } : {}) };
   }
 
   /** Settings → Devices ("Mirror to") and the folder menu ("Mirrored"). */
@@ -132,24 +133,21 @@ export class MirrorPusher {
     this.soon.unref();
   }
 
-  /** One sync to the target, if it is online. Calls during a sync run it once more afterwards. */
+  /** One sync to the target, if it is online. Calls during a sync share one more run after it. */
   sync(): Promise<void> {
-    if (this.running) {
-      this.again = true;
-      return this.running;
-    }
-    this.running = this.run()
-      .catch((err) => {
-        this.status = { ...this.status, error: (err as Error).message };
-      })
-      .finally(() => {
-        this.running = null;
-        if (this.again) {
-          this.again = false;
-          void this.sync();
-        }
-      });
-    return this.running;
+    if (this.queued) return this.queued;
+    const next = this.running.then(() => {
+      this.queued = null;
+      this.busy = true;
+      return this.run();
+    }).catch((err) => {
+      this.status = { ...this.status, error: (err as Error).message };
+    }).finally(() => {
+      this.busy = false;
+    });
+    this.queued = next;
+    this.running = next;
+    return next;
   }
 
   private async run(): Promise<void> {
