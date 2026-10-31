@@ -491,6 +491,8 @@ img{width:56px;height:56px}
 h1{margin:0;font-size:20px;font-weight:600}
 p{margin:0;color:#8e8e96}
 #error{color:#e58f8f}
+/* Google's button frame is light-scheme; matching it keeps the browser from painting a white backdrop behind it. */
+.g_id_signin iframe{color-scheme:light}
 </style></head>
 <body><main>
 <img src="/favicon.svg" alt="">
