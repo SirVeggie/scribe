@@ -3184,6 +3184,18 @@
       this.root.addEventListener("click", (event) => onLinkClick(event));
       this.root.addEventListener("auxclick", (event) => onLinkClick(event));
       this.root.addEventListener("mousedown", preventLinkAutoscroll);
+      this.root.addEventListener("contextmenu", (event) => this.contextMenu(event));
+    }
+
+    /** Right-click on the chat opens the thread menu at the pointer. Text fields, links, images and selected text keep the browser's menu. */
+    contextMenu(event) {
+      if (event.defaultPrevented || !this.thread()) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || target.closest("input, textarea, [contenteditable]:not([contenteditable='false']), a[href], img, iframe, .ag-menu")) return;
+      if (String(window.getSelection?.() || "").trim()) return;
+      event.preventDefault();
+      const x = event.clientX, y = event.clientY;
+      this.threadMenu({ isConnected: true, className: "ag-point-anchor", getBoundingClientRect: () => new DOMRect(x, y, 0, 0), closest: (sel) => target.closest(sel) });
     }
 
     thread() {
@@ -3953,6 +3965,7 @@
           ? [{ label: t.hooksOff ? "Turn detection on" : "Turn detection off", detail: t.hooksOff ? "Hooks ignore this thread" : "Hooks watch this thread", icon: "shield", run: () => api("PATCH", `/threads/${t.id}`, { hooksOff: !t.hooksOff }).catch((e) => notice(e.message)) }]
           : []),
         ...(t.grants?.length ? [{ label: "Permissions…", detail: `${t.grants.length} granted`, icon: "shield", run: () => this.permissionsMenu(anchor) }] : []),
+        { label: "Copy thread id", detail: t.id, icon: "copy", run: () => navigator.clipboard?.writeText(t.id) },
         ...(t.nativeId ? [{ label: "Copy session id", detail: t.nativeId, run: () => navigator.clipboard?.writeText(t.nativeId) }] : []),
         { separator: true },
         {
@@ -8641,6 +8654,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
         ...(t.stats.turns ? [{ label: "Fork thread", run: () => forkThread(t, onPick) }] : []),
         ...(t.stats.files ? [{ label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) }] : []),
+        { label: "Copy thread id", detail: t.id, icon: "copy", run: () => navigator.clipboard?.writeText(t.id) },
         { separator: true },
         {
           label: "Delete thread",
