@@ -1,9 +1,9 @@
 /**
  * A themed dropdown over a native <select>: the select stays the source of truth (value, name,
  * change events, form reads) and is hidden; a button and a .tab-menu list stand in for it.
- * Inside a modal <dialog> the open list stays next to the button, in the dialog's top layer.
- * Anywhere else it moves to <body> while open: a scrolling or backdrop-filtered panel would
- * otherwise clip it and become its containing block.
+ * While open, the list moves to the enclosing modal <dialog> (to stay in its top layer) or else
+ * to <body>: a scrolling or backdrop-filtered panel would otherwise clip it, paint its scrollbar
+ * over it, or become its containing block.
  */
 (function () {
   /** @type {null | { wrap: HTMLElement, close: (focus?: boolean) => void }} */
@@ -153,9 +153,8 @@
         menu.appendChild(item);
       });
       active = Math.max(0, select.selectedIndex);
-      if (!wrap.closest("dialog")) {
-        document.body.appendChild(menu);
-      }
+      // The dialog itself, not the wrap: a scrolling list inside it would paint its scrollbar over the menu.
+      (wrap.closest("dialog") || document.body).appendChild(menu);
       menu.hidden = false;
       wrap.classList.add("open");
       button.setAttribute("aria-expanded", "true");
