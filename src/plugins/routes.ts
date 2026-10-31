@@ -13,6 +13,7 @@ import type { PackageFiles } from "./package.js";
 import { parseWebImportance } from "../agent/webAccess.js";
 import { pluginId, declaredPlugins, declarePlugins } from "./manifest.js";
 import { zip } from "./package.js";
+import { coreComponentGuide } from "../coreComponents.js";
 
 export function pluginRouter(service: PluginService, store: BoardStore, host: AgentHost): Router {
   const router=Router();
@@ -83,7 +84,8 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
     return service.install(files,preview.hash,req.body?.replace===true,req.body?.approvePaths===true);
   }));
   router.get("/:plugin/bundled-update",wrap(req=>{user(req);return service.bundledUpdate(req.params.plugin);}));
-  router.get("/:plugin/guide",wrap(req=>{thread(req);return service.guide(req.params.plugin);}));
+  // "core" is Scribe's own page components (#761), not an installed plugin.
+  router.get("/:plugin/guide",wrap(req=>{thread(req);return req.params.plugin==="core"?coreComponentGuide():service.guide(req.params.plugin);}));
   router.get("/:plugin/logs",wrap(req=>{thread(req);return {logs:service.logs(req.params.plugin)};}));
   router.get("/:plugin/state/:stateKey",wrap(async(req,_res,signal)=>{
     const t=thread(req),id=req.params.plugin;if(!service.enabled(id))throw new Error("Plugin is disabled");

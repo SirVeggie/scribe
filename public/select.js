@@ -210,9 +210,57 @@
       }
     });
     select.addEventListener("change", sync);
+    // Code that sets value or selectedIndex, or swaps the options, needs no syncSelect call.
+    for (const key of ["value", "selectedIndex"]) {
+      const own = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, key);
+      Object.defineProperty(select, key, { configurable: true, get() { return own.get.call(this); }, set(value) { own.set.call(this, value); sync(); } });
+    }
+    new MutationObserver(sync).observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ["selected", "label"] });
 
     sync();
     wrap.syncSelect = sync;
     return wrap;
   };
+
+  // Loaded by a page as the select component (<script src="/c/select.js">, or inlined by an export):
+  // its own styles, and every <select> without data-native, now and later, becomes the app's dropdown.
+  const script = document.currentScript;
+  if (!script || !(script.dataset.scribeComponent === "select" || /\/c\/select\.js(\?|$)/.test(script.src))) return;
+  const style = document.createElement("style");
+  style.textContent = `
+:where(.select-wrap) { position: relative; display: inline-block; min-width: 140px; max-width: 100%; vertical-align: middle; }
+:where(.select-button) { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  height: var(--kit-control-h, 30px); padding: 0 10px; border: 1px solid var(--border); border-radius: var(--kit-control-radius, 7px);
+  background: var(--kit-sunken, rgba(0, 0, 0, 0.3)); box-shadow: none; color: var(--text); font: inherit; font-weight: 400; cursor: pointer; }
+:where(.select-button):hover, :where(.select-wrap.open) :where(.select-button) { background: rgba(0, 0, 0, 0.38); }
+:where(.select-button):focus-visible, :where(.select-wrap.open) :where(.select-button) { outline: none; border-color: var(--kit-border-strong, rgba(255, 255, 255, 0.14)); }
+:where(.select-label) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:where(.select-button)::after { content: ""; flex: 0 0 auto; width: 6px; height: 6px; margin: -3px 2px 0 0;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); }
+:where(.select-wrap.open) :where(.select-button)::after { margin-top: 3px; transform: rotate(225deg); }
+:where(.select-menu) { position: fixed; z-index: 2147483000; display: flex; flex-direction: column; min-width: 128px; max-height: 260px;
+  overflow-y: auto; padding: 4px; border-radius: 10px; background: var(--kit-surface, #202024);
+  box-shadow: 0 0 0 1px var(--border), 0 12px 32px rgba(0, 0, 0, 0.45); }
+:where(.select-menu[hidden]) { display: none; }
+:where(.select-menu) :where(button) { display: flex; align-items: center; justify-content: flex-start; min-height: 28px; height: auto;
+  padding: 0 10px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font: inherit;
+  text-align: left; white-space: nowrap; cursor: pointer; }
+:where(.select-menu) :where(button.active) { background: rgba(255, 255, 255, 0.08); }
+:where(.select-menu) :where(button[aria-selected="true"]) { color: var(--kit-heading, #fff); font-weight: 600; }
+:where(.select-menu) :where(button:disabled) { opacity: 0.4; cursor: default; }
+`;
+  document.head.appendChild(style);
+  const upgrade = (root) => {
+    const found = root.matches?.("select") ? [root] : [...(root.querySelectorAll?.("select") ?? [])];
+    for (const select of found) {
+      if (select.dataset.native === undefined && !select.closest(".select-wrap") && select.size <= 1) window.createSelect(select);
+    }
+  };
+  const start = () => {
+    upgrade(document.body);
+    new MutationObserver((records) => { for (const record of records) for (const node of record.addedNodes) if (node.nodeType === 1) upgrade(node); })
+      .observe(document.body, { childList: true, subtree: true });
+  };
+  if (document.body) start();
+  else document.addEventListener("DOMContentLoaded", start);
 })();

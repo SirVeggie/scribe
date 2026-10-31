@@ -64,6 +64,7 @@ import { findSettings, parseShowInput, setSettingsCatalog, settingsCatalog } fro
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS, inlineKit } from "./wrapHtml.js";
+import { COMPONENT_PATH, inlineComponents, readComponent } from "./coreComponents.js";
 import { spliceHtmlSlot } from "./htmlSlot.js";
 import { searchRouter } from "./search/routes.js";
 import { mlRouter } from "./ml/routes.js";
@@ -307,7 +308,15 @@ export async function startHttp(): Promise<http.Server> {
   };
   const mirrorStore = new MirrorStore(dataDir());
   const mirrorPusher = new MirrorPusher(peers, mirrorSource, dataDir());
-  const localUi: express.RequestHandler = (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next));
+  // Page components (#761): no version in the URL, so the browser revalidates by ETag.
+  const componentFiles: express.RequestHandler = (req, res, next) => {
+    const name = req.method === "GET" ? COMPONENT_PATH.exec(req.path)?.[1] : undefined;
+    const code = name && readComponent(name);
+    if (!code) return next();
+    res.setHeader("Cache-Control", "no-cache");
+    res.type("js").send(code);
+  };
+  const localUi: express.RequestHandler = (req, res, next) => uiAssets(req, res, () => componentFiles(req, res, () => publicFiles(req, res, next)));
   const mirror = mirrorView(peers, mirrorStore, {
     local: localUi,
     render: (tab) => injectBoardRuntime(tab as unknown as Tab, null),
@@ -444,6 +453,7 @@ export async function startHttp(): Promise<http.Server> {
   const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
   app.use("/api/audio", audioRouter(audioService, pageAudio));
   app.use(noteAgentSession);
+  app.use(componentFiles);
   app.use(publicFiles);
   // pdf.js for PDF file pages: the library, its worker, and the fonts, CMaps and decoders it fetches.
   app.use("/vendor/pdfjs", (req, res, next) => (PDFJS_PATH.test(req.path) ? next() : res.status(404).end()),
@@ -2346,7 +2356,7 @@ export async function startHttp(): Promise<http.Server> {
     }
     const filename = `${safeFilename(tab.title)}.html`;
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.type("html").send(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8")));
+    res.type("html").send(inlineComponents(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8"))));
   });
 
   const sendExport=async(req:express.Request,res:express.Response,file:ReturnType<typeof store.exportFile>,filename:string)=>{

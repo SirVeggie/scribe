@@ -30,7 +30,7 @@ export const pluginComponentSchema = z.object({
   events: z.array(z.string().regex(/^[a-zA-Z][\w.-]{0,99}$/)).max(100).default([]),
 }).strict();
 export const manifestSchema = z.object({
-  id: pluginId,
+  id: pluginId.refine((id) => id !== "core", "\"core\" is reserved for Scribe's own page components"),
   name: z.string().min(1).max(120),
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
   summary: z.string().min(1).max(200),

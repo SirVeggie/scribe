@@ -2420,7 +2420,7 @@ function registerPluginTools(tool: McpServer["tool"]): void {
   };
   const id=z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).describe("Plugin id from plugin_list, or the id being authored.");
   tool("plugin_list","List installed page plugins and their summaries, enablement and runtime status. Use plugin_guide for a plugin's methods and usage.",{},()=>request("GET","/"));
-  tool("plugin_guide","Read a page plugin's author guide and method signatures. Plugins can be used by ordinary pages as well as their templates.",{id},({id})=>request("GET",`/${id}/guide`));
+  tool("plugin_guide","Read a page plugin's author guide and method signatures. Plugins can be used by ordinary pages as well as their templates. id \"core\" returns the guides of Scribe's own page components (/c/<name>.js).",{id},({id})=>request("GET",`/${id}/guide`));
   tool("plugin_logs","Read the bounded recent backend log for a plugin. Secrets are never included by Scribe.",{id},({id})=>request("GET",`/${id}/logs`));
   tool("plugin_state","Read one keyed value and its revision from a plugin's shared state. Respects the page's Deny; otherwise asks unless Full or already allowed. State is written only through plugin methods.",{id,key:z.string()},({id,key},extra)=>request("GET",`/${id}/state/${encodeURIComponent(key)}`,undefined,extra));
   tool("plugin_read","List source files or read one UTF-8 file. Source is kept by Scribe; this works without workspace file access.",{id,path:z.string().optional()},({id,path})=>request("GET",`/${id}/files${path?`?path=${encodeURIComponent(path)}`:""}`));

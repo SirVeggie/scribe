@@ -267,6 +267,17 @@ Put each question next to the part of the page it is about; one form can wrap th
 
 **Starter pages.** When the user points you at a page to build from (their own layout or style), pass its key as `base` to `page_show`: your `html` goes into its element marked `data-slot` (else its `<main>`, else its `<body>`), so you write only the content. Its state and assets are not copied.
 
+### Page components
+
+Scribe offers ready-made pieces of the app's own UI that a page loads by name with `<script src="/c/<name>.js"></script>` (fragment or full document). Use them instead of building these by hand: a page's own dropdown or hand-drawn chart drifts from the app's look. Read a component's guide with `plugin_guide({ id: "core" })` before its first use. They need no permission, and downloads inline them.
+
+<!-- page-components:start -->
+| Load | Gives |
+|---|---|
+| `<script src="/c/select.js"></script>` | Scribe's own dropdown in place of every native `<select>` on the page. |
+| `<script src="/c/chart.js"></script>` | `<s-chart>`: column, bar, line, area and sparkline charts in Scribe's theme, with hover, legend and a table view. |
+<!-- page-components:end -->
+
 ## Linking pages
 
 Pages can link to other Scribe pages and to websites. The user opens a link as a tab (navigate), a **peek** (a fixed card over the page, for a quick look without opening a tab), or a **split** (a second pane beside the one the link is in; both panes are tabs). Links keep related pages connected instead of one page trying to hold everything.

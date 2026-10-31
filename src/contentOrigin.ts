@@ -1,4 +1,5 @@
 import type express from "express";
+import { COMPONENT_PATH as CORE_COMPONENT_PATH } from "./coreComponents.js";
 import { CONTENT_HOST, PAGE_HOST_SUFFIX, baseUrl, gatewayHost, hostSuffixOf, pageHost, pageIdFromHost, previewHost, previewThreadFromHost, componentItemFromHost, pageComponentFromHost, shellOrigins } from "./config.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { webBaseOf, webHostOf } from "./webRequest.js";
@@ -76,7 +77,7 @@ const VENDOR_PATH = /^\/vendor\/(highlight|marked|purify|editor|scribe-md)\.js$/
 /** The parts of pdfjs-dist a PDF file page loads, under /vendor/pdfjs. */
 export const PDFJS_PATH = /^\/(build\/pdf(\.worker)?\.min\.mjs|(cmaps|standard_fonts|wasm)\/[\w.-]+)$/;
 
-/** Data-free files every page may load: the injected tooltip script, the page kit, and the file viewer's libraries. */
+/** Data-free files every page may load: the injected tooltip script, the page kit, page components (/c/<name>.js), and the file viewer's libraries. */
 export function sharedFile(req: express.Request): boolean {
   if (req.method !== "GET") return false;
   if (
@@ -84,7 +85,8 @@ export function sharedFile(req: express.Request): boolean {
     req.path === "/kit.css" ||
     req.path === "/kit.js" ||
     req.path === "/audio-stream-worklet.js" ||
-    VENDOR_PATH.test(req.path)
+    VENDOR_PATH.test(req.path) ||
+    CORE_COMPONENT_PATH.test(req.path)
   ) {
     return true;
   }
