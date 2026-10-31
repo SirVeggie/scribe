@@ -31,7 +31,8 @@ export const COPY_VERSION = 1;
 export type CopySelection = { pages?: string[]; folders?: string[]; templates?: string[]; plugins?: string[] };
 
 type BundlePlugin = { id: string; name: string; version: string; hash: string };
-type CopyBundle = { format: typeof COPY_FORMAT; version: number; file: BoardExportFile | null; plugins: BundlePlugin[] };
+/** origin: the device the pages are from, when it isn't the sender (a copy from a mirror, #910). */
+type CopyBundle = { format: typeof COPY_FORMAT; version: number; file: BoardExportFile | null; plugins: BundlePlugin[]; origin?: { id: string } };
 
 export type CopyResult = {
   device: { id: string; name: string };
@@ -72,7 +73,8 @@ const sha256 = (data: Buffer) => crypto.createHash("sha256").update(data).digest
 
 // --- sending ---
 
-export async function sendCopy(peers: PeerService, host: CopyHost, target: string, selection: CopySelection): Promise<CopyResult> {
+/** `origin`: the device whose pages these are, when this device only holds its mirror (#910). */
+export async function sendCopy(peers: PeerService, host: CopyHost, target: string, selection: CopySelection, origin?: { id: string; name: string }): Promise<CopyResult> {
   if (target === peers.identity.id) throw new Error("That is this device.");
   const name = peers.nameOf(target);
   if (!name) throw new Error("No paired device with that id.");
@@ -87,7 +89,7 @@ export async function sendCopy(peers: PeerService, host: CopyHost, target: strin
         // Thread ids mean nothing on the other device; keep who made it by title only.
         ...(page.provenance?.created ? { created: { at: page.provenance.created.at, ...(page.provenance.created.title ? { title: page.provenance.created.title } : {}) } } : {}),
         ...(page.provenance?.changed ? { changed: { at: page.provenance.changed.at, ...(page.provenance.changed.title ? { title: page.provenance.changed.title } : {}) } } : {}),
-        copiedFrom: { device: peers.identity.id, name: peers.identity.name, key: page.key, revision: host.revision(page.key) ?? 0, at },
+        copiedFrom: { device: origin?.id ?? peers.identity.id, name: origin?.name ?? peers.identity.name, key: page.key, revision: host.revision(page.key) ?? 0, at },
       };
       for (const asset of [...page.assets, ...(page.pageAssets ?? [])] as Array<{ data?: string; hash?: string }>) {
         const data = Buffer.from(asset.data ?? "", "base64");
@@ -114,7 +116,7 @@ export async function sendCopy(peers: PeerService, host: CopyHost, target: strin
     const archive = host.exportPlugin(plugin.id);
     return [plugin.id, { archive, hash: sha256(archive) }] as const;
   }));
-  const check = await call<{ missing: string[]; present: string[] }>(peers, target, "POST", "/api/copy/incoming/check", {
+  const check = await peerCall<{ missing: string[]; present: string[] }>(peers, target, "POST", "/api/copy/incoming/check", {
     hashes: [...new Set([...blobs.keys(), ...[...archives.values()].map((a) => a.hash)])],
     plugins: local.map(({ id, hash }) => ({ id, hash })),
   });
@@ -135,12 +137,12 @@ export async function sendCopy(peers: PeerService, host: CopyHost, target: strin
       skipped += data.length;
       continue;
     }
-    await call(peers, target, "PUT", `/api/copy/incoming/blobs/${hash}`, data);
+    await peerCall(peers, target, "PUT", `/api/copy/incoming/blobs/${hash}`, data);
     sent += data.length;
   }
 
-  const bundle: CopyBundle = { format: COPY_FORMAT, version: COPY_VERSION, file, plugins };
-  const result = await call<Omit<CopyResult, "device" | "sent" | "skipped" | "pluginsPresent">>(peers, target, "POST", "/api/copy/incoming", bundle);
+  const bundle: CopyBundle = { format: COPY_FORMAT, version: COPY_VERSION, file, plugins, ...(origin ? { origin: { id: origin.id } } : {}) };
+  const result = await peerCall<Omit<CopyResult, "device" | "sent" | "skipped" | "pluginsPresent">>(peers, target, "POST", "/api/copy/incoming", bundle);
   return { ...result, device: { id: target, name }, pluginsPresent: [...present], sent, skipped };
 }
 
@@ -158,7 +160,8 @@ function exportSelection(host: CopyHost, selection: CopySelection): BoardExportF
   return first;
 }
 
-async function call<T = unknown>(peers: PeerService, target: string, method: string, url: string, body: unknown): Promise<T> {
+/** A JSON (or raw blob) request to a paired device's daemon over the link; its error message, or a hint to update it. */
+export async function peerCall<T = unknown>(peers: PeerService, target: string, method: string, url: string, body: unknown): Promise<T> {
   const raw = Buffer.isBuffer(body);
   const payload = raw ? body : Buffer.from(JSON.stringify(body));
   const reply = await timed(peers.request(target, {
@@ -173,7 +176,7 @@ async function call<T = unknown>(peers: PeerService, target: string, method: str
   } catch {
     /* not JSON */
   }
-  if (reply.status === 404 && !data.error) throw new Error(`${peers.nameOf(target) ?? "The device"} runs a Scribe without copying between devices: update it.`);
+  if (reply.status === 404 && !data.error) throw new Error(`${peers.nameOf(target) ?? "The device"} runs an older Scribe without this: update it.`);
   if (reply.status >= 400) throw new Error(typeof data.error === "string" ? data.error : `The device answered ${reply.status}.`);
   return data as T;
 }
@@ -312,7 +315,9 @@ export function copyRouter(peers: PeerService, host: CopyHost, home: string): Ro
   incoming.post("/", express.json({ limit: MAX_BUNDLE }), async (req, res) => {
     try {
       const fromId = peerDeviceOf(req.socket)!;
-      const from = { id: fromId, name: peers.nameOf(fromId) ?? fromId };
+      // A copy out of a mirror names the device the pages are from; the sender is only its keeper (#910).
+      const originId = typeof req.body?.origin?.id === "string" && req.body.origin.id !== peers.identity.id && peers.nameOf(req.body.origin.id) ? req.body.origin.id as string : fromId;
+      const from = { id: originId, name: peers.nameOf(originId) ?? originId };
       const result = await receive(req.body as CopyBundle, from);
       res.status(201).json(result);
     } catch (err) {

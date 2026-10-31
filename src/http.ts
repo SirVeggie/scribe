@@ -84,6 +84,7 @@ import { TAINT_HEADER, remoteReader } from "./devices/agentAccess.js";
 import { agentForwarder, remoteAgentGate, remoteAgentRouter, type AgentDevicesHost } from "./devices/agentRoutes.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { copyRouter } from "./devices/copy.js";
+import { MirrorPusher, MirrorStore, mirrorRouter, mirrorView, type MirrorSource } from "./devices/mirror.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
 import { browserViewHtml } from "./browserPage.js";
@@ -252,7 +253,56 @@ export async function startHttp(): Promise<http.Server> {
     return embedOrigins.has(origin);
   };
   const embeds = embedProxy({ allowed: embedOriginKnown, ports: [PORT, PEER_PORT], name: () => peers.identity.name });
-  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next)), devices: devicesApi, embeds });
+  // The offline mirror (#910): this device pushes its catalog and mirrored pages to the device it picked,
+  // and keeps the mirrors other devices push here, shown read only while they are offline.
+  const mirrorSource: MirrorSource = {
+    catalog: () => {
+      const view = store.spacesView();
+      const pages = [...store.listOpenTabs(), ...store.listClosedTabs()].filter((tab) => !tab.temp && !tab.browser);
+      return {
+        spaces: view.spaces.map((space) => ({ id: space.id, name: space.name, color: space.color, tabs: space.tabs.map((t) => t.id), ...(space.active ? { active: true } : {}) })),
+        folders: store.listFolders().map((folder) => ({ id: folder.id, parentId: folder.parentId, name: folder.name })),
+        pages: pages.map((tab) => ({
+          id: tab.id, key: tab.key, title: tab.title, updatedAt: tab.updatedAt,
+          ...(tab.folderId ? { folderId: tab.folderId } : {}),
+          ...(tab.templateId ? { templateId: tab.templateId } : {}),
+          ...(tab.file ? { kind: "file" as const } : {}),
+        })),
+        templates: store.listTemplates().map((t) => ({ id: t.id, key: t.key, title: t.title, updatedAt: t.updatedAt })),
+      };
+    },
+    pages: (folders) => {
+      // Every tab of every space (the live strip when spaces are not in use), and the Mirrored folders' pages.
+      const ids = new Set<string>([...store.listOpenTabs().map((tab) => tab.id), ...store.spacesView().spaces.flatMap((space) => space.tabs.map((t) => t.id))]);
+      const roots = folders.filter((id) => store.listFolders().some((folder) => folder.id === id));
+      if (roots.length) {
+        for (const tab of [...store.listOpenTabs(), ...store.listClosedTabs()]) {
+          if (tab.folderId && roots.some((root) => store.folderInside(tab.folderId!, root))) ids.add(tab.id);
+        }
+      }
+      const out = new Map<string, string>();
+      for (const id of ids) {
+        const tab = store.get(id);
+        if (!tab || tab.temp || tab.browser || tab.file) continue;
+        const usage = store.pageAssetUsageOf(tab.id);
+        out.set(tab.id, `${tab.revision}.${tab.stateRevision}.${tab.updatedAt}.${tab.assets.length}.${usage.count}.${usage.bytes}`);
+      }
+      return out;
+    },
+    exportPages: (ids) => store.exportFile({ pageIds: ids }),
+    onChange: (listener) => {
+      for (const event of ["tab_upserted", "tab_state", "tab_deleted", "spaces", "folders", "template_upserted", "template_deleted", "page_assets_removed"]) store.on(event, listener);
+    },
+  };
+  const mirrorStore = new MirrorStore(dataDir());
+  const mirrorPusher = new MirrorPusher(peers, mirrorSource, dataDir());
+  const localUi: express.RequestHandler = (req, res, next) => uiAssets(req, res, () => publicFiles(req, res, next));
+  const mirror = mirrorView(peers, mirrorStore, {
+    local: localUi,
+    render: (tab) => injectBoardRuntime(tab as unknown as Tab, null),
+    received: (event) => broadcast({ type: "copy_received", ...event }),
+  });
+  const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: localUi, devices: devicesApi, embeds, mirror });
   // The agent port (#915) only reaches the API, before any host-based routing.
   app.use(agentPortGate);
   app.use(gateway.http);
@@ -336,6 +386,8 @@ export async function startHttp(): Promise<http.Server> {
     previewPlugin: (files, detailed) => pluginService.preview(files, detailed),
     received: (event) => broadcast({ type: "copy_received", ...event }),
   }, dataDir()));
+  // Mirrors (#910) parse their own bodies too: pages and blobs go in batches of several MB.
+  app.use("/api/mirror", mirrorRouter(peers, mirrorPusher, mirrorStore));
   app.use(express.json({ limit: "6mb" }));
   // A chat here reaching another device (#911): device_list, and calls that name a device go over the link.
   const agentDevices: AgentDevicesHost = {
@@ -2775,6 +2827,7 @@ export async function startHttp(): Promise<http.Server> {
   server.once("close", () => agentServer.close());
   peers.attach(server);
   await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));
+  mirrorPusher.start();
   void prebuildEditorBundle();
 
   log(`Scribe listening on ${baseUrl()} (tab pages on their own *${PAGE_HOST_SUFFIX} origins)`);

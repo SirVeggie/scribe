@@ -47,6 +47,8 @@ export function peerGateway(peers: PeerService, options: {
   devices?: express.RequestHandler;
   /** This device's embeds as another device shows them (#917): eh-/es- hosts that came over the link. */
   embeds?: EmbedProxy;
+  /** Another device's hosts that came over a link: a mirror held here, shown read only (#910). */
+  mirror?: (req: express.Request, res: express.Response, gateway: { device: string; label?: string }) => void;
 }): Gateway {
   const cache = new Map<string, Cached>();
   let cacheBytes = 0;
@@ -93,7 +95,15 @@ export function peerGateway(peers: PeerService, options: {
   }
 
   function forward(req: express.Request, res: express.Response, device: string, cacheKey?: string): void {
-    const link = peers.linkTo(device);
+    let link = peers.linkTo(device);
+    // Offline: the device that keeps its mirror answers instead, read only (#910). Not for embeds, which run on the owner.
+    if (!link?.open && !isEmbedLabel(gatewayHost(req.hostname)?.label)) {
+      const mirror = peers.mirrorOf(device);
+      if (mirror) {
+        link = peers.linkTo(mirror.holder);
+        cacheKey = undefined;
+      }
+    }
     if (!link?.open) {
       offline(res, device, isEmbedLabel(gatewayHost(req.hostname)?.label));
       return;
@@ -134,6 +144,11 @@ export function peerGateway(peers: PeerService, options: {
     const gateway = gatewayHost(req.hostname);
     if (gateway && options.embeds && isEmbedLabel(gateway.label) && peerDeviceOf(req.socket)) {
       options.embeds.http(req, res, gateway.label!);
+      return;
+    }
+    // Another device's host over a link: its mirror, if this device keeps one (#910).
+    if (gateway && options.mirror && gateway.device !== peers.identity.id && peerDeviceOf(req.socket)) {
+      options.mirror(req, res, gateway);
       return;
     }
     // Over a link these hosts are this daemon's own UI as the other device shows it (contentOriginGate).
