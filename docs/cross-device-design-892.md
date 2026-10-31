@@ -390,8 +390,9 @@ and an installable web app manifest is in.
 
 ### Server setup (Contabo, Ubuntu 20.04)
 
-- User `scribe` (lingering on), Node 24 through nvm, the repo in `~scribe/scribe`, `npm ci && npm run build && npm link`,
-  `scribe service install` (systemd user unit). Device name "Server", public address `scribe.sirveggie.com` (peer port 4748).
+- Runs as root, like the server's other projects: the repo in `/root/projects/scribe`, data in `/root/scribe`, its own Node 24
+  in `/opt/node24` (root's nvm default stays as the pm2 apps use it), `npm ci && npm run build && npm link`, `scribe service
+  install` (systemd user unit, root lingering). Device name "Server", public address `scribe.sirveggie.com` (peer port 4748).
 - Web access: domain set; client id and accounts are set from a paired device.
 - `/etc/caddy/Caddyfile` (old one in `Caddyfile.bak-scribe`):
 
@@ -410,4 +411,4 @@ https://scribe.sirveggie.com, https://*.scribe.sirveggie.com {
 }
 ```
 
-- Update: `su - scribe`, `cd scribe && git pull && npm ci && npm run build`, `systemctl --user restart scribe`.
+- Update: `cd ~/projects/scribe && export PATH=/opt/node24/bin:$PATH && git pull && npm ci && npm run build && XDG_RUNTIME_DIR=/run/user/0 systemctl --user restart scribe`.
