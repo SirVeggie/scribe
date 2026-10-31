@@ -341,3 +341,68 @@ the always-on device listens on a public port; any two devices paired with it ma
 - Not done: a mirror page's own components and plugin calls (they answer 404), WebSockets to a mirror (none needed),
   mirroring threads (decided against), more than one mirror target per device, and relay chains (a relayed link is
   never used to relay).
+
+## Web access (#913)
+
+Decided by the user: Caddy terminates TLS on the server, the domain is `scribe.sirveggie.com` (DNS at Namecheap, with a
+`*.scribe.sirveggie.com` record), Sign in with Google (ID tokens), no approval step for new browsers, sessions last 30 days,
+a web session may not change web access or pairing, every paired device answers the web, the phone layout is its own card,
+and an installable web app manifest is in.
+
+- **Host names** (`src/webRequest.ts`): `<domain>` is the server's board, `d-<device>.<domain>` another device's. Free
+  certificates cover one label, so page origins are flattened: `<label>.<domain>` on the server, `<label>--<device>.<domain>`
+  on another device (`t-ab12--0123456789ab.scribe.sirveggie.com`). `parseWebHost`, `internalHostname` and `webHostOf` map
+  between those and the loopback names the daemon already serves.
+- **Listener** (`src/devices/web.ts`, `WEB_PORT`, default board port + 3, loopback only): opens while Settings names a domain.
+  A request without a session gets the sign-in page (board hosts) or 401. A signed-in one has its Host and Origin rewritten
+  to the loopback names, Scribe's own and the proxy's headers dropped, the session cookie removed, and is marked
+  (`markWebRequest`); then it goes to the same Express app. `callers.ts` makes it `{ viewer: "user", web: true }` only with
+  that mark: on the web port no browser header, local token or page origin counts. WebSockets go through the same check.
+- **Other devices**: the rewritten host is `[label.]d-<device>.localhost`, so the #905 gateway forwards it (and an offline
+  device's #910 mirror). It adds `x-scribe-web: <domain>`, which the gateway drops from everything else; the other device's
+  `requestOrigin` / `boardOrigin` then build `https://` URLs on the web names. The UI reads its host the same way
+  (`window.scribeHost` in `index.html`, with `homeOrigin()` / `deviceOrigin(id)`; the page bridge; the mirror browser).
+- **Sign-in**: the page loads Google's button (`data-ux_mode="popup"`); `POST /auth/google` checks the ID token's RS256
+  signature against Google's keys (cached per Cache-Control), issuer, audience (the client id), expiry and a verified email on
+  the allowed list. The account's `sub` is pinned on first sign-in. Ten failures a minute and it answers 429.
+- **Session**: 32 random bytes in `__Secure-scribe` (Domain=`<domain>`, HttpOnly, Secure, SameSite=Lax, 30 days, renewed
+  hourly while used), stored as its SHA-256 in `<data>/device/web.json` (mode 600). Page origins are same-site with the board,
+  as `t-*.localhost` is not; the existing guards still hold (cross-origin writes are refused by `contentOriginGate`, page
+  routes answer only their own origin, CORS keeps responses unreadable). Removing an account signs its browsers out.
+- **Settings → Devices → Web access**: pick the device (this one or an online paired one; `/api/devices/:id/web` goes over
+  the link), then Web address, Google client id, allowed accounts, and signed-in browsers with Sign out. A web session sees
+  it read only: `/api/devices` refuses web writes except switching spaces, answering approvals, resolve and describe.
+  "Sign out of this browser" posts to `/auth/logout` on the domain. Path actions answer 409 to web callers.
+- **Certificates**: Caddy's on-demand TLS, one certificate per name, asking `GET /caddy-ask?domain=` first. It answers yes
+  only for the boards, paired devices, Scribe's own labels, and pages that exist (another device's checked over the link),
+  at most 30 new names an hour, so nobody can spend the domain's Let's Encrypt allowance (50 a week) by probing names. A
+  page's first open from the web waits a few seconds for its certificate. A wildcard certificate through the DNS challenge
+  (Caddy's Namecheap module and API access) would remove both.
+- **PWA**: `manifest.webmanifest`, 192/512 and maskable icons; served without the cookie, as browsers fetch them.
+- Tests: `src/devices/web.test.ts` (A with the listener, B paired; test-signed Google tokens).
+- Not done: the phone layout (own card); embeds of private hosts in the server's own web view (the embed proxy answers only
+  link callers); a board that notices its session ended (reload goes to sign-in).
+
+### Server setup (Contabo, Ubuntu 20.04)
+
+- User `scribe` (lingering on), Node 24 through nvm, the repo in `~scribe/scribe`, `npm ci && npm run build && npm link`,
+  `scribe service install` (systemd user unit). Device name "Server", public address `scribe.sirveggie.com` (peer port 4748).
+- Web access: domain set; client id and accounts are set from a paired device.
+- `/etc/caddy/Caddyfile` (old one in `Caddyfile.bak-scribe`):
+
+```caddyfile
+{
+	on_demand_tls {
+		ask http://127.0.0.1:4750/caddy-ask
+	}
+}
+
+https://scribe.sirveggie.com, https://*.scribe.sirveggie.com {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:4750
+}
+```
+
+- Update: `su - scribe`, `cd scribe && git pull && npm ci && npm run build`, `systemctl --user restart scribe`.
