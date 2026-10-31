@@ -85,7 +85,7 @@ import { sumThreadUsage, sumUsageTree } from "./usage.js";
 import { likePatterns, matchMessages, messageSnippet, searchWords, type ThreadMessageHit } from "./threadSearch.js";
 import { allowedGrants, canReadThread, grantScopes, isMessage, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
-import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, withGrantOptions } from "./toolGrants.js";
+import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, toolGrantKey, withGrantOptions, workspaceGrant } from "./toolGrants.js";
 import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, memoryPlace, saveMemory, type Memory } from "./memory.js";
 import { WEB_IMPORTANCE_WAIT_MS, parseWebImportance, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
@@ -115,7 +115,7 @@ import type {
   Turn,
   Usage,
 } from "./types.js";
-import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, planAccess, readsOnly, settleAccess, wantsPlan } from "./types.js";
+import { APPROVAL_LABEL, APPROVALS, approvalRank, changeAccess, isProviderId, minApproval, type ModeInput, noPages, pagesReadsFiles, parseApproval, parseMode, planAccess, readsOnly, settleAccess, type ToolGrant, wantsPlan } from "./types.js";
 import { PAGE_INTENT_NOTE, pageIntentDetectors } from "./pageIntent.js";
 import { reviewNativeCommand } from "./nativeReview.js";
 import { cleanProtectedPaths, policyFor, type PolicyEnv } from "./access.js";
@@ -462,7 +462,7 @@ type RunState = {
   /** A queued message handed to this turn with steer, until the agent takes it in. */
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
   /** A workspace the agent asked for with thread_update and the user allowed: the thread moves there when the turn ends. */
-  workspace?: { cwd: string; continue: boolean };
+  workspace?: { cwd: string; continue: boolean; grant?: ToolGrant };
   hooks: {
     /** The user's message this turn answers, as context for classifier questions. */
     lastUser: string;
@@ -1922,7 +1922,9 @@ export class AgentHost {
     const thread: Thread = {
       id: `th_${crypto.randomBytes(6).toString("hex")}`,
       title: input.title?.trim() || "New thread",
-      titleLocked: Boolean(input.title?.trim()),
+      // A title given at creation comes from a page or a helper call, not a user rename (#578).
+      titleLocked: false,
+      ...(input.title?.trim() ? { titleGiven: true as const } : {}),
       provider,
       model,
       effort: input.effort !== undefined ? input.effort : choice.effort,
@@ -3734,14 +3736,25 @@ export class AgentHost {
       }
     }
     if (this.runs.get(threadId) !== run) return "Not changed: the turn that asked has ended.";
-    run.workspace = { cwd, continue: goOn };
-    return `Allowed. The workspace changes to ${cwd} when this turn ends; until then commands and relative paths still use ${thread.cwd ?? "the current folder"}. End your turn now${goOn ? ": Scribe then starts your next turn in the new folder" : ""}.`;
+    // Until the move, a folder grant lets this turn read (and on an editing rung, edit) there without asking again (#578).
+    const grant = workspaceGrant(thread, cwd);
+    const added = grant && !(thread.toolGrants ?? []).some((g) => toolGrantKey(g) === toolGrantKey(grant)) ? grant : undefined;
+    if (added) {
+      thread.toolGrants = addToolGrants(thread.toolGrants, [added]);
+      this.db.saveThread(thread);
+      this.emitThread(threadId);
+    }
+    run.workspace = { cwd, continue: goOn, ...(added ? { grant: added } : {}) };
+    const now = added ? ` You can already ${added.access === "write" ? "read and edit" : "read"} files there by absolute path in this turn.` : "";
+    return `Allowed. The workspace changes to ${cwd} when this turn ends; until then commands and relative paths still use ${thread.cwd ?? "the current folder"}.${now} ${goOn ? "If the rest of the work is there, end your turn now: Scribe then starts your next turn in the new folder." : "End your turn now."}`;
   }
 
   /** Move the thread to the workspace its ended turn asked for. A workspace-scoped thread's scope follows, as when the user picks a folder. */
-  private applyWorkspace(threadId: string, turnId: string, cwd: string): boolean {
+  private applyWorkspace(threadId: string, turnId: string, cwd: string, grant?: ToolGrant): boolean {
     try {
       const thread = this.requireThread(threadId);
+      // The grant that bridged the turn: the workspace covers that folder now.
+      if (grant) thread.toolGrants = (thread.toolGrants ?? []).filter((g) => toolGrantKey(g) !== toolGrantKey(grant));
       this.updateThread(threadId, { cwd, ...(thread.scope.kind === "workspace" ? { scope: { kind: "workspace" as const, ref: cwd } } : {}) });
       this.addItem(threadId, turnId, { kind: "notice", level: "info", text: `Workspace changed to ${cwd}.` });
       return true;
@@ -4833,7 +4846,7 @@ export class AgentHost {
       this.addItem(threadId, turn.id, { kind: "usage_limit", resetsAt: turn.limitResetsAt, status: "pending", ...(switchTo ? { switchTo } : {}) });
     }
     this.emitThread(threadId);
-    const moved = run.workspace && latest ? this.applyWorkspace(threadId, turn.id, run.workspace.cwd) : false;
+    const moved = run.workspace && latest ? this.applyWorkspace(threadId, turn.id, run.workspace.cwd, run.workspace.grant) : false;
 
     if (carried && latest) {
       const item = carried.itemId ? this.loadItems(threadId).find((it) => it.id === carried.itemId) : undefined;
@@ -5510,7 +5523,7 @@ export class AgentHost {
       },
       title(title) {
         const t = thread();
-        if (t && !t.titleLocked && title && title !== t.title) {
+        if (t && !t.titleLocked && !t.titleGiven && title && title !== t.title) {
           t.title = title.slice(0, 120);
           host.db.saveThread(t);
           host.emitThread(threadId);

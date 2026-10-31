@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { threadInstructions } from "./prompt.js";
+import { grantAllows } from "./toolGrants.js";
 import type { RunSink, TurnInput, TurnResult } from "./providers/provider.js";
 import type { ApprovalPolicy, Thread } from "./types.js";
 
@@ -24,7 +25,7 @@ const turns: Array<{ id: string; cwd: string | null; text: string }> = [];
 /** What the next turn does in place of a model: its thread_update call. */
 let act: ((threadId: string) => Promise<unknown>) | null = null;
 
-type Internals = { providers: Record<string, unknown>; runs: Map<string, unknown> };
+type Internals = { providers: Record<string, unknown>; runs: Map<string, unknown>; threads: Map<string, Thread> };
 
 before(() => {
   store.load();
@@ -115,13 +116,24 @@ test("thread_update renames the thread, but not one the user named", async () =>
   await assert.rejects(host.threadUpdateOp(id, {}), /Pass title, workspace or both/);
 });
 
+test("a title given at creation (a board worker chat) is not the user's: the agent may rename it", async () => {
+  const id = thread("edits", { title: "#12 Fix login" });
+  assert.equal(view(id).thread.titleLocked, false);
+  assert.doesNotMatch(threadInstructions((host as unknown as Internals).threads.get(id)!, {}), /In your first turn/);
+  assert.deepEqual(await host.threadUpdateOp(id, { title: "Session cookies" }), { title: "The thread is now titled “Session cookies”." });
+});
+
 test("an allowed workspace change applies when the turn ends, and Scribe sends the thread on there", async () => {
   const id = thread("edits");
   let during: string | null = null;
+  let editable = false;
   let reply: unknown;
+  const edit = { toolId: "t1", tool: "edit" as const, title: "Edit", paths: [path.join(b, "x.ts")], options: [{ id: "ok", label: "Allow", kind: "allow_once" as const }] };
+  const raw = () => (host as unknown as Internals).threads.get(id)!;
   act = async (threadId) => {
     reply = await host.threadUpdateOp(threadId, { workspace: b, reason: "The fix is in b." });
     during = view(threadId).thread.cwd;
+    editable = grantAllows(raw(), edit, []);
     return reply;
   };
   host.send(id, { text: "fix it in b" });
@@ -130,8 +142,12 @@ test("an allowed workspace change applies when the turn ends, and Scribe sends t
   assert.match(item.kind === "approval" ? item.detail ?? "" : "", /The fix is in b\./);
   await idle(id);
   assert.match((reply as { workspace: string }).workspace, /^Allowed\. The workspace changes to .* when this turn ends/);
-  // The running turn keeps its folder.
+  assert.match((reply as { workspace: string }).workspace, /You can already read and edit files there by absolute path in this turn\./);
+  // The running turn keeps its folder, but may already edit in the new one.
   assert.equal(during, a);
+  assert.ok(editable);
+  // Once moved, the workspace covers it and the bridging grant is gone.
+  assert.deepEqual(raw().toolGrants ?? [], []);
   const now = view(id).thread;
   assert.equal(now.cwd, b);
   assert.deepEqual(now.scope, { kind: "workspace", ref: b });

@@ -146,7 +146,8 @@ test("a helper runs the brief on the named model with the caller's settings and 
   assert.deepEqual(result.usage, { turns: 1, inputTokens: 20, cacheReadTokens: 10, outputTokens: 5, promptTokens: 30, costPartial: true });
   const helper = host.getThread(String(result.thread))!;
   assert.equal(helper.title, "Helper: Rename symbol");
-  assert.equal(helper.titleLocked, true);
+  assert.equal(helper.titleLocked, false);
+  assert.equal(helper.titleGiven, true);
   assert.equal(helper.helperOf, id);
   assert.equal(helper.model, "local/qwen-coder");
   assert.equal(helper.mode, "code");

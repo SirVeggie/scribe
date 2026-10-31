@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ApprovalOption, ProviderId, Thread, ToolGrant } from "./types.js";
+import { readsOnly, type ApprovalOption, type ProviderId, type Thread, type ToolGrant } from "./types.js";
 import type { ApprovalRequest } from "./providers/provider.js";
 
 /**
@@ -230,6 +230,20 @@ export function toolGrantLabel(g: ToolGrant): string {
   if (g.kind === "command") return g.key ? `Run “${g.key}”` : "Run any command";
   if (g.kind === "file") return `Edit ${g.path}`;
   return g.access === "write" ? `Edit in ${g.path}` : `Read in ${g.path}`;
+}
+
+/**
+ * The folder grant for a workspace the user allowed with thread_update, for the rest of the turn
+ * that asked (#578): what the thread's rung allows in its own workspace, edits or only reads.
+ */
+export function workspaceGrant(t: Pick<Thread, "mode" | "approval" | "noTools">, folder: string): Extract<ToolGrant, { kind: "folder" | "file" }> | null {
+  if (t.noTools) return null;
+  try {
+    const real = fs.realpathSync.native(folder);
+    return { kind: "folder", path: real, access: t.mode === "code" && !readsOnly(t.approval) ? "write" : "read" };
+  } catch {
+    return null;
+  }
 }
 
 /** The thread's grants with new ones added; one already covered is not added twice. */

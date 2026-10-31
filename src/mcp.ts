@@ -1841,12 +1841,12 @@ function registerWebRequest(server: McpServer): void {
 /**
  * thread_update: the chat renames its own thread when the subject changed, and asks to move its
  * workspace to the folder the work moved to (#577). The user allows a workspace change; it applies
- * when the turn ends.
+ * when the turn ends, and a folder grant covers file access there until then (#578).
  */
 function registerThreadUpdate(server: McpServer): void {
   server.tool(
     "thread_update",
-    "Change this chat thread's own title or workspace folder. title: rename the thread when its subject has changed and the title no longer says what it is about; a few words, like a headline. A thread the user named keeps its title. workspace: move the thread to another folder when the work has moved there, so file access in it stops needing approval one call at a time; only when the rest of the work is in that folder, not for a single file. The user is asked to allow it (not under Full access). It takes effect when your turn ends, not during it: end your turn right after the call, and Scribe starts your next turn in the new folder with a note to go on (pass continue false when nothing is left to do). On the Read-only and Board rungs the workspace is the folder they read files in. A thread in its own worktree and a helper thread keep their workspace. Returns a message per field you passed.",
+    "Change this chat thread's own title or workspace folder. title: rename the thread when its subject has changed and the title no longer says what it is about; a few words, like a headline. A thread the user named keeps its title. workspace: move the thread to another folder when the work has moved there, so file access in it stops needing approval one call at a time; only when the rest of the work is in that folder, not for a single file. The user is asked to allow it (not under Full access). Once allowed, files there can be read and edited by absolute path at once; commands and relative paths move when your turn ends: end your turn right after the call, and Scribe starts your next turn in the new folder with a note to go on (pass continue false when nothing is left to do). On the Read-only and Board rungs the workspace is the folder they read files in. A thread in its own worktree and a helper thread keep their workspace. Returns a message per field you passed.",
     {
       title: z.string().optional().describe("The new title: a few words on what the thread is about now."),
       workspace: z.string().optional().describe("Absolute path of the folder to work in from the next turn on."),

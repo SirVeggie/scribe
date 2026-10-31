@@ -158,6 +158,8 @@ export type Thread = {
   title: string;
   /** The user renamed it; provider title suggestions are ignored. */
   titleLocked: boolean;
+  /** Titled when it was made (a board worker chat, a helper): provider suggestions and first-turn naming leave it, but the agent may rename it. */
+  titleGiven?: true;
   provider: ProviderId;
   model: string;
   /** Reasoning level (Claude effort, Cursor thought_level option). Null means the model default. */
