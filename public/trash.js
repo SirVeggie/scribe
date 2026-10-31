@@ -35,7 +35,8 @@ window.createTrash = function createTrash(host) {
 
   function render() {
     const focused = rowKey(document.activeElement);
-    list.replaceChildren();
+    // Rows are kept by key and patched in place (#430).
+    const rows = [];
     countEl.textContent = String(pageCount());
     emptyBtn.disabled = batches.length === 0;
     none.hidden = batches.length > 0;
@@ -44,28 +45,29 @@ window.createTrash = function createTrash(host) {
       const folderIds = new Set(batch.folders.map((folder) => folder.id));
       const note = describeAge(batch);
       for (const folder of batch.folders.filter((item) => !item.parentId || !folderIds.has(item.parentId))) {
-        renderFolder(batch, folder, 0, note);
+        renderFolder(rows, batch, folder, 0, note);
       }
       for (const page of batch.tabs.filter((tab) => !tab.folderId || !folderIds.has(tab.folderId))) {
-        list.appendChild(pageRow(page, 0, note));
+        rows.push(pageRow(page, 0, note));
       }
     }
+    window.scribeKeyedList(list, rows);
     if (focused) {
       rowFor(focused.kind, focused.id)?.focus({ preventScroll: true });
     }
   }
 
-  function renderFolder(batch, folder, depth, note) {
+  function renderFolder(rows, batch, folder, depth, note) {
     const open = expanded.has(folder.id);
-    list.appendChild(folderRow(batch, folder, depth, open, note));
+    rows.push(folderRow(batch, folder, depth, open, note));
     if (!open) {
       return;
     }
     for (const child of batch.folders.filter((item) => item.parentId === folder.id).sort((a, b) => a.pos - b.pos)) {
-      renderFolder(batch, child, depth + 1, "");
+      renderFolder(rows, batch, child, depth + 1, "");
     }
     for (const page of batch.tabs.filter((tab) => tab.folderId === folder.id).sort((a, b) => a.libPos - b.libPos)) {
-      list.appendChild(pageRow(page, depth + 1, ""));
+      rows.push(pageRow(page, depth + 1, ""));
     }
   }
 
@@ -94,16 +96,22 @@ window.createTrash = function createTrash(host) {
     return `${n} day${n === 1 ? "" : "s"} ago`;
   }
 
-  function baseRow(kind, id, depth, label) {
+  function baseRow(kind, id) {
     const el = document.createElement("div");
+    el.className = `side-row lib-row lib-${kind} trash-row`;
     el.role = "treeitem";
     el.tabIndex = 0;
-    el.ariaLabel = label;
-    el.ariaLevel = String(depth + 1);
     el.dataset.kind = kind;
     el.dataset.id = id;
-    el.style.setProperty("--depth", String(depth));
     return el;
+  }
+
+  function updateRow(el, depth, label) {
+    window.scribeAttr(el, "aria-label", label);
+    window.scribeAttr(el, "aria-level", depth + 1);
+    if (el.style.getPropertyValue("--depth") !== String(depth)) {
+      el.style.setProperty("--depth", String(depth));
+    }
   }
 
   function textBlock(titleText, note) {
@@ -134,30 +142,44 @@ window.createTrash = function createTrash(host) {
   }
 
   function pageRow(page, depth, note) {
-    const el = baseRow("page", page.id, depth, page.title);
-    el.className = "side-row lib-row lib-page trash-row";
-    const icon = document.createElement("span");
-    icon.className = "fileicon";
-    icon.innerHTML = host.icons.file;
-    el.append(icon, textBlock(page.title, note), restoreButton());
-    return el;
+    return {
+      key: `page:${page.id}`,
+      create: () => baseRow("page", page.id),
+      update: (el) => {
+        updateRow(el, depth, page.title);
+        window.scribeFill(el, JSON.stringify([page.title, note]), () => {
+          const icon = document.createElement("span");
+          icon.className = "fileicon";
+          icon.innerHTML = host.icons.file;
+          return [icon, textBlock(page.title, note), restoreButton()];
+        });
+      },
+    };
   }
 
   function folderRow(batch, folder, depth, open, note) {
-    const el = baseRow("folder", folder.id, depth, `${folder.name} (folder)`);
-    el.className = "side-row lib-row lib-folder trash-row" + (open ? " expanded" : "");
-    el.setAttribute("aria-expanded", open ? "true" : "false");
-    const chevron = document.createElement("span");
-    chevron.className = "lib-chevron";
-    chevron.innerHTML = host.icons.chevron;
-    const icon = document.createElement("span");
-    icon.className = "lib-folder-icon";
-    icon.innerHTML = host.icons.folder;
-    const count = document.createElement("span");
-    count.className = "lib-count";
-    count.textContent = String(countIn(batch, folder.id));
-    el.append(chevron, icon, textBlock(folder.name, note), count, restoreButton());
-    return el;
+    return {
+      key: `folder:${folder.id}`,
+      create: () => baseRow("folder", folder.id),
+      update: (el) => {
+        updateRow(el, depth, `${folder.name} (folder)`);
+        window.scribeClasses(el, { expanded: open });
+        window.scribeAttr(el, "aria-expanded", open ? "true" : "false");
+        const count = countIn(batch, folder.id);
+        window.scribeFill(el, JSON.stringify([folder.name, note, count]), () => {
+          const chevron = document.createElement("span");
+          chevron.className = "lib-chevron";
+          chevron.innerHTML = host.icons.chevron;
+          const icon = document.createElement("span");
+          icon.className = "lib-folder-icon";
+          icon.innerHTML = host.icons.folder;
+          const countEl = document.createElement("span");
+          countEl.className = "lib-count";
+          countEl.textContent = String(count);
+          return [chevron, icon, textBlock(folder.name, note), countEl, restoreButton()];
+        });
+      },
+    };
   }
 
   function countIn(batch, folderId) {

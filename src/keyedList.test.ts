@@ -55,3 +55,43 @@ test("scribeKeyedList keeps elements by key, moves only what is out of order, an
     await browser.close();
   }
 });
+
+test("Trash rows are kept by key when the Trash reloads and a folder opens (#430)", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Trash keyed rows test" });
+  try {
+    const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.setContent('<span id="trash-count"></span><button id="trash-empty"></button><div id="trash-none"></div><div id="trash-list"></div>');
+    for (const file of ["dom-sync.js", "trash.js"]) {
+      await page.addScriptTag({ content: fs.readFileSync(new URL(`../public/${file}`, import.meta.url), "utf8") });
+    }
+    // A plain script: async helpers inside evaluate() are rewritten by the test runner's transform.
+    await page.addScriptTag({ content: `
+      const now = Date.now();
+      window.batches = [{ id: "b1", deletedAt: now, expiresAt: now + 864e5 * 7,
+        folders: [{ id: "f", name: "Folder", pos: 0 }],
+        tabs: [{ id: "p", title: "Page", libPos: 0 }, { id: "q", title: "Inside", folderId: "f", libPos: 0 }] }];
+      window.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ batches: window.batches }) });
+      window.trash = createTrash({ icons: { file: "", folder: "", chevron: "" }, closeMenu() {} });
+      trash.setVisible(true);
+    ` });
+    await page.waitForSelector("#trash-list .lib-row");
+    const held = await page.evaluateHandle(() => [...document.querySelectorAll("#trash-list .lib-row")]);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.batches[0].tabs[0].title = "Page renamed";
+      w.trash.refresh();
+    });
+    await page.waitForFunction(() => document.querySelector('#trash-list [data-id="p"] .tab-title')?.textContent === "Page renamed");
+    await page.locator('#trash-list .lib-row[data-id="f"]').press("ArrowRight");
+    assert.deepEqual(await page.evaluate((before) => {
+      const rows = [...document.querySelectorAll("#trash-list .lib-row")] as HTMLElement[];
+      return [rows.map(row => row.dataset.id), rows[0] === before[0], rows[2] === before[1], rows[0].getAttribute("aria-expanded"),
+        rows[1].getAttribute("aria-level"), rows[2].querySelector(".tab-title")!.textContent];
+    }, held), [["f", "q", "p"], true, true, "true", "2", "Page renamed"]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});

@@ -246,7 +246,7 @@ test("shell updates retain composer pills, thread controls and template rows wit
       ${app.slice(app.indexOf('  function templateRow('), app.indexOf('  function toggleBuiltinGroup('))}
       window.check = () => {
         window.renderHoverThreads(); view.renderComposerBar();
-        window.scribeSyncChildren(document.querySelector('#templates'), state.templates.map(t => templateRow(t, false)));
+        window.scribeKeyedList(document.querySelector('#templates'), state.templates.map(t => templateRow(t, false)));
       };
       window.replaceMetadata = () => { state.templates = [{ ...state.templates[0], fields: [{ key: 'new' }] }]; };
       window.check();

@@ -2715,24 +2715,38 @@
     const sig = shown ? JSON.stringify([rows, builtins, groups, state.builtinOpen]) : templatesDrawn;
     if (sig !== templatesDrawn) {
       templatesDrawn = sig;
-      window.scribeSyncChildren(templateList, [
+      // Rows are kept by key and patched in place, so a menu highlight or a flash on one survives (#430).
+      window.scribeKeyedList(templateList, [
         ...rows.map((template) => templateRow(template, false)),
-        ...groups.map(group => {
-          const section = document.createElement("section");
-          section.className = "plugin-template-group";
-          section.dataset.id = `plugin:${group.id}`;
-          const heading = document.createElement("h3");
-          heading.className = "plugin-template-head";
-          heading.textContent = group.name;
-          section.append(heading, ...group.templates.map(template => templateRow(template, Boolean(template.builtIn))));
-          return section;
-        }),
+        ...groups.map(group => ({
+          key: `plugin:${group.id}`,
+          create: () => {
+            const section = document.createElement("section");
+            section.className = "plugin-template-group";
+            section.dataset.id = `plugin:${group.id}`;
+            return section;
+          },
+          update: (section) => window.scribeKeyedList(section, [
+            {
+              key: "head",
+              create: () => {
+                const heading = document.createElement("h3");
+                heading.className = "plugin-template-head";
+                return heading;
+              },
+              update: (heading) => {
+                if (heading.textContent !== group.name) heading.textContent = group.name;
+              },
+            },
+            ...group.templates.map(template => templateRow(template, Boolean(template.builtIn))),
+          ]),
+        })),
       ]);
       templateNone.hidden = rows.length + pluginCount > 0;
       builtinGroup.hidden = builtins.length === 0;
       builtinGroup.classList.toggle("open", state.builtinOpen);
       builtinHead.setAttribute("aria-expanded", state.builtinOpen ? "true" : "false");
-      window.scribeSyncChildren(builtinList, builtins.map((template) => templateRow(template, true, !state.builtinOpen)));
+      window.scribeKeyedList(builtinList, builtins.map((template) => templateRow(template, true, !state.builtinOpen)));
     }
     if (freshTemplateId) {
       flashTemplateRow(freshTemplateId);
@@ -2741,78 +2755,95 @@
   }
 
   function templateRow(template, builtin, collapsed = false) {
-    const live = () => findTemplateMeta(template.id);
+    return {
+      key: `${builtin ? "builtin" : "own"}:${template.id}`,
+      create: () => createTemplateRow(template.id, builtin),
+      update: (el) => updateTemplateRow(el, template, builtin, collapsed),
+    };
+  }
+
+  /** A template row's element and listeners, which read the template by id when they run. */
+  function createTemplateRow(id, builtin) {
+    const live = () => findTemplateMeta(id);
     const el = document.createElement("div");
     el.className = builtin ? "side-row template-row builtin" : "side-row template-row";
     el.role = "button";
-    el.tabIndex = collapsed ? -1 : 0;
-    el.dataset.id = template.id;
+    el.dataset.id = id;
     el.dataset.kind = "template";
-    el.ariaLabel = template.title;
-    el.addEventListener("click", () => live() && createFromTemplate(live()));
+    el.addEventListener("click", (event) => {
+      if (event.target.closest(".tab-close")) {
+        event.stopPropagation();
+        live() && deleteTemplate(live());
+        return;
+      }
+      live() && createFromTemplate(live());
+    });
     el.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
+      if (event.target === el && (event.key === "Enter" || event.key === " ")) {
         event.preventDefault();
         live() && createFromTemplate(live());
       }
     });
-
-    const icon = document.createElement("span");
-    icon.className = "fileicon";
-    icon.innerHTML = builtin ? BUILTIN_SVG : FILE_SVG;
-    el.appendChild(icon);
-
-    const text = document.createElement("span");
-    text.className = "tab-title";
-    const name = document.createElement("span");
-    name.className = "template-name";
-    name.textContent = template.title;
-    const line = document.createElement("span");
-    line.className = "template-line";
-    line.appendChild(name);
-    if (template.builtinUpdate) {
-      const update = document.createElement("span");
-      update.className = "template-update";
-      update.innerHTML = UPDATE_SVG;
-      update.ariaLabel = `${UPDATE_TITLE}. ${UPDATE_NOTE}`;
-      update.dataset.kind = "template-update";
-      update.dataset.id = template.id;
-      hoverCard.bind(update, 240);
-      line.appendChild(update);
-    }
-    if (builtin || template.builtinSource) {
-      const version = document.createElement("span");
-      version.className = "template-version";
-      version.textContent = `v${template.stateVersion}`;
-      version.dataset.tooltip = template.plugin
-        ? (builtin ? "Plugin template version" : "Copied from a plugin template")
-        : (builtin ? "Built-in template version" : "Copied from a built-in template");
-      line.appendChild(version);
-    }
-    text.appendChild(line);
-    if (template.description) {
-      const desc = document.createElement("span");
-      desc.className = "template-desc";
-      desc.textContent = template.description;
-      text.appendChild(desc);
-    }
-    el.appendChild(text);
-
     el.addEventListener("contextmenu", (event) => live() && templateMenu(event, live(), el, builtin));
-    if (!builtin) {
-      const close = document.createElement("button");
-      close.className = "tab-close";
-      close.type = "button";
-      close.textContent = "×";
-      close.setAttribute("aria-label", "Delete template");
-      close.addEventListener("click", (event) => {
-        event.stopPropagation();
-        live() && deleteTemplate(live());
-      });
-      el.appendChild(close);
-    }
     hoverCard.bind(el, TEMPLATE_CARD_DELAY);
     return el;
+  }
+
+  function updateTemplateRow(el, template, builtin, collapsed) {
+    window.scribeAttr(el, "tabindex", collapsed ? -1 : 0);
+    window.scribeAttr(el, "aria-label", template.title);
+    const versioned = builtin || Boolean(template.builtinSource);
+    const sig = JSON.stringify([template.title, template.description || "", Boolean(template.builtinUpdate), versioned && template.stateVersion, Boolean(template.plugin)]);
+    window.scribeFill(el, sig, () => {
+      const icon = document.createElement("span");
+      icon.className = "fileicon";
+      icon.innerHTML = builtin ? BUILTIN_SVG : FILE_SVG;
+
+      const text = document.createElement("span");
+      text.className = "tab-title";
+      const name = document.createElement("span");
+      name.className = "template-name";
+      name.textContent = template.title;
+      const line = document.createElement("span");
+      line.className = "template-line";
+      line.appendChild(name);
+      if (template.builtinUpdate) {
+        const update = document.createElement("span");
+        update.className = "template-update";
+        update.innerHTML = UPDATE_SVG;
+        update.ariaLabel = `${UPDATE_TITLE}. ${UPDATE_NOTE}`;
+        update.dataset.kind = "template-update";
+        update.dataset.id = template.id;
+        hoverCard.bind(update, 240);
+        line.appendChild(update);
+      }
+      if (versioned) {
+        const version = document.createElement("span");
+        version.className = "template-version";
+        version.textContent = `v${template.stateVersion}`;
+        version.dataset.tooltip = template.plugin
+          ? (builtin ? "Plugin template version" : "Copied from a plugin template")
+          : (builtin ? "Built-in template version" : "Copied from a built-in template");
+        line.appendChild(version);
+      }
+      text.appendChild(line);
+      if (template.description) {
+        const desc = document.createElement("span");
+        desc.className = "template-desc";
+        desc.textContent = template.description;
+        text.appendChild(desc);
+      }
+      const parts = [icon, text];
+      if (!builtin) {
+        const close = document.createElement("button");
+        close.className = "tab-close";
+        close.type = "button";
+        close.textContent = "×";
+        close.setAttribute("aria-label", "Delete template");
+        parts.push(close);
+      }
+      return parts;
+    });
   }
 
   function templateMenu(event, template, el, builtin) {
