@@ -329,7 +329,8 @@ the always-on device listens on a public port; any two devices paired with it ma
   the holder (`mirrorView`). `d-<id>/` is the mirror browser (spaces and their tabs, the Library tree, catalog-only
   pages dimmed, Copy to this device, Back). A page runs on its own origin with the usual runtime: `/view/:id`,
   its assets, `/api/tabs/:id/state` and `/blob/:id` come from the mirror; other API reads are 404 and every write is 403
-  "Read only: … is offline". Copy to this device is the #907 push from the holder, with `origin` in the bundle so the
+  "Read only: … is offline" with `readOnly: true`, on which the page runtime drops the edits and resyncs instead of
+  retrying every 2 s. Copy to this device is the #907 push from the holder, with `origin` in the bundle so the
   copy records the owner in `copiedFrom`; mirrored copies carry no plugins.
 - The selector shows "offline · mirror 2 h ago" and the mirror's spaces (`GET /api/mirror/of/:device/spaces` on the
   holder); clicking one opens the mirror browser at that space. References resolve titles through

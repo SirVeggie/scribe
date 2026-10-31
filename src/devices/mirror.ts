@@ -589,7 +589,7 @@ export function mirrorView(peers: PeerService, store: MirrorStore, options: Mirr
   return (req: express.Request, res: express.Response, gateway: { device: string; label?: string }): void => {
     const mirror = store.device(gateway.device);
     const name = mirror?.name ?? peers.nameOf(gateway.device) ?? "That device";
-    const readOnly = () => res.status(403).json({ error: `Read only: ${name} is offline, and this is ${peers.identity.name}'s copy of it.` });
+    const readOnly = () => res.status(403).json({ error: `Read only: ${name} is offline, and this is ${peers.identity.name}'s copy of it.`, readOnly: true });
     if (!mirror) {
       res.status(404).set("Cache-Control", "no-store").type("html")
         .send(`<!doctype html><meta charset="utf-8"><title>Scribe</title><body style="font:14px system-ui;background:#1a1a1d;color:#e8e8ea;padding:40px"><p>${escapeHtml(name)} is offline, and ${escapeHtml(peers.identity.name)} has no copy of it.</p></body>`);

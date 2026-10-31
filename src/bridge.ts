@@ -190,7 +190,12 @@ ${POINTER_DRAG_JS}
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (data) {
         if (!res.ok) {
-          throw new Error((data && data.error) || "request failed (" + res.status + ")");
+          var error = new Error((data && data.error) || "request failed (" + res.status + ")");
+          // A read-only copy (another device's mirror, #910) refuses every write: retrying can't help.
+          if (data && data.readOnly) {
+            error.readOnly = true;
+          }
+          throw error;
         }
         return data;
       });
@@ -227,6 +232,16 @@ ${POINTER_DRAG_JS}
         confirm(sent, data);
       })
       .catch(function (err) {
+        if (err && err.readOnly) {
+          // Drop the edits and show the copy as it is again.
+          console.warn("[scribe] " + err.message);
+          if (inFlight && inFlight.writeId === sent) {
+            inFlight = null;
+          }
+          pending = [];
+          resync();
+          return;
+        }
         console.error("[scribe] save failed", err);
         // Keep the edits: put them back in front of anything typed since, and try again soon.
         if (inFlight && inFlight.writeId === sent) {
