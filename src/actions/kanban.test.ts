@@ -227,6 +227,18 @@ test("moving into done sets doneAt and puts the card on top; moving out clears i
   assert.throws(() => run(state, "move", { card: 1, to: "nowhere" }), /no column "nowhere". Columns: Inbox/);
 });
 
+test("a column named by whole words of one title resolves; ambiguous words still fail", () => {
+  let { state } = run(board(), "move", { card: 1, to: "for agent" });
+  assert.equal(card(state, 1).col, "ready");
+  ({ state } = run(state, "move", { card: 1, to: "NEEDS" }));
+  assert.equal(card(state, 1).col, "rev");
+  assert.throws(() => run(state, "move", { card: 1, to: "box" }), /no column "box"/);
+  const two = board();
+  two.columns.push({ id: "ask", title: "blocked / Needs input" });
+  assert.equal(card(run(two, "move", { card: 1, to: "needs input" }).state, 1).col, "ask");
+  assert.throws(() => run(two, "move", { card: 1, to: "needs" }), /no column "needs"/);
+});
+
 test("creation and cross-column moves default to top in every column, with bottom available explicitly", () => {
   for (const col of board().columns) {
     const initial = board();

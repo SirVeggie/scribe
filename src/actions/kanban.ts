@@ -305,6 +305,10 @@ function matchColumns(state: BoardState, ref: unknown): Column[] {
   if (byRole.length) return byRole;
   const one = cols.find((c) => c.id === text) ?? cols.find((c) => c.title.trim().toLowerCase() === lower);
   if (one) return [one];
+  // Agents often name a column by part of its title ("design" for "in design"): take it when only one title has those words.
+  const words = lower.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const partial = words ? cols.filter((c) => ` ${c.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `.includes(` ${words} `)) : [];
+  if (partial.length === 1) return partial;
   const known = cols.map((c) => (c.role ? `${c.title} (${c.role})` : c.title)).join(", ");
   throw new ActionError(`no column "${text}". Columns: ${known}`);
 }
