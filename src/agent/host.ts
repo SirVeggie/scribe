@@ -32,7 +32,7 @@ import { saveOutputImage } from "./outputImages.js";
 import { readSnapshot, removeThreadSnapshots, saveSnapshot } from "./fileSnapshots.js";
 import { findSvnRoot, svnEnd, svnStart, type SvnStart } from "./svn.js";
 import { ClaudeProvider, type ContextMeasure } from "./providers/claude.js";
-import { UsageWindowStarts, cleanWindowStarts, type WindowStartState } from "./usageWindowStarts.js";
+import { UsageWindowStarts, cleanWindowStarts, windowProvider, type WindowStartState } from "./usageWindowStarts.js";
 import { CodexProvider, codexAccountId, codexMxcAvailable, fetchCodexPlanUsage } from "./providers/codex.js";
 import { CursorProvider, isSdkAgentId } from "./providers/cursor.js";
 import { FAKE_AGENTS, FakeProvider } from "./providers/fake.js";
@@ -676,9 +676,18 @@ export class AgentHost {
       now: () => Date.now(),
       enabled: () => ({ claude: !this.loggingOut.has("claude") && this.prefs().usageWindowStarts.claude,
         codex: !this.loggingOut.has("codex") && this.prefs().usageWindowStarts.codex }),
-      running: (provider) => [...this.runs.keys(), ...this.resuming].some((id) => this.threads.get(id)?.provider === provider),
-      read: async (provider) => {
+      accounts: () => this.claudePool.ids().map((id) => `claude:${id}` as const),
+      running: (key) => [...this.runs.keys(), ...this.resuming].some((id) => {
+        const thread = this.threads.get(id);
+        if (key === "codex") return thread?.provider === "codex";
+        const account = key === "claude" ? DEFAULT_ACCOUNT : key.slice("claude:".length);
+        return thread?.provider === "claude" && (thread.claudeAccount ?? DEFAULT_ACCOUNT) === account;
+      }),
+      read: async (key) => {
+        const provider = windowProvider(key);
         if (this.closed || this.fakes || this.loggingOut.has(provider)) return null;
+        // An added Claude account (#926): its own usage read, in its own folder.
+        if (key.startsWith("claude:")) return this.claudePool.read(key.slice("claude:".length));
         const generation = this.authGenerations.get(provider);
         if (provider === "codex") {
           const parsed = planLimitsFromCodexRateLimits(await this.readCodexUsage(), Date.now());
@@ -694,9 +703,14 @@ export class AgentHost {
         if (parsed.availability === "available" || beforeRead?.availability !== "available") this.commitLimits(provider, applyExpiredWindows(parsed), false);
         return parsed;
       },
-      start: async (provider, signal) => {
-        if (provider === "claude") await (this.providers.claude as ClaudeProvider).startUsageWindow(signal);
-        else await (this.providers.codex as CodexProvider).startUsageWindow(signal);
+      start: async (key, signal) => {
+        if (key === "codex") await (this.providers.codex as CodexProvider).startUsageWindow(signal);
+        else if (key === "claude") await (this.providers.claude as ClaudeProvider).startUsageWindow(signal);
+        else {
+          const dir = this.claudePool.dir(key.slice("claude:".length));
+          if (!dir) throw new Error("No such Claude account.");
+          await (this.providers.claude as ClaudeProvider).startUsageWindow(signal, dir);
+        }
       },
       save: (state) => {
         if (this.closed) return;
@@ -718,6 +732,7 @@ export class AgentHost {
       changed: () => {
         if (!this.closed) this.emit({ type: "agent_limits", limits: this.liveLimits() });
       },
+      observed: (account, limits) => this.usageWindowStarts.observe(`claude:${account}`, limits),
       offline: Boolean(this.fakes),
     });
     for (const [id, limits] of [...this.claudeThreadLimits].sort((a, b) => a[1].at - b[1].at)) {
@@ -895,7 +910,14 @@ export class AgentHost {
     }
     // Several Claude accounts (#452): one meter, their plan-weighted average, with each account's own.
     const combined = this.claudePool?.combined();
-    if (combined) out = { ...out, claude: { ...combined, ...(out.claude?.windowStart ? { windowStart: out.claude.windowStart } : {}) } };
+    if (combined) {
+      // Each account's own window start, beside its usage.
+      const accounts = combined.accounts?.map((a) => {
+        const entry = this.usageWindowStarts?.view(a.id === DEFAULT_ACCOUNT ? "claude" : `claude:${a.id}`);
+        return entry && a.limits ? { ...a, limits: { ...a.limits, windowStart: entry } } : a;
+      });
+      out = { ...out, claude: { ...combined, ...(accounts ? { accounts } : {}), ...(out.claude?.windowStart ? { windowStart: out.claude.windowStart } : {}) } };
+    }
     return out;
   }
 
@@ -1377,6 +1399,7 @@ export class AgentHost {
     if (id === DEFAULT_ACCOUNT) return this.providerLogout("claude");
     this.closeAccountSessions([id], "Finish or stop the chats on this account before logging it out.");
     await this.claudePool.remove(id);
+    this.usageWindowStarts.reset(`claude:${id}`);
   }
 
   /** Close idle sessions on these Claude accounts; refuse while a chat on one is busy. */
@@ -1414,6 +1437,7 @@ export class AgentHost {
       this.db.saveThread(thread);
     }
     this.usageWindowStarts.reset("claude");
+    this.usageWindowStarts.reset(`claude:${id}`);
     this.planPace = Object.fromEntries(Object.entries(this.planPace).filter(([key]) => !key.startsWith("claude:")));
     this.db.setSetting("limitPace", this.planPace);
     if (theirs) this.commitLimits("claude", theirs, false);

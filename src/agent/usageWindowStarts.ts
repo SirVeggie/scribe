@@ -2,9 +2,12 @@ import type { PlanLimits } from "./types.js";
 
 export type WindowProvider = "claude" | "codex";
 export type WindowStarts = Record<WindowProvider, boolean>;
+/** A login whose 5-hour window is started: the default Claude login, Codex, or an added Claude account (#926). */
+export type WindowKey = WindowProvider | `claude:${string}`;
+export const windowProvider = (key: WindowKey): WindowProvider => key === "codex" ? "codex" : "claude";
 export const START_DELAY_MS = 10 * 60_000;
 type Entry = { reset?: number; attempted?: number; checked?: number; result?: string };
-export type WindowStartState = Partial<Record<WindowProvider, Entry>>;
+export type WindowStartState = Partial<Record<WindowKey, Entry>>;
 
 export function cleanWindowStarts(value: unknown): WindowStarts {
   const v = value as Partial<WindowStarts> | null;
@@ -27,97 +30,101 @@ export function windowStartBlocked(provider: WindowProvider, limits: PlanLimits,
 
 /** Server timestamps only. An attempt is saved before sending, including failures. */
 export class UsageWindowStarts {
-  private busy = new Set<WindowProvider>();
-  private generations = new Map<WindowProvider, number>();
-  private controllers = new Map<WindowProvider, AbortController>();
+  private busy = new Set<WindowKey>();
+  private generations = new Map<WindowKey, number>();
+  private controllers = new Map<WindowKey, AbortController>();
   private closed = false;
   constructor(private deps: {
     now(): number;
     enabled(): WindowStarts;
-    running(provider: WindowProvider): boolean;
-    read(provider: WindowProvider): Promise<PlanLimits | null>;
-    start(provider: WindowProvider, signal: AbortSignal): Promise<void>;
+    /** Added Claude accounts, checked alongside the default login. */
+    accounts?(): WindowKey[];
+    running(key: WindowKey): boolean;
+    read(key: WindowKey): Promise<PlanLimits | null>;
+    start(key: WindowKey, signal: AbortSignal): Promise<void>;
     save(state: WindowStartState): void;
   }, private state: WindowStartState = {}) {}
 
-  view(provider: WindowProvider): Entry | undefined { return this.state[provider]; }
+  view(key: WindowKey): Entry | undefined { return this.state[key]; }
 
   /** An account change invalidates pending probes and the old account's reset. */
-  reset(provider: WindowProvider): void {
-    this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
-    this.controllers.get(provider)?.abort();
-    delete this.state[provider];
+  reset(key: WindowKey): void {
+    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    this.controllers.get(key)?.abort();
+    delete this.state[key];
     this.deps.save(this.state);
   }
 
-  observe(provider: WindowProvider, limits: PlanLimits): void {
+  observe(key: WindowKey, limits: PlanLimits): void {
     if (this.closed) return;
-    const reset = fiveHourReset(provider, limits);
-    const entry = this.state[provider] ?? {};
+    const reset = fiveHourReset(windowProvider(key), limits);
+    const entry = this.state[key] ?? {};
     if (reset && (!entry.reset || reset > entry.reset)) {
-      this.state = { ...this.state, [provider]: { ...entry, reset } };
+      this.state = { ...this.state, [key]: { ...entry, reset } };
       this.deps.save(this.state);
     }
   }
 
   settingsChanged(): void {
-    for (const [provider, controller] of this.controllers) if (!this.deps.enabled()[provider]) controller.abort();
+    for (const [key, controller] of this.controllers) if (!this.deps.enabled()[windowProvider(key)]) controller.abort();
     void this.tick();
   }
 
   async tick(): Promise<void> {
     if (this.closed) return;
-    await Promise.all((["claude", "codex"] as const).map((provider) => this.check(provider)));
+    const keys: WindowKey[] = ["claude", "codex", ...(this.deps.accounts?.() ?? [])];
+    await Promise.all(keys.map((key) => this.check(key)));
   }
 
-  private async check(provider: WindowProvider): Promise<void> {
-    if (!this.deps.enabled()[provider] || this.busy.has(provider)) return;
-    let entry = this.state[provider] ?? {};
+  private async check(key: WindowKey): Promise<void> {
+    const provider = windowProvider(key);
+    if (!this.deps.enabled()[provider] || this.busy.has(key)) return;
+    let entry = this.state[key] ?? {};
     const now = this.deps.now();
     const due = entry.reset && entry.attempted !== entry.reset && now >= entry.reset + START_DELAY_MS;
     if (entry.checked && now - entry.checked < 5 * 60_000 &&
         (!due || entry.checked >= (entry.reset ?? 0) + START_DELAY_MS)) return;
-    this.busy.add(provider);
-    const generation = this.generations.get(provider);
+    this.busy.add(key);
+    const generation = this.generations.get(key);
     try {
-      this.state = { ...this.state, [provider]: { ...entry, checked: now } };
+      this.state = { ...this.state, [key]: { ...entry, checked: now } };
       this.deps.save(this.state);
-      const report = await this.deps.read(provider);
-      if (this.closed || !this.deps.enabled()[provider] || generation !== this.generations.get(provider)) return;
-      if (report) this.observe(provider, report);
-      entry = this.state[provider] ?? {};
+      const report = await this.deps.read(key);
+      if (this.closed || !this.deps.enabled()[provider] || generation !== this.generations.get(key)) return;
+      if (report) this.observe(key, report);
+      entry = this.state[key] ?? {};
       const reset = entry.reset;
       if (!reset || entry.attempted === reset || this.deps.now() < reset + START_DELAY_MS) return;
       // Missing quota is never permission to send. Recheck later without a model request.
       if (!report) return;
-      const result = this.deps.running(provider) ? "Skipped: provider is working" :
+      const result = this.deps.running(key) ? "Skipped: provider is working" :
         windowStartBlocked(provider, report, this.deps.now()) ? "Skipped: included usage unavailable" : "Sending";
-      this.record(provider, reset, result);
+      this.record(key, reset, result);
       if (result !== "Sending") return;
       const controller = new AbortController();
-      this.controllers.set(provider, controller);
+      this.controllers.set(key, controller);
       const deadline = setTimeout(() => controller.abort(), 60_000);
       deadline.unref?.();
       try {
-        await this.deps.start(provider, controller.signal);
-        if (!this.closed && generation === this.generations.get(provider)) this.record(provider, reset, "Sent");
+        await this.deps.start(key, controller.signal);
+        if (!this.closed && generation === this.generations.get(key)) this.record(key, reset, "Sent");
       } catch {
-        if (!this.closed && generation === this.generations.get(provider)) this.record(provider, reset, "Failed or cancelled; no retry this window");
+        if (!this.closed && generation === this.generations.get(key)) this.record(key, reset, "Failed or cancelled; no retry this window");
       } finally {
         clearTimeout(deadline);
-        this.controllers.delete(provider);
+        this.controllers.delete(key);
       }
-      if (!this.closed && this.deps.enabled()[provider] && generation === this.generations.get(provider)) {
-        const after = await this.deps.read(provider);
-        if (after && !this.closed && generation === this.generations.get(provider)) this.observe(provider, after);
+      if (!this.closed && this.deps.enabled()[provider] && generation === this.generations.get(key)) {
+        const after = await this.deps.read(key);
+        if (after && !this.closed && generation === this.generations.get(key)) this.observe(key, after);
       }
     } catch {
       // Quota failures may be read again; they never trigger a model request.
-    } finally { this.busy.delete(provider); }
+    } finally { this.busy.delete(key); }
   }
 
-  private record(provider: WindowProvider, attempted: number, result: string): void {
-    this.state = { ...this.state, [provider]: { ...this.state[provider], attempted, result } };
+  private record(key: WindowKey, attempted: number, result: string): void {
+    this.state = { ...this.state, [key]: { ...this.state[key], attempted, result } };
     this.deps.save(this.state);
   }
 

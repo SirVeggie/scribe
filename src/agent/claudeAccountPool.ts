@@ -31,6 +31,8 @@ export type PoolDeps = {
   running: (account: string) => number;
   /** Accounts, their usage or the pick changed. */
   changed: () => void;
+  /** A reading an account's server sent, for its 5-hour window start (#926). */
+  observed?: (account: string, limits: PlanLimits) => void;
   /** No logins or usage reads (fake agents in tests). */
   offline?: boolean;
 };
@@ -58,6 +60,8 @@ export class ClaudeAccountPool {
   private fetchedAt = new Map<string, number>();
   private timers = new Map<string, NodeJS.Timeout>();
   private fetching = new Map<string, Promise<void>>();
+  /** Each added account's last usage read; limits null when the read failed. */
+  private reads = new Map<string, { at: number; limits: PlanLimits | null }>();
   /** Accounts a chat hit the usage limit on, until the reset (#920): their last reading can still look roomy. */
   private limitedUntil = new Map<string, number>();
   /** An account being signed in: its id until the browser sign-in ends. */
@@ -91,6 +95,16 @@ export class ClaudeAccountPool {
   /** True once an account has been added: chats are then spread over several. */
   multi(): boolean {
     return this.state.accounts.length > 0;
+  }
+
+  /** The added accounts' ids. */
+  ids(): string[] {
+    return this.state.accounts.map((a) => a.id);
+  }
+
+  /** An added account's config folder. */
+  dir(id: string): string | undefined {
+    return this.account(id)?.dir ?? undefined;
   }
 
   get use(): string {
@@ -221,6 +235,7 @@ export class ClaudeAccountPool {
     if (!this.account(id)) return;
     const merged = mergeClaudeLimits(this.limits[id], next);
     if (!merged) return;
+    if (merged.fresh) this.deps.observed?.(id, next);
     this.commit(id, merged.limits);
   }
 
@@ -247,9 +262,12 @@ export class ClaudeAccountPool {
     const job = (async () => {
       const before = this.limits[id];
       const value = await this.deps.provider().fetchPlanUsage(dir).catch(() => null);
-      if (!this.account(id) || this.limits[id] !== before) return;
+      if (!this.account(id)) return;
       const wrapper = isPlainRecord(value) ? value : {};
       const parsed = claudePlanSnapshot(wrapper.report, claudeBillingSource(wrapper.billingSource), Date.now(), before);
+      this.reads.set(id, { at: Date.now(), limits: value ? parsed : null });
+      if (value) this.deps.observed?.(id, parsed);
+      if (this.limits[id] !== before) return;
       if (parsed.availability === "available" || before?.availability !== "available") this.commit(id, parsed);
     })().finally(() => {
       this.fetching.delete(id);
@@ -257,6 +275,14 @@ export class ClaudeAccountPool {
     });
     this.fetching.set(id, job);
     return job;
+  }
+
+  /** A fresh usage read of an added account, or null (failed, or read too recently to read again). */
+  async read(id: string): Promise<PlanLimits | null> {
+    const asked = Date.now();
+    await this.refresh(id);
+    const last = this.reads.get(id);
+    return last && last.at >= asked - MIN_FETCH_GAP_MS ? last.limits : null;
   }
 
   /** Read again when a window resets (or after delay). */
@@ -369,6 +395,7 @@ export class ClaudeAccountPool {
     removeProfile(acc.dir);
     this.state.accounts = this.state.accounts.filter((a) => a.id !== id);
     if (this.state.use === id) this.state.use = "distribute";
+    this.reads.delete(id);
     const { [id]: _gone, ...rest } = this.state.picked;
     this.state.picked = rest;
     const { [id]: _limits, ...left } = this.limits;

@@ -481,8 +481,8 @@ export class ClaudeProvider implements AgentProvider {
     }
   }
 
-  /** A single context-free subscription request; check the active query before releasing its input. */
-  async startUsageWindow(signal: AbortSignal): Promise<void> {
+  /** A single context-free subscription request; check the active query before releasing its input. dir: an added account's folder. */
+  async startUsageWindow(signal: AbortSignal, dir?: string): Promise<void> {
     signal.throwIfAborted();
     const sdk = await loadSdk();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-window-claude-"));
@@ -497,6 +497,7 @@ export class ClaudeProvider implements AgentProvider {
         cwd, model: "haiku", systemPrompt: "Reply only with hi.", settingSources: [], tools: [],
         mcpServers: {}, persistSession: false, maxTurns: 1, abortController,
         thinking: { type: "disabled" },
+        ...(dir ? { env: { ...accountEnv(dir), CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" } } : {}),
       } });
       const account = await q.accountInfo();
       if (account.apiProvider !== "firstParty" || (account.apiKeySource && account.apiKeySource !== "none") ||

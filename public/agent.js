@@ -12520,9 +12520,14 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (!this.usage || !this.isOpen()) return;
       this.usage.replaceChildren(...["claude", "codex", "cursor"].filter((p) => S.config.providers.some((x) => x.id === p)).map(usageMeters));
       for (const provider of ["claude", "codex"]) {
-        const activity = S.config.limits?.[provider]?.windowStart;
-        if (!activity?.result) continue;
-        this.usage.append(el("div", "ag-muted", `${provider === "claude" ? "Claude" : "Codex"} window start: ${activity.result}`));
+        const limits = S.config.limits?.[provider];
+        // Several Claude accounts: each one's own window start.
+        const rows = provider === "claude" && limits?.accounts?.length
+          ? limits.accounts.map((a) => [`Claude (${a.email || "account"})`, a.limits?.windowStart])
+          : [[provider === "claude" ? "Claude" : "Codex", limits?.windowStart]];
+        for (const [name, activity] of rows) {
+          if (activity?.result) this.usage.append(el("div", "ag-muted", `${name} window start: ${activity.result}`));
+        }
       }
     },
     forkSummarizerButton(provider) {

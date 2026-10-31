@@ -9,10 +9,10 @@ import { windowStartBlocked } from "./usageWindowStarts.js";
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 function method(provider: string, deps: Record<string, unknown>) {
   const source = fs.readFileSync(new URL(`./providers/${provider}.ts`, import.meta.url), "utf8");
-  const body = /async startUsageWindow\(signal: AbortSignal\): Promise<void> \{([\s\S]*?)\n  \}\n\n  async complete/.exec(source)![1]
+  const body = /async startUsageWindow\(signal: AbortSignal(?:, dir\?: string)?\): Promise<void> \{([\s\S]*?)\n  \}\n\n  async complete/.exec(source)![1]
     .replaceAll('await import("../planLimits.js")', "parsers")
     .replaceAll('await import("../usageWindowStarts.js")', "guards");
-  return new AsyncFunction("signal", ...Object.keys(deps), "parsers", "guards", body).bind(null);
+  return new AsyncFunction("signal", "dir", ...Object.keys(deps), "parsers", "guards", body).bind(null);
 }
 const parsers = { planLimitsFromUsageReport, planLimitsFromCodexRateLimits };
 const guards = { windowStartBlocked };
@@ -32,19 +32,25 @@ test("Claude releases one minimal message only after active-query subscription a
       fs: { mkdtempSync: () => "isolated", rmSync() {} },
       path: { join: () => "temp" }, os: { tmpdir: () => "temp" },
       InputQueue: class { push(m: unknown) { messages.push(m); } close() {} },
+      accountEnv: (dir: string) => ({ CLAUDE_CONFIG_DIR: dir }),
       queryPlanUsage: async () => ({ rate_limits: {
         five_hour: { utilization: 0, resets_at: new Date(Date.now() - 1000).toISOString() },
         seven_day: { utilization: source === "exhausted" ? 100 : 0, resets_at: new Date(Date.now() + 86400_000).toISOString() },
       } }),
     };
-    const call = () => method("claude", deps)(new AbortController().signal, ...Object.values(deps), parsers, guards);
+    const call = (dir?: string) => method("claude", deps)(new AbortController().signal, dir, ...Object.values(deps), parsers, guards);
     if (source === "subscription") {
       await call();
+      assert.equal(options.env, undefined);
       assert.equal(messages.length, 1);
       assert.equal((messages[0] as any).message.content, "Hello. Reply only with hi.");
       assert.deepEqual(options.tools, []);
       assert.deepEqual(options.settingSources, []);
       assert.equal(options.cwd, "isolated");
+      // An added account (#926): the same request, signed in from its own folder.
+      await call("acc_dir");
+      assert.equal(messages.length, 2);
+      assert.equal(options.env.CLAUDE_CONFIG_DIR, "acc_dir");
     } else {
       await assert.rejects(call);
       assert.equal(messages.length, 0, source);

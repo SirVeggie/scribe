@@ -169,3 +169,33 @@ test("disabling during a quota read prevents sending", async () => {
   await pending;
   assert.deepEqual(f.calls, []);
 });
+
+test("each added Claude account gets its own window start, with its own reset, read and busy check (#926)", async () => {
+  let now = reset;
+  let state: WindowStartState = {};
+  const calls: string[] = [];
+  const reads: string[] = [];
+  const later = reset + 60 * 60_000;
+  const reports: Record<string, PlanLimits> = { claude: quota("claude"), codex: quota("codex"), "claude:acc_a": quota("claude", later), "claude:acc_b": quota("claude") };
+  const busy = new Set<string>(["claude:acc_b"]);
+  const scheduler = new UsageWindowStarts({
+    now: () => now, enabled: () => ({ claude: true, codex: false }),
+    accounts: () => ["claude:acc_a", "claude:acc_b"],
+    running: (key) => busy.has(key),
+    read: async (key) => { reads.push(key); return reports[key]; },
+    start: async (key) => { calls.push(key); },
+    save: (s) => { state = structuredClone(s); },
+  });
+  now = reset + START_DELAY_MS;
+  await scheduler.tick();
+  assert.deepEqual([...new Set(reads)].sort(), ["claude", "claude:acc_a", "claude:acc_b"]);
+  // acc_a's window resets later; acc_b has a chat running, which starts its window anyway.
+  assert.deepEqual(calls, ["claude"]);
+  assert.equal(state["claude:acc_b"]?.result, "Skipped: provider is working");
+  now = later + START_DELAY_MS;
+  await scheduler.tick();
+  assert.deepEqual(calls, ["claude", "claude:acc_a"]);
+  scheduler.reset("claude:acc_a");
+  assert.equal(state["claude:acc_a"], undefined);
+  assert.ok(state.claude);
+});
