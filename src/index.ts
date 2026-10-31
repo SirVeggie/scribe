@@ -15,6 +15,7 @@ const USAGE = `Usage:
   scribe add-device           Show a code to enter on another device, and wait for it
   scribe devices              This device and the paired ones
   scribe unpair <name | id>   Revoke a paired device (on both sides)
+  scribe leave                Leave the pairing: drop every paired device; they stay paired with each other
   scribe rename <name>        Rename this device
   scribe service install | uninstall | status
                               Run the daemon at boot (systemd) or logon (Windows), without the desktop app`;
@@ -81,6 +82,13 @@ async function devicesCommand(): Promise<void> {
     process.stdout.write(`Revoked ${matches[0].name}. It can no longer connect, and drops this device too when it is next online.\n`);
     return;
   }
+  if (argv[0] === "leave") {
+    const count = (await devicesView()).peers.length;
+    if (!count) throw new Error("No paired devices.");
+    await change("POST", "/api/devices/leave", {}, "Could not leave the pairing");
+    process.stdout.write(`Left the pairing with ${count} device${count === 1 ? "" : "s"}. A new code pairs this device again.\n`);
+    return;
+  }
   if (argv[0] === "rename") {
     if (!rest) throw new Error("Usage: scribe rename <name>");
     const view = await change("PUT", "/api/devices/self", { name: rest }, "Could not rename it");
@@ -109,6 +117,7 @@ const COMMANDS: Record<string, () => Promise<void>> = {
   "add-device": devicesCommand,
   devices: devicesCommand,
   unpair: devicesCommand,
+  leave: devicesCommand,
   rename: devicesCommand,
   service: serviceCommand,
   help: async () => void process.stdout.write(`${USAGE}\n`),

@@ -178,6 +178,25 @@ test("a new device reaches the others on its own (#931), and revocation spreads 
   await assert.rejects(b.peers.request(c.peers.identity.id, { path: "/who" }), /not online/);
 });
 
+test("a device leaves the pairing (#937): the others drop it and stay paired, and a new code brings it back", async () => {
+  const [a, , c] = nodes;
+  const d = await node();
+  await d.peers.pair((await a.peers.createOffer())!.code);
+  await until(() => online(d, a) && online(d, c) && online(c, d), "d in the mesh");
+
+  d.peers.leave();
+  await until(() => !knows(a, d) && !knows(c, d), "a and c to drop d");
+  assert.deepEqual(d.peers.view().peers, []);
+  assert.equal(online(a, c), true);
+
+  await d.peers.pair((await c.peers.createOffer())!.code);
+  await until(() => online(d, a) && online(a, d) && online(d, c), "d back in the mesh", 15_000).catch((err) => {
+    throw new Error(`${err.message}: d→a ${knows(d, a)}, a→d ${knows(a, d)}, d→c ${knows(d, c)}`);
+  });
+  await d.peers.stop();
+  nodes.splice(nodes.indexOf(d), 1);
+});
+
 test("a restarted device reconnects with the same key", async () => {
   const [a, , c] = nodes;
   await a.peers.stop();

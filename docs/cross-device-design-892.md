@@ -77,6 +77,11 @@ that implement it.
   of both keys are shown on both sides. `src/devices/qr.ts` draws the QR code.
 - Revocation drops the key on both sides and sends `revoked` to every online peer, which drops it and tells
   the revoked device too. Each hello carries the revoked list, so a device that was away catches up.
+  Revocations carry a time (#937): a device paired again since, by code or by an introduction from one
+  that was, wins over the older revocation, so a revoked device can come back with a new code.
+- Leave pairing (#937; Settings → Devices, `scribe leave`): this device drops every paired key, without
+  revoking them, and asks the online ones to drop its key; that spreads like a revocation, and the others
+  stay paired with each other.
 - `/api/devices` (user only; agents get 403), Settings → Devices, and `scribe pair <code>` / `scribe devices`
   (`npm run pair -- <code>`). Events: `devices` (refetch), `device_paired` (words to compare). Paired devices pass each other's records on whenever a link comes up, so every device reaches every other one (#931).
 

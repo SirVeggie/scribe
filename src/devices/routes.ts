@@ -330,6 +330,8 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
     if (typeof req.body?.code !== "string") throw new Error("Enter the code the other device shows.");
     return peers.pair(req.body.code);
   }));
+  // This device leaves the pairing (#937): it drops every paired device, and they drop it.
+  router.post("/leave", guarded(() => peers.leave()));
   router.post("/:id/introduce", guarded((req) => ({ introduced: peers.introduce(req.params.id, Array.isArray(req.body?.to) ? req.body.to : undefined) })));
   router.delete("/:id", guarded((req) => peers.revoke(req.params.id)));
   return router;

@@ -39,7 +39,11 @@ export type Peer = {
 /** Accept peer connections from the internet (#910): an always-on device that relays and mirrors. */
 export type PublicListen = { host: string };
 
-type Saved = { peers: Peer[]; revoked: string[]; public?: PublicListen };
+/**
+ * `revokedAt`: when each revoked key was revoked (#937). A device paired again after that, by code
+ * or by an introduction from one that was, wins over the older revocation, so it can come back.
+ */
+type Saved = { peers: Peer[]; revoked: string[]; revokedAt?: Record<string, number>; public?: PublicListen };
 
 /** A device whose mirror another device holds, and when that mirror last matched it (#910). */
 export type MirrorHeld = { id: string; at: number };
@@ -341,7 +345,19 @@ export class PeerService extends EventEmitter {
     const peer = this.peer(id);
     if (!peer) throw new Error("No paired device with that id.");
     this.forget(peer, true);
-    for (const other of this.links.values()) other.control({ type: "revoked", id: peer.id, fingerprint: peer.fingerprint });
+    const at = this.saved.revokedAt?.[peer.fingerprint];
+    for (const other of this.links.values()) other.control({ type: "revoked", id: peer.id, fingerprint: peer.fingerprint, at });
+  }
+
+  /**
+   * This device leaves the pairing (#937): it drops every paired key and asks the online devices to
+   * drop its key; they pass that on to the offline ones. The others stay paired with each other. Their
+   * keys don't go on the revoked list here, and pairing again later with one of them rejoins the rest.
+   */
+  leave(): void {
+    const count = this.saved.peers.length;
+    for (const peer of [...this.saved.peers]) this.forget(peer, true, false);
+    this.options.log?.(`Left the pairing with ${count} device${count === 1 ? "" : "s"}`);
   }
 
   /** An HTTP request to a paired device's daemon over the link (the gateway builds on this, #905). */
@@ -439,11 +455,12 @@ export class PeerService extends EventEmitter {
   private accept(socket: tls.TLSSocket, via?: string): void {
     const spki = peerKey(socket);
     const fp = spki && fingerprintOf(spki);
-    if (!fp || fp === this.identity.fingerprint || this.saved.revoked.includes(fp)) {
+    if (!fp || fp === this.identity.fingerprint) {
       socket.destroy();
       return;
     }
     socket.on("error", () => {});
+    // A revoked key isn't in the list, so like any unknown key it may only pair, with a code.
     const peer = this.saved.peers.find((p) => p.fingerprint === fp);
     if (peer) {
       // A paired device says hello, or pairs again with a code (after it lost its copy of this one's key).
@@ -693,7 +710,7 @@ export class PeerService extends EventEmitter {
   // --- links ---
 
   private hello(): Control {
-    return { type: "hello", protocol: PROTOCOL, features: FEATURES, version: this.options.version, id: this.identity.id, name: this.identity.name, hosts: this.hosts(), port: this.options.port, revoked: this.saved.revoked, mirrors: this.heldHere };
+    return { type: "hello", protocol: PROTOCOL, features: FEATURES, version: this.options.version, id: this.identity.id, name: this.identity.name, hosts: this.hosts(), port: this.options.port, revoked: this.saved.revoked, revokedAt: this.saved.revokedAt, mirrors: this.heldHere };
   }
 
   /** Send first (if given), then wait for a control message that matches. */
@@ -748,7 +765,9 @@ export class PeerService extends EventEmitter {
     this.heldBy.set(id, cleanMirrors(hello.mirrors));
     if (typeof hello.version === "string") this.versions.set(id, hello.version.slice(0, 40));
     // Revocations made while this device was away reach it from whichever peer it meets first.
-    if (Array.isArray(hello.revoked)) for (const fingerprint of hello.revoked.slice(0, 500)) this.onControl(id, link, { type: "revoked", fingerprint });
+    const revokedAt = hello.revokedAt && typeof hello.revokedAt === "object" ? (hello.revokedAt as Record<string, unknown>) : {};
+    // Revocations made before they carried a time (#937) are older than any pairing since.
+    if (Array.isArray(hello.revoked)) for (const fingerprint of hello.revoked.slice(0, 500)) this.onControl(id, link, { type: "revoked", fingerprint, at: revokedAt[fingerprint] ?? 0 });
     this.errors.delete(id);
     const entry = this.retry.get(id);
     if (entry) {
@@ -809,21 +828,29 @@ export class PeerService extends EventEmitter {
     } else if (message.type === "revoke") {
       this.forget(peer);
     } else if (message.type === "revoked") {
-      const target = this.saved.peers.find((p) => p.fingerprint === message.fingerprint);
-      if (typeof message.fingerprint === "string" && message.fingerprint !== this.identity.fingerprint) {
-        if (target) this.forget(target, true);
-        else if (!this.saved.revoked.includes(message.fingerprint)) {
-          this.saved.revoked.push(message.fingerprint);
-          this.persist();
-        }
+      const fp = message.fingerprint;
+      if (typeof fp !== "string" || fp === this.identity.fingerprint) return;
+      // A live one from an older device has no time and counts as made now; in a hello, an untimed one is old.
+      const at = typeof message.at === "number" && message.at <= Date.now() ? message.at : Date.now();
+      const target = this.saved.peers.find((p) => p.fingerprint === fp);
+      // Paired again since: the revocation is older news.
+      if (target && target.pairedAt > at) return;
+      if (target) this.forget(target, true, true, at);
+      else if (!this.saved.revoked.includes(fp) || (this.saved.revokedAt?.[fp] ?? 0) < at) {
+        if (!this.saved.revoked.includes(fp)) this.saved.revoked.push(fp);
+        this.saved.revokedAt = { ...this.saved.revokedAt, [fp]: at };
+        this.persist();
       }
     } else if (message.type === "introduce") {
       const intro = message.peer as Partial<Peer> | undefined;
       if (!intro || typeof intro.publicKey !== "string") return;
       const spki = Buffer.from(intro.publicKey, "base64");
       const fp = fingerprintOf(spki);
-      if (fp === this.identity.fingerprint || this.saved.revoked.includes(fp) || this.saved.peers.some((p) => p.fingerprint === fp)) return;
-      const added = this.store({ id: intro.id, name: intro.name, hosts: intro.hosts, port: intro.port }, spki);
+      const pairedAt = typeof intro.pairedAt === "number" && intro.pairedAt <= Date.now() ? intro.pairedAt : undefined;
+      // A key revoked here comes back only when the introducer paired it after that revocation.
+      const revoked = this.saved.revoked.includes(fp) && !(pairedAt && pairedAt > (this.saved.revokedAt?.[fp] ?? 0));
+      if (fp === this.identity.fingerprint || revoked || this.saved.peers.some((p) => p.fingerprint === fp)) return;
+      const added = this.store({ id: intro.id, name: intro.name, hosts: intro.hosts, port: intro.port, pairedAt }, spki);
       if (added) {
         this.options.log?.(`${peer.name} introduced ${added.name}`);
         this.connect(added.id, true);
@@ -853,12 +880,12 @@ export class PeerService extends EventEmitter {
     const hosts = cleanHosts(message.hosts);
     if (seenAt) hosts.unshift(seenAt.replace(/^::ffff:/, ""));
     const fp = fingerprintOf(spki);
-    this.saved.revoked = this.saved.revoked.filter((r) => r !== fp);
     this.saved.peers = this.saved.peers.filter((p) => p.fingerprint !== fp);
     return this.store({ id: message.id, name: message.name, hosts, port: message.port }, spki);
   }
 
-  private store(info: { id?: unknown; name?: unknown; hosts?: unknown; port?: unknown }, spki: Buffer): Peer | undefined {
+  /** `pairedAt`: when the introducing device paired it, so a later revocation still wins over it. */
+  private store(info: { id?: unknown; name?: unknown; hosts?: unknown; port?: unknown; pairedAt?: number }, spki: Buffer): Peer | undefined {
     const id = typeof info.id === "string" && /^[0-9a-f]{12}$/.test(info.id) ? info.id : undefined;
     const name = cleanName(info.name);
     if (!id || !name || id === this.identity.id || !validPort(info.port)) return undefined;
@@ -866,7 +893,10 @@ export class PeerService extends EventEmitter {
     const before = this.peer(id);
     this.saved.peers = this.saved.peers.filter((p) => p.id !== id);
     old?.close();
-    const peer: Peer = { id, name, publicKey: spki.toString("base64"), fingerprint: fingerprintOf(spki), hosts: [...new Set(cleanHosts(info.hosts))], port: info.port, pairedAt: Date.now() };
+    const fp = fingerprintOf(spki);
+    this.saved.revoked = this.saved.revoked.filter((r) => r !== fp);
+    if (this.saved.revokedAt?.[fp] !== undefined) delete this.saved.revokedAt[fp];
+    const peer: Peer = { id, name, publicKey: spki.toString("base64"), fingerprint: fp, hosts: [...new Set(cleanHosts(info.hosts))], port: info.port, pairedAt: info.pairedAt ?? Date.now() };
     const formerNames = before ? rememberName(before.formerNames, before.name, name) : undefined;
     if (formerNames) peer.formerNames = formerNames;
     this.saved.peers.push(peer);
@@ -875,10 +905,16 @@ export class PeerService extends EventEmitter {
     return peer;
   }
 
-  /** Drop a device's key. `tell`: ask it to drop this device's key too, if it is online. */
-  private forget(peer: Peer, tell = false): void {
+  /**
+   * Drop a device's key. `tell`: ask it to drop this device's key too, if it is online. `revoke`: keep
+   * its key on the revoked list, which spreads to the other devices, as revoked `at`.
+   */
+  private forget(peer: Peer, tell = false, revoke = true, at = Date.now()): void {
     this.saved.peers = this.saved.peers.filter((p) => p.id !== peer.id);
-    if (!this.saved.revoked.includes(peer.fingerprint)) this.saved.revoked.push(peer.fingerprint);
+    if (revoke) {
+      if (!this.saved.revoked.includes(peer.fingerprint)) this.saved.revoked.push(peer.fingerprint);
+      this.saved.revokedAt = { ...this.saved.revokedAt, [peer.fingerprint]: at };
+    }
     this.persist();
     const entry = this.retry.get(peer.id);
     clearTimeout(entry?.timer);
@@ -888,7 +924,7 @@ export class PeerService extends EventEmitter {
     if (tell) link?.control({ type: "revoke" });
     this.links.delete(peer.id);
     if (link) setTimeout(() => link.close(), 100).unref();
-    this.options.log?.(`Device ${peer.name} (${peer.id}) revoked`);
+    this.options.log?.(`Device ${peer.name} (${peer.id}) ${revoke ? "revoked" : "dropped"}`);
     void this.bind();
     this.changed();
   }
@@ -912,7 +948,9 @@ export class PeerService extends EventEmitter {
   private load(): Saved {
     try {
       const saved = JSON.parse(fs.readFileSync(this.file(), "utf8")) as Partial<Saved>;
-      return { peers: Array.isArray(saved.peers) ? saved.peers : [], revoked: Array.isArray(saved.revoked) ? saved.revoked : [] };
+      const revokedAt = saved.revokedAt && typeof saved.revokedAt === "object" ? saved.revokedAt : undefined;
+      const pub = typeof saved.public?.host === "string" ? { host: saved.public.host } : undefined;
+      return { peers: Array.isArray(saved.peers) ? saved.peers : [], revoked: Array.isArray(saved.revoked) ? saved.revoked : [], ...(revokedAt && { revokedAt }), ...(pub && { public: pub }) };
     } catch {
       return { peers: [], revoked: [] };
     }
@@ -936,7 +974,7 @@ function peerKey(socket: tls.TLSSocket): Buffer | undefined {
 }
 
 function record(peer: Peer): Partial<Peer> {
-  return { id: peer.id, name: peer.name, publicKey: peer.publicKey, hosts: peer.hosts, port: peer.port };
+  return { id: peer.id, name: peer.name, publicKey: peer.publicKey, hosts: peer.hosts, port: peer.port, pairedAt: peer.pairedAt };
 }
 
 /** IP addresses, and host names for a public device (#910). */

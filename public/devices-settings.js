@@ -101,7 +101,11 @@
   const actions = el("div", "settings-actions device-actions");
   const addButton = button("Add device", () => addDevice());
   const enterButton = button("Enter code", () => enterCode());
-  actions.append(addButton, enterButton);
+  const leaveButton = button("Leave pairing", async () => {
+    if (!(await confirmRevoke("Leave the pairing? This device drops every paired device and they drop it; they stay paired with each other. Rejoining needs a new code.", "Leave"))) return;
+    try { render(await request("POST", "/leave")); } catch (err) { say(err.message); }
+  }, "device-leave");
+  actions.append(addButton, enterButton, leaveButton);
   pairedSection.append(list, status, panel, actions);
 
   let view = null;
@@ -288,6 +292,7 @@
 
     list.replaceChildren();
     if (!view.peers.length) list.append(el("p", "settings-hint", "None yet."));
+    leaveButton.hidden = !view.peers.length;
     for (const peer of view.peers) {
       const row = el("div", "setting-row ml-source");
       const dot = el("span", `device-dot${peer.online ? " online" : ""}`);
