@@ -461,6 +461,8 @@ type RunState = {
   clock?: { sentAt?: number; firstAt?: number; waits: Array<[number, number | undefined]> };
   /** A queued message handed to this turn with steer, until the agent takes it in. */
   steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
+  /** The provider finished the turn and Scribe is wrapping it up: nothing more is steered in (#932). */
+  ended?: boolean;
   /** A workspace the agent asked for with thread_update and the user allowed: the thread moves there when the turn ends. */
   workspace?: { cwd: string; continue: boolean; grant?: ToolGrant };
   hooks: {
@@ -2838,6 +2840,8 @@ export class AgentHost {
       }
       if (!this.preferQueued(threadId, itemId)) throw new Error("That message is not queued");
     }
+    // The turn is wrapping up: the message stays first in the queue and starts the next turn.
+    if (run.ended) return { steered: false };
     if (run.steer || !session?.steer) {
       await this.sendNow(threadId);
       return { steered: false };
@@ -2897,7 +2901,7 @@ export class AgentHost {
     const run = this.runs.get(threadId);
     const queue = this.queues.get(threadId);
     const session = this.sessions.get(threadId);
-    if (!run || run.steer || !session?.steer || !queue?.length) return false;
+    if (!run || run.ended || run.steer || !session?.steer || !queue?.length) return false;
     if (queue[0].edit) return false;
     const msg = queue.shift()!;
     if (!queue.length) this.queues.delete(threadId);
@@ -3046,7 +3050,7 @@ export class AgentHost {
     }
     if (this.queues.get(threadId)?.[0]?.edit) throw new Error("Finish editing the queued message first");
     if (!run) { this.drainQueue(threadId); return; }
-    if (!run.steer && !this.queues.get(threadId)?.length) return;
+    if (run.ended || (!run.steer && !this.queues.get(threadId)?.length)) return;
     await this.cancel(threadId, { keepQueue: true });
   }
 
@@ -4718,6 +4722,8 @@ export class AgentHost {
         result = { status: "error", error: (err as Error).message };
       }
     }
+    // A steer sent from here on would reach the provider between turns, after the check below.
+    run.ended = true;
     if (run.cancelled && result.status !== "error") result = { status: "cancelled", next: result.next };
     // An edit's withdrawal must settle before deciding whether to adopt or requeue a steer.
     await run.steer?.msg.edit?.withdrawal;

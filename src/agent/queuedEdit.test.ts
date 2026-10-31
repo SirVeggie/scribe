@@ -147,3 +147,17 @@ test("popup edits preserve attachments, and withdrawal returns their original by
   assert.equal(withdrawn.text, "revised");
   assert.deepEqual(withdrawn.files, [file]);
 });
+
+test("a message steered while a finished turn wraps up starts the next turn instead (#932)", async () => {
+  const f = setup();
+  const late = host.send(f.id, { text: "late" }).item;
+  f.results[0]({ status: "done" });
+  const runs = (host as unknown as { runs: Map<string, { ended?: boolean }> }).runs;
+  while (runs.has(f.id) && !runs.get(f.id)!.ended) await Promise.resolve();
+  assert.ok(runs.get(f.id)?.ended, "the turn's wrap-up should still be running");
+  assert.deepEqual(await host.steer(f.id, late.id), { steered: false });
+  assert.equal(f.steers.length, 0);
+  await tick();
+  assert.match(f.inputs[1].text, /late/);
+  assert.equal(users(f.id).find((it) => it.id === late.id)?.steer, undefined);
+});
