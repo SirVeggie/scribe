@@ -14,13 +14,14 @@
   /** .localhost, or .d-<device>.localhost in another device's UI through the gateway (#905). */
   const suffix = () => window.scribeHost?.suffix ?? ".localhost";
   function url(item) {
-    return `${location.protocol}//w-it-${item.id.slice(3)}${suffix()}:${location.port}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
+    return `${location.protocol}//w-it-${item.id.slice(3)}${suffix()}${location.port ? `:${location.port}` : ""}/component/${item.id}?thread=${encodeURIComponent(item.threadId)}`;
   }
   /** A chat component's URL, as the expand button stores it (on whichever device's host it was made). */
   function chatComponent(raw) {
     try {
       const target = new URL(raw);
-      const match = /^w-it-([0-9a-f]{12})(?:\.d-[0-9a-f]{12})?\.localhost$/.exec(target.hostname);
+      // Made on whichever device's host: .localhost, .d-<device>.localhost, or a web domain (#913).
+      const match = /^w-it-([0-9a-f]{12})(?:\.d-[0-9a-f]{12}\.localhost|\.localhost|--[0-9a-f]{12}\..+|\..+)$/.exec(target.hostname);
       return match && target.pathname.startsWith("/component/") ? { id: `it_${match[1]}`, thread: target.searchParams.get("thread") } : null;
     } catch {
       return null;

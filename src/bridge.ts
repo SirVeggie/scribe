@@ -665,8 +665,15 @@ ${POINTER_DRAG_JS}
   var LINK_MODES = { tab: true, peek: true, split: true };
   var embedded = window.parent !== window;
   // Behind another device's gateway (#905) this page is <label>.d-<device>.localhost and its board d-<device>.localhost.
+  // On the web (#913) it is <label>.<domain> (board <domain>) or <label>--<device>.<domain> (board d-<device>.<domain>).
   var gatewayBoard = (/^[^.]+\\.(d-[0-9a-f]{12}\\.localhost)$/.exec(location.hostname) || [])[1];
   var hostSuffix = gatewayBoard ? "." + gatewayBoard : ".localhost";
+  var webHost = !gatewayBoard && !/(^|\\.)localhost$/.test(location.hostname) && !/^[\\d.]+$/.test(location.hostname)
+    ? /^[a-z0-9-]+?(?:--([0-9a-f]{12}))?\\.(.+)$/.exec(location.hostname) : null;
+  if (webHost) {
+    gatewayBoard = webHost[1] ? "d-" + webHost[1] + "." + webHost[2] : webHost[2];
+    hostSuffix = (webHost[1] ? "--" + webHost[1] + "." : ".") + webHost[2];
+  }
   var portSuffix = location.port ? ":" + location.port : "";
   var boardOrigin = location.protocol + "//" + (gatewayBoard || "127.0.0.1") + portSuffix;
   var linkRequests = {};

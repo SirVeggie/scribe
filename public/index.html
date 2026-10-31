@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scribe</title>
   <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml" sizes="any">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <meta name="theme-color" content="#1a1a1d">
   <link rel="stylesheet" href="./fonts.css">
   <script src="./fonts.js"></script>
   <link rel="stylesheet" href="./app.css?v=83">
@@ -17,9 +20,24 @@
   <script>
     // Another device's UI, shown through this device's gateway (#905): its board is d-<device>.localhost
     // and its pages <label>.d-<device>.localhost, where this device's own use <label>.localhost.
-    window.scribeHost = /^d-[0-9a-f]{12}\.localhost$/.test(location.hostname)
-      ? { remote: true, suffix: "." + location.hostname }
-      : { remote: false, suffix: ".localhost" };
+    // On the web (#913) the server's board is <domain> and another device's d-<device>.<domain>; page hosts
+    // are flattened to one label (<label>.<domain>, <label>--<device>.<domain>) for one wildcard certificate.
+    // home: the device this UI is viewed from; device(id): another device's board host.
+    window.scribeHost = (() => {
+      const host = location.hostname;
+      const port = location.port ? `:${location.port}` : "";
+      const make = (info, home, device) => ({
+        ...info,
+        homeOrigin: () => `${location.protocol}//${home}${port}`,
+        deviceOrigin: (id) => `${location.protocol}//${device(id)}${port}`,
+      });
+      const local = (id) => `d-${id}.localhost`;
+      if (/^d-[0-9a-f]{12}\.localhost$/.test(host)) return make({ remote: true, suffix: "." + host }, "127.0.0.1", local);
+      if (host === "127.0.0.1" || host === "localhost" || host.endsWith(".localhost") || /^[\d.]+$/.test(host)) return make({ remote: false, suffix: ".localhost" }, "127.0.0.1", local);
+      const other = /^d-([0-9a-f]{12})\.(.+)$/.exec(host);
+      const base = other ? other[2] : host;
+      return make({ remote: true, web: base, suffix: other ? `--${other[1]}.${base}` : `.${base}` }, base, (id) => `d-${id}.${base}`);
+    })();
     (() => {
       // Settings saved before the rename from Agent Board keep working.
       for (const key of Object.keys(localStorage)) {
@@ -492,7 +510,7 @@
   <script src="./library.js?v=16"></script>
   <script src="./trash.js?v=2"></script>
   <script src="./popout.js?v=2"></script>
-  <script src="./views.js?v=7"></script>
+  <script src="./views.js?v=8"></script>
   <script src="./focusTrap.js?v=3"></script>
   <script src="./settings-ui.js?v=4"></script>
   <script src="./ml-settings.js?v=1"></script>
@@ -504,7 +522,7 @@
   <script src="./audio-composer.js"></script>
   <script src="./preview.js?v=3"></script>
   <script src="./permissions.js?v=2"></script>
-  <script src="./spaces.js?v=4"></script>
+  <script src="./spaces.js?v=5"></script>
   <script src="./glfx.js?v=4"></script>
   <script src="./orb.js?v=7"></script>
   <script src="./newpage.js?v=7"></script>
@@ -512,14 +530,14 @@
   <script src="./chromefx.js?v=1"></script>
   <script src="./starfx.js?v=1"></script>
   <script src="./component-host.js"></script>
-  <script src="./app.js?v=96"></script>
+  <script src="./app.js?v=97"></script>
   <script src="/vendor/marked.js"></script>
   <script src="/vendor/purify.js"></script>
   <script src="/vendor/highlight.js"></script>
   <script src="/vendor/scribe-md.js"></script>
   <script src="./agent-render.js?v=17"></script>
   <script src="./memories.js?v=2"></script>
-  <script src="./agent.js?v=74"></script>
+  <script src="./agent.js?v=75"></script>
   <script src="./harness.js?v=6"></script>
   <script src="./desktop.js?v=10"></script>
 </body>

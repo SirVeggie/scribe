@@ -9951,8 +9951,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (ask.detail) body.append(el("code", "ag-toast-detail", ask.detail));
       // That device's own UI in this window, on the chat (?thread=, read at boot).
       const open = () => {
-        const port = location.port ? `:${location.port}` : "";
-        location.href = `${location.protocol}//${ask.home ? "127.0.0.1" : `d-${ask.device}.localhost`}${port}/?thread=${encodeURIComponent(ask.thread)}`;
+        location.href = `${ask.home ? window.scribeHost.homeOrigin() : window.scribeHost.deviceOrigin(ask.device)}/?thread=${encodeURIComponent(ask.thread)}`;
       };
       // An approval answers from here (#911), through this device's daemon and the link.
       const answers = ask.kind === "approval" && ask.request && Array.isArray(ask.options) ? ask.options : [];

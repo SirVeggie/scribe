@@ -6,9 +6,12 @@ import { shellOrigin } from "../contentOrigin.js";
 import type { SpacesView } from "../spaces.js";
 import { peerDeviceOf } from "./link.js";
 import { sseStream, type AskSource, type AskWatcher } from "./attention.js";
+import { webSessionToken, type WebAccess } from "./web.js";
 import { findDevice, parseDeviceRef, type Described, type DeviceRef, type Resolved } from "./references.js";
 
 export type DevicesHost = {
+  /** Web access (#913): this device's domain, Google client and accounts, and its signed-in browsers. */
+  web?: WebAccess;
   spaces(): SpacesView;
   switchSpace(id: string): void;
   asks: AskSource;
@@ -41,6 +44,9 @@ function summaries(view: SpacesView | undefined): SpaceSummary[] {
 
 const REMOTE_TIMEOUT_MS = 3000;
 
+/** What a browser on the web may change here: switch spaces, answer approvals, resolve and describe links. */
+const WEB_WRITES = [/^\/[^/]+\/spaces\/[^/]+\/switch$/, /^\/[^/]+\/approvals\/[^/]+$/, /^\/resolve$/, /^\/describe$/];
+
 /**
  * /api/devices for Settings → Devices and `scribe pair` (#904): this device, the paired ones, Add
  * device (a code), Enter code, introductions and Revoke. Only the user: agents never pair or revoke,
@@ -54,6 +60,12 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
+      // A browser on the web (#913) uses devices but never pairs, revokes, grants or changes web access:
+      // a stolen session must not be able to add itself or lock the user out.
+      if (identify(req).web && !WEB_WRITES.some((pattern) => pattern.test(req.path))) {
+        res.status(403).json({ error: "Pairing and web access change only on a paired device, not from the web." });
+        return;
+      }
       const origin = req.get("origin");
       // A remote view's board asks this device through its gateway (#906), which checked the origin.
       const gateway = res.locals.gatewayDevice && origin === `http://${req.headers.host}`;
@@ -276,6 +288,38 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
     return { ok: true };
   }));
   // What this device lets a paired device's agents do here (#911).
+  // Web access (#913): this device's, and another device's over the link (any paired device may set it up).
+  router.get("/web", (req, res) => {
+    if (!host.web) return res.status(404).json({ error: "No web access here." });
+    res.set("Cache-Control", "no-store").json({ ...host.web.view(webSessionToken(req)), editable: !identify(req).web });
+  });
+  router.put("/web", guarded((req) => {
+    if (!host.web) throw new Error("No web access here.");
+    host.web.update(req.body);
+    return { ...host.web.view(), editable: true };
+  }));
+  router.delete("/web/sessions/:sid", guarded((req) => {
+    if (!host.web) throw new Error("No web access here.");
+    host.web.signOut(req.params.sid);
+    return { ...host.web.view(), editable: true };
+  }));
+  const onDevice = async (req: express.Request, res: express.Response, method: string, path: string) => {
+    const { id } = req.params;
+    try {
+      const reply = await withTimeout(peers.request(id, {
+        method,
+        path: `/api/devices/web${path}`,
+        headers: { host: "127.0.0.1", accept: "application/json", ...(method === "GET" ? {} : { "content-type": "application/json" }) },
+        ...(method === "GET" ? {} : { body: JSON.stringify(req.body ?? {}) }),
+      }));
+      res.status(reply.status).type("json").send(reply.body);
+    } catch {
+      res.status(502).json({ error: `${peers.nameOf(id) ?? "That device"} is not connected.` });
+    }
+  };
+  router.get("/:id/web", (req, res) => onDevice(req, res, "GET", ""));
+  router.put("/:id/web", (req, res) => onDevice(req, res, "PUT", ""));
+  router.delete("/:id/web/sessions/:sid", (req, res) => onDevice(req, res, "DELETE", `/sessions/${encodeURIComponent(req.params.sid)}`));
   router.put("/:id/agents", guarded((req) => peers.setAgentGrant(req.params.id, req.body)));
   router.put("/self", guarded((req) => peers.rename(req.body?.name)));
   // Accept connections from the internet on this address (#910), or stop: { host } or { host: null }.

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PAGE_HOST_SUFFIX, componentItemFromHost, pageComponentFromHost, pageHost, shellOrigins, pageOrigin } from "./config.js";
 import { boardOrigin, requestOrigin, requestSuffix } from "./contentOrigin.js";
+import { webBaseOf } from "./webRequest.js";
 import type { PageComponents } from "./pageComponents.js";
 import type { AgentHost } from "./agent/host.js";
 import type { ComponentItem } from "./agent/componentTool.js";
@@ -12,8 +13,10 @@ import { PAGE_PROBLEM_JS, KIT_TONES } from "./pageProblems.js";
 /** A component may sit in the board or its page; behind another device's gateway (#905), the origins it shows them on. */
 export function componentCsp(page?: string, req?: express.Request): string {
   const suffix = req ? requestSuffix(req) : PAGE_HOST_SUFFIX;
-  const shell = suffix === PAGE_HOST_SUFFIX ? shellOrigins() : [boardOrigin(req!)];
-  const ancestors = page ? [...shell, suffix === PAGE_HOST_SUFFIX ? pageOrigin(page) : requestOrigin(req!, pageHost(page, suffix))] : shell;
+  // On a loopback name here; else another device's gateway or the web (#913) names the origins.
+  const local = suffix === PAGE_HOST_SUFFIX && !(req && webBaseOf(req));
+  const shell = local ? shellOrigins() : [boardOrigin(req!)];
+  const ancestors = page ? [...shell, local ? pageOrigin(page) : requestOrigin(req!, pageHost(page, suffix))] : shell;
   return `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts; frame-ancestors ${ancestors.join(" ")}`;
 }
 export const COMPONENT_CSP = componentCsp();

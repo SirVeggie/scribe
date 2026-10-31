@@ -11,6 +11,15 @@
   /** .localhost, or .d-<device>.localhost when this is another device's UI through the gateway (#905). */
   const HOST_SUFFIX = window.scribeHost?.suffix ?? ".localhost";
   const REMOTE_VIEW = Boolean(window.scribeHost?.remote);
+  /** A chat component's own origin: w-it-<id> on any device's page host suffix, or the web's (#913). */
+  const isComponentUrl = (raw) => {
+    try {
+      const url = new URL(raw);
+      return /^w-it-[0-9a-f]{12}(?:\.|--)/.test(url.hostname) && url.pathname.startsWith("/component/");
+    } catch {
+      return false;
+    }
+  };
   let refreshOverlayTimer = setTimeout(() => dismissRefreshOverlay(), 5000);
 
   function dismissRefreshOverlay(fade = false) {
@@ -3217,7 +3226,7 @@
     // Scribe's own pages run the key script; the desktop app catches shortcuts natively in other frames.
     el.toggleAttribute("data-scribe-page", !tab.embedUrl);
     const url = viewUrl(tab);
-    if (/^https?:\/\/w-it-[0-9a-f]{12}(?:\.d-[0-9a-f]{12})?\.localhost(?::\d+)?\/component\//.test(url)) {
+    if (isComponentUrl(url)) {
       el.sandbox = "allow-scripts";
       el.dataset.src = url;
       void window.ScribeComponents.attachUrl(el, url).catch(error => showNotice(error.message));

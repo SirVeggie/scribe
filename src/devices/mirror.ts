@@ -778,14 +778,17 @@ const el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className
 function ago(at){const m=Math.round((Date.now()-at)/60000);if(m<1)return "just now";if(m<60)return m+" min ago";const h=Math.round(m/60);if(h<48)return h+" h ago";return Math.round(h/24)+" days ago";}
 $("dev").textContent=data.device.name;
 $("note").textContent=data.device.name+" is offline. Read-only copy from "+ago(data.at)+", kept on "+data.holder+".";
-$("back").href="http://127.0.0.1:"+location.port+"/";
+// d-<device>.localhost through the gateway, or d-<device>.<domain> on the web (#913), where page hosts are <label>--<device>.<domain>.
+const webHost=/^d-([0-9a-f]{12})\\.(.+)$/.exec(location.hostname);
+const onWeb=webHost&&webHost[2]!=="localhost";
+$("back").href=onWeb?location.protocol+"//"+webHost[2]+"/":"http://127.0.0.1:"+location.port+"/";
 let current=null;
 function open(id){
   const page=pages.get(id);if(!page||!mirrored.has(id))return;
   current=id;
   document.querySelectorAll(".row[data-id]").forEach(r=>r.classList.toggle("on",r.dataset.id===id));
   const label=/^t_[0-9a-f]+$/.test(id)?"t-"+id.slice(2):"x"+Array.from(new TextEncoder().encode(id),b=>b.toString(16).padStart(2,"0")).join("");
-  const frame=el("iframe");frame.src=location.protocol+"//"+label+"."+location.host+"/view/"+encodeURIComponent(id);
+  const frame=el("iframe");frame.src=location.protocol+"//"+(onWeb?label+"--"+webHost[1]+"."+webHost[2]:label+"."+location.host)+"/view/"+encodeURIComponent(id);
   $("view").replaceChildren(frame);
   $("copy").disabled=false;
   document.title=page.title+" · "+data.device.name+" (mirror)";
