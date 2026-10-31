@@ -378,6 +378,7 @@
     },
     downloadAll: () => downloadExport(),
     copyItems: (selection) => copyMenuItems(selection),
+    mirrorItem: (folderId) => mirrorFolderItem(folderId),
     showNotice,
     choose,
     confirm: (message, confirmLabel) => confirmDelete(message, confirmLabel),
@@ -726,6 +727,7 @@
     if (msg.type === "devices") {
       if (!document.getElementById("settings").hidden) window.scribeDevicesSettings.refresh();
       void refreshCopyTargets();
+      void refreshMirrorSettings();
       return;
     }
     if (msg.type === "copy_received") {
@@ -3997,6 +3999,41 @@
     }
   }
   void refreshCopyTargets();
+
+  /* ---------- Mirrored folders (#910) ---------- */
+
+  /** This daemon's mirror settings: the device it mirrors to and the folders marked Mirrored. */
+  let mirrorSettings = null;
+  async function refreshMirrorSettings() {
+    try {
+      const res = await fetch("/api/mirror", { cache: "no-store" });
+      if (res.ok) mirrorSettings = await res.json();
+    } catch {
+      /* keep the last */
+    }
+  }
+  void refreshMirrorSettings();
+  window.scribeMirrorRefresh = refreshMirrorSettings;
+
+  /** The folder menu's "Mirrored" check, once this device mirrors to another (Settings → Devices). */
+  function mirrorFolderItem(folderId) {
+    if (!mirrorSettings?.to) return null;
+    const on = (mirrorSettings.folders ?? []).includes(folderId);
+    return {
+      label: "Mirrored",
+      checked: on,
+      action: async () => {
+        try {
+          const res = await fetch("/api/mirror", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder: folderId, mirrored: !on }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || "Could not change the mirror");
+          mirrorSettings = { ...mirrorSettings, ...data };
+        } catch (err) {
+          showNotice(err.message);
+        }
+      },
+    };
+  }
 
   const countOf = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 

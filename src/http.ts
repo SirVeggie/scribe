@@ -84,7 +84,8 @@ import { TAINT_HEADER, remoteReader } from "./devices/agentAccess.js";
 import { agentForwarder, remoteAgentGate, remoteAgentRouter, type AgentDevicesHost } from "./devices/agentRoutes.js";
 import { peerDeviceOf } from "./devices/link.js";
 import { copyRouter } from "./devices/copy.js";
-import { MirrorPusher, MirrorStore, mirrorRouter, mirrorView, type MirrorSource } from "./devices/mirror.js";
+import type { Described } from "./devices/references.js";
+import { MirrorPusher, MirrorStore, mirrorDescribe, mirrorRouter, mirrorSpaces, mirrorView, type MirrorSource } from "./devices/mirror.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
 import { browserViewHtml } from "./browserPage.js";
@@ -225,6 +226,11 @@ export async function startHttp(): Promise<http.Server> {
       if (thread) agentHost.interact(thread);
       agentHost.resolveApproval(request, optionId);
     },
+    // Mirrors this device keeps (#910); the store is made below, before any request comes in.
+    mirror: {
+      spaces: (id) => mirrorSpaces(mirrorStore, id),
+      describe: (id, pages) => mirrorDescribe(mirrorStore, id, pages) as Described | undefined,
+    },
     describe: (pages, threads) => ({
       pages: Object.fromEntries(pages.map((ref) => {
         const tab = store.get(ref) ?? store.get(`scribe:${ref}`);
@@ -301,6 +307,15 @@ export async function startHttp(): Promise<http.Server> {
     local: localUi,
     render: (tab) => injectBoardRuntime(tab as unknown as Tab, null),
     received: (event) => broadcast({ type: "copy_received", ...event }),
+    importHere: (file, origin) => {
+      const parsed = parseImport(JSON.stringify(file), "mirror.json");
+      for (const [index, page] of parsed.pages.entries()) {
+        page.provenance = { copiedFrom: { device: origin.id, name: origin.name, key: file.pages[index]?.key ?? page.key ?? "", revision: 0, at: Date.now() } };
+        delete page.closedAt;
+        page.pinned = false;
+      }
+      return { pages: store.importBoard(parsed, "closed").tabs.length };
+    },
   });
   const gateway = peerGateway(peers, { version: VERSION, port: PORT, local: localUi, devices: devicesApi, embeds, mirror });
   // The agent port (#915) only reaches the API, before any host-based routing.

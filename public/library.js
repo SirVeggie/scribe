@@ -2196,6 +2196,7 @@ window.createLibrary = function createLibrary(host) {
       "sep",
       { label: "Export folder", action: () => host.downloadFolderExport(id) },
       ...(host.copyItems?.({ folders: [id] }) ?? []),
+      host.mirrorItem?.(id),
       { label: "Agent instructions", action: () => editFolderInstructions(folder) },
       { label: "Agent access", submenu: () => agentAccessItems({ kind: "folder", id }) },
       "sep",

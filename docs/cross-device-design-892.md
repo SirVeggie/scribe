@@ -292,3 +292,51 @@ The access model is the same as for chats on one device: a chat on A reaches not
   - `audioUi.test.ts` "listen combines ask permissions…" fails on Windows too: it is not about Linux.
 - The agent's own browser (`browser_*` tools, the browser handoff) needs one of those browsers installed on the
   headless box. Without one, those tools fail with "Could not launch a Chromium browser".
+
+## Always-on device: mirror and relay (#910)
+
+Decided by the user: changes are found by diffing a manifest (no `change_seq` migration); the mirror holds every
+page that is a tab in any space plus the pages of folders marked Mirrored (no per-space marking, no special handling
+for home folders); an offline device opens as a small read-only mirror browser; page scripts run with writes refused;
+the always-on device listens on a public port; any two devices paired with it may relay through it; all on one card.
+
+- **Flow control** (`link.ts`): hellos carry `features: ["flow", "relay", "mirror"]`; the link protocol stays 1 so
+  older devices still connect. With "flow" on both sides each stream has a 256 KB credit window: the reader grants
+  bytes back (frame type 5, in 64 KB steps) as it consumes them, so one slow stream no longer pauses the socket.
+- **Public listener** (`peers.ts`): Settings → Devices → Public address (`PUT /api/devices/public { host }`, kept as
+  `public` in `device/peers.json`). The device then listens on `::` (or `0.0.0.0`), and the address goes first in its
+  hints and pairing codes. Hints may now be host names (pairing code hint type 100). Only pinned keys, or an open
+  code, get past the handshake, as before. `SCRIBE_PEER_HOSTS` still fixes the addresses (tests).
+- **Relay**: when no hint answers, a device asks each directly linked device that relays: `CONNECT /relay/<target>`
+  over the link. The relay checks both are paired with it over direct links and sends `CONNECT /relay-in/<from>` to
+  the target, which runs a TLS server on that stream and accepts it like any peer (paired keys only, no pairing).
+  The two then shake hands end to end, so the relay only pipes ciphertext. `Link.via` names the relay; a direct link
+  replaces a relayed one (both sides know which is which), and relayed links try their direct hints every 5 min.
+  Settings and the space selector show "via Pi".
+- **Mirror sync** (`mirror.ts`, `MirrorPusher`): Settings → Devices → Offline mirror → Mirror to (`device/mirror.json`
+  `{ to, folders }`; the folder menu's Mirrored check edits `folders`). Every 30 s, and 3 s after a store change, the
+  owner hashes its catalog (spaces with their tab ids, folders, page titles and keys, templates) and a fingerprint per
+  mirrored page (revision, state revision, update time, asset counts and bytes). If the mirror confirmed that hash
+  last time, one `POST /api/mirror/incoming/sync { digest }` is the whole sync. Otherwise it sends the catalog and
+  fingerprints; the mirror drops pages that left and names the ones that differ; those go in ~8 MB batches with only
+  the blobs it lacks (`/incoming/check`, `PUT /incoming/blobs/:hash`, `/incoming/pages`), then `/incoming/done`.
+  A sync cut off by a disconnect runs again from the diff. File pages and temporary pages are catalog only.
+- **Mirror store** (`MirrorStore`): `<data>/mirror/mirror.sqlite` (devices, pages, templates; pages as export JSON
+  with blobs by hash) and `<data>/mirror/blobs/<sha256>`. Blobs no page names are swept hourly. Unpairing a device
+  drops its mirror. The holder tells every peer which mirrors it keeps and when each last matched (`mirrors` in the
+  hello and a `mirrors` control message), so `PeerService.mirrorOf(id)` knows where to go.
+- **Using it**: while a device is offline, the viewing device's gateway sends its `d-<id>` and `t-<page>.d-<id>` hosts to
+  the holder (`mirrorView`). `d-<id>/` is the mirror browser (spaces and their tabs, the Library tree, catalog-only
+  pages dimmed, Copy to this device, Back). A page runs on its own origin with the usual runtime: `/view/:id`,
+  its assets, `/api/tabs/:id/state` and `/blob/:id` come from the mirror; other API reads are 404 and every write is 403
+  "Read only: … is offline". Copy to this device is the #907 push from the holder, with `origin` in the bundle so the
+  copy records the owner in `copiedFrom`; mirrored copies carry no plugins.
+- The selector shows "offline · mirror 2 h ago" and the mirror's spaces (`GET /api/mirror/of/:device/spaces` on the
+  holder); clicking one opens the mirror browser at that space. References resolve titles through
+  `POST /api/mirror/of/:device/describe` and open in the mirror (`mirror: true` on the resolved target).
+- Tests: `src/devices/relay.test.ts` (A and B listen on nothing and reach each other through R; a 3 MB transfer with
+  a request beside it; a CONNECT to an unpaired device is refused), `src/devices/mirror.test.ts` (only changes travel,
+  pages that left are dropped, the gateway shows the mirror read only while the owner is offline).
+- Not done: a mirror page's own components and plugin calls (they answer 404), WebSockets to a mirror (none needed),
+  mirroring threads (decided against), more than one mirror target per device, and relay chains (a relayed link is
+  never used to relay).

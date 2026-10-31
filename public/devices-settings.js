@@ -50,7 +50,26 @@
   const name = field("Name", "", "e.g. Laptop");
   const idRow = el("div", "setting-row device-detail");
   const fingerprintRow = el("div", "setting-row device-detail");
-  selfSection.append(name.wrap, idRow, fingerprintRow);
+  // An always-on device (#910) also accepts connections from the internet, so others can relay through it.
+  const publicField = field("Public address", "", "Only on an always-on device, e.g. scribe.example.com");
+  const publicHint = el("p", "settings-hint");
+  publicHint.hidden = true;
+  selfSection.append(name.wrap, idRow, fingerprintRow, publicField.wrap, publicHint);
+
+  // The offline mirror (#910): this device's catalog and open tabs, kept on a device that stays on.
+  const mirrorSection = section(
+    "Offline mirror",
+    "A read-only copy that other devices can open while this one is off: the Library's titles, every page that is a tab in a space, and the pages in folders you mark Mirrored."
+  );
+  const mirrorWrap = el("label", "ml-field");
+  const mirrorSelect = el("select");
+  mirrorSelect.id = "device-mirror-to";
+  mirrorWrap.append(el("span", null, "Mirror to"), mirrorSelect);
+  const mirrorStatus = el("p", "settings-hint");
+  const heldStatus = el("p", "settings-hint");
+  mirrorSection.append(mirrorWrap, mirrorStatus, heldStatus);
+  let mirrorPicker = null;
+  let mirror = null;
 
   const pairedSection = section("Paired devices");
   const list = el("div", "device-list");
@@ -81,6 +100,53 @@
     return result;
   }
   const say = (text) => { status.textContent = text; };
+
+  async function mirrorRequest(method, body) {
+    const response = await fetch("/api/mirror", method === "GET" ? {} : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    let result = null;
+    try { result = await response.json(); } catch { /* an older daemon */ }
+    if (!result || (response.status === 404 && !result.error)) throw new Error("Restart Scribe to use the mirror.");
+    if (!response.ok) throw new Error(result.error || "Could not update the mirror");
+    return result;
+  }
+
+  function renderMirror() {
+    // Another device's UI shows this device's list of devices, so its mirror settings would not match it.
+    mirrorSection.hidden = !view || !!view.viewing;
+    if (mirrorSection.hidden || !mirror) return;
+    const options = [["", "None"], ...view.peers.map((peer) => [peer.id, peer.name])];
+    mirrorSelect.replaceChildren(...options.map(([value, label]) => {
+      const option = el("option", null, label);
+      option.value = value;
+      return option;
+    }));
+    mirrorSelect.value = mirror.to || "";
+    if (!mirrorPicker) mirrorPicker = window.createSelect ? window.createSelect(mirrorSelect) : null;
+    else mirrorPicker.syncSelect?.();
+    const target = view.peers.find((peer) => peer.id === mirror.to);
+    mirrorStatus.textContent = !mirror.to ? ""
+      : mirror.error ? `Not synced: ${mirror.error}`
+      : mirror.at ? `Synced ${ago(mirror.at)} · ${mirror.pages} page${mirror.pages === 1 ? "" : "s"} in full`
+      : target && !target.online ? `${target.name} is offline; it syncs when it is back.`
+      : "Syncing…";
+    mirrorStatus.hidden = !mirrorStatus.textContent;
+    const held = mirror.held || [];
+    heldStatus.textContent = held.length ? `Keeps a mirror of ${held.map((m) => `${m.name} (${ago(m.at)})`).join(", ")}.` : "";
+    heldStatus.hidden = !held.length;
+  }
+
+  function refreshMirror() {
+    mirrorRequest("GET").then((next) => { mirror = next; renderMirror(); }).catch(() => { mirrorSection.hidden = true; });
+  }
+
+  mirrorSelect.addEventListener("change", async () => {
+    try {
+      mirror = { ...mirror, ...(await mirrorRequest("PUT", { to: mirrorSelect.value || null })) };
+      renderMirror();
+      window.scribeMirrorRefresh?.();
+      window.setTimeout(refreshMirror, 1500);
+    } catch (err) { say(err.message); refreshMirror(); }
+  });
 
   function ago(at) {
     const s = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -114,6 +180,9 @@
     if (document.activeElement !== name.input) name.input.value = view.self.name;
     idRow.replaceChildren(el("span", null, "ID"), el("code", null, view.self.id));
     fingerprintRow.replaceChildren(el("span", null, "Fingerprint"), el("code", null, view.self.fingerprint));
+    if (document.activeElement !== publicField.input) publicField.input.value = view.self.public?.host || "";
+    publicHint.textContent = view.self.public ? `Listening on every network interface, port ${view.self.port}. Open that port in the firewall or router.` : "";
+    publicHint.hidden = !view.self.public;
 
     list.replaceChildren();
     if (!view.peers.length) list.append(el("p", "settings-hint", "None yet."));
@@ -123,7 +192,8 @@
       dot.setAttribute("aria-hidden", "true");
       const text = el("span", "ml-source-text");
       const state = peer.online
-        ? `online${peer.rtt !== undefined ? ` · ${peer.rtt} ms` : ""}`
+        ? `online${peer.via ? ` · via ${peer.via.name}` : ""}${peer.rtt !== undefined ? ` · ${peer.rtt} ms` : ""}`
+        : peer.mirror ? `offline · mirror on ${peer.mirror.name}, ${ago(peer.mirror.at)}`
         : peer.lastSeen ? `last seen ${ago(peer.lastSeen)}` : "not seen yet";
       const detail = el("span", "ml-source-detail", ` ${state}`);
       if (peer.error) tip(detail, peer.error).classList.add("setting-hinted");
@@ -138,7 +208,7 @@
       const home = peer.id === view.viewing;
       const port = location.port ? `:${location.port}` : "";
       const open = button(home ? "Back" : "Open", () => { location.href = home ? `${location.protocol}//127.0.0.1${port}/` : `${location.protocol}//d-${peer.id}.localhost${port}/`; });
-      open.disabled = !peer.online && !home;
+      open.disabled = !peer.online && !home && !peer.mirror;
       row.append(dot, text, open, revoke);
       list.append(row, agentRow(peer));
     }
@@ -146,6 +216,7 @@
       if (view.offer) renderOffer();
       else closePanel();
     }
+    renderMirror();
   }
 
   function closePanel() {
@@ -270,16 +341,23 @@
     try { render(await request("PUT", "/self", { name: value })); say(""); } catch (err) { say(err.message); }
   }
   name.input.addEventListener("change", saveName);
+  publicField.input.addEventListener("change", async () => {
+    try { render(await request("PUT", "/public", { host: publicField.input.value.trim() || null })); say(""); } catch (err) { say(err.message); }
+  });
+  publicField.input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") publicField.input.blur();
+  });
   name.input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") name.input.blur();
   });
 
   function refresh() {
     request("GET", "").then(render).catch((err) => say(err.message));
+    refreshMirror();
   }
 
   window.scribeDevicesSettings = {
-    sections: [selfSection, pairedSection],
+    sections: [selfSection, pairedSection, mirrorSection],
     /** `confirm(message, label)` resolves true when the user agrees to revoke a device. */
     init({ confirm }) {
       if (confirm) confirmRevoke = confirm;

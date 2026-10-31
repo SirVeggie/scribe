@@ -188,9 +188,10 @@ export class PeerService extends EventEmitter {
     for (const link of this.links.values()) link.control({ type: "mirrors", list: this.heldHere });
   }
 
-  /** An online device that holds a mirror of this (offline) one, the freshest first. */
+  /** A device that holds a mirror of this (offline) one, the freshest: an online peer, or this device itself. */
   mirrorOf(id: string): { holder: string; at: number } | undefined {
-    let best: { holder: string; at: number } | undefined;
+    const own = this.heldHere.find((m) => m.id === id);
+    let best: { holder: string; at: number } | undefined = own ? { holder: this.identity.id, at: own.at } : undefined;
     for (const [holder, list] of this.heldBy) {
       if (holder === id || !this.links.get(holder)?.open) continue;
       const entry = list.find((m) => m.id === id);
@@ -221,7 +222,7 @@ export class PeerService extends EventEmitter {
           pairedAt: peer.pairedAt,
           agents: this.agentGrant(peer.id),
           ...(link?.via ? { via: { id: link.via, name: this.peer(link.via)?.name ?? link.via } } : {}),
-          ...(mirror ? { mirror: { id: mirror.holder, name: this.peer(mirror.holder)?.name ?? mirror.holder, at: mirror.at } } : {}),
+          ...(mirror ? { mirror: { id: mirror.holder, name: mirror.holder === this.identity.id ? this.identity.name : this.peer(mirror.holder)?.name ?? mirror.holder, at: mirror.at } } : {}),
           ...(!link && this.errors.get(peer.id) ? { error: this.errors.get(peer.id) } : {}),
         };
       }),

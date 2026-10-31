@@ -17,6 +17,11 @@ export type DevicesHost = {
   answerApproval?(requestId: string, optionId: string): void;
   /** This device's pages (by key or id) and threads, for references from other devices (#908). */
   describe?(pages: string[], threads: string[]): Described;
+  /** Mirrors this device keeps itself (#910): their spaces and page titles. */
+  mirror?: {
+    spaces(device: string): { spaces: SpaceSummary[] } | undefined;
+    describe(device: string, pages: string[]): Described | undefined;
+  };
 };
 
 /** A space as the selector's device sections show it (#906). */
@@ -80,6 +85,7 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
     const peerSpaces = await Promise.all(devices.peers.map(async (peer) => {
       if (!peer.online && peer.mirror) {
         // Offline, with a mirror on another device (#910): its spaces as the mirror last saw them, read only.
+        if (peer.mirror.id === peers.identity.id) return { ...peer, spaces: host.mirror?.spaces(peer.id)?.spaces ?? [] };
         try {
           const reply = await withTimeout(peers.request(peer.mirror.id, { method: "GET", path: `/api/mirror/of/${peer.id}/spaces`, headers: { host: "127.0.0.1", accept: "application/json" } }));
           if (reply.status === 200) {
@@ -193,6 +199,11 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
         // Offline: titles from the device that keeps its mirror (#910).
         const mirror = peers.mirrorOf(id);
         if (!mirror || !pages.length) return;
+        if (mirror.holder === peers.identity.id) {
+          const here = host.mirror?.describe(id, pages);
+          if (here) mirrored.set(id, here);
+          return;
+        }
         try {
           const reply = await withTimeout(peers.request(mirror.holder, {
             method: "POST",

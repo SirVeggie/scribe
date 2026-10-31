@@ -191,6 +191,13 @@ window.createSpaces = function createSpaces(host) {
   /** A space on another device than the one showing: make it that device's current space and go there. */
   async function openOnDevice(device, space) {
     if (busy) return;
+    // Offline with a mirror (#910): its copy of that space, read only; nothing to switch on the device.
+    if (!device.online && device.mirror) {
+      const url = new URL(deviceUrl(device.id));
+      url.searchParams.set("space", space.id);
+      location.href = url.href;
+      return;
+    }
     busy = true;
     try {
       const res = await fetch(`/api/devices/${encodeURIComponent(device.id)}/spaces/${encodeURIComponent(space.id)}/switch`, {
@@ -412,7 +419,8 @@ window.createSpaces = function createSpaces(host) {
       const label = el("div", "spaces-device-head");
       label.append(el("span", `device-dot${device.online ? " online" : ""}`), el("span", "spaces-device-name", device.self ? `This device · ${device.name}` : device.name));
       const state = device.self ? "" : device.online
-        ? (device.rtt !== undefined ? `${device.rtt} ms` : "")
+        ? [device.via ? `via ${device.via.name}` : "", device.rtt !== undefined ? `${device.rtt} ms` : ""].filter(Boolean).join(" · ")
+        : device.mirror ? `offline · mirror ${ago(device.mirror.at)}`
         : device.lastSeen ? `offline · last seen ${ago(device.lastSeen)}` : "offline";
       if (state) label.append(el("span", "spaces-device-state", state));
       section.append(label);
@@ -433,13 +441,16 @@ window.createSpaces = function createSpaces(host) {
   function remoteCard(device, space, index) {
     const item = el("button", "space-card compact" + (space.active ? " active" : ""));
     item.type = "button";
-    item.disabled = !device.online;
+    item.disabled = !device.online && !device.mirror;
     item.style.setProperty("--space", COLORS[space.color] || COLORS.slate);
     item.style.setProperty("--i", String(index));
     const top = el("div", "space-top");
     top.append(el("span", "space-dot"), el("span", "space-name", space.name));
     if (space.active) top.append(el("span", "space-badge", "Current"));
-    item.append(top, el("div", "space-meta", `${space.tabs} tab${space.tabs === 1 ? "" : "s"}${space.active || !space.usedAt ? "" : ` · ${ago(space.usedAt)}`}`));
+    const meta = device.online
+      ? `${space.tabs} tab${space.tabs === 1 ? "" : "s"}${space.active || !space.usedAt ? "" : ` · ${ago(space.usedAt)}`}`
+      : `${space.tabs} tab${space.tabs === 1 ? "" : "s"} · read only`;
+    item.append(top, el("div", "space-meta", meta));
     item.addEventListener("click", () => void openOnDevice(device, space));
     return item;
   }

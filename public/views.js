@@ -1738,7 +1738,8 @@ window.createViews = function createViews(host) {
       return open(localTarget(ref), mode, { ...opts, anchor });
     }
     const device = info.device.name;
-    if (!info.online) {
+    // Offline, but in a mirror another device keeps (#910): it opens there, read only.
+    if (!info.online && !(info.mirror && ref.kind === "page")) {
       host.showNotice(`${device} is offline`);
       return { ok: false, error: "offline" };
     }

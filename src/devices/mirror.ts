@@ -429,6 +429,29 @@ function cleanCatalog(value: unknown): MirrorCatalog {
 
 // --- routes ---
 
+/** A mirror's spaces, for the space selector. */
+export function mirrorSpaces(store: MirrorStore, device: string) {
+  const mirror = store.device(device);
+  if (!mirror) return undefined;
+  return { at: mirror.at, spaces: mirror.catalog.spaces.map((s) => ({ id: s.id, name: s.name, color: s.color, tabs: s.tabs.length, active: !!s.active })) };
+}
+
+/** Titles of a mirror's pages, by key or id, for references; `mirrored` when the page itself is in it. */
+export function mirrorDescribe(store: MirrorStore, device: string, refs: string[]) {
+  const mirror = store.device(device);
+  if (!mirror) return undefined;
+  const mirrored = store.mirrored(mirror.id);
+  return {
+    at: mirror.at,
+    pages: Object.fromEntries(refs.map((ref) => {
+      const key = ref.startsWith("scribe:") ? ref : `scribe:${ref}`;
+      const page = mirror.catalog.pages.find((p) => p.id === ref || p.key === ref || p.key === key);
+      return [ref, page ? { id: page.id, key: page.key, title: page.title, mirrored: mirrored.has(page.id) } : null];
+    })),
+    threads: {},
+  };
+}
+
 /**
  * /api/mirror. `GET /` and `PUT /` are this device's mirror settings (the board UI). `/incoming/*` takes
  * syncs from paired devices, and `/of/:device/*` answers other paired devices about a mirror held here;
@@ -504,24 +527,15 @@ export function mirrorRouter(peers: PeerService, pusher: MirrorPusher, store: Mi
   });
   // Another paired device asks about a mirror held here: its space selector and its references.
   linked.get("/of/:device/spaces", (req, res) => {
-    const mirror = store.device(req.params.device);
-    if (!mirror) return void fail(res, new Error("No mirror of that device here."), 404);
-    res.set("Cache-Control", "no-store").json({ at: mirror.at, spaces: mirror.catalog.spaces.map((s) => ({ id: s.id, name: s.name, color: s.color, tabs: s.tabs.length, active: !!s.active })) });
+    const spaces = mirrorSpaces(store, req.params.device);
+    if (!spaces) return void fail(res, new Error("No mirror of that device here."), 404);
+    res.set("Cache-Control", "no-store").json(spaces);
   });
   linked.post("/of/:device/describe", express.json(), (req, res) => {
-    const mirror = store.device(req.params.device);
-    if (!mirror) return void fail(res, new Error("No mirror of that device here."), 404);
     const refs = Array.isArray(req.body?.pages) ? (req.body.pages as unknown[]).filter((p): p is string => typeof p === "string").slice(0, 200) : [];
-    const mirrored = store.mirrored(mirror.id);
-    res.set("Cache-Control", "no-store").json({
-      at: mirror.at,
-      pages: Object.fromEntries(refs.map((ref) => {
-        const key = ref.startsWith("scribe:") ? ref : `scribe:${ref}`;
-        const page = mirror.catalog.pages.find((p) => p.id === ref || p.key === ref || p.key === key);
-        return [ref, page ? { id: page.id, key: page.key, title: page.title, mirrored: mirrored.has(page.id) } : null];
-      })),
-      threads: {},
-    });
+    const described = mirrorDescribe(store, req.params.device, refs);
+    if (!described) return void fail(res, new Error("No mirror of that device here."), 404);
+    res.set("Cache-Control", "no-store").json(described);
   });
   router.use((req, res, next) => {
     if (req.path.startsWith("/incoming/") || req.path.startsWith("/of/")) linked(req, res, next);
@@ -562,6 +576,8 @@ export type MirrorViewOptions = {
   render(tab: { id: string; key: string; title: string; html: string; state: unknown; stateRevision: number; revision: number; assets: Array<{ name: string; mimeType: string }>; templateId?: string }): string;
   /** CopyHost bits that don't depend on the pages: copies from a mirror carry no plugins. */
   received?: CopyHost["received"];
+  /** Copy to this device when this device keeps the mirror itself: import the pages here. */
+  importHere?(file: BoardExportFile, origin: { id: string; name: string }): { pages: number };
 };
 
 /**
@@ -595,8 +611,14 @@ export function mirrorView(peers: PeerService, store: MirrorStore, options: Mirr
         express.json()(req, res, async () => {
           try {
             const viewer = identify(req).device;
-            if (!viewer) throw new Error("Copies go to the device you are viewing from.");
             const ids = Array.isArray(req.body?.pages) ? (req.body.pages as unknown[]).filter((p): p is string => typeof p === "string").slice(0, 500) : [];
+            if (!viewer) {
+              // The browser is this device's own: the mirror is here, so the copy is a local import.
+              if (!options.importHere) throw new Error("Copies go to the device you are viewing from.");
+              const result = options.importHere(mirrorFile(store, mirror.id, ids), { id: mirror.id, name });
+              res.json({ ...result, device: { id: peers.identity.id, name: peers.identity.name } });
+              return;
+            }
             res.json(await copyFromMirror(peers, store, mirror.id, name, viewer, ids, options.received));
           } catch (err) {
             res.status(400).json({ error: (err as Error).message });
@@ -664,6 +686,21 @@ export function mirrorView(peers: PeerService, store: MirrorStore, options: Mirr
 
 /** Copy to this device, from a mirror: the same push as a copy from the owner, naming the owner. */
 async function copyFromMirror(peers: PeerService, store: MirrorStore, device: string, name: string, target: string, ids: string[], received?: CopyHost["received"]) {
+  const file = mirrorFile(store, device, ids);
+  const host: CopyHost = {
+    exportFile: () => JSON.parse(JSON.stringify(file)) as BoardExportFile,
+    importBoard: () => { throw new Error("Not here"); },
+    revision: () => 0,
+    plugin: () => undefined,
+    exportPlugin: () => { throw new Error("Copies from a mirror carry no plugins."); },
+    previewPlugin: () => { throw new Error("Not here"); },
+    received: received ?? (() => {}),
+  };
+  return sendCopy(peers, host, target, { pages: ids }, { id: device, name });
+}
+
+/** Mirrored pages as an export file, blobs filled back in, with the templates they use. */
+function mirrorFile(store: MirrorStore, device: string, ids: string[]): BoardExportFile {
   const pages: BoardExportPage[] = [];
   const templates = new Map<string, Template>();
   for (const id of ids) {
@@ -685,17 +722,7 @@ async function copyFromMirror(peers: PeerService, store: MirrorStore, device: st
     pages.push(copy);
   }
   if (!pages.length) throw new Error("None of those pages are in the mirror.");
-  const file: BoardExportFile = { format: "scribe-export", version: 1, exportedAt: Date.now(), templates: [...templates.values()], pages };
-  const host: CopyHost = {
-    exportFile: () => JSON.parse(JSON.stringify(file)) as BoardExportFile,
-    importBoard: () => { throw new Error("Not here"); },
-    revision: () => 0,
-    plugin: () => undefined,
-    exportPlugin: () => { throw new Error("Copies from a mirror carry no plugins."); },
-    previewPlugin: () => { throw new Error("Not here"); },
-    received: received ?? (() => {}),
-  };
-  return sendCopy(peers, host, target, { pages: ids }, { id: device, name });
+  return { format: "scribe-export", version: 1, exportedAt: Date.now(), templates: [...templates.values()], pages };
 }
 
 function escapeHtml(text: string): string {

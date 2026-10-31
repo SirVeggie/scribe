@@ -9,6 +9,15 @@
 - **How to verify:** `src/callers.test.ts`, `src/pageAccessHttp.test.ts`.
 - **When to remove:** Keep.
 
+## Offline mirror files and relay protocol (#910, additive, no schema change)
+
+- **What changed:** A device can mirror its catalog and open tabs to another paired device and relay links for devices that can't reach each other. Change tracking diffs a manifest of existing revisions, so the planned `change_seq` column and `changes` table were not needed (user decision, 2026-10-31).
+- **Data:** new files only. `<data>/device/mirror.json` (`{ to, folders }`) on the owner; `<data>/mirror/mirror.sqlite` (tables `devices`, `pages`, `templates`, made with `CREATE TABLE IF NOT EXISTS`) and `<data>/mirror/blobs/` on a device that keeps mirrors. `device/peers.json` may gain `public: { host }`. `board.sqlite` is unchanged.
+- **Protocol:** additive. Hellos carry `features` and `mirrors`; a `mirrors` control message; a `WINDOW` frame (type 5) only when both hellos list "flow"; `CONNECT /relay/<id>` and `/relay-in/<id>` over links; host names in address hints and pairing codes (hint type 100, which older decoders stop at). The link `PROTOCOL` stays 1, so older devices still pair and link, without flow control, relaying or mirrors. Routes: `/api/mirror` (`GET`, `PUT`, `POST /sync`; `/incoming/*` and `/of/:device/*` over links only), `PUT /api/devices/public`. `VERSION` stays as is.
+- **Where:** `src/devices/link.ts`, `src/devices/peers.ts`, `src/devices/pairing.ts`, `src/devices/mirror.ts`, `src/devices/copy.ts`, `src/devices/gateway.ts`, `src/devices/routes.ts`, `src/http.ts`, `public/devices-settings.js`, `public/spaces.js`, `public/views.js`, `public/app.js`, `public/library.js`.
+- **How to verify:** `src/devices/relay.test.ts`, `src/devices/mirror.test.ts`, `src/devices/peers.test.ts`.
+- **When to remove:** Keep.
+
 ## `message_text` table and triggers (`agent.sqlite`, #602, additive, schema still 1)
 
 - **What changed:** Thread message search (the thread menu, the palette's thread search, and `thread_list` with `messages: true`) reads a new `message_text` table instead of scanning every item's JSON. It holds one row per searchable item (`item_id`, `thread_id`, `seq`, `text`): the user's messages and the agent's own replies, not dropped and not a subagent's. On the real history that is about 5 MB of 195 MB, and queries went from 250–300 ms to 9–37 ms.

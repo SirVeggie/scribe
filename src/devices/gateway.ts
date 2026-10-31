@@ -99,6 +99,11 @@ export function peerGateway(peers: PeerService, options: {
     // Offline: the device that keeps its mirror answers instead, read only (#910). Not for embeds, which run on the owner.
     if (!link?.open && !isEmbedLabel(gatewayHost(req.hostname)?.label)) {
       const mirror = peers.mirrorOf(device);
+      // This device keeps the mirror itself: serve it here.
+      if (mirror && mirror.holder === peers.identity.id && options.mirror) {
+        options.mirror(req, res, gatewayHost(req.hostname) ?? { device });
+        return;
+      }
       if (mirror) {
         link = peers.linkTo(mirror.holder);
         cacheKey = undefined;

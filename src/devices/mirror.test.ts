@@ -199,4 +199,10 @@ test("while the owner is offline, the viewer's gateway shows its mirror, read on
   assert.equal(write.status, 403);
   assert.match(JSON.parse(write.body).error, /Read only/);
   assert.equal((await get(a, host, "/kit.js")).body, "// kit");
+
+  // On the device that keeps the mirror, its own browser opens B the same way.
+  assert.equal(r.peers.view().peers.find((p) => p.id === b.id)?.mirror?.id, r.id);
+  const own = await get(r, `t-aa11.d-${b.id}.localhost`, "/view/t_aa11");
+  assert.equal(own.status, 200);
+  assert.match(own.body, /Plan v2/);
 });
