@@ -173,7 +173,7 @@
   const webPath = () => (webTarget && webTarget !== view?.self.id ? `/${encodeURIComponent(webTarget)}/web` : "/web");
 
   function renderWeb() {
-    if (!view) return;
+    if (!view?.self) return;
     const devices = [[view.self.id, `${view.self.name} (this device)`], ...view.peers.filter((peer) => peer.online).map((peer) => [peer.id, peer.name])];
     if (!devices.some(([id]) => id === webTarget)) webTarget = view.self.id;
     webDevice.replaceChildren(...devices.map(([value, label]) => {

@@ -11,7 +11,7 @@ process.env.SCRIBE_HOME = dir;
 const { store } = await import("../store.js");
 const { AgentHost } = await import("./host.js");
 before(() => store.load());
-after(() => { store.closeDb(); fs.rmSync(dir, { recursive: true, force: true }); });
+after(() => { store.closeDb(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
 test("Claude shared quota survives failed reads and restarts", async () => {
   let host = new AgentHost(() => {}, async () => null);

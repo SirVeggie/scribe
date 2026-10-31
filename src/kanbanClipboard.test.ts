@@ -23,7 +23,8 @@ test("comments can be copied from a separate-origin Scribe page", async (t) => {
     page.on("pageerror", error => errors.push(error.message));
     const app = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
     const constants = app.slice(app.indexOf("  const SANDBOX ="), app.indexOf("  const LIVE_FRAME_CAP"));
-    const loader = app.slice(app.indexOf("  function loadFrame("), app.indexOf("  function discardFrame("));
+    const loader = app.slice(app.indexOf("  const isComponentUrl ="), app.indexOf("  let refreshOverlayTimer"))
+      + app.slice(app.indexOf("  function loadFrame("), app.indexOf("  function discardFrame("));
     const kanban = templateHtml("kanban");
     const comment = "Copy **Markdown** exactly.\n\nSecond paragraph.";
     const state = {

@@ -571,7 +571,8 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
     await page.setContent('<main style="width:1100px;height:650px"><div id="frames"></div></main>');
     await page.addStyleTag({ content: fs.readFileSync(new URL('../public/app.css', import.meta.url), 'utf8') });
     const ensureFrameSource = appSource.slice(appSource.indexOf('  function ensureFrame('), appSource.indexOf('  /** Keep the iframe'));
-    const loadFrameSource = appSource.slice(appSource.indexOf('  function loadFrame('), appSource.indexOf('  function discardFrame('));
+    const loadFrameSource = appSource.slice(appSource.indexOf('  const isComponentUrl ='), appSource.indexOf('  let refreshOverlayTimer'))
+      + appSource.slice(appSource.indexOf('  function loadFrame('), appSource.indexOf('  function discardFrame('));
     await page.addScriptTag({ content: `{
       const mainEl = document.querySelector('main'), framesEl = document.querySelector('#frames'), frames = new Map();
       const tabs = ['primary','cold'].map(id => ({id,title:id,revision:1}));
