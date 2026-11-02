@@ -8,7 +8,7 @@ import { after, test } from "node:test";
 import express from "express";
 import { WebSocket, WebSocketServer } from "ws";
 import { identify, socketAllowed } from "../callers.js";
-import { loadIdentity } from "./identity.js";
+import { deviceDir, loadIdentity } from "./identity.js";
 import { decodeCode, makeOffer, pairWords } from "./pairing.js";
 import { PeerService } from "./peers.js";
 import { qrMatrix } from "./qr.js";
@@ -205,6 +205,60 @@ test("a restarted device reconnects with the same key", async () => {
   const back = await node(a.home, a.port);
   assert.equal(back.peers.identity.id, a.peers.identity.id);
   await until(() => online(back, c) && online(c, back), "the link after restart", 15_000);
+});
+
+test("a revoked device paired again by code reaches every device (#943), and hears why while it is revoked", async () => {
+  const box = await node();
+  const lan = await node();
+  const srv = await node();
+  await box.peers.pair((await lan.peers.createOffer())!.code);
+  await srv.peers.pair((await box.peers.createOffer())!.code);
+  await until(() => online(srv, lan) && online(lan, srv), "the mesh");
+
+  // Revoked while it is away: back, it hears why it can't connect.
+  await srv.peers.stop();
+  nodes.splice(nodes.indexOf(srv), 1);
+  box.peers.revoke(srv.peers.identity.id);
+  await until(() => !knows(box, srv) && !knows(lan, srv), "the revocation");
+  const back = await node(srv.home, srv.port);
+  const error = () => back.peers.view().peers.find((p) => p.id === box.peers.identity.id)?.error ?? "";
+  await until(() => /revoked this device/.test(error()), "the reason", 15_000);
+
+  // Paired again with box (its code entered on box, as with `scribe add-device`): lan reaches it too,
+  // and box keeps lan. Before, the revocations it kept poisoned the others' lists.
+  await box.peers.pair((await back.peers.createOffer())!.code);
+  await until(() => online(back, lan) && online(lan, back) && online(box, lan), "the mesh again", 15_000).catch((err) => {
+    throw new Error(`${err.message}: back→lan ${knows(back, lan)}, lan→back ${knows(lan, back)}, box→lan ${knows(box, lan)}`);
+  });
+  for (const n of [box, lan, back]) {
+    await n.peers.stop();
+    nodes.splice(nodes.indexOf(n), 1);
+  }
+});
+
+test("revocations kept from before don't travel with a device that pairs from no paired devices (#943)", async () => {
+  const box = await node();
+  const lan = await node();
+  await box.peers.pair((await lan.peers.createOffer())!.code);
+  await until(() => online(box, lan), "box–lan");
+  // As an older build left it: srv dropped by both, with their keys on its revoked list.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-peer-"));
+  const stale = [box, lan].map((n) => n.peers.identity.fingerprint);
+  fs.mkdirSync(deviceDir(home), { recursive: true });
+  fs.writeFileSync(path.join(deviceDir(home), "peers.json"), JSON.stringify({ peers: [], revoked: stale, revokedAt: Object.fromEntries(stale.map((fp) => [fp, Date.now()])) }));
+  const srv = await node(home);
+  await box.peers.pair((await srv.peers.createOffer())!.code);
+  await until(() => online(srv, lan) && online(lan, srv) && online(box, lan), "the mesh", 15_000);
+  for (const n of [box, lan, srv]) {
+    await n.peers.stop();
+    nodes.splice(nodes.indexOf(n), 1);
+  }
+});
+
+test("a code naming only local addresses that don't answer says to pair the other way round", async () => {
+  const lone = new PeerService({ home: fs.mkdtempSync(path.join(os.tmpdir(), "scribe-code-")), port: await freePort(), hosts: ["127.0.0.1"], version: "test" });
+  const offer = makeOffer(loadIdentity(fs.mkdtempSync(path.join(os.tmpdir(), "scribe-id-"))).fingerprint, await freePort(), ["127.0.0.1"]);
+  await assert.rejects(lone.pair(offer.code), /Pair the other way round/);
 });
 
 /** The same code with another secret, to try wrong guesses against a real offer. */

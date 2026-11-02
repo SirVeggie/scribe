@@ -82,6 +82,12 @@ that implement it.
 - Leave pairing (#937; Settings → Devices, `scribe leave`): this device drops every paired key, without
   revoking them, and asks the online ones to drop its key; that spreads like a revocation, and the others
   stay paired with each other.
+- Revoked-side drops (#943): `revoke` means "drop my key". With `left: true` (Leave) the receiver revokes the
+  sender, so it spreads; without it (the sender revoked the receiver) the receiver only forgets the key. It used
+  to record a revocation of every device that dropped it, and when it was paired again its hellos refused or
+  revoked the others, leaving a partial mesh. A device pairing by code from no paired devices drops the
+  revocations it kept from before. A revoked key that dials gets `refused`, so its Devices list says why.
+  Entering a code that names only LAN/tailnet addresses, none answering, says to pair the other way round.
 - `/api/devices` (user only; agents get 403), Settings → Devices, and `scribe pair <code>` / `scribe devices`
   (`npm run pair -- <code>`). Events: `devices` (refetch), `device_paired` (words to compare). Paired devices pass each other's records on whenever a link comes up, so every device reaches every other one (#931).
 

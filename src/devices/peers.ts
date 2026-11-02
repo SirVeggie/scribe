@@ -102,6 +102,13 @@ export function peerHosts(): string[] {
   return [...new Set(out)];
 }
 
+/** A LAN, tailnet, unique-local or link-local address, not one on the internet. */
+function localAddress(host: string): boolean {
+  if (net.isIPv4(host)) return privateV4(host) || host.startsWith("127.") || host.startsWith("169.254.");
+  if (net.isIPv6(host)) return /^(f[cd]|fe80|::1$)/i.test(host);
+  return false;
+}
+
 function privateV4(address: string): boolean {
   const [a, b] = address.split(".").map(Number);
   return a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b < 128);
@@ -293,6 +300,7 @@ export class PeerService extends EventEmitter {
     const decoded = decodeCode(code);
     if (this.identity.fingerprint.startsWith(decoded.fingerprintPrefix)) throw new Error("That code is this device's own.");
     let lastError: Error = new Error("Could not reach the device that showed the code.");
+    let unreachable = 0;
     for (const host of decoded.hosts) {
       let socket: tls.TLSSocket;
       let spki: Buffer;
@@ -300,6 +308,7 @@ export class PeerService extends EventEmitter {
         ({ socket, spki } = await this.dial(host, decoded.port, (fp) => fp.startsWith(decoded.fingerprintPrefix)));
       } catch (err) {
         lastError = err as Error;
+        if (!/another key/.test(lastError.message)) unreachable++;
         continue;
       }
       const theirs = fingerprintOf(spki);
@@ -314,11 +323,17 @@ export class PeerService extends EventEmitter {
         if (!sameProof(reply.proof, pairProof(decoded.secret, "listener", theirs, this.identity.fingerprint))) throw new Error("The other device could not prove the code.");
         const peer = this.addPeer(reply, spki, host);
         if (!peer) throw new Error("The other device sent no usable name or id.");
+        this.options.log?.(`Paired with ${peer.name} (${peer.id}) by its code`);
         this.connect(peer.id, true);
         return { device: { id: peer.id, name: peer.name }, words: pairWords(this.identity.fingerprint, peer.fingerprint), others: this.othersThan(peer.id) };
       } finally {
         link.close();
       }
+    }
+    // Only local-network or tailnet addresses, and none answered: this device is likely not on that
+    // network (a VPS without Tailscale, #943). The other way round works when this one can be reached.
+    if (unreachable === decoded.hosts.length && decoded.hosts.every(localAddress)) {
+      throw new Error(`No answer from ${decoded.hosts.join(", ")} (port ${decoded.port}). Those are local-network or tailnet addresses, which this device may not reach. Pair the other way round: Add device here, and enter that code on the other device.`);
     }
     throw lastError;
   }
@@ -356,7 +371,10 @@ export class PeerService extends EventEmitter {
    */
   leave(): void {
     const count = this.saved.peers.length;
-    for (const peer of [...this.saved.peers]) this.forget(peer, true, false);
+    for (const peer of [...this.saved.peers]) {
+      this.links.get(peer.id)?.control({ type: "revoke", left: true });
+      this.forget(peer, false, false);
+    }
     this.options.log?.(`Left the pairing with ${count} device${count === 1 ? "" : "s"}`);
   }
 
@@ -477,7 +495,12 @@ export class PeerService extends EventEmitter {
     }
     this.expireOffer();
     if (!this.offer || via) {
-      socket.destroy();
+      // A key revoked here hears so, and its Devices list says why it can't connect (#943).
+      if (this.saved.revoked.includes(fp)) {
+        const link = new Link(socket, false);
+        link.control({ type: "refused", reason: "revoked", name: this.identity.name });
+        setTimeout(() => link.close(), 200).unref();
+      } else socket.destroy();
       return;
     }
     // An unknown key while an offer is open: it may only pair.
@@ -505,6 +528,7 @@ export class PeerService extends EventEmitter {
     }
     const peer = this.addPeer(message, spki, link.socket.remoteAddress);
     if (!peer) return fail("Send a device id and name.");
+    this.options.log?.(`Paired with ${peer.name} (${peer.id}) by this device's code`);
     this.offer = null;
     link.control({ ...this.hello(), type: "paired", proof: pairProof(offer.secret, "listener", this.identity.fingerprint, fp) });
     setTimeout(() => link.close(), 200).unref();
@@ -542,7 +566,7 @@ export class PeerService extends EventEmitter {
         }
         const link = new Link(socket, true, id);
         try {
-          const hello = await this.ask(link, this.hello(), (m) => m.type === "hello");
+          const hello = await this.helloFrom(link);
           if (this.adopt(id, link, hello)) return;
         } catch (err) {
           this.errors.set(id, (err as Error).message);
@@ -563,7 +587,7 @@ export class PeerService extends EventEmitter {
         const link = new Link(socket, true, id);
         link.via = relay;
         try {
-          const hello = await this.ask(link, this.hello(), (m) => m.type === "hello");
+          const hello = await this.helloFrom(link);
           if (this.adopt(id, link, hello)) return;
         } catch (err) {
           this.errors.set(id, (err as Error).message);
@@ -713,6 +737,16 @@ export class PeerService extends EventEmitter {
     return { type: "hello", protocol: PROTOCOL, features: FEATURES, version: this.options.version, id: this.identity.id, name: this.identity.name, hosts: this.hosts(), port: this.options.port, revoked: this.saved.revoked, revokedAt: this.saved.revokedAt, mirrors: this.heldHere };
   }
 
+  /** Our hello, and theirs back; a device that revoked this one's key says so instead (#943). */
+  private async helloFrom(link: Link): Promise<Control> {
+    const reply = await this.ask(link, this.hello(), (m) => m.type === "hello" || m.type === "refused");
+    if (reply.type === "refused") {
+      const name = cleanName(reply.name) ?? "The other device";
+      throw new Error(`${name} revoked this device's key. Pair the two again with a code.`);
+    }
+    return reply;
+  }
+
   /** Send first (if given), then wait for a control message that matches. */
   private ask(link: Link, first: Control | null, match: (message: Control) => boolean): Promise<Control> {
     return new Promise((resolve, reject) => {
@@ -826,7 +860,10 @@ export class PeerService extends EventEmitter {
       this.heldBy.set(id, cleanMirrors(message.list));
       this.changed();
     } else if (message.type === "revoke") {
-      this.forget(peer);
+      // It left (#937): drop it everywhere, as a revocation. Otherwise it dropped this device (it or
+      // another device revoked this one): only forget its key. Recording that as a revocation made by
+      // this device would travel with it when it pairs again and cut it off from the rest (#943).
+      this.forget(peer, false, message.left === true);
     } else if (message.type === "revoked") {
       const fp = message.fingerprint;
       if (typeof fp !== "string" || fp === this.identity.fingerprint) return;
@@ -849,7 +886,11 @@ export class PeerService extends EventEmitter {
       const pairedAt = typeof intro.pairedAt === "number" && intro.pairedAt <= Date.now() ? intro.pairedAt : undefined;
       // A key revoked here comes back only when the introducer paired it after that revocation.
       const revoked = this.saved.revoked.includes(fp) && !(pairedAt && pairedAt > (this.saved.revokedAt?.[fp] ?? 0));
-      if (fp === this.identity.fingerprint || revoked || this.saved.peers.some((p) => p.fingerprint === fp)) return;
+      if (fp === this.identity.fingerprint || this.saved.peers.some((p) => p.fingerprint === fp)) return;
+      if (revoked) {
+        this.options.log?.(`Refused ${peer.name}'s introduction of ${cleanName(intro.name) ?? "a device"}: its key was revoked here, after ${peer.name} paired it`);
+        return;
+      }
       const added = this.store({ id: intro.id, name: intro.name, hosts: intro.hosts, port: intro.port, pairedAt }, spki);
       if (added) {
         this.options.log?.(`${peer.name} introduced ${added.name}`);
@@ -875,11 +916,21 @@ export class PeerService extends EventEmitter {
 
   // --- the paired devices file ---
 
-  /** `seenAt`: the address it was reached on (or came from), tried first; its own hints may include ones we can't route to. */
+  /**
+   * Paired by code. `seenAt`: the address it was reached on (or came from), tried first; its own hints
+   * may include ones we can't route to.
+   */
   private addPeer(message: Control, spki: Buffer, seenAt?: string): Peer | undefined {
     const hosts = cleanHosts(message.hosts);
     if (seenAt) hosts.unshift(seenAt.replace(/^::ffff:/, ""));
     const fp = fingerprintOf(spki);
+    // A device with no other paired device joins the other one's devices: revocations it kept from
+    // before would only travel with its hellos and cut it, or the others, off from each other (#943).
+    if (!this.saved.peers.some((p) => p.fingerprint !== fp) && this.saved.revoked.length) {
+      this.options.log?.(`Dropped ${this.saved.revoked.length} old revocation${this.saved.revoked.length === 1 ? "" : "s"} on pairing from no paired devices`);
+      this.saved.revoked = [];
+      delete this.saved.revokedAt;
+    }
     this.saved.peers = this.saved.peers.filter((p) => p.fingerprint !== fp);
     return this.store({ id: message.id, name: message.name, hosts, port: message.port }, spki);
   }
