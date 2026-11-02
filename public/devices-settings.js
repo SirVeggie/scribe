@@ -83,7 +83,7 @@
   webDeviceWrap.append(el("span", null, "On"), webDevice);
   const webHostField = field("Web address", "", "e.g. scribe.example.com");
   const webClientField = field("Google client id", "", "….apps.googleusercontent.com");
-  const webAccountsField = field("Allowed Google accounts", "", "you@gmail.com, separated by commas");
+  const webAccountsField = field("Allowed accounts", "", "you@gmail.com, separated by commas");
   const webStatus = el("p", "settings-hint");
   const webSessions = el("div", "device-list");
   const webActions = el("div", "settings-actions");
@@ -200,7 +200,7 @@
     if (active !== webHostField.input) webHostField.input.value = web.host || "";
     if (active !== webClientField.input) webClientField.input.value = web.clientId || "";
     if (active !== webAccountsField.input) webAccountsField.input.value = (web.accounts || []).join(", ");
-    webStatus.textContent = !web.host ? "Off."
+    webStatus.textContent = !web.host ? "Off until a web address is set."
       : web.listening ? `Point your TLS proxy at 127.0.0.1:${web.port} for ${web.host} and *.${web.host}.`
       : `Not listening on port ${web.port}: see the log on that device.`;
     webSessions.replaceChildren(...(web.sessions || []).map((session) => {
