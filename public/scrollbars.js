@@ -127,7 +127,7 @@
     return moving;
   }
 
-  function hitTest(el, state) {
+  function hitTest(el, state, menus) {
     for (const axis of AXES) {
       const m = state.axes[axis];
       if (!state.visible || !m.needed) continue;
@@ -136,7 +136,12 @@
       const cx = Math.max(clip.left, Math.min(clip.right - 1, x + w / 2));
       const cy = Math.max(clip.top, Math.min(clip.bottom - 1, y + h / 2));
       const hit = document.elementsFromPoint(cx, cy).find(node => !isOverlay(node));
-      m.covered = !hit || !el.contains(hit) || clip.right <= clip.left || clip.bottom <= clip.top;
+      // The bars float above menus (so a menu's own bar shows), so an open menu over part of the bar hides it too.
+      const left = Math.max(x, clip.left), right = Math.min(x + w, clip.right);
+      const top = Math.max(y, clip.top), bottom = Math.min(y + h, clip.bottom);
+      const underMenu = menus.some(([menu, r]) => !menu.contains(el) && !el.contains(menu) &&
+        r.left < right && r.right > left && r.top < bottom && r.bottom > top);
+      m.covered = !hit || !el.contains(hit) || underMenu || clip.right <= clip.left || clip.bottom <= clip.top;
     }
   }
 
@@ -202,7 +207,9 @@
     for (const [el, state] of list) {
       if (measure(el, state)) moving = true;
     }
-    list.forEach(([el, state]) => hitTest(el, state));
+    const menus = [...document.querySelectorAll('.tab-menu:not([hidden])')].map(menu => [menu, menu.getBoundingClientRect()])
+      .filter(([, r]) => r.width && r.height);
+    list.forEach(([el, state]) => hitTest(el, state, menus));
     list.forEach(([el, state]) => write(el, state));
     if (moving) queueFull();
   }
