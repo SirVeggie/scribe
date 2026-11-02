@@ -1,6 +1,6 @@
 import { limitComponentAction, type ComponentRate } from "../plugins/componentHost.js";
 import type { EffectivePermissions } from "./effectivePermissions.js";
-import type { LaunchSettings, PageRunInput, ThreadRunInfo } from "../actions/types.js";
+import type { LaunchSettings, OverlapRun, PageRunInput, ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,7 +18,7 @@ import { deviceKeysInText, type RemoteAgent } from "../devices/agentAccess.js";
 import { AgentDb } from "./db.js";
 import { diffPatch, diffTrees, fileAtTree, findRepo, git, repoRelative, revertTrees, snapshotTree } from "./git.js";
 import { syncDependencies } from "./deps.js";
-import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeRemaining, worktreeStatus, type WorktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeFiles, worktreeProgress, worktreeRemaining, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, implementText, pageKeysIn, planTurnNote, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { plugins, pluginActions } from "../plugins/current.js";
@@ -764,7 +764,13 @@ export class AgentHost {
           return tab && pluginActions?.binding(tab)?pluginActions.runHold(tab,run.threadId):store.runHold(run.pageId,run.threadId);
         },
         send: (id, text) => void this.send(id, { text, from: "page" }),
-        merge: async (id) => (await this.finishWorktree(id, "merge")).message,
+        merge: async (id) => {
+          const wt = this.threads.get(id) && openWorktree(this.threads.get(id)!);
+          const files = wt ? await worktreeFiles(wt).catch(() => []) : [];
+          const { message } = await this.finishWorktree(id, "merge");
+          if (wt && files.length) void this.noticeOverlaps(id, wt, files).catch((err) => log(`Merge notices failed: ${(err as Error).message}`));
+          return message;
+        },
         save: (runs) => this.db.setSetting("pageRuns", runs),
         changed: (run, note) => {
           this.emitThread(run.threadId);
@@ -2886,6 +2892,41 @@ export class AgentHost {
     // Steer only when it is the one queued message: steering takes the queue's first.
     if (!card.resume && this.queues.get(threadId)?.length === 1 && this.steerFirst(threadId)) return { delivered: "steered" };
     return { delivered: "queued" };
+  }
+
+  /**
+   * A page run's branch merged: tell the page's other running chats whose worktrees change some of
+   * the same files, so they can fit their work to it (#944). The page writes the note, or none.
+   */
+  private async noticeOverlaps(threadId: string, wt: ThreadWorktree, files: string[]): Promise<void> {
+    const run = this.pageRuns.get(threadId);
+    if (!run) return;
+    const page = store.get(run.pageId);
+    if (!page || pluginActions?.binding(page)) return;
+    const merged = new Set(files);
+    const others: OverlapRun[] = [];
+    for (const other of this.pageRuns.list()) {
+      if (other.threadId === threadId || other.pageId !== run.pageId || other.phase !== "running" || !this.runs.has(other.threadId)) continue;
+      const thread = this.threads.get(other.threadId);
+      const theirs = thread && openWorktree(thread);
+      if (!theirs || workspaceKey(theirs.repo) !== workspaceKey(wt.repo)) continue;
+      const both = (await worktreeFiles(theirs).catch(() => [] as string[])).filter((f) => merged.has(f));
+      if (both.length) others.push({ thread: other.threadId, ...(other.data ? { data: other.data } : {}), files: both });
+    }
+    if (!others.length) return;
+    const notices = store.mergeNotices(run.pageId, { thread: threadId, ...(run.data ? { data: run.data } : {}), ...(wt.base ? { base: wt.base } : {}) }, others);
+    for (const n of notices) this.steerNote(n.thread, n.text);
+  }
+
+  /** Scribe's own note into a running turn: steered in when the provider can, else queued behind it. Dropped when idle. */
+  private steerNote(threadId: string, text: string): void {
+    if (!this.runs.has(threadId)) return;
+    try {
+      const { queued } = this.send(threadId, { text, from: "scribe" });
+      if (queued && this.queues.get(threadId)?.length === 1) this.steerFirst(threadId);
+    } catch (err) {
+      log(`${threadId}: merge notice not sent: ${(err as Error).message}`);
+    }
   }
 
   /** Put this queued item first so steer / send-now acts on it. */

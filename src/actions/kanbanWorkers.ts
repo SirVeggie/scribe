@@ -27,7 +27,7 @@ import {
   type Worker,
   type WorkerLogEntry,
 } from "./kanban.js";
-import { arr, newId, str, type ActionOutcome, type DriveContext, type DriveOutcome, type LaunchSettings, type PageLaunch, type PageRunInput, type ThreadRunInfo } from "./types.js";
+import { arr, newId, str, type ActionOutcome, type DriveContext, type DriveOutcome, type LaunchSettings, type MergedRun, type OverlapRun, type PageLaunch, type PageRunInput, type ThreadRunInfo } from "./types.js";
 
 /**
  * A Kanban board's agent workers, run by the daemon (#312): whether or not a window shows the board,
@@ -217,6 +217,8 @@ export function workerPrompt(state: BoardState, page: { id: string; title: strin
   if (FOLDER_MODES.has(workerMode(w)) && w.worktree) {
     lines.push("- You work in a git worktree, on a branch of your own. Commit your work before you end your turn. When your turn ends, the board rebases your branch onto the one it came from and merges it, and the next agent starts from there; if that hits conflicts, it asks you to sort them out.");
   }
+  const roster = inProgress(state, c);
+  if (roster) lines.push(roster);
   if (solo) {
     lines.push("- This is a one-off run for this card only. Don't take other cards; when it is finished, end your turn.");
   } else if (w.context === "fresh") {
@@ -235,6 +237,77 @@ export function workerPrompt(state: BoardState, page: { id: string; title: strin
   const prompt = lines.join("\n");
   // Long instructions plus a long card would pass the cap: name the card only, and the agent gets it.
   return prompt.length > 19000 ? prompt.replace(brief, () => `Your card: #${c.num} ${c.title} (too long to include here: get it first)`) : prompt;
+}
+
+const IN_PROGRESS_IN_PROMPT = 8;
+
+/** Whether the board steers a merge's overlap into its other running chats (#944); on unless turned off. */
+export function overlapNoticesOn(state: BoardState): boolean {
+  return (settingsOf(state) as { overlapNotices?: unknown }).overlapNotices !== false;
+}
+
+/** Cards other agents hold right now, so a new chat knows what may touch the same code (#944). Matches the page's inProgress. */
+function inProgress(state: BoardState, c: Card): string {
+  const held = liveCards(state).filter((o) => o.id !== c.id && o.claim && !o.claim.stale);
+  if (!held.length) return "";
+  const listed = held.slice(0, IN_PROGRESS_IN_PROMPT).map((o) => `#${o.num} ${str(o.title).slice(0, 80)}${str(o.assignee).trim() ? ` (${str(o.assignee).trim()})` : ""}`).join("; ");
+  const more = held.length > IN_PROGRESS_IN_PROMPT ? `; and ${held.length - IN_PROGRESS_IN_PROMPT} more` : "";
+  const notice = overlapNoticesOn(state) ? " If one of them merges changes to files you also change, the board tells you." : "";
+  return `- Other cards in progress now: ${listed}${more}. Keep them in mind if your work touches the same code.${notice}`;
+}
+
+/** Files nearly every card changes, which say nothing about overlap. */
+const NOISY_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|VERSION|CHANGELOG\.md)$/i;
+const NOTICE_FILES = 12;
+const NOTICE_SUMMARY_MAX = 800;
+
+/** Files of a merge worth a notice: the noisy ones left out. */
+export function overlapFiles(files: string[]): string[] {
+  return files.filter((f) => !NOISY_FILES.test(f));
+}
+
+/**
+ * The notes for other running worker chats after one chat's branch merged (#944): which card merged,
+ * the files both change, and its hand-in, so the agent can make its work fit rather than only
+ * patch the conflict. Logged as "notice" lines.
+ */
+export function mergeNotices(state: BoardState, merged: MergedRun, others: OverlapRun[], now: number): { notices: { thread: string; text: string }[]; ops: unknown[] } {
+  if (!overlapNoticesOn(state)) return { notices: [], ops: [] };
+  const plan = new Plan(state, now);
+  const mergedId = str(merged.data?.worker);
+  const mergedWorker = mergedId ? workerOf(state, mergedId) : undefined;
+  const num = Number(merged.data?.card) || undefined;
+  const done = liveCards(state).filter((c) => (num && c.num === num) || (c.thread === merged.thread && ["review", "done"].includes(str(colOf(state, c)?.role))));
+  const seen = new Set<string>();
+  const finished = done.filter((c) => !seen.has(c.id) && seen.add(c.id));
+  const what = finished.length
+    ? finished.map((c) => `#${c.num} "${str(c.title).slice(0, 100)}"`).join(", ")
+    : "Another chat's work";
+  const by = mergedWorker?.name ? ` (${str(mergedWorker.name)})` : "";
+  const into = merged.base ? ` into ${merged.base}` : "";
+  const handIns = finished
+    .map((c) => {
+      const last = [...arr<Comment>(c.comments)].reverse().find((cm) => cm && cm.by !== "user");
+      return last ? `Hand-in on #${c.num}:\n> ${clip(last.text, NOTICE_SUMMARY_MAX).replace(/\n/g, "\n> ")}` : "";
+    })
+    .filter(Boolean);
+  const notices: { thread: string; text: string }[] = [];
+  for (const other of others) {
+    const files = overlapFiles(other.files);
+    if (!files.length || other.thread === merged.thread) continue;
+    const shown = files.slice(0, NOTICE_FILES).join(", ") + (files.length > NOTICE_FILES ? `, and ${files.length - NOTICE_FILES} more` : "");
+    const text = [
+      `${what}${by} just merged${into}, and it changed files your branch changes too: ${shown}.`,
+      ...(handIns.length ? ["", ...handIns] : []),
+      "",
+      "Check whether it affects your work. If it doesn't, carry on. If it does, make the two fit together well, not only so they merge: when your change means that work needs more than a small fix to keep working well (a shared helper, changed behavior, a setting or UI both touch), adjust that side too in your branch and say so in your hand-in. The board rebases your branch when you finish; don't stop to rebase now unless you need its code.",
+    ].join("\n");
+    notices.push({ thread: other.thread, text });
+    const otherId = str(other.data?.worker);
+    const otherCard = Number(other.data?.card) || undefined;
+    plan.log(otherId && workerOf(state, otherId) ? otherId : null, "notice", `${otherCard ? `#${otherCard}: ` : ""}told about ${finished.length ? finished.map((c) => `#${c.num}`).join(", ") : "a merge"}, which changed ${files.length} of its files (${files.slice(0, 4).join(", ")}${files.length > 4 ? ", …" : ""})`, { ...(otherCard ? { card: otherCard } : {}), thread: other.thread });
+  }
+  return { notices, ops: notices.length ? plan.outcome().ops : [] };
 }
 
 /** The chat's settings from the worker's. Provider and model left out follow the board's fixed defaults (see AgentHost.launchPageThread). */

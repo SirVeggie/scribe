@@ -15,7 +15,7 @@ import {
   type ThreadRunInfo,
 } from "./types.js";
 import { applyStateOps } from "../stateOps.js";
-import { claimOps, driveWorkers, workerLaunched, workerLaunchAllowed, workerReady, workerStartOps } from "./kanbanWorkers.js";
+import { claimOps, driveWorkers, mergeNotices, workerLaunched, workerLaunchAllowed, workerReady, workerStartOps } from "./kanbanWorkers.js";
 
 /** Rules the Kanban page follows too: done time, column order, card numbers, claims. Keep them in step. */
 
@@ -784,7 +784,7 @@ export const kanbanActions: ActionSet = {
     },
     logs: {
       description:
-        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, blocked, limit, resume, wait, solo, or done; q matches text, worker, kind, or #card. End-of-chat lines include usage { turns, inputTokens, outputTokens } when the daemon reported them.",
+        "Recent worker log lines (starts, pauses, merges, usage-limit waits) so you can debug the board's run without Keeper process logs. Oldest first among the last `limit` (default 80, max 200). worker is a name or id; kind is start, stop, pause, launch, merge, merge_fix, notice, blocked, limit, resume, wait, solo, or done; q matches text, worker, kind, or #card. End-of-chat lines include usage { turns, inputTokens, outputTokens } when the daemon reported them.",
       args: "{ worker?, kind?, q?, limit? }",
       run(state, args) {
         let list = workerLogEntries(state);
@@ -1226,6 +1226,7 @@ export const kanbanActions: ActionSet = {
     return driveWorkers(state, ctx);
   },
   launchAllowed: workerLaunchAllowed,
+  mergeNotices,
   launched(state, launch, result, now) {
     return workerLaunched(state, launch, result, now);
   },

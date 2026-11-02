@@ -651,3 +651,35 @@ test("worker_start is the page's, needs a ready worker, and logs the start", () 
   assert.deepEqual(worker(next).run, { since: 1 });
   assert.equal(log(next)[0].text, "Started");
 });
+
+test("a merge tells other running workers about the files both change, with the card and its hand-in (#944)", () => {
+  const state = board();
+  Object.assign(card(state, 1), { col: "rev", thread: "th_a", comments: [{ id: "m1", by: "Opus", at: 5, text: "Added a shared helper.\nCheck the list." }] });
+  Object.assign(card(state, 2), { col: "work", claim: { thread: "th_b", at: 5 } });
+  const out = kanbanActions.mergeNotices!(state, { thread: "th_a", data: { worker: "w_op", card: 1 }, base: "master" }, [
+    { thread: "th_b", data: { worker: "w_op", card: 2 }, files: ["src/a.ts", "package.json"] },
+    { thread: "th_c", data: { worker: "w_op" }, files: ["VERSION"] },
+  ], 9_000);
+  assert.equal(out.notices.length, 1, "only noisy files in common: no notice");
+  const n = out.notices[0];
+  assert.equal(n.thread, "th_b");
+  assert.match(n.text, /^#1 "One" \(Opus\) just merged into master, and it changed files your branch changes too: src\/a\.ts\./);
+  assert.doesNotMatch(n.text, /package\.json/);
+  assert.match(n.text, /Hand-in on #1:\n> Added a shared helper\.\n> Check the list\./);
+  assert.match(n.text, /adjust that side too/);
+  const after = applyStateOps(state, out.ops) as State;
+  assert.match(log(after).at(-1)!.text, /^#2: told about #1, which changed 1 of its files \(src\/a\.ts\)/);
+  assert.equal(log(after).at(-1)!.kind, "notice");
+
+  (state.settings as State).overlapNotices = false;
+  assert.deepEqual(kanbanActions.mergeNotices!(state, { thread: "th_a", data: { card: 1 } }, [{ thread: "th_b", files: ["src/a.ts"] }], 9_000), { notices: [], ops: [] });
+});
+
+test("a worker's prompt lists the cards other agents hold right now (#944)", () => {
+  const state = board({ run: { since: 5 } });
+  Object.assign(card(state, 3), { col: "work", claim: { thread: "th_x", at: 5 } });
+  const prompt = drive(state, ctx().c)?.launch?.prompt ?? "";
+  assert.match(prompt, /- Other cards in progress now: #3 Three \(Someone\)\. Keep them in mind if your work touches the same code\. If one of them merges changes to files you also change, the board tells you\./);
+  card(state, 3).claim = { thread: "th_x", at: 5, stale: true };
+  assert.doesNotMatch(drive(state, ctx().c)?.launch?.prompt ?? "", /Other cards in progress/);
+});

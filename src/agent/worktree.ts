@@ -217,6 +217,27 @@ async function countAheadOf(wt: ThreadWorktree): Promise<number> {
   return count;
 }
 
+/**
+ * Repo-relative files the worktree changes against its base, committed or not (untracked ones
+ * included). Empty when the folder is gone or git can't tell (#944).
+ */
+export async function worktreeFiles(wt: ThreadWorktree): Promise<string[]> {
+  if (!fs.existsSync(wt.path)) return [];
+  const base = wt.base && (await branchExists(wt.repo, wt.base)) ? `refs/heads/${wt.base}` : wt.baseCommit;
+  const fork = await git(["merge-base", base, "HEAD"], wt.path, { timeoutMs: 10_000 });
+  const from = fork.code === 0 && fork.stdout.trim() ? fork.stdout.trim() : wt.baseCommit;
+  const [diff, untracked] = await Promise.all([
+    git(["diff", "--name-only", "--no-renames", from], wt.path, { timeoutMs: 30_000 }),
+    git(["ls-files", "--others", "--exclude-standard"], wt.path, { timeoutMs: 30_000 }),
+  ]);
+  const files = new Set<string>();
+  for (const res of [diff, untracked]) {
+    if (res.code !== 0) continue;
+    for (const line of res.stdout.split("\n")) if (line.trim()) files.add(line.trim());
+  }
+  return [...files];
+}
+
 /** Commits and uncommitted changes, cheap enough to refresh after each turn. */
 export async function worktreeProgress(wt: ThreadWorktree): Promise<{ ahead: number; dirty: boolean }> {
   if (!fs.existsSync(wt.path)) return { ahead: 0, dirty: false };

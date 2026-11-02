@@ -985,6 +985,10 @@
   .wp-foot .add:hover { text-decoration: underline; }
   .wp-foot .log-tog.on { color: var(--text); }
   .wp-max { display: inline-flex; align-items: center; gap: 6px; }
+  .wp-notices { cursor: pointer; }
+  .wp-notices .switch { width: 28px; height: 16px; margin: 0; box-shadow: none; }
+  .wp-notices .switch::after { top: 2px; left: 2px; width: 12px; height: 12px; }
+  .wp-notices .switch:checked::after { transform: translateX(12px); }
   .worker-error { margin: -2px 10px 6px; font-size: 12px; color: var(--danger); }
   .worker-error button { color: var(--text); text-decoration: underline; padding: 0; margin-left: 4px; }
   .wp-log { margin: 4px 4px 0; padding: 8px 6px 4px; border-top: 1px solid var(--line); }
@@ -5577,6 +5581,23 @@
     if (images) lines.push("", "The card has " + images + " image" + (images === 1 ? "" : "s") + "; get the card to see " + (images === 1 ? "it" : "them") + ".");
     return lines.join("\n");
   }
+  /** Whether the daemon tells running workers about a merge that changes their files (#944); on unless turned off. */
+  function overlapNoticesOn() {
+    return settings().overlapNotices !== false;
+  }
+  var IN_PROGRESS_IN_PROMPT = 8;
+  /** Cards other agents hold right now. Matches the daemon's inProgress (src/actions/kanbanWorkers.ts). */
+  function inProgress(c) {
+    var held = liveCards().filter(function (o) { return o.id !== c.id && o.claim && !o.claim.stale; });
+    if (!held.length) return "";
+    var listed = held.slice(0, IN_PROGRESS_IN_PROMPT).map(function (o) {
+      var who = str(o.assignee).trim();
+      return "#" + o.num + " " + str(o.title).slice(0, 80) + (who ? " (" + who + ")" : "");
+    }).join("; ");
+    var more = held.length > IN_PROGRESS_IN_PROMPT ? "; and " + (held.length - IN_PROGRESS_IN_PROMPT) + " more" : "";
+    var notice = overlapNoticesOn() ? " If one of them merges changes to files you also change, the board tells you." : "";
+    return "- Other cards in progress now: " + listed + more + ". Keep them in mind if your work touches the same code." + notice;
+  }
   function workerPrompt(w, c, fallbackInstructions, solo) {
     var name = workerName(w) || "Agent";
     var lines = [
@@ -5596,6 +5617,8 @@
     if (FOLDER_MODES[workerMode(w)] && w.worktree) {
       lines.push("- You work in a git worktree, on a branch of your own. Commit your work before you end your turn. When your turn ends, the board rebases your branch onto the one it came from and merges it, and the next agent starts from there; if that hits conflicts, it asks you to sort them out.");
     }
+    var roster = c.id ? inProgress(c) : "";
+    if (roster) lines.push(roster);
     if (solo) {
       lines.push("- This is a one-off run for this card only. Don't take other cards; when it is finished, end your turn.");
     } else if (w.context === "fresh") {
@@ -6156,7 +6179,7 @@
     var rows = JSON.stringify([workerIds().map(function (id) {
       return [workerState(id), workerErrors[id] || "", Boolean(launching[id]), workerCards(id).length, atLimit(id)];
     }), columns().map(function (c) { return isReadyCol(c) ? (isPausedCol(c) ? 1 : 2) : 0; })]);
-    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.defaultWorker, s.maxWorkers, s.maxWorkersPerProvider, workersLogOpen && s.workerLog,
+    region(workersPop, [rows, s.workers, s.workerOrder, s.workerInstructions, s.defaultWorker, s.maxWorkers, s.maxWorkersPerProvider, s.overlapNotices, workersLogOpen && s.workerLog,
       workersLogOpen, panelOpen, panelEditor, agentOptions, optionsFailed], buildWorkersPanel);
   }
   function buildWorkersPanel() {
@@ -6317,6 +6340,20 @@
     }
     parallelSetting("Max parallel", "maxWorkers", maxWorkers());
     parallelSetting("Per provider", "maxWorkersPerProvider", maxWorkersPerProvider());
+    var notices = el("label", "wp-max wp-notices", "Overlap notices ");
+    notices.dataset.tooltip = "When a worker's branch merges, other running workers that change the same files are told what it changed.";
+    notices.setAttribute("aria-description", notices.dataset.tooltip);
+    var noticeSwitch = el("input", "switch");
+    noticeSwitch.type = "checkbox";
+    noticeSwitch.checked = overlapNoticesOn();
+    noticeSwitch.addEventListener("change", function () {
+      var next = Object.assign({}, settings());
+      if (noticeSwitch.checked) delete next.overlapNotices;
+      else next.overlapNotices = false;
+      scribe.set({ settings: next });
+    });
+    notices.appendChild(noticeSwitch);
+    foot.appendChild(notices);
     workersPop.appendChild(foot);
     workersPop.scrollTop = scroll;
     var newLog = workersPop.querySelector(".wp-log-list");

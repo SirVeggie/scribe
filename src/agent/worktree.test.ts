@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { diffPatch, diffTrees, revertTrees, snapshotTree } from "./git.js";
-import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeProgress, worktreeRemaining, worktreeStatus } from "./worktree.js";
+import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headCommit, mergeWorktree, removeWorktree, reopenWorktree, resetHead, unlinkOrphanedWorktrees, worktreeFiles, worktreeProgress, worktreeRemaining, worktreeStatus } from "./worktree.js";
 
 let root = "";
 let repo = "";
@@ -505,4 +505,18 @@ test("a worktree no thread uses loses its links, so removing it by hand is safe"
   assert.ok(fs.existsSync(path.join(repo, "node_modules", "dep", "index.js")), "deleting the orphan leaves the main checkout's node_modules");
   await removeWorktree(kept);
   sh(repo, "worktree", "prune");
+});
+
+test("worktreeFiles lists committed, uncommitted and untracked changes, not the base's own (#944)", async () => {
+  const { worktree: wt } = await createWorktree(repo, repo, "files");
+  fs.writeFileSync(path.join(wt.path, "committed.txt"), "a\n");
+  await commitAll(wt, "add committed");
+  fs.writeFileSync(path.join(wt.path, "loose.txt"), "b\n");
+  fs.writeFileSync(path.join(repo, "base-only.txt"), "c\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-q", "-m", "base moves on");
+  assert.deepEqual((await worktreeFiles(wt)).sort(), ["committed.txt", "loose.txt"]);
+  fs.rmSync(path.join(wt.path, "loose.txt"));
+  await removeWorktree(wt);
+  sh(repo, "branch", "-D", wt.branch);
 });

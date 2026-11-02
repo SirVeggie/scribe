@@ -115,6 +115,12 @@ export type ActionSet = {
   /** Scribe moved one of the page's runs on (a limit wait, a resume, a merge fix, its end), e.g. to log it on the page. */
   runEvent?(state: BoardState, event: RunEvent, now: number): ActionOutcome | null;
   /**
+   * One of the page's runs merged its branch, and other running chats of the page change some of the
+   * same files (#944): the notes to steer into those chats (none when the page has them turned off),
+   * and ops to record them.
+   */
+  mergeNotices?(state: BoardState, merged: MergedRun, others: OverlapRun[], now: number): { notices: { thread: string; text: string }[]; ops: unknown[] };
+  /**
    * One step of the page's own agents (a Kanban board's workers), run by the daemon whether or not
    * a window shows the page: wrap up a chat whose run ended, start the next one, or wait. Called
    * again on the new state until it returns null.
@@ -174,6 +180,11 @@ export type DriveContext = SweepContext & {
 export type DriveOutcome = ActionOutcome & { launch?: PageLaunch };
 
 export type RunEvent = RunNote & { thread: string; run: PageRunView };
+
+/** A page run whose branch just merged: its chat, the page's data for it, and the branch it merged into. */
+export type MergedRun = { thread: string; data?: Record<string, unknown>; base?: string };
+/** Another running chat of the page, with the files it changes that the merge changed too. */
+export type OverlapRun = { thread: string; data?: Record<string, unknown>; files: string[] };
 
 export class ActionError extends Error {}
 

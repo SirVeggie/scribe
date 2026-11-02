@@ -31,7 +31,7 @@ export const ENDED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_RESUME_PROMPT =
   "Your plan's usage limit has reset. Go on where you left off: check your task and the work you have done so far, then finish it as before.";
 export const MERGE_FIX_PROMPT =
-  "Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes, run the checks, and commit, so the worktree is clean. Don't start other work. Then end your turn with a short summary; Scribe tries the merge again.";
+  "Rebase your branch onto the branch the worktree was made from (the one checked out in the main checkout; see git worktree list), resolve any conflicts keeping both sides' changes (when your work means the other side needs more than a conflict fix to keep working well, change that side too), run the checks, and commit, so the worktree is clean. Don't start other work. Then end your turn with a short summary; Scribe tries the merge again.";
 
 export type RunOutcome = {
   /**

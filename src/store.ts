@@ -48,7 +48,7 @@ import { applyOps, deepEqual } from "./stateOps.js";
 import { jsonBytes } from "./stateSize.js";
 import { normalizeEvents } from "./events.js";
 import { upgradeLegacyHtml } from "./legacyPages.js";
-import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type InboundReply, type ReplyDelivery, type RunEvent, type SweepContext } from "./actions/index.js";
+import { BUILTIN_ACTIONS, describeActions, type ActionCaller, type ActionContext, type ActionSet, type InboundReply, type MergedRun, type OverlapRun, type ReplyDelivery, type RunEvent, type SweepContext } from "./actions/index.js";
 import type { DriveContext, LaunchSettings, PageLaunch } from "./actions/types.js";
 import type { RunNote } from "./agent/pageRuns.js";
 import {
@@ -957,6 +957,21 @@ export class BoardStore extends EventEmitter {
       });
     } catch (err) {
       log(`Run event failed on ${tab.key}`, String(err));
+    }
+  }
+
+  /** The notes for a page's other running chats after one of its runs merged (see ActionSet.mergeNotices). */
+  mergeNotices(pageId: string, merged: MergedRun, others: OverlapRun[]): { thread: string; text: string }[] {
+    const tab = this.locate(pageId)?.tab;
+    const set = tab ? this.actionsFor(tab) : undefined;
+    if (!tab || !set?.mergeNotices) return [];
+    try {
+      const out = set.mergeNotices(tab.state, merged, others, Date.now());
+      if (out.ops.length) this.writeState(tab.id, { ops: out.ops, lenient: true });
+      return out.notices;
+    } catch (err) {
+      log(`Merge notices failed on ${tab.key}`, String(err));
+      return [];
     }
   }
 
