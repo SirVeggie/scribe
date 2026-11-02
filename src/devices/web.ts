@@ -20,7 +20,7 @@ import { internalHostname, markWebRequest, parseWebHost, validWebBase, type WebH
  *   a web request (callers.ts makes it the user, contentOrigin.ts builds web URLs) and goes to the app.
  *   A host on another device goes through the peer gateway (#905), like a browser on this device.
  * - Settings change only from this device or a paired device, never from a web session, so a stolen
- *   session can neither lock you out nor add an account. Pairing and leaving the pairing are allowed from the web (#939).
+ *   session can neither lock you out nor add an account. Pairing, leaving the pairing and agent access grants are allowed from the web (#939).
  */
 
 export const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
