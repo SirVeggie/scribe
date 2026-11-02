@@ -5615,7 +5615,7 @@ html[data-theme="cream"] {
 
 /* App updates (#942): Settings → Updates and the notice that offers one. */
 .updates-section .audio-control { width: 240px; max-width: 100%; min-width: 0; flex: 0 1 240px; }
-.updates-section .device-detail > span:last-child { margin-right: auto; overflow-wrap: anywhere; }
+.updates-section .device-detail > span:last-child { flex: 1 1 auto; overflow-wrap: anywhere; color: var(--text); }
 .updates-commits { margin: 4px 2px 8px; padding-left: 18px; font-size: 12px; color: var(--muted); }
 .updates-commits code { color: var(--text); }
 .updates-actions { display: flex; gap: 8px; margin: 8px 2px; }

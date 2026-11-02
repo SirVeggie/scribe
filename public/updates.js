@@ -15,7 +15,7 @@
     return node;
   };
   const MODES = [
-    ["auto", "Install automatically"],
+    ["auto", "Automatically"],
     ["ask", "Ask first"],
     ["ignore", "Don't check"],
   ];
@@ -49,7 +49,7 @@
   heading.append(" ", help);
 
   const modeRow = el("div", "setting-row");
-  const modeLabel = el("label", null, "Updates");
+  const modeLabel = el("label", null, "Install updates");
   const mode = el("select");
   mode.id = "updates-mode";
   for (const [value, label] of MODES) mode.append(new Option(label, value));
