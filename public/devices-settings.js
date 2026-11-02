@@ -20,7 +20,7 @@
     return node;
   };
   const section = (title, help) => {
-    const node = el("section", "settings-section");
+    const node = el("section", "settings-section device-section");
     const heading = el("h3", null, title);
     if (help) {
       const mark = tip(el("button", "search-help", "?"), help);

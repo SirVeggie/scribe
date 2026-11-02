@@ -5355,6 +5355,9 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 /* Settings → Devices (devices-settings.js) */
 .device-detail { font-size: 13px; }
 .device-detail > span { flex: 0 0 76px; color: var(--muted); }
+/* Labels like "Allowed Google accounts" need more than the classifier form's 76px column, and stacked fields a gap. */
+.device-section > .ml-field + .ml-field { margin-top: 8px; }
+.device-section .ml-field > span, .device-section .device-detail > span { flex-basis: 150px; }
 .device-detail > code { margin-right: auto; overflow-wrap: anywhere; }
 .device-list .ml-source { gap: 10px; }
 .device-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; }
