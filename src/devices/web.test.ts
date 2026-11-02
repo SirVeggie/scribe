@@ -261,7 +261,7 @@ test("signed in: sockets to this board and through to another device", async () 
 test("web access is set up from a paired device, never from the web", async () => {
   const fromWeb = await web(BASE, "/api/devices/web", { method: "PUT", headers: { origin: `https://${BASE}`, "content-type": "application/json" }, body: JSON.stringify({ accounts: "evil@example.com" }) });
   assert.equal(fromWeb.status, 403);
-  // Pairing is allowed from the web (#939); revoking and leaving are not.
+  // Pairing and leaving the pairing are allowed from the web (#939); revoking is not.
   // No Origin: the web front rewrites it to the daemon's own, which this test daemon's port does not match.
   const json = { "content-type": "application/json" };
   const offer = await web(BASE, "/api/devices/offer", { method: "POST", headers: json, body: "{}" });
@@ -270,7 +270,6 @@ test("web access is set up from a paired device, never from the web", async () =
   assert.equal((await web(BASE, "/api/devices/offer", { method: "DELETE", headers: json, body: "{}" })).status, 200);
   assert.notEqual((await web(BASE, "/api/devices/pair", { method: "POST", headers: json, body: JSON.stringify({ code: "nope" }) })).status, 403);
   assert.equal((await web(BASE, `/api/devices/${b.id}`, { method: "DELETE", headers: json, body: "{}" })).status, 403);
-  assert.equal((await web(BASE, "/api/devices/leave", { method: "POST", headers: json, body: "{}" })).status, 403);
   const seen = JSON.parse((await web(BASE, "/api/devices/web")).body);
   assert.equal(seen.editable, false);
   assert.deepEqual(seen.accounts, ["me@example.com"]);
@@ -280,6 +279,10 @@ test("web access is set up from a paired device, never from the web", async () =
   const fromB = await call(b.port, `127.0.0.1:${b.port}`, `/api/devices/${a.id}/web`, { method: "PUT", headers: { "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ accounts: "me@example.com, you@example.com" }) });
   assert.equal(fromB.status, 200, fromB.body);
   assert.deepEqual(JSON.parse(fromB.body).accounts, ["me@example.com", "you@example.com"]);
+  // Leaving the pairing from the web drops B.
+  const leave = await web(BASE, "/api/devices/leave", { method: "POST", headers: json, body: "{}" });
+  assert.equal(leave.status, 200, leave.body);
+  assert.equal(JSON.parse(leave.body).peers.length, 0);
   // Dropping an account signs its browsers out.
   a.web!.access.update({ accounts: "you@example.com" });
   assert.equal((await web(BASE, "/api/who")).status, 401);

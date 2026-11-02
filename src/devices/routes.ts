@@ -46,7 +46,7 @@ const REMOTE_TIMEOUT_MS = 3000;
 
 /**
  * What a browser on the web may change here: switch spaces, answer approvals, resolve and describe links,
- * and pair (Add device, Enter code, introductions; #939: the sign-in is barrier enough).
+ * pair and leave the pairing (Add device, Enter code, introductions, Leave; #939: the sign-in is barrier enough).
  */
 const WEB_WRITES = [
   /^\/[^/]+\/spaces\/[^/]+\/switch$/,
@@ -56,6 +56,7 @@ const WEB_WRITES = [
   /^\/offer$/,
   /^\/pair$/,
   /^\/[^/]+\/introduce$/,
+  /^\/leave$/,
 ];
 
 /**
@@ -71,7 +72,7 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
-      // A browser on the web (#913) uses devices and may pair (#939), but never revokes, leaves, grants or
+      // A browser on the web (#913) uses devices and may pair and leave (#939), but never revokes, grants or
       // changes web access: a stolen session must not be able to lock the user out.
       if (identify(req).web && !WEB_WRITES.some((pattern) => pattern.test(req.path))) {
         res.status(403).json({ error: "Web access, revoking and agent access change only on a paired device, not from the web." });

@@ -351,7 +351,7 @@ the always-on device listens on a public port; any two devices paired with it ma
 
 Decided by the user: Caddy terminates TLS on the server, the domain is `scribe.sirveggie.com` (DNS at Namecheap, with a
 `*.scribe.sirveggie.com` record), Sign in with Google (ID tokens), no approval step for new browsers, sessions last 30 days,
-a web session may not change web access (pairing from the web was allowed later, #939), every paired device answers the web, the phone layout is its own card,
+a web session may not change web access (pairing and leaving from the web were allowed later, #939), every paired device answers the web, the phone layout is its own card,
 and an installable web app manifest is in.
 
 - **Host names** (`src/webRequest.ts`): `<domain>` is the server's board, `d-<device>.<domain>` another device's. Free
@@ -377,7 +377,7 @@ and an installable web app manifest is in.
 - **Settings → Devices → Web access**: pick the device (this one or an online paired one; `/api/devices/:id/web` goes over
   the link), then Web address, Google client id, allowed accounts, and signed-in browsers with Sign out. A web session sees
   it read only: `/api/devices` refuses web writes except switching spaces, answering approvals, resolve and describe, and
-  pairing (Add device, Enter code, introductions; #939).
+  pairing (Add device, Enter code, introductions, Leave; #939).
   "Sign out of this browser" posts to `/auth/logout` on the domain. Path actions answer 409 to web callers.
 - **Certificates**: Caddy's on-demand TLS, one certificate per name, asking `GET /caddy-ask?domain=` first. It answers yes
   only for the boards, paired devices, Scribe's own labels, and pages that exist (another device's checked over the link),
