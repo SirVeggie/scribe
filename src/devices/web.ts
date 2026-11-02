@@ -19,8 +19,9 @@ import { internalHostname, markWebRequest, parseWebHost, validWebBase, type WebH
  * - A signed-in request gets the Host (and Origin) this daemon already serves on loopback, is marked as
  *   a web request (callers.ts makes it the user, contentOrigin.ts builds web URLs) and goes to the app.
  *   A host on another device goes through the peer gateway (#905), like a browser on this device.
- * - Settings change only from this device or a paired device, never from a web session, so a stolen
- *   session can neither lock you out nor add an account. Pairing, leaving the pairing and agent access grants (#939) and updates (#946) are allowed from the web.
+ * - A web session may change settings here, web access included, and check and install updates (#946),
+ *   but not revoke a device (#939): the sign-in is barrier enough, since this device's agents could reach
+ *   as far anyway.
  */
 
 export const SESSION_MS = 30 * 24 * 60 * 60 * 1000;

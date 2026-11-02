@@ -258,10 +258,8 @@ test("signed in: sockets to this board and through to another device", async () 
   assert.equal(await open(BASE, "https://evil.example"), "status 401");
 });
 
-test("web access is set up from a paired device, never from the web", async () => {
-  const fromWeb = await web(BASE, "/api/devices/web", { method: "PUT", headers: { origin: `https://${BASE}`, "content-type": "application/json" }, body: JSON.stringify({ accounts: "evil@example.com" }) });
-  assert.equal(fromWeb.status, 403);
-  // Pairing, leaving and agent grants are allowed from the web (#939); revoking is not.
+test("a web session changes everything but Revoke, web access included", async () => {
+  // Everything but Revoke is allowed from the web (#939).
   // No Origin: the web front rewrites it to the daemon's own, which this test daemon's port does not match.
   const json = { "content-type": "application/json" };
   const offer = await web(BASE, "/api/devices/offer", { method: "POST", headers: json, body: "{}" });
@@ -270,9 +268,10 @@ test("web access is set up from a paired device, never from the web", async () =
   assert.equal((await web(BASE, "/api/devices/offer", { method: "DELETE", headers: json, body: "{}" })).status, 200);
   assert.notEqual((await web(BASE, "/api/devices/pair", { method: "POST", headers: json, body: JSON.stringify({ code: "nope" }) })).status, 403);
   assert.equal((await web(BASE, `/api/devices/${b.id}`, { method: "DELETE", headers: json, body: "{}" })).status, 403);
+  const fromWeb = await web(BASE, "/api/devices/web", { method: "PUT", headers: json, body: JSON.stringify({ accounts: "me@example.com, web@example.com" }) });
+  assert.equal(fromWeb.status, 200, fromWeb.body);
+  assert.deepEqual(JSON.parse(fromWeb.body).accounts, ["me@example.com", "web@example.com"]);
   const seen = JSON.parse((await web(BASE, "/api/devices/web")).body);
-  assert.equal(seen.editable, false);
-  assert.deepEqual(seen.accounts, ["me@example.com"]);
   assert.equal(seen.sessions.length, 1);
   assert.equal(seen.sessions[0].current, true);
   // B sets A's up over the link, as a paired device may.

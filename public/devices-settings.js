@@ -188,8 +188,7 @@
     webDevice.value = webTarget;
     if (!webPicker) webPicker = window.createSelect ? window.createSelect(webDevice) : null;
     else webPicker.syncSelect?.();
-    const editable = !!web?.editable;
-    for (const input of [webHostField.input, webClientField.input, webAccountsField.input]) input.disabled = !web || !editable;
+    for (const input of [webHostField.input, webClientField.input, webAccountsField.input]) input.disabled = !web;
     if (!web) {
       webStatus.textContent = "";
       webSessions.replaceChildren();
@@ -208,7 +207,7 @@
       const text = el("span", "ml-source-text");
       text.append(el("strong", null, session.email), el("span", "ml-source-detail", ` ${session.agent}${session.current ? " · this browser" : ""} · ${ago(session.seenAt)}`));
       row.append(text);
-      if (editable) row.append(button("Sign out", () => saveWeb("DELETE", `/sessions/${encodeURIComponent(session.id)}`)));
+      row.append(button("Sign out", () => saveWeb("DELETE", `/sessions/${encodeURIComponent(session.id)}`)));
       return row;
     }));
     webActions.replaceChildren();

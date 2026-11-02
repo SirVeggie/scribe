@@ -45,21 +45,10 @@ function summaries(view: SpacesView | undefined): SpaceSummary[] {
 const REMOTE_TIMEOUT_MS = 3000;
 
 /**
- * What a browser on the web may change here: switch spaces, answer approvals, resolve and describe links,
- * pair and leave the pairing (Add device, Enter code, introductions, Leave; #939: the sign-in is barrier enough),
- * and set what a paired device's agents may do here (only this device's own risk).
+ * Revoke is the one change a browser on the web may not make (#939): the sign-in is barrier enough for
+ * the rest, since an agent on this device could reach as far anyway.
  */
-const WEB_WRITES = [
-  /^\/[^/]+\/spaces\/[^/]+\/switch$/,
-  /^\/[^/]+\/approvals\/[^/]+$/,
-  /^\/resolve$/,
-  /^\/describe$/,
-  /^\/offer$/,
-  /^\/pair$/,
-  /^\/[^/]+\/introduce$/,
-  /^\/leave$/,
-  /^\/[^/]+\/agents$/,
-];
+const WEB_REFUSED = (method: string, path: string) => method === "DELETE" && /^\/[^/]+$/.test(path) && path !== "/offer";
 
 /**
  * /api/devices for Settings → Devices and `scribe pair` (#904): this device, the paired ones, Add
@@ -74,10 +63,9 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
-      // A browser on the web (#913) uses devices and may pair, leave and grant agent access (#939), but never
-      // revokes or changes web access: a stolen session must not be able to lock the user out.
-      if (identify(req).web && !WEB_WRITES.some((pattern) => pattern.test(req.path))) {
-        res.status(403).json({ error: "Web access and revoking change only on a paired device, not from the web." });
+      // A browser on the web (#913) may change everything here but Revoke (#939).
+      if (identify(req).web && WEB_REFUSED(req.method, req.path)) {
+        res.status(403).json({ error: "Revoke a device on a paired device, not from the web." });
         return;
       }
       const origin = req.get("origin");
@@ -305,17 +293,17 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
   // Web access (#913): this device's, and another device's over the link (any paired device may set it up).
   router.get("/web", (req, res) => {
     if (!host.web) return res.status(404).json({ error: "No web access here." });
-    res.set("Cache-Control", "no-store").json({ ...host.web.view(webSessionToken(req)), editable: !identify(req).web });
+    res.set("Cache-Control", "no-store").json(host.web.view(webSessionToken(req)));
   });
   router.put("/web", guarded((req) => {
     if (!host.web) throw new Error("No web access here.");
     host.web.update(req.body);
-    return { ...host.web.view(), editable: true };
+    return host.web.view(webSessionToken(req));
   }));
   router.delete("/web/sessions/:sid", guarded((req) => {
     if (!host.web) throw new Error("No web access here.");
     host.web.signOut(req.params.sid);
-    return { ...host.web.view(), editable: true };
+    return host.web.view(webSessionToken(req));
   }));
   const onDevice = async (req: express.Request, res: express.Response, method: string, path: string) => {
     const { id } = req.params;
