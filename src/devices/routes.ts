@@ -44,8 +44,19 @@ function summaries(view: SpacesView | undefined): SpaceSummary[] {
 
 const REMOTE_TIMEOUT_MS = 3000;
 
-/** What a browser on the web may change here: switch spaces, answer approvals, resolve and describe links. */
-const WEB_WRITES = [/^\/[^/]+\/spaces\/[^/]+\/switch$/, /^\/[^/]+\/approvals\/[^/]+$/, /^\/resolve$/, /^\/describe$/];
+/**
+ * What a browser on the web may change here: switch spaces, answer approvals, resolve and describe links,
+ * and pair (Add device, Enter code, introductions; #939: the sign-in is barrier enough).
+ */
+const WEB_WRITES = [
+  /^\/[^/]+\/spaces\/[^/]+\/switch$/,
+  /^\/[^/]+\/approvals\/[^/]+$/,
+  /^\/resolve$/,
+  /^\/describe$/,
+  /^\/offer$/,
+  /^\/pair$/,
+  /^\/[^/]+\/introduce$/,
+];
 
 /**
  * /api/devices for Settings → Devices and `scribe pair` (#904): this device, the paired ones, Add
@@ -60,10 +71,10 @@ export function devicesRouter(peers: PeerService, host: DevicesHost): Router {
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
-      // A browser on the web (#913) uses devices but never pairs, revokes, grants or changes web access:
-      // a stolen session must not be able to add itself or lock the user out.
+      // A browser on the web (#913) uses devices and may pair (#939), but never revokes, leaves, grants or
+      // changes web access: a stolen session must not be able to lock the user out.
       if (identify(req).web && !WEB_WRITES.some((pattern) => pattern.test(req.path))) {
-        res.status(403).json({ error: "Pairing and web access change only on a paired device, not from the web." });
+        res.status(403).json({ error: "Web access, revoking and agent access change only on a paired device, not from the web." });
         return;
       }
       const origin = req.get("origin");

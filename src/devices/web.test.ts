@@ -90,7 +90,7 @@ type Reply = { status: number; headers: http.IncomingHttpHeaders; body: string }
 
 function call(port: number, host: string, pathname: string, options: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<Reply> {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, method: options.method ?? "GET", path: pathname, headers: { host, ...options.headers } }, (res) => {
+    const req = http.request({ host: "127.0.0.1", port, method: options.method ?? "GET", path: pathname, headers: { host, ...(options.body !== undefined ? { "content-length": String(Buffer.byteLength(options.body)) } : {}), ...options.headers } }, (res) => {
       const chunks: Buffer[] = [];
       res.on("data", (chunk: Buffer) => chunks.push(chunk));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString() }));
@@ -261,6 +261,16 @@ test("signed in: sockets to this board and through to another device", async () 
 test("web access is set up from a paired device, never from the web", async () => {
   const fromWeb = await web(BASE, "/api/devices/web", { method: "PUT", headers: { origin: `https://${BASE}`, "content-type": "application/json" }, body: JSON.stringify({ accounts: "evil@example.com" }) });
   assert.equal(fromWeb.status, 403);
+  // Pairing is allowed from the web (#939); revoking and leaving are not.
+  // No Origin: the web front rewrites it to the daemon's own, which this test daemon's port does not match.
+  const json = { "content-type": "application/json" };
+  const offer = await web(BASE, "/api/devices/offer", { method: "POST", headers: json, body: "{}" });
+  assert.equal(offer.status, 200, offer.body);
+  assert.ok(JSON.parse(offer.body).offer);
+  assert.equal((await web(BASE, "/api/devices/offer", { method: "DELETE", headers: json, body: "{}" })).status, 200);
+  assert.notEqual((await web(BASE, "/api/devices/pair", { method: "POST", headers: json, body: JSON.stringify({ code: "nope" }) })).status, 403);
+  assert.equal((await web(BASE, `/api/devices/${b.id}`, { method: "DELETE", headers: json, body: "{}" })).status, 403);
+  assert.equal((await web(BASE, "/api/devices/leave", { method: "POST", headers: json, body: "{}" })).status, 403);
   const seen = JSON.parse((await web(BASE, "/api/devices/web")).body);
   assert.equal(seen.editable, false);
   assert.deepEqual(seen.accounts, ["me@example.com"]);
