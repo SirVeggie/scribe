@@ -352,6 +352,7 @@ export class UpdateService {
   private gitTarget: string | null = null;
   private downloaded: string | null = null;
   private timers: NodeJS.Timeout[] = [];
+  private checking: Promise<UpdateView> | null = null;
   private readonly now: () => number;
   private readonly run: Runner;
   private readonly platform: NodeJS.Platform;
@@ -443,8 +444,15 @@ export class UpdateService {
     if (this.mode !== "ignore") await this.check();
   }
 
-  async check(): Promise<UpdateView> {
-    if (this.phase !== "idle" || this.install.kind === "unknown") return this.view();
+  /** Check now; a check already running is shared. */
+  check(): Promise<UpdateView> {
+    if (this.checking) return this.checking;
+    if (this.phase !== "idle" || this.install.kind === "unknown") return Promise.resolve(this.view());
+    this.checking = this.runCheck().finally(() => { this.checking = null; });
+    return this.checking;
+  }
+
+  private async runCheck(): Promise<UpdateView> {
     this.phase = "checking";
     this.changed();
     try {
@@ -458,7 +466,7 @@ export class UpdateService {
       this.phase = "idle";
     }
     this.changed();
-    void this.tick();
+    setImmediate(() => void this.tick());
     return this.view();
   }
 

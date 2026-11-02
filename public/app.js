@@ -282,6 +282,8 @@
   let snapshotSeen = false;
   let lastInteractedAt = 0;
   let lastEditAt = 0;
+  /** The last key, click or scroll here, reported at most every 30 s: auto updates wait for idle (#942). */
+  let activeAt = 0;
   let viewerHidden = false;
   let paletteTimer = 0;
   let paletteReq = 0;
@@ -637,10 +639,21 @@
         selectedId: state.activeId,
         lastInteractedAt,
         lastEditAt,
+        activeAt,
         hidden: viewerHidden,
       })
     );
   }
+
+  function noteActive() {
+    const now = Date.now();
+    if (now - activeAt < 30_000) return;
+    activeAt = now;
+    reportViewer();
+  }
+  for (const type of ["pointerdown", "keydown", "wheel"]) window.addEventListener(type, noteActive, { capture: true, passive: true });
+  // Focus moving into a page's frame is input there, which the shell does not see.
+  window.addEventListener("blur", () => { if (document.activeElement?.tagName === "IFRAME") noteActive(); });
 
   /** The desktop app reports its window hidden in the tray, so agents open it instead of assuming it is seen. */
   window.scribeSetHidden = (hidden) => {
@@ -671,6 +684,7 @@
     if (msg.type === "snapshot") {
       clearTimeout(startupTimer);
       showVersionMismatch(msg.version);
+      window.scribeUpdates.connected();
       abortDrag(false);
       state.tabs = msg.tabs;
       state.closed = Array.isArray(msg.closed) ? msg.closed : [];
@@ -731,6 +745,10 @@
       if (msg.value !== "allow" && ((msg.perm === "audio.microphone" && pageAudioSessions.get(msg.id)?.mode !== "stream") ||
         (msg.perm === "audio.microphoneStream" && pageAudioSessions.get(msg.id)?.mode === "stream") ||
         (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
+      return;
+    }
+    if (msg.type === "update") {
+      window.scribeUpdates.event(msg);
       return;
     }
     if (msg.type === "devices") {
@@ -1646,6 +1664,7 @@
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
+    { label: "Updates", sections: window.scribeUpdates.sections },
   ], {
     close: closeSettings,
     after: [
@@ -1759,6 +1778,7 @@
     if (category === "Devices") settingsCategories.select(7);
     if (category === "Plugins") settingsCategories.select(5);
     window.scribeDevicesSettings.refresh();
+    window.scribeUpdates.refresh();
     window.scribeAudioSettings.refresh();
     window.scribePluginSettings.refresh();
     searchSwitch.disabled = true;
@@ -4001,6 +4021,7 @@
       undo || action ? 7000 : 4000
     );
   }
+  window.scribeShowNotice = (text) => showNotice(text);
 
   /** A page nearing its asset storage limit. Once per page per 10 minutes; the page sees it on every save. */
   const assetWarnedAt = new Map();

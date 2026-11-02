@@ -5612,3 +5612,33 @@ html[data-theme="cream"] {
 }
 :where(input[type="checkbox"]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 :where(input[type="checkbox"]):disabled { opacity: .45; cursor: default; }
+
+/* App updates (#942): Settings → Updates and the notice that offers one. */
+.updates-section .audio-control { width: 240px; max-width: 100%; min-width: 0; flex: 0 1 240px; }
+.updates-section .device-detail > span:last-child { margin-right: auto; overflow-wrap: anywhere; }
+.updates-commits { margin: 4px 2px 8px; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.updates-commits code { color: var(--text); }
+.updates-actions { display: flex; gap: 8px; margin: 8px 2px; }
+.updates-actions [hidden] { display: none; }
+.update-notice {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: var(--z-drag);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(340px, calc(100% - 40px));
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow), 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+.update-notice[hidden], .update-notice-actions[hidden] { display: none; }
+.update-notice-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.update-notice-text span { color: var(--muted); }
+.update-notice-text span:empty { display: none; }
+.update-notice-actions { display: flex; gap: 8px; }
+.update-notice-actions button { height: 26px; padding: 0 10px; font-size: 12px; }
+.update-notice-primary { color: var(--accent); }
