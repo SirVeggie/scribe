@@ -21,7 +21,7 @@ Settings → Updates → Install updates (`updates.json` in the data folder):
 - **Ask first** (default): the same checks; a notice offers **Update**, **Skip version** (remembered) and **Dismiss** (until the daemon restarts or a newer update appears).
 - **Don't check**: no checks of its own; Settings → Updates → Check now still works.
 
-Only the user can install, skip or change the mode (`/api/updates`): agents and web access read it only.
+Only the user can install, skip or change the mode (`/api/updates`), from this device, a paired device or a signed-in web session (#946); agents read it only.
 
 ## Restarting
 

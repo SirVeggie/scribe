@@ -4,8 +4,9 @@ import { shellOrigin } from "../contentOrigin.js";
 import type { UpdateService } from "./updates.js";
 
 /**
- * /api/updates for Settings → Updates and the update notice (#942). Only the user: agents and the web
- * (#913) read it but never install, skip or change the mode.
+ * /api/updates for Settings → Updates and the update notice (#942). Only the user: agents read it but never
+ * install, skip or change the mode. A signed-in browser on the web (#913) may (#946): an update installs only
+ * what this install's own source publishes, so the sign-in is barrier enough, as for pairing (#939).
  */
 export function updatesRouter(service: UpdateService): Router {
   const router = Router();
@@ -17,7 +18,7 @@ export function updatesRouter(service: UpdateService): Router {
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
       const origin = req.get("origin");
-      if (identify(req).web || (origin && !shellOrigin(req, origin))) {
+      if (origin && !shellOrigin(req, origin)) {
         res.status(403).json({ error: "Updates can only be changed from the board" });
         return;
       }

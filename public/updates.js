@@ -69,9 +69,13 @@
   const check = button("Check now", async () => {
     busy = true;
     renderSettings();
+    let failed = null;
     try { render(await request("POST", "/check")); }
-    catch (err) { status.textContent = err.message; }
-    finally { busy = false; renderSettings(); }
+    catch (err) { failed = err.message; }
+    busy = false;
+    renderSettings();
+    // After renderSettings, which would otherwise replace the error with the old status (#946).
+    if (failed) status.textContent = failed;
   });
   const install = button("Update now", () => void apply());
   const unskip = button("Stop skipping", async () => {
