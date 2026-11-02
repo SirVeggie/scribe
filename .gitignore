@@ -5,3 +5,6 @@ dist/
 
 # Copied from public/tooltip.js by the desktop build.
 /desktop/splash/tooltip.js
+
+# Release builds (npm run release).
+/release/

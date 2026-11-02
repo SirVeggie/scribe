@@ -1,5 +1,6 @@
 // Builds a Windows installer that bundles the desktop app with the daemon, its modules and Node, so it runs
-// on a PC without Node or a Scribe checkout. Usage: npm run desktop:release
+// on a PC without Node or a Scribe checkout. Usage: npm run desktop:release (tools/release.mjs runs it for a
+// release).
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -36,6 +37,9 @@ fs.cpSync(fs.realpathSync(path.join(root, "node_modules")), path.join(stage, "no
 run("Removing dev dependencies", process.execPath, [npmCli(), "prune", "--omit=dev", "--ignore-scripts", "--offline", "--no-audit", "--no-fund"], stage);
 fs.mkdirSync(path.join(stage, "node"));
 fs.copyFileSync(node, path.join(stage, "node", "node.exe"));
+// Marks the app folder as a release, so the daemon updates it from releases rather than git (src/updates).
+const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+fs.writeFileSync(path.join(stage, "install.json"), `${JSON.stringify({ kind: "standalone", target: "windows-x64-desktop", version }, null, 2)}\n`);
 
 const config = {
   bundle: {
