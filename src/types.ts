@@ -1,5 +1,6 @@
 import type { SearchDeclaration } from "./search/chunker.js";
 import type { SpacesView } from "./spaces.js";
+import type { UpdateView } from "./updates/updates.js";
 import { embedUrlFromHtml } from "./embed.js";
 import type { SkippedOp, StateOp } from "./stateOps.js";
 import type { PageAssetFile, PageAssetMeta, PageAssetUsage } from "./pageAssets.js";
@@ -487,6 +488,8 @@ export type BoardEvent =
   | { type: "copy_received"; from: { id: string; name: string }; pages: number; templates: number; plugins: number }
   /** A device paired with this one by its code: the words to compare, and the other paired devices it could meet. */
   | { type: "device_paired"; device: { id: string; name: string }; words: string[]; others: { id: string; name: string }[] }
+  /** The app's update state changed (#942): Settings → Updates and the update notice. */
+  | { type: "update"; view: UpdateView }
   | AgentEvent;
 
 export type UpsertInput = {

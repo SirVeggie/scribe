@@ -1702,6 +1702,11 @@ export class AgentHost {
     return resumed;
   }
 
+  /** Chats with a turn running or about to resume: auto updates wait for none (#942). */
+  busyCount(): number {
+    return this.runs.size + this.resuming.size;
+  }
+
   getThread(id: string): Thread | null {
     return this.threads.get(id) ?? null;
   }

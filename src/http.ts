@@ -106,6 +106,8 @@ import { declaredPlugins, declarePlugins } from "./plugins/manifest.js";
 import { exportTransfer, importTransfer, type PluginExportChoice } from "./plugins/transfer.js";
 import { readPackage } from "./plugins/package.js";
 import { mainRepository } from "./plugins/git.js";
+import { UPDATE_RESTART_CODE, UpdateService, windowsAppRunning } from "./updates/updates.js";
+import { updatesRouter } from "./updates/routes.js";
 
 const publicDir = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "public");
 const pageProblems = new PageProblems();
@@ -437,6 +439,20 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/plugins",pluginRouter(pluginService,store,agentHost));
   app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
   app.use("/api/search", searchRouter(undefined, reachable));
+  let restartForUpdate = async () => {};
+  const updates = new UpdateService({
+    root: INSTALL_ROOT,
+    home: dataDir(),
+    busy: () => agentHost?.busyCount() ?? 0,
+    lastActivity: () => viewers.lastActivity(),
+    emit: (view) => broadcast({ type: "update", view }),
+    restart: () => restartForUpdate(),
+    detach: (command, args) => spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true }).unref(),
+    desktopRunning: windowsAppRunning,
+    log,
+  });
+  updates.start();
+  app.use("/api/updates", updatesRouter(updates));
   app.use("/api/ml", mlRouter(undefined, { grants: (id) => store.pagePermissions(id) }));
   let devicesQueued = false;
   peers.on("change", () => {
@@ -2736,11 +2752,18 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   app.post("/api/shutdown", async (_req, res) => {
+    await stopServices();
+    res.json({ ok: true });
+    exitDaemon(0);
+  });
+  const stopServices = async () => {
+    updates.stop();
     await pluginService.close();
     askWatcher.stop();
     void peers.stop();
     searchEmbedder.stop();
-    res.json({ ok: true });
+  };
+  const exitDaemon = (code: number) => {
     try {
       agentHost?.dispose();
     } catch {
@@ -2751,8 +2774,21 @@ export async function startHttp(): Promise<http.Server> {
     } catch {
       /* already logged */
     }
-    void Promise.all([searchIndex.close(), closeScreenshotBrowser(), closeAgentBrowser()]).finally(() => process.exit(0));
-  });
+    void Promise.all([searchIndex.close(), closeScreenshotBrowser(), closeAgentBrowser()]).finally(() => process.exit(code));
+  };
+  /**
+   * After an update (#942): under systemd, exit with a failure code so Restart=on-failure starts the new
+   * build; elsewhere a detached copy of the new build waits for this one to exit and starts the daemon.
+   */
+  restartForUpdate = async () => {
+    const systemd = process.platform === "linux" && !!process.env.INVOCATION_ID;
+    if (!systemd) {
+      const child = spawn(process.execPath, [path.join(INSTALL_ROOT, "dist", "index.js"), "--restart-after", String(process.pid)], { cwd: INSTALL_ROOT, detached: true, stdio: "ignore", windowsHide: true });
+      child.unref();
+    }
+    await stopServices();
+    exitDaemon(systemd ? UPDATE_RESTART_CODE : 0);
+  };
 
   const server = http.createServer(app);
   server.once("close", () => { searchEmbedder.stop(); void searchIndex.close(); });
@@ -2808,6 +2844,7 @@ export async function startHttp(): Promise<http.Server> {
         selectedId?: string | null;
         lastInteractedAt?: unknown;
         lastEditAt?: unknown;
+        activeAt?: unknown;
         hidden?: unknown;
       };
       try {
@@ -2822,6 +2859,7 @@ export async function startHttp(): Promise<http.Server> {
         selectedId: msg.selectedId,
         lastInteractedAt: msg.lastInteractedAt,
         lastEditAt: msg.lastEditAt,
+        activeAt: msg.activeAt,
         hidden: msg.hidden,
       });
     });

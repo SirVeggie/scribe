@@ -7,6 +7,8 @@ export type Viewer = {
   selectedId: string | null;
   lastInteractedAt: number;
   lastEditAt: number;
+  /** The last key, click or scroll in the window (throttled), for auto updates' idle check (#942). */
+  activeAt: number;
   connectedAt: number;
   /** A desktop window hidden in the tray: connected, but nobody is looking at it. */
   hidden: boolean;
@@ -21,6 +23,7 @@ export class ViewerHub {
       selectedId: null,
       lastInteractedAt: 0,
       lastEditAt: 0,
+      activeAt: 0,
       connectedAt: Date.now(),
       hidden: false,
     };
@@ -34,7 +37,7 @@ export class ViewerHub {
 
   update(
     socket: WebSocket,
-    patch: { selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown; hidden?: unknown }
+    patch: { selectedId?: string | null; lastInteractedAt?: unknown; lastEditAt?: unknown; activeAt?: unknown; hidden?: unknown }
   ): void {
     const viewer = this.viewers.get(socket);
     if (!viewer) {
@@ -49,9 +52,19 @@ export class ViewerHub {
     if (typeof patch.lastEditAt === "number" && Number.isFinite(patch.lastEditAt)) {
       viewer.lastEditAt = Math.max(viewer.lastEditAt, patch.lastEditAt);
     }
+    if (typeof patch.activeAt === "number" && Number.isFinite(patch.activeAt)) {
+      viewer.activeAt = Math.min(Date.now(), Math.max(viewer.activeAt, patch.activeAt));
+    }
     if (typeof patch.hidden === "boolean") {
       viewer.hidden = patch.hidden;
     }
+  }
+
+  /** The latest input in any window, hidden ones too; 0 when there has been none. */
+  lastActivity(): number {
+    let latest = 0;
+    for (const viewer of this.viewers.values()) latest = Math.max(latest, viewer.activeAt, viewer.lastInteractedAt, viewer.lastEditAt);
+    return Math.min(latest, Date.now());
   }
 
   /** Viewers someone can see. With none, agents open the board. */

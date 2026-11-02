@@ -154,6 +154,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  // After an update (#942): the old daemon starts this from the new build, then exits.
+  const after = argv.indexOf("--restart-after");
+  if (after >= 0) {
+    await waitForExit(Number(argv[after + 1]));
+    await ensureDaemon({ replace: true });
+    return;
+  }
+
   // The desktop app starts (or replaces) the daemon this way before loading the board.
   if (args.has("--ensure")) {
     await ensureDaemon({ replace: true });
@@ -161,6 +169,17 @@ async function main(): Promise<void> {
   }
 
   await startMcp();
+}
+
+async function waitForExit(pid: number): Promise<void> {
+  for (let i = 0; Number.isInteger(pid) && pid > 0 && i < 300; i += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 }
 
 main().catch((err) => {
