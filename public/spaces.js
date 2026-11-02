@@ -43,6 +43,16 @@ window.createSpaces = function createSpaces(host) {
   let animTimer = 0;
   /** /api/devices/spaces, answered by this device's daemon in every view (#906). Null until fetched. */
   let devices = null;
+  /** /api/devices: the paired devices without their spaces. Local and quick, so the sections show before the spaces come. */
+  let peerList = null;
+  /** True while this opening's /api/devices/spaces is on its way: other devices' spaces show as loading cards. */
+  let loadingSpaces = false;
+  /** The device sections by device id, kept so a redraw of one never rebuilds this device's grid. */
+  const sections = new Map();
+  /** Set while a space on another device opens (#947): { controller, item, navigating }. */
+  let entering = null;
+  /** The view apply() drew last, to skip redraws that change nothing. */
+  let lastView = "";
   /** The device whose UI this is, when it is another device's through this one's gateway (#905). */
   const remoteId = /^d-([0-9a-f]{12})\./.exec(location.hostname)?.[1] ?? null;
   /** The viewed device as /api/devices last described it, for the chip. */
@@ -89,7 +99,18 @@ window.createSpaces = function createSpaces(host) {
     "<span><kbd>N</kbd> new</span><span><kbd>F2</kbd> rename</span><span><kbd>Del</kbd> delete</span>" +
     "<span><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo delete</span><span><kbd>Esc</kbd> back</span>";
   inner.append(head, area, deletedRow, keys);
-  root.append(inner);
+  // Opening a space on another device (#947): shown at once, until that device's UI loads or the user goes back.
+  const enterBox = el("div", "spaces-entering");
+  enterBox.hidden = true;
+  enterBox.setAttribute("role", "status");
+  const enterTitle = el("div", "spaces-entering-title");
+  const enterSub = el("div", "spaces-entering-sub");
+  const enterCancel = el("button", "spaces-entering-cancel");
+  enterCancel.type = "button";
+  enterCancel.innerHTML = "Cancel <kbd>Esc</kbd>";
+  enterCancel.addEventListener("click", () => cancelEnter());
+  enterBox.append(el("div", "spaces-entering-spinner"), enterTitle, enterSub, enterCancel);
+  root.append(inner, enterBox);
   document.body.append(root);
 
   root.addEventListener("pointerdown", (event) => {
@@ -110,8 +131,12 @@ window.createSpaces = function createSpaces(host) {
     data = { spaces: view.spaces, activeId: view.activeId ?? null, deleted: Array.isArray(view.deleted) ? view.deleted : [] };
     selected = Math.min(selected, Math.max(0, data.spaces.length - 1));
     renderChip();
-    // Not while a name is being typed: a redraw would replace the input.
-    if (open && !drag && !renaming && !switching) {
+    const json = JSON.stringify(data);
+    const same = json === lastView;
+    lastView = json;
+    // Not while a name is being typed: a redraw would replace the input. Nor when nothing changed:
+    // the cards would be rebuilt and lose their fade-in.
+    if (open && !same && !drag && !renaming && !switching) {
       render();
     }
   }
@@ -164,19 +189,41 @@ window.createSpaces = function createSpaces(host) {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (open) root.classList.add("shown");
     }));
-    const listed = loadDevices();
+    // This device's spaces are here already (the socket sends them): draw them now, not after the
+    // network. Other devices' sections fill in on their own, without redrawing these (#947).
+    loadingSpaces = true;
+    void loadPeers().then(() => open && renderDevices());
+    void loadDevices().then(() => open && renderDevices());
+    const drawn = data.spaces.length > 0;
+    if (drawn) {
+      selected = Math.max(0, data.spaces.findIndex((space) => space.id === data.activeId));
+      render();
+      focusSelected();
+    }
     await run("POST", "/api/spaces/ensure");
-    selected = Math.max(0, data.spaces.findIndex((space) => space.id === data.activeId));
-    render();
-    focusSelected();
-    await listed;
-    if (open && !drag && !renaming && !switching) render();
+    if (!drawn && open) {
+      selected = Math.max(0, data.spaces.findIndex((space) => space.id === data.activeId));
+      render();
+      focusSelected();
+    }
   }
 
+  let loadToken = 0;
   async function loadDevices() {
+    const token = ++loadToken;
     try {
       const res = await fetch("/api/devices/spaces", { cache: "no-store" });
-      if (res.ok) devices = await res.json();
+      if (res.ok && token === loadToken) devices = await res.json();
+    } catch {
+      /* keep the last list */
+    }
+    if (token === loadToken) loadingSpaces = false;
+  }
+
+  async function loadPeers() {
+    try {
+      const res = await fetch("/api/devices", { cache: "no-store" });
+      if (res.ok) peerList = await res.json();
     } catch {
       /* keep the last list */
     }
@@ -188,35 +235,66 @@ window.createSpaces = function createSpaces(host) {
   }
 
   /** A space on another device than the one showing: make it that device's current space and go there. */
-  async function openOnDevice(device, space) {
-    if (busy) return;
+  async function openOnDevice(device, space, item) {
+    if (busy || entering) return;
+    const controller = new AbortController();
+    const mine = { controller, item, navigating: false };
+    entering = mine;
+    item?.classList.add("chosen");
+    enterTitle.textContent = `Opening ${space.name}`;
+    enterSub.textContent = device.online ? `on ${device.name}` : `${device.name}'s mirror · read only`;
+    enterBox.hidden = false;
+    root.classList.add("entering");
+    enterCancel.focus({ preventScroll: true });
     // Offline with a mirror (#910): its copy of that space, read only; nothing to switch on the device.
     if (!device.online && device.mirror) {
       const url = new URL(deviceUrl(device.id));
       url.searchParams.set("space", space.id);
+      mine.navigating = true;
       location.href = url.href;
       return;
     }
-    busy = true;
     try {
       const res = await fetch(`/api/devices/${encodeURIComponent(device.id)}/spaces/${encodeURIComponent(space.id)}/switch`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",
+        signal: controller.signal,
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      if (entering !== mine) return;
+      mine.navigating = true;
       location.href = deviceUrl(device.id);
     } catch (err) {
+      if (entering !== mine) return;
+      endEnter();
       host.showNotice(String(err.message || err));
-      busy = false;
     }
+  }
+
+  /** Back to the space list from an opening space on another device (Cancel, Esc, Ctrl+E). */
+  function cancelEnter(focus = true) {
+    if (!entering) return;
+    entering.controller.abort();
+    // The device's UI may already be loading in this window: stop that navigation.
+    if (entering.navigating) window.stop();
+    endEnter();
+    if (focus) focusSelected();
+  }
+
+  function endEnter() {
+    entering?.item?.classList.remove("chosen");
+    entering = null;
+    enterBox.hidden = true;
+    root.classList.remove("entering");
   }
 
   function close() {
     if (!open) {
       return;
     }
+    cancelEnter(false);
     open = false;
     renaming = null;
     closeMenu();
@@ -402,38 +480,72 @@ window.createSpaces = function createSpaces(host) {
     });
   }
 
-  /** The device sections (#906): this device first, then the paired ones; the grid sits in the shown device's. */
+  /** The device sections (#906): this device first, then the paired ones; the grid sits in the shown device's.
+   *  Sections are kept and updated in place, so the other devices' spaces coming in never rebuild the grid (#947). */
   function renderDevices() {
-    const peers = devices?.peers ?? [];
-    if (!devices || !peers.length) {
+    // While this opening's spaces are on their way, the quick device list names the sections.
+    const base = loadingSpaces ? peerList ?? devices : devices ?? peerList;
+    const peers = base?.peers ?? [];
+    if (!base || !peers.length) {
+      sections.clear();
       if (area.firstChild !== grid || area.childNodes.length > 1) area.replaceChildren(grid);
       return;
     }
-    const showing = remoteId ?? devices.self.id;
-    const list = [{ ...devices.self, online: true, self: true }, ...peers];
-    area.replaceChildren();
+    const known = new Map(devices ? [[devices.self.id, devices.self], ...devices.peers.map((peer) => [peer.id, peer])] : []);
+    const showing = remoteId ?? base.self.id;
+    const list = [{ ...base.self, online: true, self: true }, ...peers];
+    const order = [];
     for (const device of list) {
-      const section = el("section", "spaces-device" + (device.online ? "" : " offline"));
+      let entry = sections.get(device.id);
+      if (!entry) {
+        entry = { section: el("section"), label: el("div", "spaces-device-head"), row: null };
+        entry.section.append(entry.label);
+        sections.set(device.id, entry);
+      }
+      const { section, label } = entry;
+      section.className = "spaces-device" + (device.online ? "" : " offline");
       section.style.setProperty("--space", deviceColor(device.id));
-      const label = el("div", "spaces-device-head");
-      label.append(el("span", `device-dot${device.online ? " online" : ""}`), el("span", "spaces-device-name", device.self ? `This device · ${device.name}` : device.name));
+      label.replaceChildren(el("span", `device-dot${device.online ? " online" : ""}`), el("span", "spaces-device-name", device.self ? `This device · ${device.name}` : device.name));
       const state = device.self ? "" : device.online
         ? [device.via ? `via ${device.via.name}` : "", device.rtt !== undefined ? `${device.rtt} ms` : ""].filter(Boolean).join(" · ")
         : device.mirror ? `offline · mirror ${ago(device.mirror.at)}`
         : device.lastSeen ? `offline · last seen ${ago(device.lastSeen)}` : "offline";
       if (state) label.append(el("span", "spaces-device-state", state));
-      section.append(label);
       if (device.id === showing) {
-        section.append(grid);
+        if (grid.parentNode !== section) section.append(grid);
       } else {
-        const row = el("div", "spaces-grid spaces-remote");
-        const spaces = device.spaces ?? [];
-        if (device.online && !spaces.length) row.append(el("p", "spaces-device-empty", device.unreachable ? "Didn't answer." : "No spaces yet."));
-        spaces.forEach((space, index) => row.append(remoteCard(device, space, index)));
-        if (spaces.length || device.online) section.append(row);
+        entry.row?.remove();
+        entry.row = remoteRow(device, known.get(device.id));
+        if (entry.row) section.append(entry.row);
       }
-      area.append(section);
+      order.push(section);
     }
+    for (const id of sections.keys()) {
+      if (!list.some((device) => device.id === id)) sections.delete(id);
+    }
+    const children = [...area.children];
+    if (order.length !== children.length || order.some((section, index) => children[index] !== section)) area.replaceChildren(...order);
+  }
+
+  /** Another device's spaces, or loading cards while they are on their way. Null when there is nothing to show. */
+  function remoteRow(device, last) {
+    const row = el("div", "spaces-grid spaces-remote");
+    if (loadingSpaces) {
+      if (!device.online && !device.mirror) return null;
+      row.setAttribute("aria-busy", "true");
+      const count = Math.min(Math.max(last?.spaces?.length ?? 2, 1), 6);
+      for (let index = 0; index < count; index++) {
+        const item = el("div", "space-card compact loading");
+        item.style.setProperty("--i", String(index));
+        item.append(el("div", "space-skeleton"), el("div", "space-skeleton short"));
+        row.append(item);
+      }
+      return row;
+    }
+    const spaces = device.spaces ?? [];
+    if (device.online && !spaces.length) row.append(el("p", "spaces-device-empty", device.unreachable || !devices ? "Didn't answer." : "No spaces yet."));
+    spaces.forEach((space, index) => row.append(remoteCard(device, space, index)));
+    return spaces.length || device.online ? row : null;
   }
 
   /** A space on another device: its name and tab count. Opening it leaves for that device's UI. */
@@ -450,7 +562,7 @@ window.createSpaces = function createSpaces(host) {
       ? `${space.tabs} tab${space.tabs === 1 ? "" : "s"}${space.active || !space.usedAt ? "" : ` · ${ago(space.usedAt)}`}`
       : `${space.tabs} tab${space.tabs === 1 ? "" : "s"} · read only`;
     item.append(top, el("div", "space-meta", meta));
-    item.addEventListener("click", () => void openOnDevice(device, space));
+    item.addEventListener("click", () => void openOnDevice(device, space, item));
     return item;
   }
 
@@ -799,6 +911,12 @@ window.createSpaces = function createSpaces(host) {
     if (!open || renaming) {
       return false;
     }
+    if (entering) {
+      // Esc or Ctrl+E goes back to the space list; other keys wait while the space opens.
+      if (event.key !== "Escape" && !((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "e")) return false;
+      cancelEnter();
+      return true;
+    }
     if (menu && event.key === "Escape") {
       closeMenu();
       return true;
@@ -917,6 +1035,8 @@ window.createSpaces = function createSpaces(host) {
   }
 
   renderChip();
+  // The device list is local and quick: knowing it before the first opening puts the sections in place at once.
+  void loadPeers();
 
   return {
     activeId: () => data.activeId,
