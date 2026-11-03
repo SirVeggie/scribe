@@ -200,3 +200,16 @@ test("titles: agents must name a new memory, edits keep the title, and the block
   assert.throws(() => saveMemory([], { title: "x".repeat(101), text: "y", scope: "global", by: "user" }), /title/);
   host.deleteMemory(saved.saved.id);
 });
+
+test("deletes and memories made local leave tombstones for paired devices (#978)", () => {
+  let changes = 0;
+  host.onMemoriesChange(() => changes++);
+  const made = host.saveUserMemory(null, { title: "Brave", text: "The browser is Brave." });
+  const local = host.saveUserMemory(made.id, { text: "The browser is Brave.", device: "this" });
+  assert.equal(local.local, true);
+  assert.notEqual(local.id, made.id);
+  assert.ok(host.memoryTombstones().some((t) => t.id === made.id));
+  host.deleteMemory(local.id);
+  assert.ok(host.memoryTombstones().some((t) => t.id === local.id));
+  assert.equal(changes, 3);
+});

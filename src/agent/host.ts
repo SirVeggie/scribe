@@ -87,7 +87,7 @@ import { likePatterns, matchMessages, messageSnippet, searchWords, type ThreadMe
 import { allowedGrants, canReadThread, grantScopes, isMessage, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
 import { addToolGrants, cleanCommandAllowlist, grantAllows, grantFor, grantOptions, pathInside, realTarget, threadCwd, toolGrantKey, withGrantOptions, workspaceGrant } from "./toolGrants.js";
-import { cleanMemories, memoriesFor, memoryApplies, memoryOwner, memoryPlace, saveMemory, type Memory } from "./memory.js";
+import { cleanMemories, cleanTombstones, memoriesFor, memoryApplies, memoryOwner, memoryPlace, saveMemory, type Memory, type MemoryTombstone } from "./memory.js";
 import { WEB_IMPORTANCE_WAIT_MS, parseWebImportance, cleanAllowlist, cleanSearxngUrl, grantWeb, parseWebAccess, webCallAllowed, webCallDomains, webPassCovers, type WebCall, type WebImportance } from "./webAccess.js";
 import type {
   AgentEvent,
@@ -1217,6 +1217,7 @@ export class AgentHost {
       cursorHostShell: saved.cursorHostShell === true,
       helpers: saved.helpers !== false,
       memory: saved.memory !== false,
+      memorySync: saved.memorySync !== false,
       instructionsOff: cleanInstructionsOff(saved.instructionsOff),
       hookRules: savedRules(saved.hookRules),
       disabledModes: cleanDisabledModes(saved.disabledModes),
@@ -1236,6 +1237,7 @@ export class AgentHost {
     if (patch.cursorHostShell !== undefined) next.cursorHostShell = patch.cursorHostShell === true;
     if (patch.helpers !== undefined) next.helpers = patch.helpers === true;
     if (patch.memory !== undefined) next.memory = patch.memory !== false;
+    if (patch.memorySync !== undefined) next.memorySync = patch.memorySync !== false;
     if (patch.instructionsOff !== undefined) next.instructionsOff = cleanInstructionsOff(patch.instructionsOff);
     if (patch.hookRules !== undefined) {
       next.hookRules = normalizeRules(patch.hookRules);
@@ -4152,6 +4154,32 @@ export class AgentHost {
     return cleanMemories(this.db.getSetting<unknown>("memories", []));
   }
 
+  /** Deleted memories, for paired devices that still have them (#978). */
+  memoryTombstones(): MemoryTombstone[] {
+    return cleanTombstones(this.db.getSetting<unknown>("memoryTombstones", []));
+  }
+
+  private memoryListeners = new Set<() => void>();
+
+  /** Called after any change to the saved memories (memory sync, #978). */
+  onMemoriesChange(listener: () => void): void {
+    this.memoryListeners.add(listener);
+  }
+
+  /** Every write of the memories goes here: `removed` ids leave tombstones, so paired devices drop them too. */
+  private storeMemories(memories: Memory[], removed: string[] = [], tombstones?: MemoryTombstone[]): void {
+    const now = Date.now();
+    this.db.setSetting("memories", memories);
+    if (tombstones || removed.length) this.db.setSetting("memoryTombstones", cleanTombstones([...removed.map((id) => ({ id, at: now })), ...(tombstones ?? this.memoryTombstones())], now));
+    this.emit({ type: "agent_memories" });
+    for (const listener of this.memoryListeners) listener();
+  }
+
+  /** A paired device's memories, already merged with these (memory sync, #978). */
+  replaceMemories(memories: Memory[], tombstones: MemoryTombstone[]): void {
+    this.storeMemories(memories, [], tombstones);
+  }
+
   /** Targets for the user's memory editor, without fetching models or credentials. */
   memoryTargets(): Array<{ provider: string; source?: string; label: string }> {
     const sources = new Map(this.modelSources().map((s) => [`src-${s.id}`, s.name]));
@@ -4177,15 +4205,16 @@ export class AgentHost {
     const input = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const workspace = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : null;
     if (workspace && !path.isAbsolute(workspace)) throw new Error("The workspace must be an absolute folder path.");
-    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), ...(typeof input.title === "string" ? { title: input.title } : {}), text: typeof input.text === "string" ? input.text : "", scope: input.scope === "provider" ? "provider" : workspace ? "workspace" : "global", workspace, provider: typeof input.provider === "string" ? input.provider : undefined, source: typeof input.source === "string" ? input.source : undefined, by: "user" });
-    this.db.setSetting("memories", saved.memories);
+    const local = input.device === "this" ? true : input.device === "all" ? false : undefined;
+    const saved = saveMemory(this.memories(), { ...(id ? { id } : {}), ...(typeof input.title === "string" ? { title: input.title } : {}), text: typeof input.text === "string" ? input.text : "", scope: input.scope === "provider" ? "provider" : workspace ? "workspace" : "global", workspace, provider: typeof input.provider === "string" ? input.provider : undefined, source: typeof input.source === "string" ? input.source : undefined, local, by: "user" });
+    this.storeMemories(saved.memories, saved.retired ? [saved.retired] : []);
     return saved.memory;
   }
 
   deleteMemory(id: string): void {
     const all = this.memories();
     if (!all.some((m) => m.id === id)) throw new Error(`memory not found: ${id}`);
-    this.db.setSetting("memories", all.filter((m) => m.id !== id));
+    this.storeMemories(all.filter((m) => m.id !== id), [id]);
   }
 
   /**
@@ -4200,7 +4229,7 @@ export class AgentHost {
     const workspace = this.memoryWorkspace(thread);
     const owner = this.runs.get(threadId)?.memoryOwner ?? memoryOwner(thread);
     const all = this.memories();
-    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), ...(m.provider ? { provider: m.provider } : {}), ...(m.source ? { source: m.source } : {}), ...(m.title ? { title: m.title } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
+    const row = (m: Memory) => ({ id: m.id, scope: m.scope, ...(m.workspace ? { workspace: m.workspace } : {}), ...(m.local ? { thisDevice: true } : {}), ...(m.provider ? { provider: m.provider } : {}), ...(m.source ? { source: m.source } : {}), ...(m.title ? { title: m.title } : {}), text: m.text, by: m.by, updatedAt: new Date(m.updatedAt).toISOString() });
     const note = (text: string) => {
       const run = this.runs.get(threadId);
       if (run) this.closeBlocks(run);
@@ -4232,10 +4261,11 @@ export class AgentHost {
         // Ownership comes from the authenticated thread, never tool arguments.
         provider: owner.provider,
         source: owner.source,
+        ...(typeof body.thisDevice === "boolean" ? { local: body.thisDevice } : {}),
         by: thread.provider,
         thread: threadId,
       });
-      this.db.setSetting("memories", saved.memories);
+      this.storeMemories(saved.memories, saved.retired ? [saved.retired] : []);
       note(`${saved.created ? "Saved a memory" : "Updated a memory"} (${memoryPlace(saved.memory)}): ${saved.memory.title ? `${saved.memory.title}. ` : ""}${saved.memory.text}`);
       return { saved: row(saved.memory), created: saved.created, note: "Chats get it in their instructions from their next message. The user can edit or remove it under Agent settings, Memories." };
     }
@@ -4243,7 +4273,7 @@ export class AgentHost {
       const id = typeof body.id === "string" ? body.id.trim() : "";
       const old = all.find((m) => m.id === id);
       if (!old || !memoryApplies(old, workspace, owner)) throw new Error(`No memory ${id || "(no id)"} in this thread's scopes. memory_list shows them.`);
-      this.db.setSetting("memories", all.filter((m) => m.id !== id));
+      this.storeMemories(all.filter((m) => m.id !== id), [id]);
       note(`Deleted a memory: ${old.text}`);
       return { deleted: id };
     }
@@ -6867,7 +6897,7 @@ export class AgentHost {
       hiddenWorkspaces: prefs.hiddenWorkspaces.map((dir) => move(dir) ?? dir),
     });
     const memories = this.memories();
-    if (memories.some((m) => move(m.workspace))) this.db.setSetting("memories", memories.map((m) => (move(m.workspace) ? { ...m, workspace: move(m.workspace)! } : m)));
+    if (memories.some((m) => move(m.workspace))) this.storeMemories(memories.map((m) => (move(m.workspace) ? { ...m, workspace: move(m.workspace)! } : m)));
     const known = this.db.getSetting<Record<string, KnownWorkspace>>("workspaceIds", {});
     this.db.setSetting("workspaceIds", Object.fromEntries(Object.entries(known).filter(([key]) => !move(key))));
     this.db.setSetting("workspaceMovesDismissed", this.db.getSetting<string[]>("workspaceMovesDismissed", []).filter((key) => !move(key)));

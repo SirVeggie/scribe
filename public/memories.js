@@ -185,6 +185,10 @@
     const provider = el("select");
     fill(provider, [["", "Every provider"], ...store.targets.map((t) => [targetKey(t), `${t.label} only`])]);
     provider.value = memory ? providerValue(memory) : "";
+    // Paired devices get every memory but these (#978).
+    const device = el("select");
+    fill(device, [["all", "All devices"], ["this", "This device"]]);
+    device.value = memory?.local ? "this" : "all";
 
     const error = el("p", "ag-source-error");
     error.hidden = true;
@@ -196,7 +200,7 @@
     const save = async () => {
       if (!title.value.trim()) return title.focus();
       if (!text.value.trim()) return text.focus();
-      const body = { title: title.value, text: text.value, workspace: workspace.value || null, ...providerBody(provider.value) };
+      const body = { title: title.value, text: text.value, workspace: workspace.value || null, ...providerBody(provider.value), device: device.value };
       try {
         await api(memory ? "PUT" : "POST", memory ? `/memories/${memory.id}` : "/memories", body);
       } catch (err) {
@@ -238,11 +242,12 @@
     const head = [el("h2", "ag-modal-title", memory ? "Memory" : "New memory")];
     if (memory) head.push(el("p", "ag-modal-hint", `Saved by ${byLabel(memory.by)}, ${day(memory.updatedAt)}`));
     const place = el("div", "ag-memory-place");
-    place.append(field("Workspace", workspace, "div"), field("Provider", provider, "div"));
+    place.append(field("Workspace", workspace, "div"), field("Provider", provider, "div"), field("Devices", device, "div"));
     panel.append(...head, field("Title", title), field("Memory", text), place, error, actions);
     // The themed select wraps the element where it sits, so it has to be in the panel first.
     window.createSelect?.(workspace);
     window.createSelect?.(provider);
+    window.createSelect?.(device);
     (memory ? text : title).focus();
   }
 

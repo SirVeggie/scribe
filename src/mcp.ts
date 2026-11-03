@@ -2063,8 +2063,9 @@ function registerMemoryTools(server: McpServer): void {
         .optional()
         .describe("workspace: chats in this workspace (default when it has one). global: every chat. provider: only this provider's chats across workspaces; for Native, only this model's source. Ownership is set by the host. Omit scope when editing to keep the existing scope."),
       id: z.string().optional().describe("Change this memory (id from your instructions or memory_list) instead of adding a new one."),
+      thisDevice: z.boolean().optional().describe("true: keep it on this machine only, for facts about this machine (paths, installed tools, network). Otherwise it also reaches the user's paired devices. Omit when editing to keep the saved setting."),
     },
-    async ({ title, text, scope, id }, extra) => call("save", { title, text, scope, id }, extra)
+    async ({ title, text, scope, id, thisDevice }, extra) => call("save", { title, text, scope, id, thisDevice }, extra)
   );
 
   server.tool(

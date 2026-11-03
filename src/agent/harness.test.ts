@@ -228,11 +228,12 @@ test("memory popup preserves Native source on edit, asks for a title, keeps the 
     const edit = page.getByRole("dialog", { name: "Memory", exact: true });
     assert.equal(await edit.getByRole("combobox", { name: "Provider" }).inputValue(), '["pi","src-local"]');
     assert.equal(await edit.getByRole("combobox", { name: "Workspace" }).inputValue(), "");
+    assert.equal(await edit.getByRole("combobox", { name: "Devices" }).inputValue(), "all");
     await edit.getByRole("textbox", { name: "Title", exact: true }).fill("Local rule");
     await edit.getByRole("textbox", { name: "Memory", exact: true }).fill("Updated local rule");
     await edit.getByRole("button", { name: "Save", exact: true }).click();
     await page.getByRole("button", { name: /^Local rule/ }).waitFor();
-    assert.deepEqual(writes[0], { title: "Local rule", text: "Updated local rule", workspace: null, scope: "provider", provider: "pi", source: "src-local" });
+    assert.deepEqual(writes[0], { title: "Local rule", text: "Updated local rule", workspace: null, scope: "provider", provider: "pi", source: "src-local", device: "all" });
     await page.getByRole("button", { name: "Add memory", exact: true }).click();
     const add = page.getByRole("dialog", { name: "New memory", exact: true });
     // A new memory starts as every chat's.
@@ -246,7 +247,7 @@ test("memory popup preserves Native source on edit, asks for a title, keeps the 
     await add.getByRole("textbox", { name: "Title", exact: true }).fill("Codex helpers");
     await add.getByRole("button", { name: "Add", exact: true }).click();
     await add.waitFor({ state: "detached" });
-    assert.deepEqual(writes[1], { title: "Codex helpers", text: "Codex helper rule", workspace: null, scope: "provider", provider: "codex" });
+    assert.deepEqual(writes[1], { title: "Codex helpers", text: "Codex helper rule", workspace: null, scope: "provider", provider: "codex", device: "all" });
     // The provider filter keeps what that provider's chats get, with their rough token cost.
     const total = page.locator(".ag-memory-total");
     await total.getByText(/^1 memory · ≈ \d+ tokens$/).waitFor();

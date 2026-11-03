@@ -742,6 +742,7 @@ export type AgentEvent =
   | { type: "agent_item_deleted"; threadId: string; id: string }
   | { type: "agent_limits"; limits: Partial<Record<ProviderId, PlanLimits>> }
   | { type: "agent_spend"; spend: Record<string, ApiSpend> }
+  | { type: "agent_memories" }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn }
   | { type: "agent_turn_deleted"; threadId: string; id: string }

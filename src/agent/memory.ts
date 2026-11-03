@@ -24,6 +24,8 @@ export type Memory = {
   by: string;
   /** The thread that saved it. */
   thread?: string;
+  /** Kept on this device only; otherwise it syncs to paired devices (#978). */
+  local?: true;
   createdAt: number;
   updatedAt: number;
 };
@@ -68,6 +70,7 @@ export function cleanMemories(raw: unknown): Memory[] {
       text: m.text,
       by: typeof m.by === "string" && m.by ? m.by : "user",
       ...(typeof m.thread === "string" ? { thread: m.thread } : {}),
+      ...(m.local === true ? { local: true as const } : {}),
       createdAt: typeof m.createdAt === "number" ? m.createdAt : at,
       updatedAt: at,
     });
@@ -90,14 +93,16 @@ export function memoriesFor(memories: Memory[], workspace: string | null, owner?
   return memories.filter((m) => memoryApplies(m, workspace, owner)).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** title: undefined keeps the saved one; "" clears it. */
-export type MemoryInput = { id?: string; title?: string; text: string; scope: Memory["scope"]; workspace?: string | null; provider?: string; source?: string; by: string; thread?: string };
+/** title: undefined keeps the saved one; "" clears it. local: undefined keeps the saved one. */
+export type MemoryInput = { id?: string; title?: string; text: string; scope: Memory["scope"]; workspace?: string | null; provider?: string; source?: string; local?: boolean; by: string; thread?: string };
 
 /**
  * Add a memory, or replace the text (and scope) of the one with input.id. Returns the new list and
  * the saved memory. A text that is already saved in the same scope updates that memory instead.
+ * A synced memory made local gets a new id, and `retired` names the old one, so the other devices
+ * delete their copy without deleting this one (#978).
  */
-export function saveMemory(memories: Memory[], input: MemoryInput, now = Date.now()): { memories: Memory[]; memory: Memory; created: boolean } {
+export function saveMemory(memories: Memory[], input: MemoryInput, now = Date.now()): { memories: Memory[]; memory: Memory; created: boolean; retired?: string } {
   const text = input.text.replace(/\r\n/g, "\n").trim();
   if (!text) throw new Error("A memory needs text.");
   if (text.length > MEMORY_MAX_CHARS) throw new Error(`A memory is at most ${MEMORY_MAX_CHARS} characters (this one has ${text.length}). Keep it to one fact, or split it.`);
@@ -113,20 +118,25 @@ export function saveMemory(memories: Memory[], input: MemoryInput, now = Date.no
   if (input.id && !existing) throw new Error(`No memory ${input.id}.`);
   existing ??= memories.find((m) => samePlace(m) && m.text === text);
   if (existing) {
-    const { workspace: _old, provider: _provider, source: _source, title: oldTitle, ...rest } = existing;
+    const { workspace: _old, provider: _provider, source: _source, title: oldTitle, local: wasLocal, ...rest } = existing;
     const kept = title === undefined ? oldTitle : title;
-    const memory: Memory = { ...rest, ...place, ...(kept ? { title: kept } : {}), text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), updatedAt: now };
-    return { memories: memories.map((m) => (m.id === memory.id ? memory : m)), memory, created: false };
+    const local = input.local ?? wasLocal === true;
+    const retire = local && !wasLocal;
+    const memory: Memory = { ...rest, ...(retire ? { id: newMemoryId() } : {}), ...place, ...(kept ? { title: kept } : {}), text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), ...(local ? { local: true as const } : {}), updatedAt: now };
+    return { memories: memories.map((m) => (m.id === existing.id ? memory : m)), memory, created: false, ...(retire ? { retired: existing.id } : {}) };
   }
   if (memories.length >= MEMORY_MAX_COUNT) throw new Error(`There are already ${MEMORY_MAX_COUNT} memories. Delete or merge some first.`);
-  const memory: Memory = { id: `m_${crypto.randomBytes(4).toString("hex")}`, ...place, ...(title ? { title } : {}), text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), createdAt: now, updatedAt: now };
+  const memory: Memory = { id: newMemoryId(), ...place, ...(title ? { title } : {}), text, by: input.by, ...(input.thread ? { thread: input.thread } : {}), ...(input.local ? { local: true as const } : {}), createdAt: now, updatedAt: now };
   return { memories: [...memories, memory], memory, created: true };
 }
+
+const newMemoryId = () => `m_${crypto.randomBytes(4).toString("hex")}`;
 
 /** Where a memory applies, in words: "all chats", "chats in C:\repo", "only codex chats in C:\repo". */
 export function memoryPlace(m: Memory): string {
   const where = m.workspace ? ` in ${m.workspace}` : "";
-  return m.scope === "provider" ? `only ${m.provider}${m.source ? `/${m.source}` : ""} chats${where}` : m.scope === "global" ? "all chats" : `chats${where}`;
+  const place = m.scope === "provider" ? `only ${m.provider}${m.source ? `/${m.source}` : ""} chats${where}` : m.scope === "global" ? "all chats" : `chats${where}`;
+  return m.local ? `${place}, this device only` : place;
 }
 
 /** The memories as the block a thread's instructions carry, newest first, within the room they may take. */
@@ -135,7 +145,7 @@ export function memoryBlock(memories: Memory[], max = MEMORY_PROMPT_CHARS): stri
   let used = 0;
   let left = 0;
   for (const m of memories) {
-    const line = `- [${m.id}] (${m.scope === "provider" ? `provider: ${m.provider}${m.source ? `/${m.source}` : ""}${m.workspace ? ", workspace" : ""}` : m.scope}) ${m.title ? `${m.title.replaceAll("</memories>", "</ memories>")}: ` : ""}${m.text.replaceAll("</memories>", "</ memories>").replace(/\n+/g, "\n  ")}`;
+    const line = `- [${m.id}] (${m.scope === "provider" ? `provider: ${m.provider}${m.source ? `/${m.source}` : ""}${m.workspace ? ", workspace" : ""}` : m.scope}${m.local ? ", this device" : ""}) ${m.title ? `${m.title.replaceAll("</memories>", "</ memories>")}: ` : ""}${m.text.replaceAll("</memories>", "</ memories>").replace(/\n+/g, "\n  ")}`;
     if (lines.length && used + line.length > max) {
       left += 1;
       continue;
@@ -146,4 +156,54 @@ export function memoryBlock(memories: Memory[], max = MEMORY_PROMPT_CHARS): stri
   if (!lines.length) return "<memories>\nNone saved yet.\n</memories>";
   if (left) lines.push(`(${left} older ${left === 1 ? "memory is" : "memories are"} not shown; memory_list has them.)`);
   return `<memories>\n${lines.join("\n")}\n</memories>`;
+}
+
+// ---------- sync between paired devices (#978) ----------
+
+/** A deleted memory, kept so a paired device that still has it deletes it too instead of sending it back. */
+export type MemoryTombstone = { id: string; at: number };
+
+const TOMBSTONE_MAX = 2000;
+const TOMBSTONE_KEEP_MS = 180 * 24 * 3600_000;
+
+export function cleanTombstones(raw: unknown, now = Date.now()): MemoryTombstone[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Map<string, number>();
+  for (const t of raw) {
+    if (!isRecord(t) || typeof t.id !== "string" || !t.id || typeof t.at !== "number" || !Number.isFinite(t.at)) continue;
+    if (now - t.at > TOMBSTONE_KEEP_MS) continue;
+    out.set(t.id, Math.max(out.get(t.id) ?? 0, t.at));
+  }
+  return [...out].map(([id, at]) => ({ id, at })).sort((a, b) => b.at - a.at).slice(0, TOMBSTONE_MAX);
+}
+
+/**
+ * Merge a paired device's memories into this device's, as a set: by id, the later edit wins, and a
+ * tombstone at or after a memory's last edit deletes it. Local-only memories are never replaced or
+ * deleted from outside. `incoming` already has this device's workspace paths (or lacks the ones it
+ * cannot place). Nothing changes when both sides already match, so a sync settles after one round.
+ */
+export function mergeMemories(local: Memory[], tombstones: MemoryTombstone[], incoming: Memory[], incomingTombstones: MemoryTombstone[], now = Date.now()): { memories: Memory[]; tombstones: MemoryTombstone[]; changed: boolean } {
+  const dead = new Map(tombstones.map((t) => [t.id, t.at]));
+  let changed = false;
+  for (const t of cleanTombstones(incomingTombstones, now)) {
+    if ((dead.get(t.id) ?? -1) >= t.at) continue;
+    dead.set(t.id, t.at);
+    changed = true;
+  }
+  const byId = new Map(local.map((m) => [m.id, m]));
+  for (const m of incoming) {
+    if (m.local || (dead.get(m.id) ?? -1) >= m.updatedAt) continue;
+    const mine = byId.get(m.id);
+    if (mine && (mine.local || mine.updatedAt >= m.updatedAt)) continue;
+    const { thread: _thread, ...rest } = m;
+    byId.set(m.id, rest);
+    changed = true;
+  }
+  for (const [id, m] of byId) {
+    if (m.local || (dead.get(id) ?? -1) < m.updatedAt) continue;
+    byId.delete(id);
+    changed = true;
+  }
+  return { memories: [...byId.values()], tombstones: cleanTombstones([...dead].map(([id, at]) => ({ id, at })), now), changed };
 }

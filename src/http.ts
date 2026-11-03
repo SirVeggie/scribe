@@ -89,6 +89,7 @@ import { agentForwarder, remoteAgentGate, remoteAgentRouter, type AgentDevicesHo
 import { peerDeviceOf } from "./devices/link.js";
 import { copyRouter } from "./devices/copy.js";
 import type { Described } from "./devices/references.js";
+import { MemorySync } from "./devices/memorySync.js";
 import { MirrorPusher, MirrorStore, mirrorDescribe, mirrorRouter, mirrorSpaces, mirrorView, type MirrorSource } from "./devices/mirror.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
@@ -421,6 +422,17 @@ export async function startHttp(): Promise<http.Server> {
   }, dataDir()));
   // Mirrors (#910) parse their own bodies too: pages and blobs go in batches of several MB.
   app.use("/api/mirror", mirrorRouter(peers, mirrorPusher, mirrorStore));
+  // Memories follow the user to their paired devices (#978).
+  const memoryHost = agentHost;
+  const memorySync = new MemorySync(peers, {
+    enabled: () => memoryHost.prefs().memorySync,
+    memories: () => memoryHost.memories(),
+    tombstones: () => memoryHost.memoryTombstones(),
+    replace: (memories, tombstones) => memoryHost.replaceMemories(memories, tombstones),
+    folders: () => [...memoryHost.workspaceFolders().values()],
+    onChange: (listener) => memoryHost.onMemoriesChange(listener),
+  }, log);
+  app.use("/api/memory-sync", memorySync.router());
   app.use(express.json({ limit: "6mb" }));
   // A chat here reaching another device (#911): device_list, and calls that name a device go over the link.
   const agentDevices: AgentDevicesHost = {
@@ -2981,6 +2993,8 @@ export async function startHttp(): Promise<http.Server> {
   peers.attach(server);
   await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));
   mirrorPusher.start();
+  memorySync.start();
+  server.once("close", () => memorySync.stop());
   void prebuildEditorBundle();
 
   log(`Scribe listening on ${baseUrl()} (tab pages on their own *${PAGE_HOST_SUFFIX} origins)`);

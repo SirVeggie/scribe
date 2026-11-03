@@ -856,6 +856,11 @@
         if (app()?.activeTab?.()?.id === msg.pageId) showPageThread(msg.threadId, msg.where);
         return;
       }
+      case "agent_memories": {
+        // A save here, or memories synced from a paired device (#978): lists already loaded reload.
+        if (window.scribeMemories?.store.list) void window.scribeMemories.store.load();
+        return;
+      }
       case "agent_spend": {
         S.config.spend = msg.spend || {};
         pageLimitsChanged();
@@ -12439,6 +12444,22 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
             });
         }
       );
+      const memorySyncOn = switchControl(
+        () => prefs().memorySync !== false,
+        () => {
+          const on = prefs().memorySync === false;
+          S.config.prefs = { ...prefs(), memorySync: on };
+          api("PUT", "/prefs", { memorySync: on })
+            .then((next) => {
+              S.config.prefs = next;
+            })
+            .catch((err) => {
+              S.config.prefs = { ...prefs(), memorySync: !on };
+              memorySyncOn.setAttribute("aria-checked", String(!on));
+              notice(err.message);
+            });
+        }
+      );
       // The list itself (#840), loaded again each time settings open.
       const memoryList = window.scribeMemories?.browser({ keep: true, workspaces: memoryWorkspaces, off: () => prefs().memory === false }) || el("div");
       memory.append(
@@ -12446,6 +12467,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow("Agents share memories", memoryOn, {
           id: "ag-memory-label",
           hint: "Chats on every provider get the saved memories in their instructions and can save new ones: corrections you gave, mistakes to avoid, facts about a project. Each save shows as a note in that chat. Off, chats get none and cannot save any; the saved ones are kept. Applies from a thread's next message.",
+        }),
+        settingRow("Sync with paired devices", memorySyncOn, {
+          id: "ag-memory-sync-label",
+          hint: "Memories go to your other devices, except those set to This device. Workspace memories go only to devices with a clone of the same git repository.",
         }),
         memoryList
       );

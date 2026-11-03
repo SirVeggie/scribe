@@ -55,6 +55,8 @@ export type Prefs = {
   helpers: boolean;
   /** Chats get the shared memories in their instructions, and the memory tools to keep them (see memory.ts). */
   memory: boolean;
+  /** Memories sync with paired devices, except the ones kept on this device (#978). */
+  memorySync: boolean;
   /** Optional app instructions (APP_INSTRUCTIONS in prompt.ts) left out of new chats' instructions. */
   instructionsOff: string[];
   /** The user's own hooks (hooks.ts): a pattern, the event it watches, and what happens on a match. */
@@ -101,6 +103,7 @@ export const DEFAULT_PREFS: Prefs = {
   cursorHostShell: false,
   helpers: true,
   memory: true,
+  memorySync: true,
   instructionsOff: [],
   hookRules: [],
   recentWorkspaces: [],
