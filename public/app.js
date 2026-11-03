@@ -3683,7 +3683,7 @@
     });
   }
 
-  /** Closing keeps the page in the Library; `permanent` deletes it (Ctrl+Z or the notice undoes it). */
+  /** Closing keeps the page in the Library; `permanent` deletes it (the notice's Undo or Ctrl+Shift+T undoes it). */
   async function closeTab(id, { permanent = false } = {}) {
     if (state.draft?.id === id) {
       closeDraft();
@@ -4759,11 +4759,6 @@
     if ((key === "t" || key === "n") && !event.shiftKey) {
       event.preventDefault();
       runShortcut("new-page");
-      return;
-    }
-    if (key === "z" && !event.shiftKey && !isTypingTarget(event.target)) {
-      event.preventDefault();
-      undoClose();
     }
   }
 
@@ -6319,10 +6314,8 @@
     }
     if (event.data?.type === "scribe-download") {
       downloadActive();
-    } else if (childId && ["scribe-undo", "scribe-help", "scribe-palette", "scribe-shortcut"].includes(event.data?.type)) {
+    } else if (childId && ["scribe-help", "scribe-palette", "scribe-shortcut"].includes(event.data?.type)) {
       // The strip's and the Library's shortcuts stay with the main window.
-    } else if (event.data?.type === "scribe-undo") {
-      undoClose();
     } else if (event.data?.type === "scribe-help") {
       openHelp();
     } else if (event.data?.type === "scribe-palette") {

@@ -23,7 +23,6 @@ Scribe is a local hub for notes, pages and coding work. A daemon on this machine
 | Ctrl+E | Spaces overview |
 | Ctrl+Shift+PgUp / PgDn | Previous / next space |
 | Ctrl+T or Ctrl+N | New page |
-| Ctrl+Z | Reopen the last closed tab, or undo the last delete, whichever is newer |
 | Ctrl+S | Download the current page as HTML (markup only) |
 | Ctrl+, (or Ctrl+Alt+S) | Settings |
 | Ctrl+Shift+, (or Ctrl+Shift+Alt+S) | Agent settings |
@@ -46,7 +45,7 @@ Scribe is a local hub for notes, pages and coding work. A daemon on this machine
 | Ctrl / Alt / Shift + click a link | Navigate / peek / split |
 | Ctrl+Tab / Ctrl+Shift+Tab | Desktop app: next / previous tab |
 | Ctrl+W | Desktop app: close a peek, else the current tab |
-| Ctrl+Shift+T | Desktop app: reopen the last closed tab |
+| Ctrl+Shift+T | Desktop app: reopen the last closed tab, or undo the last delete, whichever is newer |
 | Ctrl+Shift+M | Desktop app: normal / compact window |
 | F5 or Ctrl+R | Desktop app: reload Scribe |
 
@@ -54,7 +53,7 @@ On Nordic layouts the `'` keys are the `'*` key next to Enter, and `/` is Shift+
 
 ## Tabs
 
-- Close a tab with × or middle-click; the page stays in the Library. Shift+click × deletes it (Undo in the notice, or Ctrl+Z). Deleted pages stay in the Trash (Library ⋯ → Trash) for 7 days.
+- Close a tab with × or middle-click; the page stays in the Library. Shift+click × deletes it (Undo in the notice, or Ctrl+Shift+T in the desktop app). Deleted pages stay in the Trash (Library ⋯ → Trash) for 7 days.
 - Right-click a tab to pin, copy its key (`scribe:…`), export it or set its permissions. Double-click a tab copies its key; paste it into a chat so the agent knows which page you mean.
 - Right-click inside a page for Ask agent, Copy, Select all and Copy page key. Shift+right-click shows the browser's own menu.
 - A dot on a tab means it changed while you were elsewhere.
@@ -587,9 +586,9 @@ Transfer, recovery, desktop behavior and settings that sit outside the daily cha
 
 #### Undo a close or deletion; restore from Trash
 
-- Find it: Ctrl+Z · Library ⋯ → Trash
+- Find it: the notice's Undo · Ctrl+Shift+T (desktop app) · Library ⋯ → Trash
 
-Ctrl+Z undoes the more recent close/delete; a bulk delete counts as one step. Deleted pages/folders remain in Trash for seven days before permanent deletion. Closing alone keeps the page indefinitely in the Library.
+Ctrl+Shift+T undoes the more recent close/delete; a bulk delete counts as one step. Deleted pages/folders remain in Trash for seven days before permanent deletion. Closing alone keeps the page indefinitely in the Library.
 
 #### HTML download and full export are different
 

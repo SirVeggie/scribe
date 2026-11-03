@@ -2398,7 +2398,7 @@ export class BoardStore extends EventEmitter {
     return tab;
   }
 
-  /** Ctrl+Z: the newer of the last delete batch and the last closed page. */
+  /** Ctrl+Shift+T: the newer of the last delete batch and the last closed page. */
   restoreLast(): { tab: Tab | null } {
     let newestClosed: Tab | undefined;
     const parked = this.parkedTabs();
@@ -3996,7 +3996,7 @@ export class BoardStore extends EventEmitter {
     this.markDirty(tab.id);
   }
 
-  /** Drop an in-app page (help) without closing it into the Library or keeping it on the Ctrl+Z stack. */
+  /** Drop an in-app page (help) without closing it into the Library or keeping it on the reopen stack. */
   private discardAppTab(tab: Tab): Tab {
     const wasActive = this.activeId === tab.id;
     const wasOpen = this.tabs.has(tab.id);

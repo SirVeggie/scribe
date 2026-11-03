@@ -685,10 +685,10 @@ Transfer, recovery, desktop behavior and settings that sit outside the daily cha
 #### Undo a close or deletion; restore from Trash
 
 - Discoverability: Worth a closer look. Close, delete and permanent deletion have different lifetimes.
-- Find it: Ctrl+Z · Library ⋯ → Trash
+- Find it: the notice's Undo · Ctrl+Shift+T (desktop app) · Library ⋯ → Trash
 - Sources: `README.md:288`, `public/trash.js`
 
-Ctrl+Z undoes the more recent close/delete; a bulk delete counts as one step. Deleted pages/folders remain in Trash for seven days before permanent deletion. Closing alone keeps the page indefinitely in the Library.
+Ctrl+Shift+T undoes the more recent close/delete; a bulk delete counts as one step. Deleted pages/folders remain in Trash for seven days before permanent deletion. Closing alone keeps the page indefinitely in the Library.
 
 #### HTML download and full export are different
 

@@ -3247,11 +3247,6 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
       parent.postMessage({ type: "scribe-help" }, "*");
       return;
     }
-    if (key === "z" && !event.shiftKey && !typing(event.target)) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-undo" }, "*");
-      return;
-    }
     if (key === "d" && !event.shiftKey) {
       event.preventDefault();
       parent.postMessage({ type: "scribe-palette" }, "*");

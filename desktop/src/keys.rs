@@ -28,9 +28,8 @@ use crate::layout;
 enum Shortcut {
     /// Ctrl+Shift+M
     Compact,
-    /// Board actions the page runs through `window.scribeShortcut`. Ctrl+Z stays with the
-    /// page: an embed's text field needs its own undo, and board frames already forward it.
-    /// Ctrl+Shift+T reopens without that caveat.
+    /// Board actions the page runs through `window.scribeShortcut`. Ctrl+Shift+T reopens the
+    /// last closed tab; Ctrl+Z stays with the page for text undo.
     Board(&'static str),
     /// F5 / Ctrl+R: drop WebView2's HTTP cache, then reload, so embedded sites are not stale.
     /// In an embed only that frame reloads.

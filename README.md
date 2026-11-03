@@ -60,7 +60,7 @@ A space is a named set of tabs, such as one for home and one for work, or one pe
 
 - Pages are shared: a page can be a tab in several spaces, and every page stays in the Library. Opening a page from the Library or an agent's `page_show` puts it in the current space.
 - Cards can be renamed (double-click or F2), recolored (⋯), reordered by dragging, and deleted (Del). Ctrl+Z in the overview, the notice's Undo, or the "Recently deleted" chips bring a space back with its tabs (the last 10).
-- Tabs parked in other spaces are skipped by Ctrl+Z reopen and by Library clean-up (unless it includes open pages).
+- Tabs parked in other spaces are skipped by Ctrl+Shift+T reopen and by Library clean-up (unless it includes open pages).
 - Spaces are stored in `scribe.sqlite` (`meta.spaces`). Agents only see the current strip; the `/api/spaces` routes are for the board UI.
 
 ## Desktop app
@@ -74,7 +74,7 @@ A space is a named set of tabs, such as one for home and one for work, or one pe
 - Settings → Desktop shows or hides each title bar button (compact, minimize, maximize, close). Right-click any button still shown for the hidden ones; with all four hidden, a ⋯ menu holds them.
 - Settings → Desktop reports native version, build time, executable path and API revision under Build details. When the daemon's UI requires a newer native API (including shells too old to report a revision), an Update desktop button opens rebuild/install instructions. Unsupported settings are disabled. Compatibility is based on API support; it does not check remote releases or every source change. When adding native APIs required by the UI, increase both `api_revision` in `desktop/src/layout.rs` and `REQUIRED_API_REVISION` in `public/desktop.js`, and guard the affected control on old shells.
 - Settings → Desktop → "Reduce motion" on Windows reduces animations, effects and smooth scrolling in Scribe and pages that honor `prefers-reduced-motion`. The choice is saved across restarts and applies to page windows too. Turning it off restores the system preference.
-- While an embedded site has focus, Scribe shortcuts (Ctrl+D, Ctrl+S, Ctrl+K, …) are caught natively, since the site keeps its keys from the board. Elsewhere Scribe's pages get them first, as in a browser: a page that uses Ctrl+K or Ctrl+B keeps it. Ctrl+Z stays with the page; Ctrl+Shift+T does the same and is caught natively. F5 / Ctrl+R in an embedded site reloads only that site.
+- While an embedded site has focus, Scribe shortcuts (Ctrl+D, Ctrl+S, Ctrl+K, …) are caught natively, since the site keeps its keys from the board. Elsewhere Scribe's pages get them first, as in a browser: a page that uses Ctrl+K or Ctrl+B keeps it. Ctrl+Z stays with the page for text undo; Ctrl+Shift+T reopens the last closed tab and is caught natively. F5 / Ctrl+R in an embedded site reloads only that site.
 - Websites that refuse to be framed (`X-Frame-Options`, CSP `frame-ancestors`) load in tabs, peeks and splits anyway: the app drops those headers from embedded documents. Sites that sign in with `SameSite` cookies may still not stay logged in inside a frame.
 - Desktop-only tab keys: Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, Ctrl+W closes the current tab (it stays in the Library).
 - Ctrl+Shift+M, or the button beside the window controls, switches between the normal window and a compact one. Each remembers its own size and place; the compact one stays on top unless turned off in Settings.
@@ -92,7 +92,7 @@ Pages, state, the Library, spaces and agent chat live in the daemon, so both sho
 |---|---|---|
 | Sites that refuse framing | Load anyway | Open in browser card |
 | Scribe shortcuts while an embedded site has focus | Work (caught natively) | Stay with the site |
-| Ctrl+T / Ctrl+N, Ctrl+W, Ctrl+Tab, Ctrl+Shift+T | Scribe's | The browser's (use **+** and Ctrl+Z) |
+| Ctrl+T / Ctrl+N, Ctrl+W, Ctrl+Tab, Ctrl+Shift+T | Scribe's | The browser's (use **+** and the notice's Undo) |
 | Pages that use Ctrl+K, Ctrl+B, Ctrl+L, … | The page keeps it | The page keeps it |
 | Embedded sites that use those keys | Scribe takes the key | The site keeps it |
 | F5 / Ctrl+R in an embedded site | Reloads the site | Reloads the board |

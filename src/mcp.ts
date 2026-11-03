@@ -1312,7 +1312,7 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "page_close",
-    "Close Scribe tabs (same as the UI close button). The pages stay in the Library and can be reopened with page_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one). Returns { closed: [ids] } or { deleted: [ids] } for the tabs this call closed or deleted — not the Library-wide closed-page count (that is page_list's closedCount).",
+    "Close Scribe tabs (same as the UI close button). The pages stay in the Library and can be reopened with page_open. Pass id or key for one tab, or unpinned/all to close several open tabs. Pass permanent: true to delete the page(s) instead (no confirmation); deleted pages stay in the user's Trash for 7 days, and Ctrl+Shift+T (desktop app) or the notice's Undo restores the most recent delete (a bulk delete counts as one). Returns { closed: [ids] } or { deleted: [ids] } for the tabs this call closed or deleted — not the Library-wide closed-page count (that is page_list's closedCount).",
     {
       id: z.string().optional().describe("Tab id to close or delete."),
       key: z.string().optional().describe("Tab key to close or delete."),

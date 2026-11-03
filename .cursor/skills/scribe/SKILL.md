@@ -887,7 +887,7 @@ In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the pa
 ## Pin, open, close
 
 - `page_pin` / `page_unpin` (`id`/`key`) so Clear and close-unpinned keep or drop the tab. Same rule as `page_show` `pin`.
-- `page_close` closes one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Closed pages stay in the Library. Pass `permanent: true` to delete instead; deleted pages stay in the user's Trash for 7 days, and Ctrl+Z restores the most recent delete (a bulk delete counts as one). The result is `{ closed: [ids] }` or `{ deleted: [ids] }` for **this call** — not `page_list`'s Library-wide `closedCount`.
+- `page_close` closes one tab (`id`/`key`), unpinned tabs (`unpinned: true`), or everything (`all: true`). Closed pages stay in the Library. Pass `permanent: true` to delete instead; deleted pages stay in the user's Trash for 7 days, and Ctrl+Shift+T (desktop app) or the notice's Undo restores the most recent delete (a bulk delete counts as one). The result is `{ closed: [ids] }` or `{ deleted: [ids] }` for **this call** — not `page_list`'s Library-wide `closedCount`.
 - `page_open` (`id`/`key`) opens a closed page on the strip (focused).
 - Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
