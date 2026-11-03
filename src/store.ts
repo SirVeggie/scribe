@@ -3078,6 +3078,26 @@ export class BoardStore extends EventEmitter {
     return { folder, pages, reused, truncated };
   }
 
+  /* ---------- first-run setup (#962) ---------- */
+
+  /**
+   * Whether the setup guide still waits for this install. The first time anyone asks, an install that
+   * already has Library pages or chats was set up before the guide existed: it counts as done.
+   */
+  onboarding(hasChats: () => boolean): { done: boolean } {
+    const saved = this.db?.readMetaJson("onboarding");
+    if (saved && typeof saved === "object") return { done: (saved as { done?: unknown }).done === true };
+    const done = this.libraryTabs().length > 0 || hasChats();
+    this.db?.writeMetaJson("onboarding", { done, at: Date.now(), ...(done ? { existing: true } : {}) });
+    return { done };
+  }
+
+  setOnboarding(done: boolean): { done: boolean } {
+    if (!this.db) throw new Error("Database is not loaded");
+    this.db.writeMetaJson("onboarding", { done, at: Date.now() });
+    return { done };
+  }
+
   /* ---------- disk folders (#707) ---------- */
 
   private diskWatcher: DiskWatcher | null = null;
