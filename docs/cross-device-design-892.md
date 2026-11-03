@@ -291,7 +291,7 @@ The access model is the same as for chats on one device: a chat on A reaches not
 - Desktop-only parts: window hiding is Windows only, and the Chromium sweep lists processes with `ps`.
   IntelliJ finds no binary and stays off. Reveal in folder uses `xdg-open` and reports a failure as an error.
   The tray is the desktop shell's (Tauri), so it is not part of a headless install. Plugin secrets
-  need Windows DPAPI and fail with that message.
+  use a 0600 key file there (#975).
 - `npm test` on Linux: 1433 tests, 1313 pass, 63 skipped, 56 fail. 52 of the failures (and the hung
   `pageComponents.test.ts`) are UI tests that need Edge, Chrome or Brave, which this WSL box doesn't have. Agent chats,
   helpers, kanban workers, worktrees, devices, the gateway and the MCP tests pass. That leaves four:
