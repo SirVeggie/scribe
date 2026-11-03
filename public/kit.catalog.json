@@ -122,7 +122,7 @@
       "example": "<scribe-component plugin=\"git-history\" name=\"activity\" props='{}'></scribe-component>",
       "hooks": [
         {
-          "file": "page-components.js",
+          "file": "page-widgets.js",
           "text": "customElements.define(\"scribe-component\", PageComponent)"
         }
       ]

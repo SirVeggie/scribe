@@ -1,4 +1,4 @@
-import { limitComponentAction, type ComponentRate } from "../plugins/componentHost.js";
+import { limitWidgetAction, type WidgetRate } from "../plugins/widgetHost.js";
 import type { EffectivePermissions } from "./effectivePermissions.js";
 import type { LaunchSettings, OverlapRun, PageRunInput, ThreadRunInfo } from "../actions/types.js";
 import crypto from "node:crypto";
@@ -22,10 +22,10 @@ import { commitAll, createWorktree, discardWorktree, dropBranchIfEmpty, headComm
 import { lastSeenPages, pageEditsBlock, pageEditsSince, rememberPages, writePageRefs, type PageSnapshot } from "./pageEdits.js";
 import { cleanInstructionsOff, contextBlock, cursorScribeServers, freshContext, guidesBlock, implementText, pageKeysIn, planTurnNote, threadInstructions, type PageGuide, type ScopeInfo } from "./prompt.js";
 import { plugins, pluginActions } from "../plugins/current.js";
-import { componentStateAllowed } from "../plugins/manifest.js";
+import { widgetStateAllowed } from "../plugins/manifest.js";
 import { checkPermission } from "../pagePermissions.js";
 import { PageProblems } from "../pageProblems.js";
-import { probeComponent } from "../screenshot.js";
+import { probeWidget } from "../screenshot.js";
 import { forgetGuides, guideSent, markGuideSent } from "../guideMemory.js";
 import { filePath, filesBlock, removeFiles, removeThreadFiles, saveFiles } from "./attachments.js";
 import { saveOutputImage } from "./outputImages.js";
@@ -123,7 +123,7 @@ import { cleanProtectedPaths, policyFor, type PolicyEnv } from "./access.js";
 import { blockSummary, resetSandbox, sandboxed, sandboxNet, type SandboxBlock, type SandboxHooks } from "./sandbox.js";
 import { injectionDetectors } from "./injection.js";
 
-import { parseComponentInput, componentJson, componentString, componentText, componentLink, type ComponentAnswer, type ComponentItem, type ComponentInput } from "./componentTool.js";
+import { parseWidgetInput, widgetJson, widgetString, widgetText, widgetLink, type WidgetAnswer, type WidgetItem, type WidgetInput } from "./widgetTool.js";
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
 
@@ -231,7 +231,7 @@ type Pending =
   | { kind: "browser_handoff"; threadId: string; itemId: string; resolve: (a: string[]) => void; reject: (err: Error) => void }
   | { kind: "approval"; threadId: string; itemId: string; resolve: (d: ApprovalDecision) => void; reject: (err: Error) => void }
   | { kind: "question"; threadId: string; itemId: string; resolve: (a: QuestionAnswer) => void; reject: (err: Error) => void }
-  | { kind: "component"; threadId: string; itemId: string; resolve: (a: ComponentAnswer) => void; reject: (err: Error) => void };
+  | { kind: "component"; threadId: string; itemId: string; resolve: (a: WidgetAnswer) => void; reject: (err: Error) => void };
 
 function approvalFor(prefs: Prefs, provider: ProviderId): ApprovalPolicy {
   return prefs.approvals[provider] ?? prefs.approval;
@@ -2577,7 +2577,7 @@ export class AgentHost {
         if (item.kind === "tool" && item.task) item.task = { ...item.task, status: "stopped", summary: "Stopped: Scribe restarted", endedAt: item.task.endedAt ?? Date.now() };
       }
       if (stale.length) this.db.saveItems(stale);
-      const expired = items.filter((item): item is ComponentItem => item.kind === "component" && item.status === "pending");
+      const expired = items.filter((item): item is WidgetItem => item.kind === "component" && item.status === "pending");
       for (const item of expired) item.status = "expired";
       if (expired.length) this.db.saveItems(expired);
       const handoffs = items.filter(item => item.kind === "browser_handoff" && item.status === "pending");
@@ -5331,7 +5331,7 @@ export class AgentHost {
     this.addItem(threadId, run.turn.id, { kind: "settings", ids, ...(title ? { title } : {}) });
   }
 
-  componentItem(threadId: string, itemId: string): ComponentItem {
+  componentItem(threadId: string, itemId: string): WidgetItem {
     this.requireThread(threadId);
     const item = this.loadItems(threadId).find(it => it.id === itemId);
     if (!item || item.kind !== "component") throw new Error("Component not found.");
@@ -5359,7 +5359,7 @@ export class AgentHost {
     return { ...plugins.component(item.plugin, item.component, item.props), plugin: item.plugin, thread, permission };
   }
 
-  private componentCallRates = new Map<string, ComponentRate>();
+  private componentCallRates = new Map<string, WidgetRate>();
   async componentPluginAction(threadId: string, itemId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     let rate = this.componentCallRates.get(itemId);
     if (!rate) {
@@ -5370,7 +5370,7 @@ export class AgentHost {
       }
       rate = { at: Date.now(), count: 0, active: 0 }; this.componentCallRates.set(itemId, rate);
     }
-    return limitComponentAction(rate, () => this.performComponentPluginAction(threadId, itemId, input, signal));
+    return limitWidgetAction(rate, () => this.performComponentPluginAction(threadId, itemId, input, signal));
   }
 
   private async performComponentPluginAction(threadId: string, itemId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
@@ -5385,7 +5385,7 @@ export class AgentHost {
       if (thread.approval === "readonly" && def.agent !== "read") throw new Error("Method requires Board or higher access.");
       needsConsent = def.agent === "ask";
     } else if (op === "state") {
-      if (!key || key.length > 200 || !componentStateAllowed(definition.state, key)) throw new Error("Component state key is not declared.");
+      if (!key || key.length > 200 || !widgetStateAllowed(definition.state, key)) throw new Error("Component state key is not declared.");
     } else if (op === "listen") {
       if (!definition.events.length && !definition.state.length) throw new Error("Component has no live declarations.");
     } else if (op === "subscribe") {
@@ -5398,13 +5398,13 @@ export class AgentHost {
     const latest = this.componentPlugin(threadId, itemId);
     if (signal?.aborted) throw new Error("Component request cancelled.");
     if (latest.hash !== current.hash || latest.thread.approval !== initialApproval || latest.permission !== permission) throw new Error("Plugin or thread changed; retry the operation.");
-    if (op === "call") return plugins!.call(plugin, method, componentJson(input.args ?? {}), { kind: "agent", thread: threadId, ...(thread.scope.kind === "page" && thread.scope.ref ? { page: thread.scope.ref } : {}) });
+    if (op === "call") return plugins!.call(plugin, method, widgetJson(input.args ?? {}), { kind: "agent", thread: threadId, ...(thread.scope.kind === "page" && thread.scope.ref ? { page: thread.scope.ref } : {}) });
     if (op === "state") return plugins!.database.get(plugin, key);
     return { ok: true };
   }
 
-  async showComponent(threadId: string, input: ComponentInput, signal?: AbortSignal): Promise<unknown> {
-    const spec = parseComponentInput(input);
+  async showComponent(threadId: string, input: WidgetInput, signal?: AbortSignal): Promise<unknown> {
+    const spec = parseWidgetInput(input);
     const run = this.runs.get(threadId);
     if (!run) throw new Error("component_show only works while this chat thread has a turn running.");
     if (spec.plugin) {
@@ -5415,12 +5415,12 @@ export class AgentHost {
     }
     this.closeBlocks(run);
     const item = this.addItem(threadId, run.turn.id, { kind: "component", ...spec, wait: spec.wait === true, status: spec.wait ? "pending" : "shown" });
-    const answer = spec.wait ? this.waitPending<ComponentAnswer>(threadId, run, "component", item.id, signal) : undefined;
+    const answer = spec.wait ? this.waitPending<WidgetAnswer>(threadId, run, "component", item.id, signal) : undefined;
     // Register the wait immediately so a fast click cannot race the bounded diagnostic pass.
     if (answer) void answer.catch(() => {});
     const problems = spec.plugin ? await this.componentProblems.collect(item.id, 0, async captureSignal => {
       const current = this.componentPlugin(threadId, item.id);
-      const report = await probeComponent({ ...item, html: current.html } as ComponentItem, captureSignal);
+      const report = await probeWidget({ ...item, html: current.html } as WidgetItem, captureSignal);
       const boot = this.componentProblems.boot(item.id, 0);
       if (boot && report && typeof report === "object") this.componentProblems.report(item.id, { ...report, token: boot.token });
     }) : [];
@@ -5432,7 +5432,7 @@ export class AgentHost {
   updateComponent(threadId: string, itemId: string, change: Record<string, unknown>): { ok: true; link?: string } {
     const item = this.componentItem(threadId, itemId);
     if (change.action === "problems") { this.componentProblems.report(itemId, change.report); return { ok: true }; }
-    if (change.action === "open") return { ok: true, link: componentLink(change.link) };
+    if (change.action === "open") return { ok: true, link: widgetLink(change.link) };
     if (change.action === "local" || change.action === "summary") {
       let rate = this.componentWrites.get(itemId);
       if (!rate || Date.now() - rate.at >= 1000) {
@@ -5444,18 +5444,18 @@ export class AgentHost {
       if (++rate.count > 10) throw new Error("Component updates are too frequent; coalesce view state updates.");
     }
     if (change.action === "local") {
-      const local = componentJson(change.local);
+      const local = widgetJson(change.local);
       if (!local || typeof local !== "object" || Array.isArray(local)) throw new Error("local must be an object.");
       item.local = local as Record<string, unknown>;
     } else if (change.action === "summary") {
-      item.summary = componentString(change.summary, "summary", 8000);
+      item.summary = widgetString(change.summary, "summary", 8000);
     } else if (change.action === "reply" || change.action === "skip") {
       if (item.wait) {
         const pending = this.pending.get(itemId);
         if (!pending || pending.kind !== "component" || item.status !== "pending") throw new Error("This component is no longer waiting.");
         const skip = change.action === "skip";
-        const summary = skip ? "" : componentString(change.summary, "summary", 8000);
-        const data = skip ? null : componentJson(change.data);
+        const summary = skip ? "" : widgetString(change.summary, "summary", 8000);
+        const data = skip ? null : widgetJson(change.data);
         this.pending.delete(itemId);
         item.status = skip ? "skipped" : "answered";
         if (!skip) item.summary = summary;
@@ -5464,9 +5464,9 @@ export class AgentHost {
         return { ok: true };
       }
       if (change.action === "skip") throw new Error("This component is not waiting.");
-      const summary = componentString(change.summary, "summary", 8000).trim();
+      const summary = widgetString(change.summary, "summary", 8000).trim();
       if (!summary) throw new Error("A summary is required to send a component reply.");
-      componentJson(change.data);
+      widgetJson(change.data);
       item.summary = summary;
       this.send(threadId, { text: summary, from: "component" });
     } else throw new Error("Unknown component action.");
@@ -7090,7 +7090,7 @@ export class AgentHost {
     for (const turn of kept) {
       const ofTurn = items.filter((it) => it.turnId === turn.id && !("parentToolId" in it && it.parentToolId));
       const asked = ofTurn.filter((it) => it.kind === "user").map((it) => (it.kind === "user" ? it.text : "")).join("\n\n");
-      const texts = ofTurn.flatMap(it => it.kind === "text" ? [it.text] : it.kind === "component" ? [componentText(it)] : []);
+      const texts = ofTurn.flatMap(it => it.kind === "text" ? [it.text] : it.kind === "component" ? [widgetText(it)] : []);
       const reply = texts.at(-1) ?? "";
       const stopped = turn.status === "cancelled" ? " (stopped before it finished)" : turn.status === "error" ? " (failed before it finished)" : "";
       if (asked) parts.push(`User: ${asked}`);
@@ -7180,14 +7180,14 @@ export class AgentHost {
   private turnText(items: Item[], turn: Turn, full: boolean): { asked: string; reply: string; text: string } {
     const ofTurn = items.filter((it) => it.turnId === turn.id && !("parentToolId" in it && it.parentToolId));
     const asked = ofTurn.flatMap((it) => (it.kind === "user" ? [it.text] : [])).join("\n\n");
-    const texts = ofTurn.flatMap((it) => (it.kind === "text" ? [it.text] : it.kind === "component" ? [componentText(it)] : []));
+    const texts = ofTurn.flatMap((it) => (it.kind === "text" ? [it.text] : it.kind === "component" ? [widgetText(it)] : []));
     const reply = texts.at(-1) ?? "";
     if (!full) return { asked, reply, text: "" };
     const lines: string[] = [];
     for (const it of ofTurn) {
       if (it.kind === "user") lines.push(`User: ${it.text}`);
       else if (it.kind === "text") lines.push(`Agent: ${it.text}`);
-      else if (it.kind === "component") lines.push(`[component] ${componentText(it)}`);
+      else if (it.kind === "component") lines.push(`[component] ${widgetText(it)}`);
       else if (it.kind === "tool") lines.push(`[tool: ${it.title}${it.status === "error" ? " (failed)" : ""}]`);
       else if (it.kind === "plan") lines.push(`[plan, ${it.status}]\n${it.text}`);
     }

@@ -22,7 +22,7 @@ import { store } from "../store.js";
 import { pageAssetUrl } from "../pageAssets.js";
 import { componentHost } from "../config.js";
 import { plugins } from "../plugins/current.js";
-import { relayComponentEvents } from "../plugins/componentHost.js";
+import { relayWidgetEvents } from "../plugins/widgetHost.js";
 import { AI_CHUNKS, AI_QUERY_MAX, aiChunkPrompt, aiSearchPrompt, chunkDigest, digestPages, pageDigest, parseAiHits } from "../aiSearch.js";
 import { refreshSearchIndex, searchIndex } from "../search/service.js";
 import { chunkPage } from "../search/chunker.js";
@@ -969,7 +969,7 @@ export function agentRouter(host: AgentHost): express.Router {
           return current.hash === initial.hash && (persistent(current) || (once && consentTurn !== undefined && host.activeTurnId(req.params.id) === consentTurn && current.thread.approval === initialApproval && current.permission === initialPermission));
         } catch { return false; }
       };
-      relayComponentEvents(res, { plugins: plugins!, plugin: initial.plugin, definition: initial.definition, valid });
+      relayWidgetEvents(res, { plugins: plugins!, plugin: initial.plugin, definition: initial.definition, valid });
     } catch (error) { if (!res.headersSent) res.status(400).json({ error: (error as Error).message }); else res.end(); }
   });
   router.post("/threads/:id/components/:itemId", wrap(req => {

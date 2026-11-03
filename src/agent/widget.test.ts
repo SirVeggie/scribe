@@ -3,20 +3,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { parseComponentInput, componentLink, MAX_COMPONENT_HTML, type ComponentItem } from "./componentTool.js";
+import { parseWidgetInput, widgetLink, MAX_WIDGET_HTML, type WidgetItem } from "./widgetTool.js";
 import { componentHost, componentItemFromHost, previewThreadFromHost, pageIdFromHost } from "../config.js";
 import { contentOriginGate } from "../contentOrigin.js";
-import { componentDocument, COMPONENT_CSP } from "../components.js";
+import { widgetDocument, WIDGET_CSP } from "../widgets.js";
 import { itemText } from "./threadAccess.js";
 import { launchChromium } from "../chromium.js";
 import { PluginService } from "../plugins/service.js";
 import { setPlugins } from "../plugins/current.js";
-import { parseManifest, componentStateAllowed } from "../plugins/manifest.js";
+import { parseManifest, widgetStateAllowed } from "../plugins/manifest.js";
 import express from "express";
 import { agentRouter } from "./routes.js";
-import { componentSite } from "../components.js";
+import { widgetSite } from "../widgets.js";
 import { shellOrigins } from "../config.js";
-import { probeComponent } from "../screenshot.js";
+import { probeWidget } from "../screenshot.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-components-"));
 process.env.SCRIBE_HOME = dir;
@@ -35,17 +35,17 @@ function runningThread() {
   internals.runs.set(thread.id, { turn, textItem: null, reasoningItem: null, tools: new Map(), hooks: { called: new Set(), gated: new Set(), approved: new Set(), waiting: new Map(), told: new Set() } });
   return thread.id;
 }
-function component(threadId: string): ComponentItem {
+function component(threadId: string): WidgetItem {
   const item = host.threadDetail(threadId)!.items.find(it => it.kind === "component");
   assert.ok(item?.kind === "component");
   return item;
 }
 
 test("input caps count UTF-8 bytes and enforce exclusive HTML or plugin inputs", () => {
-  assert.throws(() => parseComponentInput({ html: "å".repeat(MAX_COMPONENT_HTML) }), /UTF-8/);
-  assert.throws(() => parseComponentInput({ html: " " }), /empty/);
-  assert.throws(() => parseComponentInput({ html: "ok", plugin: "test" }), /either/);
-  assert.throws(() => parseComponentInput({ html: "ok", wait: "yes" }), /true or false/);
+  assert.throws(() => parseWidgetInput({ html: "å".repeat(MAX_WIDGET_HTML) }), /UTF-8/);
+  assert.throws(() => parseWidgetInput({ html: " " }), /empty/);
+  assert.throws(() => parseWidgetInput({ html: "ok", plugin: "test" }), /either/);
+  assert.throws(() => parseWidgetInput({ html: "ok", wait: "yes" }), /true or false/);
 });
 
 const pluginManifest = { id: "component-fixture", name: "Component fixture", version: "1.0.0", summary: "Component tests", backend: "backend.mjs", risky: false,
@@ -66,8 +66,8 @@ test("plugin manifests reject bad schemas, paths and capabilities", () => {
   for (const props of [{ type: "object", wat: true }, { type: "object", properties: { n: { type: "number", default: 1 } } }, { type: "array" }]) {
     assert.throws(() => parseManifest({ ...pluginManifest, components: { counter: { ...pluginManifest.components.counter, props } } }), /props/i);
   }
-  assert.equal(componentStateAllowed(["rows/*"], "rows/a"), true);
-  assert.equal(componentStateAllowed(["rows/*"], "rows-private/a"), false);
+  assert.equal(widgetStateAllowed(["rows/*"], "rows/a"), true);
+  assert.equal(widgetStateAllowed(["rows/*"], "rows-private/a"), false);
   assert.throws(() => parseManifest({ ...pluginManifest, components: { counter: { ...pluginManifest.components.counter, html: "../escape" } } }));
 });
 
@@ -121,14 +121,14 @@ test("component hosts cannot collide with page or worktree origins and expose no
     contentOriginGate({ hostname, path: route, method: "GET" } as any, response as any, () => { allowed = true; });
     assert.equal(status, 403, route); assert.equal(allowed, false);
   }
-  assert.match(COMPONENT_CSP, /connect-src 'none'/);
-  assert.match(COMPONENT_CSP, /sandbox allow-scripts;/);
+  assert.match(WIDGET_CSP, /connect-src 'none'/);
+  assert.match(WIDGET_CSP, /sandbox allow-scripts;/);
 });
 
 test("component links cannot open files or loopback aliases", () => {
-  for (const link of ["file:///C:/private.txt", "javascript:alert(1)", "http://localhost/", "http://127.1/", "http://0.0.0.0/", "http://[::ffff:7f00:1]/", "http://w-it-012345abcdef.localhost/"]) assert.throws(() => componentLink(link), /Components can open/);
-  assert.equal(componentLink("scribe:agent-todo#card=777"), "scribe:agent-todo#card=777");
-  assert.equal(componentLink("https://example.com/test"), "https://example.com/test");
+  for (const link of ["file:///C:/private.txt", "javascript:alert(1)", "http://localhost/", "http://127.1/", "http://0.0.0.0/", "http://[::ffff:7f00:1]/", "http://w-it-012345abcdef.localhost/"]) assert.throws(() => widgetLink(link), /Components can open/);
+  assert.equal(widgetLink("scribe:agent-todo#card=777"), "scribe:agent-todo#card=777");
+  assert.equal(widgetLink("https://example.com/test"), "https://example.com/test");
 });
 
 test("question consumers can skip component waits and server caps write bursts", async () => {
@@ -190,7 +190,7 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
       const req = route.request(), target = new URL(req.url());
       if (target.hostname === componentHost(item.id)) {
         documents++;
-        return route.fulfill({ contentType: "text/html", headers: { "Content-Security-Policy": COMPONENT_CSP }, body: componentDocument(host.componentItem(thread, item.id), { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") }) });
+        return route.fulfill({ contentType: "text/html", headers: { "Content-Security-Policy": WIDGET_CSP }, body: widgetDocument(host.componentItem(thread, item.id), { css: read("kit.css"), js: read("kit.js"), bridge: read("widget-bridge.js") }) });
       }
       if (target.pathname.startsWith("/api/agent")) {
         if (req.method() === "POST") writes++;
@@ -202,7 +202,7 @@ test("real browser: kit table and three buttons, sandbox, no-network, reply, sta
     });
     await page.goto("http://localhost:4747/component-test");
     await page.addScriptTag({ content: "window.__name = value => value; window.scribeApp = { showNotice: console.error };" });
-    await page.addScriptTag({ content: read("component-host.js") });
+    await page.addScriptTag({ content: read("widget-host.js") });
     await page.evaluate(item => {
       const w = window as any;
       const R = {
@@ -264,10 +264,10 @@ test("kit restores terminal reply state for buttons and forms, while shown compo
   const browser = await launchChromium({ headless: true, args: [], purpose: "Component reply state test" });
   try {
     const read = (name: string) => fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8");
-    const kit = { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") };
+    const kit = { css: read("kit.css"), js: read("kit.js"), bridge: read("widget-bridge.js") };
     for (const status of ["answered", "skipped", "expired", "shown", "pending"] as const) {
       const page = await browser.newPage();
-      await page.setContent(componentDocument({ html: '<button data-reply="Blue">Choose blue</button><button data-reply="">Red</button><form data-reply><input name="note"><button type="submit">Send</button></form>', status, summary: "Blue" }, kit));
+      await page.setContent(widgetDocument({ html: '<button data-reply="Blue">Choose blue</button><button data-reply="">Red</button><form data-reply><input name="note"><button type="submit">Send</button></form>', status, summary: "Blue" }, kit));
       const closed = ["answered", "skipped", "expired"].includes(status);
       assert.equal(await page.locator(":disabled").count(), closed ? 4 : 0, status);
       assert.equal(await page.locator('.kit-reply-chosen[aria-pressed="true"]').count(), status === "answered" ? 1 : 0, status);
@@ -299,7 +299,7 @@ test("plugin frames relay live revisions/events, release subscriptions on unmoun
   const service = new PluginService(path.join(dir, "live-plugins")); setPlugins(service);
   const browser = await launchChromium({ headless: true, args: [], purpose: "Plugin component bridge test" });
   const app = express();
-  app.use(componentSite(() => host, path.resolve("public")));
+  app.use(widgetSite(() => host, path.resolve("public")));
   app.use("/api/agent", agentRouter(host));
   app.get("/", (_req, res) => res.send("<main></main><div style='height:4000px'></div>"));
   const server = app.listen(0, "0.0.0.0"); await new Promise<void>(resolve => server.once("listening", resolve));
@@ -324,11 +324,11 @@ test("plugin frames relay live revisions/events, release subscriptions on unmoun
     });
     await page.route("**/component/**", async route => {
       const read = (file: string) => fs.readFileSync(`public/${file}`, "utf8");
-      await route.fulfill({ contentType: "text/html", body: componentDocument({ ...item, html: host.componentPlugin(thread, item.id).html }, { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") }), headers: { "content-security-policy": COMPONENT_CSP.replace(/frame-ancestors[^;]+/, `frame-ancestors http://localhost:${port}`) } });
+      await route.fulfill({ contentType: "text/html", body: widgetDocument({ ...item, html: host.componentPlugin(thread, item.id).html }, { css: read("kit.css"), js: read("kit.js"), bridge: read("widget-bridge.js") }), headers: { "content-security-policy": WIDGET_CSP.replace(/frame-ancestors[^;]+/, `frame-ancestors http://localhost:${port}`) } });
     });
     await page.goto(`http://localhost:${port}/`);
     await page.addScriptTag({ content: "window.__name = value => value; window.scribeApp = { showNotice: console.error };" });
-    await page.addScriptTag({ content: fs.readFileSync("public/component-host.js", "utf8") });
+    await page.addScriptTag({ content: fs.readFileSync("public/widget-host.js", "utf8") });
     await page.evaluate(item => {
       const w = window as any;
       const R = { el(tag: string, cls: string, text: string) { const n = document.createElement(tag); n.className = cls || ""; n.textContent = text || ""; return n; }, button(text: string, cls: string, fn: () => void) { const n = R.el("button", cls, text); n.onclick = fn; return n; }, renderMarkdown(n: HTMLElement, text: string) { n.textContent = text; } };
@@ -384,9 +384,9 @@ test("plugin frames relay live revisions/events, release subscriptions on unmoun
 });
 
 test("component diagnostic capture reports script and bridge errors without invoking methods", { timeout: 15_000 }, async () => {
-  const item: ComponentItem = { id: "it_012345abcdef", threadId: "th_capture", turnId: "tu_capture", seq: 1, createdAt: Date.now(), kind: "component", plugin: "component-fixture", component: "counter", props: { name: "Capture" }, wait: false, status: "shown", html: `<script>window.calls=0; scribe.plugin.call('update',{value:99}).then(result=>{if(result.error!=='capture')throw new Error('capture failed')}); setTimeout(()=>{throw new Error('Render failure')},0);</script>` };
+  const item: WidgetItem = { id: "it_012345abcdef", threadId: "th_capture", turnId: "tu_capture", seq: 1, createdAt: Date.now(), kind: "component", plugin: "component-fixture", component: "counter", props: { name: "Capture" }, wait: false, status: "shown", html: `<script>window.calls=0; scribe.plugin.call('update',{value:99}).then(result=>{if(result.error!=='capture')throw new Error('capture failed')}); setTimeout(()=>{throw new Error('Render failure')},0);</script>` };
   const controller = new AbortController();
-  const report = await probeComponent(item, controller.signal) as { problems: Array<{code:string;message:string}> };
+  const report = await probeWidget(item, controller.signal) as { problems: Array<{code:string;message:string}> };
   assert.ok(report.problems.some(p => p.code === "uncaught_error" && p.message.includes("Render failure")));
   assert.ok(!report.problems.some(p => p.message.includes("capture failed")));
 });

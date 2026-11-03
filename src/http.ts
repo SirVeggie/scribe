@@ -4,9 +4,9 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { componentSite } from "./components.js";
-import { PageComponents } from "./pageComponents.js";
-import { parseComponentInput } from "./agent/componentTool.js";
+import { widgetSite } from "./widgets.js";
+import { PageWidgets } from "./pageWidgets.js";
+import { parseWidgetInput } from "./agent/widgetTool.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isSafeAssetName, parseAssetInputs, prepareAssets, readStoredAsset, rewriteAssetRefs } from "./assets.js";
 import { builtinWatchEnabled, watchBuiltinTemplates } from "./builtinTemplates.js";
@@ -347,8 +347,8 @@ export async function startHttp(): Promise<http.Server> {
     if (identify(req).device || identify(req).web) res.status(409).json({ error: "This opens on the device's own screen, so it is not available from another device." });
     else next();
   });
-  const pageComponents = new PageComponents(store, pluginService);
-  app.use(componentSite(() => agentHost ?? undefined, publicDir, pageComponents));
+  const pageComponents = new PageWidgets(store, pluginService);
+  app.use(widgetSite(() => agentHost ?? undefined, publicDir, pageComponents));
   // A worktree's UI preview, on its chat's own origin (#703); other hosts go on.
   app.use(worktreePreviewSite(id => agentHost?.getThread(id)?.worktree));
   // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
@@ -1422,7 +1422,7 @@ export async function startHttp(): Promise<http.Server> {
     const thread = threadOf(req);
     if (!thread || !agentHost) { res.status(403).json({ error: "component_show only works in Scribe chat threads." }); return; }
     let input;
-    try { input = parseComponentInput(req.body); }
+    try { input = parseWidgetInput(req.body); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
     req.setTimeout(0);
     res.setTimeout(0);

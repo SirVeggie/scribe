@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import type express from "express";
-import { limitComponentAction, relayComponentEvents, type ComponentRate } from "./componentHost.js";
+import { limitWidgetAction, relayWidgetEvents, type WidgetRate } from "./widgetHost.js";
 import type { PluginService } from "./service.js";
 
 function fixture() {
@@ -23,7 +23,7 @@ function fixture() {
 
 test("component relay filters declarations and payload size, reloads and cleans up", () => {
   const f = fixture(), r = f.response();
-  relayComponentEvents(r.response, { plugins: f.plugins, plugin: "counter", definition: { state: ["rows/*"], events: ["tick"] }, valid: () => true });
+  relayWidgetEvents(r.response, { plugins: f.plugins, plugin: "counter", definition: { state: ["rows/*"], events: ["tick"] }, valid: () => true });
   try {
     f.emit("other", "tick", 1);
     f.emit("counter", "private", 1);
@@ -52,8 +52,8 @@ test("relay polling revokes idle streams and stops checking closed streams", t =
   const f = fixture(), a = f.response(), b = f.response();
   let valid = true, checks = 0;
   const options = { plugins: f.plugins, plugin: "counter", definition: { state: [], events: [] }, valid: () => { checks++; return valid; } };
-  relayComponentEvents(a.response, options);
-  relayComponentEvents(b.response, options);
+  relayWidgetEvents(a.response, options);
+  relayWidgetEvents(b.response, options);
   try {
     assert.equal(start.mock.callCount(), 1, "streams share one interval");
     t.mock.timers.tick(1000);
@@ -74,9 +74,9 @@ test("relay polling revokes idle streams and stops checking closed streams", t =
 test("relay checks validity before delivery and closes on backpressure", () => {
   const f = fixture(), a = f.response(), b = f.response();
   const options = { plugins: f.plugins, plugin: "counter", definition: { state: [], events: ["tick"] } };
-  relayComponentEvents(a.response, { ...options, valid: () => false });
+  relayWidgetEvents(a.response, { ...options, valid: () => false });
   b.res.writable = false;
-  relayComponentEvents(b.response, { ...options, valid: () => true });
+  relayWidgetEvents(b.response, { ...options, valid: () => true });
   try {
     assert.equal(b.res.ended, 1);
     f.emit("counter", "tick", "private");
@@ -88,19 +88,19 @@ test("relay checks validity before delivery and closes on backpressure", () => {
 
 test("component limiter bounds requests and active actions, and releases failures", async t => {
   t.mock.timers.enable({ apis: ["Date"] });
-  const rate: ComponentRate = { at: Date.now(), count: 0, active: 0 };
-  for (let i = 0; i < 100; i++) await limitComponentAction(rate, () => i);
-  await assert.rejects(limitComponentAction(rate, () => 0), /frequent/);
+  const rate: WidgetRate = { at: Date.now(), count: 0, active: 0 };
+  for (let i = 0; i < 100; i++) await limitWidgetAction(rate, () => i);
+  await assert.rejects(limitWidgetAction(rate, () => 0), /frequent/);
   t.mock.timers.tick(1000);
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
-  const active = Array.from({ length: 16 }, () => limitComponentAction(rate, () => pending));
+  const active = Array.from({ length: 16 }, () => limitWidgetAction(rate, () => pending));
   assert.equal(rate.active, 16);
-  await assert.rejects(limitComponentAction(rate, () => 0), /frequent/);
+  await assert.rejects(limitWidgetAction(rate, () => 0), /frequent/);
   release(); await Promise.all(active);
   assert.equal(rate.active, 0);
-  await assert.rejects(limitComponentAction(rate, () => { throw new Error("failed"); }), /failed/);
-  await assert.rejects(limitComponentAction(rate, async () => { throw new Error("failed async"); }), /failed async/);
+  await assert.rejects(limitWidgetAction(rate, () => { throw new Error("failed"); }), /failed/);
+  await assert.rejects(limitWidgetAction(rate, async () => { throw new Error("failed async"); }), /failed async/);
   assert.equal(rate.active, 0);
-  assert.equal(await limitComponentAction(rate, () => 42), 42);
+  assert.equal(await limitWidgetAction(rate, () => 42), 42);
 });

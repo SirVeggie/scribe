@@ -24,7 +24,7 @@ function checkPropsSchema(schema: unknown, depth = 0): void {
 const propsSchema = z.record(z.string(), z.unknown()).superRefine((schema, ctx) => {
   try { if (schema.type !== "object") throw new Error("Props must have type object"); checkPropsSchema(schema); z.fromJSONSchema(schema); } catch (error) { ctx.addIssue({ code: "custom", message: `Invalid component props schema: ${String(error)}` }); }
 });
-export const pluginComponentSchema = z.object({
+export const pluginWidgetSchema = z.object({
   description: z.string().min(1).max(1000), html: file, props: propsSchema,
   height: z.object({ min: z.number().int().min(64).max(1200), max: z.number().int().min(64).max(1200) }).refine(v => v.min <= v.max).default({ min: 64, max: 480 }),
   methods: z.array(componentName).max(100).default([]),
@@ -42,7 +42,7 @@ export const manifestSchema = z.object({
   source: file.optional(),
   guide: file.optional(),
   readme: file.optional(),
-  components: z.record(componentName, pluginComponentSchema).default({}),
+  components: z.record(componentName, pluginWidgetSchema).default({}),
   access: z.object({ files: z.array(z.string().max(1000)).max(50).default([]), network: z.array(z.string().max(250)).max(50).default([]),
     // Environment variables the backend gets from Scribe's own environment, shown for approval at install.
     env: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,99}$/).refine(name => !reservedEnv(name), "Scribe's own variables and NODE_OPTIONS cannot be passed to a plugin")).max(50).default([]) }).default({ files: [], network: [], env: [] }),
@@ -64,10 +64,10 @@ export type PluginManifest = z.infer<typeof manifestSchema>;
 /** Compares declared access across versions; records saved before access.env read as having none. */
 export const accessKey = (access: Partial<PluginManifest["access"]>): string => JSON.stringify([access.files ?? [], access.network ?? [], access.env ?? []]);
 export type PluginMethod = PluginManifest["methods"][string];
-export function componentStateAllowed(patterns: string[], key: string): boolean {
+export function widgetStateAllowed(patterns: string[], key: string): boolean {
   return patterns.some(pattern => pattern.endsWith("/*") ? key.startsWith(pattern.slice(0, -1)) : key === pattern);
 }
-export function validateComponentProps(schema: Record<string, unknown>, props: unknown): void {
+export function validateWidgetProps(schema: Record<string, unknown>, props: unknown): void {
   // Zod's object conversion only enforces required names present in properties.
   // JSON Schema also permits required names absent from properties.
   const requiredFit = (s: any, value: any): boolean => {

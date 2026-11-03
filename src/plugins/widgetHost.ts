@@ -1,11 +1,11 @@
 import type express from "express";
-import { componentStateAllowed, type PluginManifest } from "./manifest.js";
+import { widgetStateAllowed, type PluginManifest } from "./manifest.js";
 import type { PluginService } from "./service.js";
 
-export type ComponentRate = { at: number; count: number; active: number };
+export type WidgetRate = { at: number; count: number; active: number };
 
 /** Count every request, including ones awaiting consent, against the same limits. */
-export async function limitComponentAction<T>(rate: ComponentRate, action: () => T | Promise<T>): Promise<T> {
+export async function limitWidgetAction<T>(rate: WidgetRate, action: () => T | Promise<T>): Promise<T> {
   const now = Date.now();
   if (now - rate.at >= 1000) { rate.at = now; rate.count = 0; }
   if (++rate.count > 100 || rate.active >= 16) throw new Error("Component plugin requests are too frequent.");
@@ -27,7 +27,7 @@ function poll(check: () => void): () => void {
   };
 }
 
-export function relayComponentEvents(res: express.Response, options: {
+export function relayWidgetEvents(res: express.Response, options: {
   plugins: Pick<PluginService, "subscribe">;
   plugin: string;
   definition: Pick<PluginManifest["components"][string], "state" | "events">;
@@ -53,7 +53,7 @@ export function relayComponentEvents(res: express.Response, options: {
     if (registry || !valid()) { reload(); return; }
     if (name === "state") {
       const state = data as { key?: unknown; revision?: unknown };
-      if (typeof state?.key === "string" && componentStateAllowed(definition.state, state.key)) send({ type: "plugin-state", key: state.key, revision: state.revision });
+      if (typeof state?.key === "string" && widgetStateAllowed(definition.state, state.key)) send({ type: "plugin-state", key: state.key, revision: state.revision });
     } else if (definition.events.includes(name) && Buffer.byteLength(JSON.stringify(data) ?? "null") <= 64 * 1024) send({ type: "plugin-event", name, data });
   });
   unpoll = poll(() => { if (!valid()) reload(); else if (!res.write(": keepalive\n\n")) close(); });

@@ -1,5 +1,5 @@
 /** Self-contained: serialized into the opaque-origin document. */
-function componentBridge(initialLocal, initialProps = {}, hasPlugin = false, initialReplyState = {}) {
+function widgetBridge(initialLocal, initialProps = {}, hasPlugin = false, initialReplyState = {}) {
     let port;
     let next = 0;
     const waiting = new Map();

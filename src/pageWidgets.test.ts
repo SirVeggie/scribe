@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import express from "express";
 import { get } from "node:http";
-import { PageComponents, PAGE_COMPONENT_LIMIT, GLOBAL_COMPONENT_LIMIT, COMPONENT_LEASE_MS } from "./pageComponents.js";
+import { PageWidgets, PAGE_WIDGET_LIMIT, GLOBAL_WIDGET_LIMIT, WIDGET_LEASE_MS } from "./pageWidgets.js";
 import { PluginService } from "./plugins/service.js";
-import { componentSite } from "./components.js";
+import { widgetSite } from "./widgets.js";
 import { BOARD_BRIDGE_JS } from "./bridge.js";
 import { PageProblems, PAGE_PROBLEM_JS } from "./pageProblems.js";
 import { contentOriginGate, framePageId } from "./contentOrigin.js";
@@ -34,7 +34,7 @@ async function fixture(now = Date.now) {
   await plugins.install(files, plugins.preview(files).hash);
   let permission = "allow", revision = 1;
   const store = { get: ((id: string) => /^t_[a-z0-9]{8}$/.test(id) ? { id, revision } : undefined) as any, pagePermissions: (() => new Map([[`plugin.${manifest.id}`, { value: permission }]])) as any };
-  const mounts = new PageComponents(store, plugins, now);
+  const mounts = new PageWidgets(store, plugins, now);
   return { plugins, mounts, files, setPermission(value: string) { permission = value; }, nextRevision() { revision++; }, async close() { await plugins.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } };
 }
 
@@ -80,24 +80,24 @@ test("page component leases protect active viewers and reclaim only abandoned mo
   try {
     for (let i = 0; i < 100; i++) f.mounts.validate("t_aaaaaaaa", spec);
     const first = f.mounts.resolve("t_aaaaaaaa", spec);
-    for (let i = 1; i < PAGE_COMPONENT_LIMIT; i++) f.mounts.resolve("t_aaaaaaaa", spec);
+    for (let i = 1; i < PAGE_WIDGET_LIMIT; i++) f.mounts.resolve("t_aaaaaaaa", spec);
     assert.throws(() => f.mounts.resolve("t_aaaaaaaa", spec), /64 active instances/);
     assert.ok(f.mounts.validate("t_aaaaaaaa", spec), "schema checks do not consume active capacity");
     assert.match(f.mounts.renewAll("t_bbbbbbbb", [first.id]).errors[first.id], /expired/);
     assert.throws(() => f.mounts.renewAll("t_aaaaaaaa", Array(65).fill(first.id)), /Invalid/);
     assert.ok(f.mounts.current("t_aaaaaaaa", first.id), "a full page never evicts an active mount");
-    now += COMPONENT_LEASE_MS - 1;
+    now += WIDGET_LEASE_MS - 1;
     assert.deepEqual(f.mounts.renewAll("t_aaaaaaaa", [first.id]).errors, {});
     now += 2;
     const next = f.mounts.resolve("t_aaaaaaaa", spec);
     assert.ok(f.mounts.current("t_aaaaaaaa", first.id));
     assert.ok(f.mounts.current("t_aaaaaaaa", next.id));
-    for (let i = 2; i < GLOBAL_COMPONENT_LIMIT; i++) f.mounts.resolve(`t_${String(Math.floor(i / 60)).padStart(8, "0")}`, spec);
+    for (let i = 2; i < GLOBAL_WIDGET_LIMIT; i++) f.mounts.resolve(`t_${String(Math.floor(i / 60)).padStart(8, "0")}`, spec);
     assert.throws(() => f.mounts.resolve("t_99999999", spec), /500 active page instances/);
     assert.ok(f.mounts.current("t_aaaaaaaa", first.id));
     f.mounts.release("t_aaaaaaaa", next.id);
     assert.ok(f.mounts.resolve("t_99999999", spec));
-    now += COMPONENT_LEASE_MS;
+    now += WIDGET_LEASE_MS;
     f.mounts.resolve("t_88888888", spec);
     assert.throws(() => f.mounts.renew("t_aaaaaaaa", first.id), /expired/);
     assert.ok(f.mounts.resolve("t_aaaaaaaa", spec), "expired leases free capacity globally");
@@ -110,7 +110,7 @@ test("capture mounts have a separate page limit and cannot consume viewer slots"
   const f = await fixture();
   const spec = { plugin: manifest.id, component: "counter", props: { name: "Hello" } };
   try {
-    for (let i = 0; i < PAGE_COMPONENT_LIMIT; i++) f.mounts.resolve("t_aaaaaaaa", { ...spec, capture: true });
+    for (let i = 0; i < PAGE_WIDGET_LIMIT; i++) f.mounts.resolve("t_aaaaaaaa", { ...spec, capture: true });
     assert.throws(() => f.mounts.resolve("t_aaaaaaaa", { ...spec, capture: true }), /64 active instances.*captures/);
     const viewer = f.mounts.resolve("t_aaaaaaaa", spec);
     assert.ok(f.mounts.current("t_aaaaaaaa", viewer.id));
@@ -128,7 +128,7 @@ test("page component browser: isolation, state/events, replies, local state, dia
   app.use((req, res, next) => { const set = res.setHeader.bind(res); res.setHeader = ((key: string, value: any) => set(key, key.toLowerCase() === "content-security-policy" ? String(value).replaceAll(`:${PORT}`, `:${port}`) : value)) as any; next(); });
   app.use(contentOriginGate);
   app.use((req, _res, next) => { if (req.path.startsWith("/component/")) setTimeout(next, 650); else next(); });
-  app.use(componentSite(() => undefined, path.resolve("public"), f.mounts));
+  app.use(widgetSite(() => undefined, path.resolve("public"), f.mounts));
   app.use(express.json());
   app.get("/", (_req, res) => res.type("html").send(`<iframe id="page" style="width:900px;height:800px" src="http://t-aaaaaaaa.localhost:${port}/view/t_aaaaaaaa"></iframe><script>
 window.shellReplies=[];window.noTarget=false;
@@ -201,7 +201,7 @@ addEventListener('message',e=>{if(e.data?.type==='scribe-reply'){shellReplies.pu
     await widget.locator("#name").waitFor();
     assert.deepEqual(await (await child())!.evaluate(() => (window as any).initialLocal), { saved: 9 });
     const beforeExpiry = new URL((await child())!.url()).pathname.split("/").pop()!;
-    now += COMPONENT_LEASE_MS;
+    now += WIDGET_LEASE_MS;
     const reclaim = f.mounts.resolve("t_bbbbbbbb", { plugin: manifest.id, component: "counter", props: { name: "Reclaim" } });
     f.mounts.release("t_bbbbbbbb", reclaim.id);
     await hostPage().waitForFunction(old => {

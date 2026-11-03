@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { PAGE_PERMISSIONS } from "../pagePermissions.js";
-import { accessKey, parseManifest, pluginId, declarePlugins, declaredPlugins, validateComponentProps, type PluginManifest } from "./manifest.js";
+import { accessKey, parseManifest, pluginId, declarePlugins, declaredPlugins, validateWidgetProps, type PluginManifest } from "./manifest.js";
 import { PluginDatabase, type PluginRecord } from "./database.js";
 import { packageHash, packagePath, readPackage, writePackage, zip, type PackageFiles } from "./package.js";
 import { PluginRuntime } from "./runtime.js";
@@ -89,7 +89,7 @@ export class PluginService {
     const key = `${record.hash}:${name}:${JSON.stringify(props)}`;
     const cached = this.componentCache.get(key);
     if (cached) return cached;
-    validateComponentProps(definition.props, props);
+    validateWidgetProps(definition.props, props);
     const result = { definition, html: this.text(id, definition.html), name: record.manifest.name, hash: record.hash };
     this.componentCache.set(key, result);
     if (this.componentCache.size > 64) this.componentCache.delete(this.componentCache.keys().next().value!);

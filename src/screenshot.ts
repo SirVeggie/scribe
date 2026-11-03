@@ -63,7 +63,7 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let diagnosticViews = 0;
 
 /** Component fallback diagnostics never execute plugin methods or send replies. */
-export async function probeComponent(item: import("./agent/componentTool.js").ComponentItem, signal: AbortSignal): Promise<unknown> {
+export async function probeWidget(item: import("./agent/widgetTool.js").WidgetItem, signal: AbortSignal): Promise<unknown> {
   if (signal.aborted || diagnosticViews >= 2) return;
   diagnosticViews++;
   try {
@@ -73,13 +73,13 @@ export async function probeComponent(item: import("./agent/componentTool.js").Co
       signal.addEventListener("abort", close, { once: true });
       try {
         if (signal.aborted) return;
-        const { componentDocument, COMPONENT_CSP } = await import("./components.js");
+        const { widgetDocument, WIDGET_CSP } = await import("./widgets.js");
         const { readFileSync } = await import("node:fs");
         const read = (name: string) => readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8");
-        const html = componentDocument(item, { css: read("kit.css"), js: read("kit.js"), bridge: read("component-bridge.js") }, { token: "capture", capture: true });
+        const html = widgetDocument(item, { css: read("kit.css"), js: read("kit.js"), bridge: read("widget-bridge.js") }, { token: "capture", capture: true });
         await context.addInitScript(() => { (window as any).__SCRIBE_CAPTURE__ = true; });
         const page = await context.newPage();
-        await page.route("**/*", route => route.fulfill({ contentType: "text/html", headers: { "Content-Security-Policy": COMPONENT_CSP }, body: html }));
+        await page.route("**/*", route => route.fulfill({ contentType: "text/html", headers: { "Content-Security-Policy": WIDGET_CSP }, body: html }));
         await page.goto("http://component-capture.localhost/", { waitUntil: "domcontentloaded", timeout: 1500 });
         await page.waitForFunction(() => !!(window as any).__componentReport, undefined, { timeout: 1600 });
         return await page.evaluate(() => (window as any).__componentReport);
