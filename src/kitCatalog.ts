@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-/** The catalog describes implemented kit features; plugin components stay in their manifests. */
+/** The catalog describes implemented kit features; plugin widgets stay in their manifests. */
 export type KitEntry = {
   id: string;
   write: string;

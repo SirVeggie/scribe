@@ -269,7 +269,7 @@ Put each question next to the part of the page it is about; one form can wrap th
 
 ### Page components
 
-Scribe offers ready-made pieces of the app's own UI that a page loads by name with `<script src="/c/<name>.js"></script>` (fragment or full document). Use them instead of building these by hand: a page's own dropdown or hand-drawn chart drifts from the app's look. Read a component's guide with `plugin_guide({ id: "core" })` before its first use. They need no permission, and downloads inline them.
+Scribe offers ready-made pieces of the app's own UI that a page loads by name with `<script src="/c/<name>.js"></script>` (fragment or full document). Use them instead of building these by hand: a page's own dropdown or hand-drawn chart drifts from the app's look. Read a component's guide with `plugin_guide({ id: "core" })` before its first use. They need no permission, and downloads inline them. Plugins can offer their own at `/c/<plugin>/<name>.js`: `plugin_guide({ id: "core" })` lists them under `pluginPageComponents`, and that plugin's `plugin_guide` has their guides.
 
 <!-- page-components:start -->
 | Load | Gives |
@@ -893,14 +893,14 @@ In a Scribe chat thread (the tool list has `page_ask`), use `page_ask` on the pa
 - Reuse a `key` only for in-place edits of that page. A continuation or large rewrite gets a new key; close the old tab first so the previous page stays recoverable.
 - Dates in tool results are local ISO (timezone offset); stored as unix ms on disk.
 
-## Inline UI in chat: component_show
+## Inline UI in chat: widget_show
 
-For a small choice or table inside the reply itself (not a page), call `component_show` with `html`: a fragment that uses the Page kit (kit.css and kit.js are included, so its elements, `<button data-reply>` and `<form data-reply>` work). Or pass `plugin`, `component` and `props` from `plugin_guide`. Always add `fallback` markdown: history, `thread_read` and exports show it (or the `setSummary` text) in place of the widget.
+For a small choice or table inside the reply itself (not a page), call `widget_show` with `html`: a fragment that uses the Page kit (kit.css and kit.js are included, so its elements, `<button data-reply>` and `<form data-reply>` work). Or pass `plugin`, `widget` and `props` from `plugin_guide`'s `widgets`. Always add `fallback` markdown: history, `thread_read` and exports show it (or the `setSummary` text) in place of the widget.
 
-- The frame has its own sandboxed origin with no network and no page API. Its `window.scribe` has only `props`, `local`/`setLocal` (view state for this item), `reply(data, { summary })`, `setSummary(text)` and `open(link)` (`scribe:` keys or external websites). Plugin components also get `scribe.plugin.call/state/on` for their declared methods, state and events.
+- The frame has its own sandboxed origin with no network and no page API. Its `window.scribe` has only `props`, `local`/`setLocal` (view state for this item), `reply(data, { summary })`, `setSummary(text)` and `open(link)` (`scribe:` keys or external websites). Plugin widgets also get `scribe.plugin.call/state/on` for their declared methods, state and events.
 - `wait: true` blocks until the user clicks a reply (the result has `data` and `summary`) or Skip. Without `wait`, a reply sends its summary as a chat message.
 - Replies and links need a real click in the frame; a script can't send one by itself.
-- Plugin components may return `problems` from their first render, like `page_show`.
+- Plugin widgets may return `problems` from their first render, like `page_show`.
 
 ## Page plugins
 

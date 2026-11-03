@@ -20,6 +20,13 @@ Pages need `plugin.<id>` permission; Scribe asks on first use. A disabled or mis
 
 Agent methods declare `agent: "read"`, `"board"` or `"ask"`. Read methods work on all rungs; Board methods require Board or higher. Ask methods request Allow / Allow for this thread / Deny unless on Full or inherited from the thread's page. A page's Deny refuses Ask calls; Auto asks. These approvals never change page grants.
 
+## Widgets and page components
+
+A plugin can offer two kinds of UI, both listed by `plugin_guide`:
+
+- **Widgets** (`widgets` in the manifest) are framed, sandboxed HTML: `widget_show({plugin,widget,props})` puts one in the chat and `<scribe-widget plugin="…" name="…" props='{}'>` on a page. Each declares `description`, `html`, a JSON Schema for `props`, an optional `height: {min,max}`, and the agent `methods`, `state` keys (`rows/*` for a prefix) and `events` its frame may use. Packages written before widgets were renamed use `components`; Scribe still reads that key, and `<scribe-component>` still works on saved pages.
+- **Page components** (`pageComponents`) are JS (with its own CSS) that runs in the page itself, like Scribe's own `/c/chart.js`: `"pageComponents":{"gauge":{"summary":"…","file":"gauge.js","guide":"gauge.md"}}` is loaded with `<script src="/c/<plugin>/gauge.js"></script>`. Names are lowercase with dashes. Its calls go through `scribe.plugin(id)` under the page's plugin permission, so it needs no permission of its own, and loading it declares the plugin for the page. Downloads inline it, and a disabled plugin's components are not served. Keep the guide short: how to load it, its markup or API, and an example.
+
 ## Authoring
 
 Source is kept in Scribe, with Git history. Board agents use `plugin_create`, `plugin_read`, and `plugin_patch`; workspace filesystem access is unnecessary. Edits do not change installed code.

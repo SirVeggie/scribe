@@ -216,11 +216,11 @@ Control agent chats after a click, unattended chats, workspace access, classifie
 
 The shared viewer handles PDFs, video/audio, Markdown, CSV/TSV tables, JSON, text/code and sandboxed HTML. Arrow keys step through a set of files. This is also available to custom pages without building another viewer.
 
-#### Plugins add backend features and live components
+#### Plugins add backend features, widgets and page components
 
 - Find it: Settings → Plugins
 
-Import a plugin package, review its source/changes and requested access, configure it, inspect logs, restart it and export it. Updates can keep local customizations, take the incoming version or use an agent to merge. Plugin components can appear in pages or inline chat.
+Import a plugin package, review its source/changes and requested access, configure it, inspect logs, restart it and export it. Updates can keep local customizations, take the incoming version or use an agent to merge. Plugin widgets can appear in pages or inline chat, and plugins can offer page components that pages load like Scribe's own.
 
 ## Chat & threads
 
