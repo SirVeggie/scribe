@@ -4691,18 +4691,29 @@ button.space-card.compact:disabled {
 }
 
 /* The device chip in another device's UI (#906): the space chip's look, in the device's color. */
-button.device-chip[hidden] {
-  display: none;
+/* In another device's UI the space chip also names that device (#949). */
+button.space-chip.remote {
+  max-width: 260px;
 }
 
-button.device-chip {
+.space-chip-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 12px;
+  background: var(--border);
+}
+
+.space-chip-device {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text);
-  background: color-mix(in srgb, var(--space) 14%, transparent);
 }
 
-button.device-chip.offline .space-chip-dot {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--space);
+button.space-chip.offline .space-chip-device {
+  color: var(--muted);
 }
 
 .space-top {

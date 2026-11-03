@@ -71,14 +71,6 @@ window.createSpaces = function createSpaces(host) {
   chip.addEventListener("click", () => toggle());
   host.chipSlot.after(chip);
 
-  // In another device's UI, the one place that says so (#906): its name, in its color.
-  const deviceChip = document.createElement("button");
-  deviceChip.type = "button";
-  deviceChip.className = "space-chip named device-chip";
-  deviceChip.hidden = true;
-  deviceChip.addEventListener("click", () => toggle());
-  if (remoteId) chip.before(deviceChip);
-
   const root = el("div", "spaces");
   root.hidden = true;
   root.setAttribute("role", "dialog");
@@ -442,20 +434,31 @@ window.createSpaces = function createSpaces(host) {
 
   /* ---------- render ---------- */
 
+  /** The space chip; in another device's UI it also names that device after a divider (#906, #949). */
   function renderChip() {
     const space = current();
     chip.replaceChildren();
     chip.classList.toggle("named", Boolean(space));
     if (space) {
       chip.style.setProperty("--space", colorOf(space));
-      const dot = el("span", "space-chip-dot");
-      const name = el("span", "space-chip-name", space.name);
-      chip.append(dot, name);
-      chip.dataset.tooltip = `Space: ${space.name} (Ctrl+E)`;
+      chip.append(el("span", "space-chip-dot"), el("span", "space-chip-name", space.name));
     } else {
       chip.innerHTML = ICONS.spaces;
-      chip.removeAttribute("data-tooltip");
     }
+    const tips = space ? [`Space: ${space.name} (Ctrl+E)`] : [];
+    if (remoteId && remoteDevice) {
+      const online = remoteDevice.online && remoteConnected;
+      chip.classList.add("remote");
+      chip.classList.toggle("offline", !online);
+      chip.append(el("span", "space-chip-sep"), el("span", "space-chip-device", remoteDevice.name));
+      tips.push(
+        online
+          ? `On ${remoteDevice.name}${remoteDevice.rtt !== undefined ? ` · ${remoteDevice.rtt} ms` : ""}`
+          : `${remoteDevice.name} is offline${remoteDevice.lastSeen ? ` · last seen ${ago(remoteDevice.lastSeen)}` : ""}`,
+      );
+    }
+    if (tips.length) chip.dataset.tooltip = tips.join(" · ");
+    else chip.removeAttribute("data-tooltip");
   }
 
   function deviceColor(id) {
@@ -465,19 +468,6 @@ window.createSpaces = function createSpaces(host) {
     return hues[hash % hues.length];
   }
 
-  function renderDeviceChip() {
-    if (!remoteId) return;
-    deviceChip.hidden = !remoteDevice;
-    if (!remoteDevice) return;
-    const online = remoteDevice.online && remoteConnected;
-    deviceChip.style.setProperty("--space", deviceColor(remoteId));
-    deviceChip.classList.toggle("offline", !online);
-    deviceChip.replaceChildren(el("span", "space-chip-dot"), el("span", "space-chip-name", remoteDevice.name));
-    deviceChip.dataset.tooltip = online
-      ? `On ${remoteDevice.name}${remoteDevice.rtt !== undefined ? ` · ${remoteDevice.rtt} ms` : ""}`
-      : `${remoteDevice.name} is offline${remoteDevice.lastSeen ? ` · last seen ${ago(remoteDevice.lastSeen)}` : ""}`;
-  }
-
   async function pollDevice() {
     try {
       const res = await fetch("/api/devices", { cache: "no-store" });
@@ -485,7 +475,7 @@ window.createSpaces = function createSpaces(host) {
     } catch {
       /* this device's daemon is down too: keep the last state */
     }
-    renderDeviceChip();
+    renderChip();
   }
 
   if (remoteId) {
@@ -494,7 +484,7 @@ window.createSpaces = function createSpaces(host) {
     addEventListener("scribe:connection", (event) => {
       remoteConnected = Boolean(event.detail?.connected);
       if (remoteConnected) void pollDevice();
-      else renderDeviceChip();
+      else renderChip();
     });
   }
 
