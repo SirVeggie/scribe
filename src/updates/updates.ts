@@ -16,7 +16,7 @@ export type UpdateMode = "auto" | "ask" | "ignore";
 export const UPDATE_MODES: UpdateMode[] = ["auto", "ask", "ignore"];
 
 /** Release targets: the asset names in the manifest. */
-export type ReleaseTarget = "windows-x64-desktop" | "linux-x64-headless";
+export type ReleaseTarget = "windows-x64-desktop" | "linux-x64-headless" | "macos-arm64-headless" | "macos-x64-headless";
 
 export const DEFAULT_MANIFEST_URL = "https://github.com/SirVeggie/scribe/releases/latest/download/latest.json";
 const CHECK_EVERY_MS = 6 * 60 * 60_000;
@@ -85,7 +85,7 @@ function packageVersion(root: string): string {
   return typeof pkg?.version === "string" ? pkg.version : "0.0.0";
 }
 
-const TARGETS: ReleaseTarget[] = ["windows-x64-desktop", "linux-x64-headless"];
+const TARGETS: ReleaseTarget[] = ["windows-x64-desktop", "linux-x64-headless", "macos-arm64-headless", "macos-x64-headless"];
 
 /** What kind of install `root` is. Git details are filled in by the check. */
 export function detectInstall(root: string, env: NodeJS.ProcessEnv = process.env): InstallInfo {
@@ -277,8 +277,8 @@ export function windowsInstallScript(installer: string, root: string, desktopRun
   ].filter(Boolean).join("; ");
 }
 
-/** Linux headless: unpacks the archive beside the app folder and swaps the two. */
-export async function swapLinuxRelease(run: Runner, archive: string, root: string): Promise<void> {
+/** Linux and macOS headless: unpacks the archive beside the app folder and swaps the two. */
+export async function swapHeadlessRelease(run: Runner, archive: string, root: string): Promise<void> {
   const next = `${root}.new`;
   const old = `${root}.old`;
   fs.rmSync(next, { recursive: true, force: true });
@@ -574,7 +574,7 @@ export class UpdateService {
           this.deps.detach("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", script]);
           return this.view();
         }
-        if (this.install.target === "linux-x64-headless") await swapLinuxRelease(this.run, file, this.install.root);
+        if (this.install.target?.endsWith("-headless")) await swapHeadlessRelease(this.run, file, this.install.root);
         else throw new Error("This install cannot update itself");
       }
     } catch (err) {

@@ -51,8 +51,13 @@ fn repo_dir() -> PathBuf {
 }
 
 fn bundled_dir() -> Option<PathBuf> {
-    let dir = std::env::current_exe().ok()?.parent()?.join("app");
-    dir.join("dist").join("index.js").is_file().then_some(dir)
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // A macOS bundle keeps resources in Scribe.app/Contents/Resources, beside Contents/MacOS/scribe.
+    let mut candidates = vec![exe_dir.join("app")];
+    if cfg!(target_os = "macos") {
+        candidates.push(exe_dir.join("..").join("Resources").join("app"));
+    }
+    candidates.into_iter().find(|dir| dir.join("dist").join("index.js").is_file())
 }
 
 /// The Node a release ships in `app/node`, else the one on PATH.

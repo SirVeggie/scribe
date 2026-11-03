@@ -20,6 +20,11 @@ export const SERVICE_NAME = "scribe";
 const WINDOWS_TASK = "Scribe";
 const LAUNCHD_LABEL = "local.scribe.daemon";
 
+/** Whether systemd or launchd runs this daemon as the service: it then restarts a daemon that exits with a failure code. */
+export function underServiceManager(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
+  return (platform === "linux" && !!env.INVOCATION_ID) || (platform === "darwin" && env.XPC_SERVICE_NAME === LAUNCHD_LABEL);
+}
+
 export type ServicePlan = {
   node: string;
   entry: string;

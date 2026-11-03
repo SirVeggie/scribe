@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { launchdPlist, servicePlan, systemdUnit, windowsTaskScript } from "./service.js";
+import { launchdPlist, servicePlan, underServiceManager, systemdUnit, windowsTaskScript } from "./service.js";
 
 test("servicePlan keeps only Scribe's own settings", () => {
   const plan = servicePlan({ SCRIBE_HOME: "/srv/scribe", SCRIBE_PORT: "4800", SCRIBE_THREAD: "th_1", HOME: "/home/me", SCRIBE_PEER_PORT: "" });
@@ -34,4 +34,11 @@ test("launchd agent runs the daemon at login, restarts it only on failure, and e
   assert.match(plist, /<key>PATH<\/key>/);
   assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
   assert.match(plist, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+});
+
+test("underServiceManager recognizes systemd and the launchd agent, not a daemon started by hand", () => {
+  assert.equal(underServiceManager({ INVOCATION_ID: "abc" }, "linux"), true);
+  assert.equal(underServiceManager({ XPC_SERVICE_NAME: "local.scribe.daemon" }, "darwin"), true);
+  assert.equal(underServiceManager({ XPC_SERVICE_NAME: "application.com.apple.Terminal.123" }, "darwin"), false);
+  assert.equal(underServiceManager({}, "win32"), false);
 });

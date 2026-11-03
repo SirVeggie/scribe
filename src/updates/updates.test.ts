@@ -38,6 +38,8 @@ test("detectInstall tells releases, checkouts and other copies apart", () => {
   assert.equal(info.version, "1.4.0");
   assert.equal(info.target, "linux-x64-headless");
   assert.equal(info.manifestUrl, "https://updates.example/latest.json");
+  release(dir, "1.4.0", "macos-arm64-headless");
+  assert.equal(detectInstall(dir).target, "macos-arm64-headless");
 });
 
 test("parseManifest resolves asset URLs against the manifest and drops bad entries", () => {
@@ -48,11 +50,13 @@ test("parseManifest resolves asset URLs against the manifest and drops bad entri
     assets: {
       "windows-x64-desktop": { url: "Scribe_2.0.0_x64-setup.exe", sha256: sha.toUpperCase(), size: 10 },
       "linux-x64-headless": { url: "scribe.tar.gz", sha256: "nope" },
+      "macos-x64-headless": { url: "scribe-2.0.0-macos-x64.tar.gz", sha256: sha },
       other: { url: "x", sha256: sha },
     },
   }, "https://github.com/o/r/releases/download/v2.0.0/latest.json");
   assert.deepEqual(manifest.assets, {
     "windows-x64-desktop": { url: "https://github.com/o/r/releases/download/v2.0.0/Scribe_2.0.0_x64-setup.exe", sha256: sha, size: 10 },
+    "macos-x64-headless": { url: "https://github.com/o/r/releases/download/v2.0.0/scribe-2.0.0-macos-x64.tar.gz", sha256: sha },
   });
   assert.throws(() => parseManifest({ version: "latest" }, "https://x/"), /valid version/);
 });

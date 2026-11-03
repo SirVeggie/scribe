@@ -98,6 +98,7 @@ import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
 import { refreshSearchIndex, searchIndex } from "./search/service.js";
 import { PluginService } from "./plugins/service.js";
+import { underServiceManager } from "./service.js";
 import { PluginActions } from "./plugins/actions.js";
 import { pluginRouter } from "./plugins/routes.js";
 import { setPlugins, plugins, setPluginActions } from "./plugins/current.js";
@@ -2819,17 +2820,17 @@ export async function startHttp(): Promise<http.Server> {
     void Promise.all([searchIndex.close(), closeScreenshotBrowser(), closeAgentBrowser()]).finally(() => process.exit(code));
   };
   /**
-   * After an update (#942): under systemd, exit with a failure code so Restart=on-failure starts the new
-   * build; elsewhere a detached copy of the new build waits for this one to exit and starts the daemon.
+   * After an update (#942): under systemd or launchd, exit with a failure code so the service manager starts
+   * the new build; elsewhere a detached copy of the new build waits for this one to exit and starts the daemon.
    */
   restartForUpdate = async () => {
-    const systemd = process.platform === "linux" && !!process.env.INVOCATION_ID;
-    if (!systemd) {
+    const supervised = underServiceManager();
+    if (!supervised) {
       const child = spawn(process.execPath, [path.join(INSTALL_ROOT, "dist", "index.js"), "--restart-after", String(process.pid)], { cwd: INSTALL_ROOT, detached: true, stdio: "ignore", windowsHide: true });
       child.unref();
     }
     await stopServices();
-    exitDaemon(systemd ? UPDATE_RESTART_CODE : 0);
+    exitDaemon(supervised ? UPDATE_RESTART_CODE : 0);
   };
 
   const server = http.createServer(app);

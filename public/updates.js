@@ -85,12 +85,18 @@
   actions.append(check, install, unskip);
   section.append(heading, modeRow, installRow, status, commits, actions);
 
+  const RELEASE_LABELS = {
+    "linux-x64-headless": "Linux release (headless)",
+    "macos-arm64-headless": "macOS release (headless, Apple silicon)",
+    "macos-x64-headless": "macOS release (headless, Intel)",
+  };
+
   function describeInstall(install) {
     if (install.kind === "git") {
       const where = install.upstream ? ` · ${install.branch} → ${install.upstream}` : install.branch ? ` · ${install.branch}` : "";
       return `${install.version} · git checkout${install.commit ? ` @ ${install.commit}` : ""}${where}`;
     }
-    if (install.kind === "standalone") return `${install.version} · ${install.target === "linux-x64-headless" ? "Linux release (headless)" : "Windows release"}`;
+    if (install.kind === "standalone") return `${install.version} · ${RELEASE_LABELS[install.target] || "Windows release"}`;
     return `${install.version} · not a git checkout or a release; it cannot update itself`;
   }
 

@@ -1,8 +1,8 @@
-// Makes a Scribe release (#942): bumps the version, builds the Windows installer and the headless Linux
-// archive, writes the update manifest (latest.json), commits and tags. --publish then pushes the commit and
+// Makes a Scribe release (#942, #971): bumps the version, builds the Windows installer and the headless Linux
+// and macOS archives, writes the update manifest (latest.json), commits and tags. --publish then pushes the commit and
 // tag and creates the GitHub release with gh, which is what installed copies update from.
 //
-//   npm run release -- <version> [--notes <file>] [--publish] [--skip-windows] [--skip-linux]
+//   npm run release -- <version> [--notes <file>] [--publish] [--skip-windows] [--skip-linux] [--skip-macos]
 //   npm run release -- --publish-only <version>     publish a release built earlier
 //
 // The files land in release/<version>/ (gitignored). The .claude/skills/release skill walks an agent through it.
@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildLinuxRelease } from "./release-linux.mjs";
+import { buildHeadlessRelease, HEADLESS_TARGETS } from "./release-headless.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = "SirVeggie/scribe";
@@ -24,7 +24,7 @@ const positional = argv.filter((arg, i) => !arg.startsWith("--") && !["--notes"]
 const version = positional[0]?.replace(/^v/, "");
 
 if (!version || !SEMVER.test(version)) {
-  console.error("Usage: npm run release -- <version> [--notes <file>] [--publish] [--skip-windows] [--skip-linux]\n       npm run release -- --publish-only <version>");
+  console.error("Usage: npm run release -- <version> [--notes <file>] [--publish] [--skip-windows] [--skip-linux] [--skip-macos]\n       npm run release -- --publish-only <version>");
   process.exit(1);
 }
 const tag = `v${version}`;
@@ -61,14 +61,18 @@ async function build() {
     // desktop/release.mjs builds the daemon too.
     if (!flag("--skip-windows")) assets["windows-x64-desktop"] = buildWindows();
     else run("Building the daemon", process.execPath, [npmCli(), "run", "build"]);
-    if (!flag("--skip-linux")) assets["linux-x64-headless"] = asset(await buildLinuxRelease(out));
+    for (const target of Object.keys(HEADLESS_TARGETS)) {
+      if (flag(target.startsWith("macos-") ? "--skip-macos" : "--skip-linux")) continue;
+      assets[target] = asset(await buildHeadlessRelease(out, target));
+    }
   } catch (err) {
     console.error("Build failed; putting the old version back");
     setVersion(current);
     throw err;
   }
   if (!Object.keys(assets).length) throw new Error("Nothing was built");
-  fs.copyFileSync(path.join(root, "tools", "install-linux.sh"), path.join(out, "install-linux.sh"));
+  // install-linux.sh: the same script under the name links made before macOS was supported use.
+  for (const name of ["install.sh", "install-linux.sh"]) fs.copyFileSync(path.join(root, "tools", "install.sh"), path.join(out, name));
   fs.writeFileSync(path.join(out, "notes.md"), `${notes}\n`);
   // Asset URLs are relative: they resolve against wherever latest.json is served (a GitHub release, or a server).
   const manifest = { version, date: new Date().toISOString(), notes, assets };
