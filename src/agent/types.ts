@@ -197,6 +197,11 @@ export type Thread = {
    * never changed; the thread stays Read-only, web off, with no workspace.
    */
   noTools?: true;
+  /**
+   * A Help chat (#962): Read-only, no workspace, web off, with the help guide in its instructions. The Help
+   * panel shows it and the thread lists leave it out. Temporary: deleted when the daemon starts.
+   */
+  help?: true;
   /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
   helperOf?: string;
   /** A helper a chat on another device started here with agent_run (#911): that device and its chat. */

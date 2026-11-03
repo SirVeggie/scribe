@@ -619,6 +619,8 @@ export function agentRouter(host: AgentHost): express.Router {
             ...(body.helpersAllowed === true ? { helpersAllowed: true } : {}),
             // A one-off chat a page starts with no tools at all (#729).
             ...(body.noTools === true ? { noTools: true } : {}),
+            // The Help panel's chat (#962).
+            ...(body.help === true ? { help: true } : {}),
           },
           { remember: body.remember !== false }
         ),

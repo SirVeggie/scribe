@@ -590,6 +590,14 @@ export class AgentHost {
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
     (this.providers.codex as CodexProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.codex", []));
     for (const thread of this.db.listThreads()) {
+      // Help chats (#962) last until the daemon stops.
+      if (thread.help) {
+        this.db.deleteThread(thread.id);
+        try {
+          removeThreadFiles(thread.id);
+        } catch {}
+        continue;
+      }
       if (migrateOpenaiThread(thread)) this.db.saveThread(thread);
       this.threads.set(thread.id, thread);
       // A turn cannot survive a daemon restart: mark leftovers as cancelled, and send the thread on once Scribe is up.
@@ -1870,7 +1878,8 @@ export class AgentHost {
   }
 
   /** remember: false for threads a page starts (board workers), so they leave the user's defaults alone. */
-  createThread(input: ThreadPatch & { scope?: ThreadScope; noTools?: boolean }, { remember = true }: { remember?: boolean } = {}): ThreadView {
+  createThread(input: ThreadPatch & { scope?: ThreadScope; noTools?: boolean; help?: boolean }, { remember = true }: { remember?: boolean } = {}): ThreadView {
+    if (input.help) return this.createHelpThread(input);
     const thread = this.draftThread(input);
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
     // A draft thread (saved unsent) leaves the spare for the thread the user goes on to start.
@@ -1892,6 +1901,25 @@ export class AgentHost {
     this.db.saveThread(thread);
     if (thread.cwd) this.noteWorkspaces([thread.cwd]);
     if (remember) this.rememberChoices(thread, settingPatch(thread));
+    const view = this.view(thread);
+    this.emit({ type: "agent_thread", thread: view });
+    return view;
+  }
+
+  /**
+   * A Help chat (#962): global scope, Read-only, no workspace, web off. It reads pages and shows settings
+   * rows; the guide in its instructions does the rest. No prewarmed spare: that one has a workspace's tools.
+   */
+  private createHelpThread(input: ThreadPatch): ThreadView {
+    const thread = this.draftThread({ provider: input.provider, model: input.model, effort: input.effort, modelParams: input.modelParams, scope: { kind: "global", ref: null }, cwd: null, useWorktree: false, mode: "board", approval: "readonly", web: "off", title: "Help" });
+    thread.help = true;
+    delete thread.custom;
+    delete thread.planNext;
+    this.threads.set(thread.id, thread);
+    this.items.set(thread.id, []);
+    this.turns.set(thread.id, []);
+    this.seq.set(thread.id, 0);
+    this.db.saveThread(thread);
     const view = this.view(thread);
     this.emit({ type: "agent_thread", thread: view });
     return view;
@@ -3874,7 +3902,7 @@ export class AgentHost {
     // A tainted transcript holds trusted content (#269): an untrusted reader only gets it from the user's #tag.
     const trusted = this.threadTrusted(reader);
     const tagged = (t: Thread) => (reader.threadGrants ?? []).some((s) => s.kind === "thread" && s.id === t.id);
-    const threads = [...this.threads.values()].filter((t) => canReadThread(reader, t, lookup) && (!t.tainted || trusted || tagged(t)));
+    const threads = [...this.threads.values()].filter((t) => !t.help && canReadThread(reader, t, lookup) && (!t.tainted || trusted || tagged(t)));
     return { reader, threads, lookup };
   }
 

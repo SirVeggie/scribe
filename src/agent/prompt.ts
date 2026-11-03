@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { customInstructions, readShell } from "./customModes.js";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { BOARD_MCP } from "./providers/cursor.js";
 import type { FolderInstruction } from "../types.js";
 import { memoryBlock, type Memory } from "./memory.js";
@@ -79,6 +80,35 @@ function readingFiles(thread: Thread): string {
   return "You can read and search files in the workspace and run commands, but not edit files: commands run in a read-only sandbox without asking.";
 }
 
+/** What the Help agent knows about Scribe (#962): public/help/guide.md, read again when it changes. */
+const HELP_GUIDE = path.join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "public", "help", "guide.md");
+let helpGuideCache: { mtime: number; text: string } | null = null;
+
+export function helpGuide(file = HELP_GUIDE): string {
+  try {
+    const mtime = fs.statSync(file).mtimeMs;
+    if (helpGuideCache?.mtime !== mtime) helpGuideCache = { mtime, text: fs.readFileSync(file, "utf8") };
+    return helpGuideCache.text;
+  } catch {
+    return "";
+  }
+}
+
+/** A Help chat's instructions (#962): a reference desk, not a conversation, with the guide to answer from. */
+function helpInstructions(server: string): string {
+  return [
+    "Help: you are Scribe's Help agent. The user asks how to use Scribe in the Help panel, which shows only your latest answer, as a result under the question. Messages there come from the user (the panel sends what they typed).",
+    "Write each answer as a reference entry, not a conversation: no greeting, no \"Sure\" or \"Great question\", no closing offer or follow-up question. Lead with the answer in one or two sentences, then numbered steps, a short list or a table where they help. Name UI parts in **bold** and keys like `Ctrl+K`. Keep it short (well under 300 words) unless the user asks for a full list, such as every shortcut.",
+    `Settings: when a setting is part of the answer, find it with settings_find and show its rows with settings_show, so the user can change it right there in the result. Do that rather than only describing where it is. Pick the few rows that fit; do not ask first.`,
+    `Pages: use the page tools on \`${server}\` only when the question is about the user's own pages or boards. You cannot create or change pages here.`,
+    "Answer from the guide below and what your tools show. When the guide does not cover something, say so in a line instead of guessing at menus or settings that may not exist.",
+    "",
+    "<scribe_help_guide>",
+    helpGuide().trim() || "(The help guide is missing from this install. Answer from settings_find and your tools.)",
+    "</scribe_help_guide>",
+  ].join("\n");
+}
+
 export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   const server = thread.provider === "cursor" ? BOARD_MCP : "scribe";
   const on = (id: AppInstruction) => !scope.instructionsOff?.includes(id);
@@ -86,7 +116,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
   if (on("codeBlocks")) {
     lines.push("Code blocks: always give a fenced block its language (```ts, ```powershell, ```json, ```bash, ```text for plain output). The chat shows it in the block's header and highlights the code by it. To quote code from a file in the workspace, put its first line, last line and path there instead (```12:40:src/app.ts): the chat highlights it by the file's type and offers to open the file at that line in the user's IDE.");
   }
-  if (on("wrongThread")) {
+  if (on("wrongThread") && !thread.help) {
     lines.push(
       "Wrong thread: the user runs many chats side by side and sometimes sends a message to the wrong one. When a message in a thread with earlier turns has nothing to do with the work so far, and does not say it is a new topic (\"separate question\", \"also\", \"unrelated, but\"), ask in one short line whether it was meant for this thread before you edit files, run commands or change pages, and say what this thread has been about. If they confirm, go ahead. Do not ask about follow-ups that build on the conversation, the first message of a thread, or messages a page's code sent."
     );
@@ -113,6 +143,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       "Linking pages: page keys look like scribe:page-name. To link a page in your reply, write [[scribe:page-name]] (shows the page title) or [label](scribe:page-name). Use only keys you got from the page tools or from this conversation."
     );
   }
+  if (thread.help) lines.push(helpInstructions(server), "");
   if (!thread.helperOf) {
     lines.push(
       `Questions: when you need the user's decision or details to carry on, ask with ask_user on the \`${server}\` server rather than your own built-in question tool. It takes choices (single or multi-select), free text, numbers and scales, shows a few questions as a card in the chat and more as a form, and returns the answers.`,
