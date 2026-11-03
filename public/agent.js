@@ -5140,7 +5140,7 @@
     }
 
     renderApproval(it) {
-      const node = el("div", `ag-card ag-approval${it.tone === "harness" ? " ag-approval-harness" : ""} s-${it.status}`);
+      const node = el("div", `ag-card ag-approval${it.tone ? " ag-approval-internal" : ""} s-${it.status}`);
       node.dataset.itemId = it.id;
       if (it.status !== "pending") {
         cardNotes.delete(`approval:${it.id}`);

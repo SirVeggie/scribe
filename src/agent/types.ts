@@ -660,8 +660,12 @@ export type ItemBody =
       title: string;
       detail?: string;
       sourceUrl?: string;
-      /** harness: a change to the user's agent setup (#79), shown in violet so it stands apart from tool approvals. */
-      tone?: "harness";
+      /**
+       * Shown in violet so Scribe's own prompts stand apart from tool approvals. harness: a change to
+       * the user's agent setup (#79); internal: another of Scribe's asks (plugins, page and thread
+       * access, web, workspace, helpers).
+       */
+      tone?: "harness" | "internal";
       options: ApprovalOption[];
       status: "pending" | "resolved" | "expired";
       decision?: string;
