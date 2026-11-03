@@ -10,7 +10,7 @@ import type { ChildProcess } from "node:child_process";
 import { CodexRpc, type RpcMessage } from "./providers/codexRpc.js";
 import { CodexSession, readCodexPlanUsage, syncAuthFiles, guardianDenialEvent } from "./providers/codex.js";
 import type { ApprovalDecision, ApprovalRequest, RunSink, SessionContext } from "./providers/provider.js";
-import { FALLBACK_MODELS, gitCommonDir, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides, turnPermissionOverrides, windowsSandboxConfig } from "./providers/codex.js";
+import { FALLBACK_MODELS, gitCommonDir, gitWriteDirs, loginEnv, loginUrlFromOutput, mapCodexModels, mapUsage, mcpConfig, sandboxFor, threadOptions, turnStartOverrides, turnPermissionOverrides, windowsSandboxConfig } from "./providers/codex.js";
 import { codexPermissions, permissionBoundaryProblem, scribeToolAvailability, workerPermissionProblem, type WorkerToolRequirements } from "./effectivePermissions.js";
 import type { Thread } from "./types.js";
 import { McpBridge } from "./mcpBridge.js";
@@ -76,6 +76,8 @@ test("windowsSandboxConfig selects the unelevated sandbox and opens a worktree's
 
     assert.equal(gitCommonDir(path.join(wt, "src")), path.join(main, ".git"));
     assert.equal(gitCommonDir(main), path.join(main, ".git"));
+    assert.deepEqual(gitWriteDirs(path.join(wt, "src")), [path.join(main, ".git"), wtGit]);
+    assert.deepEqual(gitWriteDirs(main), [path.join(main, ".git")]);
     assert.deepEqual(windowsSandboxConfig("workspace-write", wt, "win32"), {
       "windows.sandbox": "unelevated",
       "sandbox_workspace_write.writable_roots": [path.join(main, ".git")],

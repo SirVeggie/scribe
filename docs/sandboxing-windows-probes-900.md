@@ -54,6 +54,12 @@ deny entries for the secret and `local-token`, network on or off):
 | Node fetch / git HTTPS / **Schannel curl** | blocked | 200 / works / **200** |
 | daemon on loopback (4747) | `EACCES` | **200** |
 
+"Worktree git dir" above is `update-ref`, which writes the shared refs. A linked worktree's own
+`.git/worktrees/<name>` (index, HEAD) stays **denied** with only the common dir as a root, under MXC and
+unelevated alike: Codex keeps the folder a `.git` file points to read-only inside the cwd's workspace root,
+so `git add`/`commit` fail on `index.lock` (#927). Naming that folder as a workspace root of its own makes it
+writable under MXC (Scribe sends both since #927); unelevated still denies it.
+
 So under MXC Schannel works (unlike srt-win), deny-read works, and the git dir works once it is a
 workspace root. With network on, loopback is open (the docs say managed networking needs
 `allow_local_binding`), so a sandboxed command can reach the Scribe daemon.

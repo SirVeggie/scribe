@@ -51,10 +51,10 @@ test("MXC profiles: the sandbox mode picks one, and a reported profile id maps b
   assert.equal(mxcProfile("workspace-write", true), MXC_PROFILES.web);
   assert.equal(mxcProfile("danger-full-access", false), ":danger-full-access");
   for (const id of Object.values(MXC_PROFILES)) assert.ok(profileSandbox(id));
-  const config = mxcConfig(["C:\\data\\local-token"], "S:\\repo\\.git") as { "windows.sandbox": string; permissions: Record<string, any> };
+  const config = mxcConfig(["C:\\data\\local-token"], ["S:\\repo\\.git", "S:\\repo\\.git\\worktrees\\wt"]) as { "windows.sandbox": string; permissions: Record<string, any> };
   assert.equal(config["windows.sandbox"], "mxc");
   assert.deepEqual(config.permissions[MXC_PROFILES.write].filesystem, { "C:/data/local-token": "deny" });
-  assert.deepEqual(config.permissions[MXC_PROFILES.write].workspace_roots, { "S:/repo/.git": true });
+  assert.deepEqual(config.permissions[MXC_PROFILES.write].workspace_roots, { "S:/repo/.git": true, "S:/repo/.git/worktrees/wt": true });
   assert.equal(config.permissions[MXC_PROFILES.write].network.enabled, false);
   assert.equal(config.permissions[MXC_PROFILES.web].network.enabled, true);
   assert.equal(config.permissions[MXC_PROFILES.read].extends, ":read-only");
@@ -65,7 +65,7 @@ test("MXC profiles: the sandbox mode picks one, and a reported profile id maps b
 
 test("threadOptions and turn overrides select a profile id under MXC, never a sandbox mode with it", () => {
   const t = { model: "default", effort: null, mode: "code", approval: "auto", web: "off", cwd: null } as unknown as Thread;
-  const mxc = mxcConfig([], null);
+  const mxc = mxcConfig([], []);
   const options = threadOptions(t, "/work", "win32", mxc);
   assert.equal(options.sandbox, undefined);
   // As the config default, not thread/start's `permissions`: Codex fails the turns then (#959).

@@ -440,18 +440,33 @@ export function sandboxFor(thread: Pick<Thread, "mode" | "approval" | "custom">)
  * and git also writes the shared objects and refs there.
  */
 export function gitCommonDir(cwd: string): string | null {
+  return gitDirs(cwd)?.common ?? null;
+}
+
+/**
+ * The git dirs a commit in `cwd` writes, for MXC's workspace roots: the common dir, and a linked
+ * worktree's own `.git/worktrees/<name>` (index, HEAD). Codex keeps the folder a `.git` file points
+ * to read-only inside a workspace root, so the common dir alone leaves `index.lock` denied (#927).
+ */
+export function gitWriteDirs(cwd: string): string[] {
+  const dirs = gitDirs(cwd);
+  if (!dirs) return [];
+  return dirs.gitDir === dirs.common ? [dirs.common] : [dirs.common, dirs.gitDir];
+}
+
+function gitDirs(cwd: string): { gitDir: string; common: string } | null {
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
     const dotGit = path.join(dir, ".git");
     let stat: fs.Stats;
     try { stat = fs.statSync(dotGit); } catch { if (path.dirname(dir) === dir) return null; continue; }
-    if (stat.isDirectory()) return dotGit;
+    if (stat.isDirectory()) return { gitDir: dotGit, common: dotGit };
     try {
       const match = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, "utf8"));
       if (!match) return null;
       const gitDir = path.resolve(dir, match[1]);
       let common = gitDir;
       try { common = path.resolve(gitDir, fs.readFileSync(path.join(gitDir, "commondir"), "utf8").trim()); } catch { /* not a linked worktree */ }
-      return common;
+      return { gitDir, common };
     } catch { return null; }
   }
 }
@@ -1124,7 +1139,7 @@ export class CodexSession implements ProviderSession {
   private async mxcConfig(): Promise<RpcRecord | null> {
     if (process.platform !== "win32" || !(await this.ctx.codexMxc?.())) return null;
     const policy = policyFor({ ...this.thread, cwd: this.cwd() }, this.ctx.accessEnv?.());
-    return mxcConfig(mxcDenyPaths(policy, scribeCodexHome()), gitCommonDir(this.cwd()));
+    return mxcConfig(mxcDenyPaths(policy, scribeCodexHome()), gitWriteDirs(this.cwd()));
   }
 
   /** What codexPermissions compares against: the sandbox mode, also when a profile id was sent. */

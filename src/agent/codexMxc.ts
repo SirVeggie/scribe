@@ -105,10 +105,10 @@ export function mxcDenyPaths(policy: AccessPolicy, codexHome: string): string[] 
 }
 
 /** Codex config for a thread under MXC: the engine and its three profiles. */
-export function mxcConfig(deny: string[], gitDir: string | null): Record<string, unknown> {
+export function mxcConfig(deny: string[], gitDirs: string[]): Record<string, unknown> {
   const filesystem = Object.fromEntries(deny.map((p) => [p.replace(/\\/g, "/"), "deny"]));
-  // Commits write the main repository's git folder.
-  const roots = gitDir ? { workspace_roots: { [gitDir.replace(/\\/g, "/")]: true } } : {};
+  // Commits write the main repository's git folder (and a worktree's own one there).
+  const roots = gitDirs.length ? { workspace_roots: Object.fromEntries(gitDirs.map((d) => [d.replace(/\\/g, "/"), true])) } : {};
   return {
     "windows.sandbox": "mxc",
     permissions: {
