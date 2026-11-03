@@ -1039,7 +1039,7 @@
       return pageThreadIsStale({ status: picked.status, finishedAt: last || undefined }, now) ? null : picked.id;
     }
     if (!tabId) return null;
-    const t = [...S.threads.values()].filter((x) => !x.archived && x.scope.kind === "page" && x.scope.ref === tabId).sort((a, b) => b.activityAt - a.activityAt)[0];
+    const t = [...S.threads.values()].filter((x) => !x.archived && !x.temporary && x.scope.kind === "page" && x.scope.ref === tabId).sort((a, b) => b.activityAt - a.activityAt)[0];
     return t && !pageThreadIsStale(t, now) ? t.id : null;
   }
 
@@ -6869,7 +6869,7 @@
         // builds every thread's full view on the daemon (about half a second with a thousand threads).
         const words = q.toLowerCase().split(/\s+/).filter(Boolean);
         const threads = [...S.threads.values()]
-          .filter((t) => t.id !== this.threadId && !taken.has(`thread:${t.id}`) && words.every((w) => `${t.title} ${t.id}`.toLowerCase().includes(w)))
+          .filter((t) => t.id !== this.threadId && !t.temporary && !taken.has(`thread:${t.id}`) && words.every((w) => `${t.title} ${t.id}`.toLowerCase().includes(w)))
           .sort((a, b) => b.activityAt - a.activityAt)
           .slice(0, 20)
           .map((t) => ({ kind: "thread", id: t.id, title: t.title }));
@@ -8081,7 +8081,7 @@
    * None is opt-in.
    */
   function groupDraft(key) {
-    const members = [...S.threads.values()].filter((t) => !t.archived && groupKey(t) === key);
+    const members = [...S.threads.values()].filter((t) => !t.archived && !t.temporary && groupKey(t) === key);
     const last = (members.some((t) => !t.fromPage) ? members.filter((t) => !t.fromPage) : members).sort((a, b) => b.activityAt - a.activityAt)[0];
     if (!last) return null;
     const dir = S.filter === "workspaces" ? workspaceDir(last) : key.startsWith("ws:") ? activeTab()?.workspace || null : null;
@@ -8418,7 +8418,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   function recentThreads(now = Date.now()) {
     return [...S.threads.values()]
-      .filter((t) => !t.archived && recentInteractionAt(t) && now - recentInteractionAt(t) < RECENT_THREAD_MS)
+      .filter((t) => !t.archived && !t.temporary && recentInteractionAt(t) && now - recentInteractionAt(t) < RECENT_THREAD_MS)
       .sort((a, b) => recentInteractionAt(b) - recentInteractionAt(a))
       .slice(0, 5);
   }
@@ -8590,7 +8590,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         }
         out.push(listHeading("limit-heading", "Out of usage"), keyedBox("limit-body", "ag-list-group-body ag-list-limit", items));
       }
-      let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
+      let threads = [...S.threads.values()].filter((t) => !t.temporary && (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
       const spaceId = spaceFilterId();
       if (spaceId) threads = threads.filter((t) => t.space === spaceId);
@@ -9432,7 +9432,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       // A helper sits under the thread that started it, as in the thread list.
       // The sidebar's Space switch applies here too (#838).
       const spaceId = spaceFilterId();
-      const threads = [...S.threads.values()].filter((t) => !t.archived && !nestsUnder(t) && (!spaceId || t.space === spaceId || t.id === this.view.threadId)).sort((a, b) => threadRank(b) - threadRank(a));
+      const threads = [...S.threads.values()].filter((t) => !t.archived && (!t.temporary || t.id === this.view.threadId) && !nestsUnder(t) && (!spaceId || t.space === spaceId || t.id === this.view.threadId)).sort((a, b) => threadRank(b) - threadRank(a));
       const pageThreads = tab ? threads.filter((t) => t.scope.kind === "page" && t.scope.ref === tab.id) : [];
       const others = threads.filter((t) => !pageThreads.includes(t));
       const items = [];
@@ -9776,7 +9776,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function pageThreads(tabId) {
     let count = 0;
     for (const t of S.threads.values()) {
-      if (!t.archived && t.scope.kind === "page" && t.scope.ref === tabId) count += 1;
+      if (!t.archived && !t.temporary && t.scope.kind === "page" && t.scope.ref === tabId) count += 1;
     }
     return count;
   }
@@ -9866,7 +9866,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const all = activeThreads().filter((t) => !t.archived).sort((a, b) => threadRank(b) - threadRank(a));
     const unseen = (t) => Boolean(t.unread) && !t.fromPage;
     const recent = all
-      .filter((t) => t.status === "idle" && !waitingAsk(t) && (unseen(t) || now - flyoutRecentAt(t) < FLYOUT_RECENT_MS))
+      .filter((t) => t.status === "idle" && !waitingAsk(t) && !t.temporary && (unseen(t) || now - flyoutRecentAt(t) < FLYOUT_RECENT_MS))
       .sort((a, b) => Number(unseen(b)) - Number(unseen(a)) || flyoutRecentAt(b) - flyoutRecentAt(a))
       .slice(0, FLYOUT_RECENT_CAP);
     return {
@@ -13279,7 +13279,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   /** Palette (`=` prefix) and anything else that wants the same match as the thread-menu search. */
   function searchThreads(query, { limit = 40 } = {}) {
     const q = String(query || "").trim();
-    let threads = [...S.threads.values()].filter((t) => !t.archived);
+    let threads = [...S.threads.values()].filter((t) => !t.archived && !t.temporary);
     // A helper is reached through the thread that started it. A search finds it, named as that thread's helper.
     if (!q) {
       const hidden = hiddenWorkspaceKeys();
@@ -13641,6 +13641,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           scope: { kind: "page", ref: tab.id },
           ...(title ? { title } : {}),
           ...(noTools ? { noTools: true } : {}),
+          // A throwaway chat (#970): out of the thread lists, gone on delete or restart.
+          ...(data.temporary === true ? { temporary: true } : {}),
         });
         S.threads.set(created.id, created);
         S.details.set(created.id, { items: [], byId: new Map(), turns: new Map() });

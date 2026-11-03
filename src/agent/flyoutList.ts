@@ -14,6 +14,8 @@ export type FlyoutThread = {
   unread?: boolean;
   fromPage?: boolean;
   archived?: boolean;
+  /** A page's temporary chat (#970): shown while it runs or waits, never under Recent. */
+  temporary?: boolean;
   pinned?: boolean;
   /** An idle thread whose usage limit card still waits for an answer (#78): listed under Waiting. */
   limit?: boolean;
@@ -47,7 +49,7 @@ export function flyoutSections<T extends FlyoutThread>(
   const all = threads.filter((t) => !t.archived).sort((a, b) => rank(b) - rank(a));
   const unseen = (t: T) => Boolean(t.unread) && !t.fromPage;
   const recent = all
-    .filter((t) => t.status === "idle" && !t.limit && (unseen(t) || opts.now - recentAt(t) < recentMs))
+    .filter((t) => t.status === "idle" && !t.limit && !t.temporary && (unseen(t) || opts.now - recentAt(t) < recentMs))
     .sort((a, b) => Number(unseen(b)) - Number(unseen(a)) || recentAt(b) - recentAt(a))
     .slice(0, recentCap);
   return {

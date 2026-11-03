@@ -202,6 +202,11 @@ export type Thread = {
    * panel shows it and the thread lists leave it out. Temporary: deleted when the daemon starts.
    */
   help?: true;
+  /**
+   * A page's throwaway chat (#970), started with scribe.agent.start({ temporary: true }): the thread
+   * lists leave it out, and it is deleted when the page deletes it or the daemon starts.
+   */
+  temporary?: true;
   /** A helper another thread's agent started with agent_run: that thread's id. It works on that agent's briefs, not the user's messages. */
   helperOf?: string;
   /** A helper a chat on another device started here with agent_run (#911): that device and its chat. */

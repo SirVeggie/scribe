@@ -622,6 +622,8 @@ export function agentRouter(host: AgentHost): express.Router {
             ...(body.noTools === true ? { noTools: true } : {}),
             // The Help panel's chat (#962).
             ...(body.help === true ? { help: true } : {}),
+            // A page's throwaway chat (#970).
+            ...(body.temporary === true ? { temporary: true } : {}),
           },
           { remember: body.remember !== false }
         ),

@@ -1390,6 +1390,7 @@ ${POINTER_DRAG_JS}
     });
     if (opts.web === "on" || opts.web === "limited" || opts.web === "off") out.web = opts.web;
     if (opts.tools === false) out.tools = false;
+    if (opts.temporary === true) out.temporary = true;
     if (Number.isInteger(opts.cardContext) && opts.cardContext > 0) out.cardContext = opts.cardContext;
     if (opts.run === true) out.run = {};
     else if (opts.run && typeof opts.run === "object") out.run = agentRun(opts.run);
@@ -1417,6 +1418,8 @@ ${POINTER_DRAG_JS}
      * images: up to 10 images (Blobs, Files, data: URLs, or asset ids or URLs; 8 MB each) for the
      * first message. tools: false is a one-off chat with no tools at all (no pages, files, shell or
      * web; Read-only, no folder), for OCR, classifying or rewriting what the prompt and images hold.
+     * temporary: true keeps the chat out of the user's thread lists (shown only while it runs or
+     * waits on them) and deletes it when Scribe restarts; delete() it once its reply is read.
      */
     start: function (prompt, opts) {
       opts = opts || {};

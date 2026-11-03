@@ -547,6 +547,8 @@ export class AgentHost {
   private flushTimer: NodeJS.Timeout | null = null;
   /** Threads whose turn a restart cut off, until resumeInterrupted sends them on. They count as running meanwhile. */
   private resuming = new Set<string>();
+  /** Temporary page chats (#970) from before the restart that still had a worktree: deleteThread commits and removes it. */
+  private leftoverTemporary: string[] = [];
   private ctx: SessionContext;
   /** Chats pages handed over to be seen through: limit waits, resumes, merges (#285). */
   private pageRuns: PageRuns;
@@ -597,8 +599,9 @@ export class AgentHost {
     (this.providers.cursor as CursorProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.cursor", []));
     (this.providers.codex as CodexProvider).setModelCache(this.db.getSetting<ModelOption[]>("models.codex", []));
     for (const thread of this.db.listThreads()) {
-      // Help chats (#962) last until the daemon stops.
-      if (thread.help) {
+      // Help chats (#962) and a page's temporary chats (#970) last until the daemon stops. One with an
+      // open worktree goes once Scribe is up (resumeInterrupted), so its work is committed to its branch first.
+      if (thread.help || (thread.temporary && !openWorktree(thread))) {
         this.db.deleteThread(thread.id);
         try {
           removeThreadFiles(thread.id);
@@ -607,6 +610,10 @@ export class AgentHost {
       }
       if (migrateOpenaiThread(thread)) this.db.saveThread(thread);
       this.threads.set(thread.id, thread);
+      if (thread.temporary) {
+        this.leftoverTemporary.push(thread.id);
+        continue;
+      }
       // A turn cannot survive a daemon restart: mark leftovers as cancelled, and send the thread on once Scribe is up.
       const turns = this.db.listTurns(thread.id);
       for (const turn of turns) {
@@ -1722,8 +1729,12 @@ export class AgentHost {
    * same session, and messages that were queued behind the cut-off turn queue again behind it (ones
    * with attachments stay in the transcript as not sent). Call once Scribe is listening, so the
    * agents' MCP servers can reach it.
+   * Temporary page chats (#970) that kept a worktree go first.
    */
   resumeInterrupted(): string[] {
+    for (const id of this.leftoverTemporary.splice(0)) {
+      if (this.threads.has(id)) void this.deleteThread(id).catch((err) => log(`Deleting temporary thread ${id} failed: ${(err as Error).message}`));
+    }
     const resumed: string[] = [];
     const all = [...this.resuming];
     for (const threadId of all) {
@@ -1933,9 +1944,10 @@ export class AgentHost {
   }
 
   /** remember: false for threads a page starts (board workers), so they leave the user's defaults alone. */
-  createThread(input: ThreadPatch & { scope?: ThreadScope; noTools?: boolean; help?: boolean }, { remember = true }: { remember?: boolean } = {}): ThreadView {
+  createThread(input: ThreadPatch & { scope?: ThreadScope; noTools?: boolean; help?: boolean; temporary?: boolean }, { remember = true }: { remember?: boolean } = {}): ThreadView {
     if (input.help) return this.createHelpThread(input);
     const thread = this.draftThread(input);
+    if (input.temporary) thread.temporary = true;
     // Prewarm starts MCP with the draft's id. Reuse it so claims from that process map to this thread.
     // A draft thread (saved unsent) leaves the spare for the thread the user goes on to start.
     const spareId = input.draft ? null : this.agent(thread.provider).spareThreadId?.(thread, this.ctx);
@@ -3957,7 +3969,7 @@ export class AgentHost {
     // A tainted transcript holds trusted content (#269): an untrusted reader only gets it from the user's #tag.
     const trusted = this.threadTrusted(reader);
     const tagged = (t: Thread) => (reader.threadGrants ?? []).some((s) => s.kind === "thread" && s.id === t.id);
-    const threads = [...this.threads.values()].filter((t) => !t.help && canReadThread(reader, t, lookup) && (!t.tainted || trusted || tagged(t)));
+    const threads = [...this.threads.values()].filter((t) => !t.help && !t.temporary && canReadThread(reader, t, lookup) && (!t.tainted || trusted || tagged(t)));
     return { reader, threads, lookup };
   }
 
@@ -7161,6 +7173,7 @@ export class AgentHost {
     });
     if (wt) thread.worktree = { ...wt };
     if (source.skills?.length) thread.skills = [...source.skills];
+    if (source.temporary) thread.temporary = true;
     if (to.provider && to.provider !== source.provider) {
       // The other provider's own last-used settings, as when a new thread switches provider.
       const prefs = this.prefs();
