@@ -380,7 +380,7 @@ test("a chat that ended without its Scribe MCP says so on the card it still hold
   const { c } = ctx({ th_1: ended({ kind: "done", held: "it still holds #1", mcpDown: "MCP server scribe connection timed out" }) });
   const next = apply(state, drive(state, c)!);
   assert.deepEqual(card(next, 1).status, { kind: "blocked", text: "Scribe MCP didn't connect" });
-  assert.match(card(next, 1).comments.at(-1)!.text, /^The agent's Scribe MCP didn't connect \(MCP server scribe connection timed out\), so it couldn't finish/);
+  assert.match((card(next, 1).comments as { text: string }[]).at(-1)!.text, /^The agent's Scribe MCP didn't connect \(MCP server scribe connection timed out\), so it couldn't finish/);
 });
 
 test("three failed chats in a row pause the worker", () => {
