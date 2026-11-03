@@ -2099,8 +2099,11 @@
       input.placeholder = saving ? "File name" : files ? "C:\\path\\to\\file.txt" : "C:\\path\\to\\project";
       input.value = saving ? initialPath.slice(split + 1) || opts.name || "untitled.txt" : initial || prefs().recentWorkspaces[0] || "";
       if (saving) input.setAttribute("aria-label", "File name");
+      // A name typed without an extension gets the suggested name's ("notes" → "notes.md").
+      const defaultExt = saving ? /.(\.[^.]+)$/.exec(input.value)?.[1] || "" : "";
       const submit = () => {
-        const value = input.value.trim();
+        let value = input.value.trim();
+        if (defaultExt && value && !value.startsWith(".") && !/.\.[^.]+$/.test(value)) value += defaultExt;
         if (saving && (!saveDir || !value || /[\\/]/.test(value) || value === "." || value === "..")) {
           input.setCustomValidity(!saveDir ? "Choose a folder first." : "Enter a file name without a folder path.");
           input.reportValidity();
@@ -2194,7 +2197,11 @@
       if (used.childElementCount) panel.append(used);
       panel.append(browser, actions);
       load(saving ? saveDir : input.value.trim());
-      setTimeout(() => input.focus(), 0);
+      setTimeout(() => {
+        input.focus();
+        // Select the name without its extension, so typing replaces just that.
+        if (saving) input.setSelectionRange(0, input.value.length - defaultExt.length);
+      }, 0);
       // Esc from the modal stack resolves as cancel.
       modalStack[modalStack.length - 1] = () => finish(null);
     });
