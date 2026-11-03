@@ -4768,6 +4768,7 @@
       if (task) head.append(el("span", `ag-task-badge ts-${task.status}`, taskStatusLabel(task)));
       if (it.exitCode !== undefined && it.tool === "execute") head.append(el("span", `ag-exit${it.exitCode === 0 ? " ok" : " bad"}`, it.exitCode === 0 ? "exit 0" : `exit ${it.exitCode}`));
       if (it.endedAt && it.startedAt && it.endedAt - it.startedAt > 1500) head.append(el("span", "ag-muted ag-dur", R.duration(it.endedAt - it.startedAt)));
+      else if (busy && !task && it.startedAt && !it.endedAt) head.append(toolTimer(it.startedAt));
       head.append(icon("chevron", "ag-ico ag-chev"));
       node.append(head);
       if (task) node.append(this.renderTaskLine(it));
@@ -7851,7 +7852,24 @@
     return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
   }
 
+  /** Tool calls running longer than this show how long they have been going, so a stall stands out. */
+  const TOOL_TIMER_MS = 60_000;
+
+  /** A running tool's elapsed time: empty until it passes TOOL_TIMER_MS, then ticks with the clocks. */
+  function toolTimer(start) {
+    const span = el("span", "ag-muted ag-dur ag-tool-timer");
+    span.dataset.start = String(start);
+    tickToolTimer(span);
+    return span;
+  }
+
+  function tickToolTimer(span) {
+    const ms = Date.now() - Number(span.dataset.start);
+    span.textContent = ms >= TOOL_TIMER_MS ? R.duration(ms) : "";
+  }
+
   setInterval(() => {
+    for (const span of document.querySelectorAll(".ag-tool-timer[data-start]")) tickToolTimer(span);
     for (const span of document.querySelectorAll(".ag-elapsed[data-start]")) {
       span.textContent = R.duration(Date.now() - Number(span.dataset.start));
     }

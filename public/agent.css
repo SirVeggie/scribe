@@ -1402,6 +1402,14 @@ html[data-theme="cream"] .ag-md {
   flex-shrink: 0;
 }
 
+.ag-tool-timer {
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-tool-timer:empty {
+  display: none;
+}
+
 .ag-st-ok {
   color: var(--ag-ok);
 }
