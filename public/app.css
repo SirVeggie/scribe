@@ -4624,32 +4624,14 @@ button.space-card.compact:disabled {
   cursor: default;
 }
 
-/* Another device's spaces on their way (#947): placeholder cards that shimmer. */
-.space-card.compact.loading {
-  min-height: 0;
-  cursor: default;
-  gap: 9px;
-  padding-top: 20px;
-  padding-bottom: 20px;
+/* Another device's spaces coming in with nothing cached (#948): they fade in, one after another. */
+.spaces-remote.arriving > * {
+  animation: space-arrive 0.28s var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
 }
 
-.space-skeleton {
-  height: 10px;
-  width: 62%;
-  border-radius: 5px;
-  background: linear-gradient(90deg, var(--border) 0%, color-mix(in srgb, var(--text) 16%, transparent) 50%, var(--border) 100%);
-  background-size: 200% 100%;
-  animation: space-skeleton 1.2s ease-in-out infinite;
-}
-
-.space-skeleton.short {
-  width: 34%;
-  opacity: 0.7;
-}
-
-@keyframes space-skeleton {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
+@keyframes space-arrive {
+  from { opacity: 0; transform: translateY(6px); }
 }
 
 /* Opening a space on another device (#947): covers the list until that device's UI loads. */

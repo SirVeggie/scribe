@@ -41,11 +41,13 @@ window.createSpaces = function createSpaces(host) {
   // Set while a switch is on its way: the overview closes on the old view rather than redrawing the new one (#65).
   let switching = false;
   let animTimer = 0;
-  /** /api/devices/spaces, answered by this device's daemon in every view (#906). Null until fetched. */
-  let devices = null;
+  /** /api/devices/spaces, answered by this device's daemon in every view (#906). Kept between openings and
+   *  page loads (#948), so other devices' spaces show at once and only change in place when fresh ones come. */
+  const DEVICES_KEY = "scribe.spaces.devices";
+  let devices = readCachedDevices();
   /** /api/devices: the paired devices without their spaces. Local and quick, so the sections show before the spaces come. */
   let peerList = null;
-  /** True while this opening's /api/devices/spaces is on its way: other devices' spaces show as loading cards. */
+  /** True while /api/devices/spaces is on its way with nothing cached: other devices' rows stay empty, then fade in. */
   let loadingSpaces = false;
   /** The device sections by device id, kept so a redraw of one never rebuilds this device's grid. */
   const sections = new Map();
@@ -191,7 +193,7 @@ window.createSpaces = function createSpaces(host) {
     }));
     // This device's spaces are here already (the socket sends them): draw them now, not after the
     // network. Other devices' sections fill in on their own, without redrawing these (#947).
-    loadingSpaces = true;
+    loadingSpaces = !devices;
     void loadPeers().then(() => open && renderDevices());
     void loadDevices().then(() => open && renderDevices());
     const drawn = data.spaces.length > 0;
@@ -213,11 +215,27 @@ window.createSpaces = function createSpaces(host) {
     const token = ++loadToken;
     try {
       const res = await fetch("/api/devices/spaces", { cache: "no-store" });
-      if (res.ok && token === loadToken) devices = await res.json();
+      if (res.ok && token === loadToken) {
+        devices = await res.json();
+        try {
+          localStorage.setItem(DEVICES_KEY, JSON.stringify(devices));
+        } catch {
+          /* storage full or off: the copy in memory still serves */
+        }
+      }
     } catch {
       /* keep the last list */
     }
     if (token === loadToken) loadingSpaces = false;
+  }
+
+  function readCachedDevices() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DEVICES_KEY) || "null");
+      return saved?.self && Array.isArray(saved.peers) ? saved : null;
+    } catch {
+      return null;
+    }
   }
 
   async function loadPeers() {
@@ -491,14 +509,13 @@ window.createSpaces = function createSpaces(host) {
       if (area.firstChild !== grid || area.childNodes.length > 1) area.replaceChildren(grid);
       return;
     }
-    const known = new Map(devices ? [[devices.self.id, devices.self], ...devices.peers.map((peer) => [peer.id, peer])] : []);
     const showing = remoteId ?? base.self.id;
     const list = [{ ...base.self, online: true, self: true }, ...peers];
     const order = [];
     for (const device of list) {
       let entry = sections.get(device.id);
       if (!entry) {
-        entry = { section: el("section"), label: el("div", "spaces-device-head"), row: null };
+        entry = { section: el("section"), label: el("div", "spaces-device-head"), row: null, key: "", pending: false };
         entry.section.append(entry.label);
         sections.set(device.id, entry);
       }
@@ -514,9 +531,19 @@ window.createSpaces = function createSpaces(host) {
       if (device.id === showing) {
         if (grid.parentNode !== section) section.append(grid);
       } else {
-        entry.row?.remove();
-        entry.row = remoteRow(device, known.get(device.id));
-        if (entry.row) section.append(entry.row);
+        // Rebuild the row only when what it shows changed, so a refresh that brings the same spaces is invisible.
+        const key = loadingSpaces ? "loading" : JSON.stringify([device.online, !!device.mirror, !!device.unreachable, !!devices, device.spaces ?? []]);
+        if (key !== entry.key || (entry.row && entry.row.parentNode !== section)) {
+          entry.key = key;
+          entry.row?.remove();
+          entry.row = remoteRow(device);
+          if (entry.row) {
+            // Spaces that come in after an empty loading row fade in; a cached row updated in place does not.
+            if (entry.pending && !loadingSpaces) entry.row.classList.add("arriving");
+            section.append(entry.row);
+          }
+          entry.pending = loadingSpaces;
+        }
       }
       order.push(section);
     }
@@ -527,19 +554,12 @@ window.createSpaces = function createSpaces(host) {
     if (order.length !== children.length || order.some((section, index) => children[index] !== section)) area.replaceChildren(...order);
   }
 
-  /** Another device's spaces, or loading cards while they are on their way. Null when there is nothing to show. */
-  function remoteRow(device, last) {
+  /** Another device's spaces, or an empty row while they are on their way. Null when there is nothing to show. */
+  function remoteRow(device) {
     const row = el("div", "spaces-grid spaces-remote");
     if (loadingSpaces) {
       if (!device.online && !device.mirror) return null;
       row.setAttribute("aria-busy", "true");
-      const count = Math.min(Math.max(last?.spaces?.length ?? 2, 1), 6);
-      for (let index = 0; index < count; index++) {
-        const item = el("div", "space-card compact loading");
-        item.style.setProperty("--i", String(index));
-        item.append(el("div", "space-skeleton"), el("div", "space-skeleton short"));
-        row.append(item);
-      }
       return row;
     }
     const spaces = device.spaces ?? [];
