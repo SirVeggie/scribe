@@ -1161,7 +1161,7 @@
           <div class="section-label">Comments</div>
           <div class="comments" id="comments"></div>
           <div class="inline-add" style="flex-direction:column">
-            <textarea class="field comment-box" id="commentBox" placeholder="Write a comment. Ctrl+Enter posts."></textarea>
+            <textarea class="field comment-box" id="commentBox" placeholder="Write a comment. Paste an image to embed it. Ctrl+Enter posts."></textarea>
             <div><button class="primary" id="commentPost" type="button">Comment</button></div>
           </div>
         </div>
@@ -4290,7 +4290,8 @@
     if (failed) setHint("Some older images could not be moved to storage. They are still available; reopen the board to retry.", true);
   }
 
-  function addImageFiles(files, intoDescription) {
+  /** into: "description" or "comment" embeds each image in that editor at the cursor; otherwise it only joins the card's images. */
+  function addImageFiles(files, into) {
     var c = openId && card(openId);
     if (!c) return;
     var targetId = c.id;
@@ -4304,13 +4305,15 @@
         if (err || !blob) return setHint("Could not read that image.", true);
         scribe.saveAsset(blob, { name: file.name || "image" }).then(function (asset) {
           var im = { id: newId("im"), name: asset.name, data: asset.url };
-          var embed = intoDescription && editingDesc && openId === targetId;
-          if (embed) insertAtCursor(mdEditor, "![" + im.name + "](#img-" + im.id + ")\n");
+          var embed = openId === targetId && (into === "description" ? editingDesc : into === "comment");
+          var editor = into === "description" ? mdEditor : commentBox;
+          if (embed) insertAtCursor(editor, "![" + im.name + "](#img-" + im.id + ")\n");
           updateCard(targetId, function (x) {
             x.images = x.images.concat([im]);
-            if (embed) x.description = mdEditor.value;
+            if (embed && into === "description") x.description = mdEditor.value;
             return x;
           });
+          if (embed && into === "comment") saveCommentDraft();
           setHint(asset.usage && asset.usage.warning ? "Image added. Storage is filling up: " + asset.usage.warning + "." : "Image added.", Boolean(asset.usage && asset.usage.warning));
         }, function (e) {
           setHint("Could not save that image: " + e.message, true);
@@ -4345,9 +4348,14 @@
     img.src = url;
   }
   fileEl.addEventListener("change", function () {
-    addImageFiles(fileEl.files, false);
+    addImageFiles(fileEl.files, null);
     fileEl.value = "";
   });
+  /** Where a pasted or dropped image goes: the comment box it landed in, else the description being edited. */
+  function imageTarget(node) {
+    if (node === commentBox) return "comment";
+    return editingDesc ? "description" : null;
+  }
   document.addEventListener("paste", function (e) {
     if (!openId || !e.clipboardData) return;
     var files = [];
@@ -4356,7 +4364,7 @@
     });
     if (!files.length) return;
     e.preventDefault();
-    addImageFiles(files, editingDesc);
+    addImageFiles(files, imageTarget(e.target));
   });
   modal.addEventListener("dragover", function (e) {
     if (!e.dataTransfer || Array.prototype.indexOf.call(e.dataTransfer.types, "Files") === -1) return;
@@ -4370,7 +4378,7 @@
     modal.classList.remove("drop-target");
     if (!e.dataTransfer || !e.dataTransfer.files.length) return;
     e.preventDefault();
-    addImageFiles(e.dataTransfer.files, editingDesc);
+    addImageFiles(e.dataTransfer.files, imageTarget(e.target));
   });
   function showLightbox(src) {
     lightboxImg.src = src;
