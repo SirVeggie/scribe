@@ -1665,6 +1665,7 @@
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
     { label: "Updates", sections: window.scribeUpdates.sections },
+    { label: "Help", sections: window.scribeOnboarding.sections },
   ], {
     close: closeSettings,
     after: [
