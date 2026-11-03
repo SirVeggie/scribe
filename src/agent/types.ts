@@ -352,6 +352,27 @@ export type PlanLimits = {
   nextAccount?: string;
 };
 
+/**
+ * Today's cost of Native chats on one pay-per-use API (#980), by the model id's part before "/"
+ * ("deepseek", "src-<source id>"). Resets at local midnight; only APIs with a cost today appear.
+ */
+export type ApiSpend = {
+  /** Local day (YYYY-MM-DD) the cost is for. */
+  day: string;
+  costUsd: number;
+  label: string;
+  /** DeepSeek's account balance (GET /user/balance); amounts as the API gives them. */
+  balance?: ApiBalance;
+};
+
+export type ApiBalance = {
+  at: number;
+  /** Whether the balance covers new API calls. */
+  available: boolean;
+  /** One per currency the account holds: total = granted + topped up. */
+  amounts: Array<{ currency: string; total: string; granted?: string; toppedUp?: string }>;
+};
+
 export type PlanWindow = {
   id: string; label: string; utilization: number; resetsAt?: number; expired?: true;
   /** Daemon-computed from successive provider readings (planPace.ts); sent to the UI, not stored. */
@@ -720,6 +741,7 @@ export type AgentEvent =
   | { type: "agent_item"; item: Item }
   | { type: "agent_item_deleted"; threadId: string; id: string }
   | { type: "agent_limits"; limits: Partial<Record<ProviderId, PlanLimits>> }
+  | { type: "agent_spend"; spend: Record<string, ApiSpend> }
   | { type: "agent_delta"; threadId: string; itemId: string; append: string }
   | { type: "agent_turn"; turn: Turn }
   | { type: "agent_turn_deleted"; threadId: string; id: string }

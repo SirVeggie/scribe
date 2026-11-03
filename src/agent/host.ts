@@ -66,7 +66,8 @@ import { applyExpiredWindows, codexUsageRecoveryAllowed, livePlanLimits, nextRef
 import { claudeBillingSource, claudePlanSnapshot } from "./claudeUsage.js";
 import { ClaudeAccountPool, SWITCHED_ACCOUNT_PROMPT, mergeClaudeLimits, type AccountView } from "./claudeAccountPool.js";
 import { DEFAULT_ACCOUNT } from "./claudeAccounts.js";
-import { isPlainRecord } from "./types.js";
+import { isPlainRecord, type ApiBalance, type ApiSpend } from "./types.js";
+import { fetchDeepSeekBalance, localDay, nativeApi, todaysSpend } from "./apiSpend.js";
 import { DEFAULT_RESUME_PROMPT, PageRuns, RESUME_DELAY_MS, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
@@ -912,6 +913,11 @@ export class AgentHost {
   private codexUsageTimer: NodeJS.Timeout | null = null;
   private codexUsageFetch: Promise<void> | null = null;
   private codexUsageFetchAt = 0;
+  /** Today's Native API costs (#980), dropped after each Native turn and at local midnight. */
+  private spendCache: { day: string; costs: Map<string, number> } | null = null;
+  /** DeepSeek balances by Native API, and when each was last asked for. */
+  private balances = new Map<string, ApiBalance>();
+  private balanceFetchAt = new Map<string, number>();
   private loggingOut = new Set<ProviderId>();
   private authGenerations = new Map<ProviderId, number>();
   private closed = false;
@@ -919,6 +925,47 @@ export class AgentHost {
   /** Shared provider usage for every meter. Claude/Cursor windows display zero after reset. */
   limits(): Partial<Record<ProviderId, PlanLimits>> {
     return this.liveLimits();
+  }
+
+  /** Today's cost of Native chats per pay-per-use API, with DeepSeek's balance where the key is DeepSeek's (#980). */
+  spend(): Record<string, ApiSpend> {
+    const day = localDay(Date.now());
+    if (this.spendCache?.day !== day) {
+      this.spendCache = { day, costs: todaysSpend([
+        ...[...this.threads.values()].filter((t) => t.provider === "pi").map((t) => this.loadTurns(t.id)),
+        ...this.db.listThreadStats().filter((kept) => kept.provider === "pi").map((kept) => kept.turns),
+      ]) };
+    }
+    const pi = this.providers.pi as PiProvider;
+    const out: Record<string, ApiSpend> = {};
+    for (const [api, costUsd] of this.spendCache.costs) {
+      const balance = this.balances.get(api);
+      out[api] = { day, costUsd, label: pi.apiLabel(api), ...(balance ? { balance } : {}) };
+      if (!balance) void this.refreshBalance(api, 10 * 60_000);
+    }
+    return out;
+  }
+
+  /** After a Native turn: today's cost again, and the balance when the API is DeepSeek's. */
+  private spendChanged(model: string): void {
+    this.spendCache = null;
+    this.emit({ type: "agent_spend", spend: this.spend() });
+    const api = nativeApi(model);
+    if (api) void this.refreshBalance(api, 30_000);
+  }
+
+  private async refreshBalance(api: string, minGap: number): Promise<void> {
+    if (this.closed || this.fakes || Date.now() - (this.balanceFetchAt.get(api) ?? 0) < minGap) return;
+    this.balanceFetchAt.set(api, Date.now());
+    try {
+      const key = await (this.providers.pi as PiProvider).deepSeekKey(api);
+      const balance = key ? await fetchDeepSeekBalance(key) : null;
+      if (!balance || this.closed) return;
+      this.balances.set(api, balance);
+      this.emit({ type: "agent_spend", spend: this.spend() });
+    } catch (err) {
+      log(`DeepSeek balance failed: ${(err as Error).message}`);
+    }
   }
 
   private liveLimits(): Partial<Record<ProviderId, PlanLimits>> {
@@ -4981,6 +5028,7 @@ export class AgentHost {
       if (resetsAt) turn.limitResetsAt = resetsAt;
     }
     this.saveTurn(turn);
+    if (thread.provider === "pi") this.spendChanged(turn.model);
     this.flushNow();
     this.runs.delete(threadId);
     this.status.set(threadId, "idle");

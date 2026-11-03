@@ -6404,6 +6404,8 @@
     workerPending = null;
   }
   var workerLimits = {};
+  /** Today's cost of Native chats per pay-per-use API (#980): { [api]: { day, costUsd, label, balance? } }. */
+  var workerSpend = {};
   var workerLimitsLoaded = false;
   var workerLimitsLoading = false;
   var workerLimitsError = false;
@@ -6413,7 +6415,7 @@
     scribe.agent.limits().then(function (r) {
       workerLimitsLoaded = Boolean(r && r.ok);
       workerLimitsError = !workerLimitsLoaded;
-      if (workerLimitsLoaded) workerLimits = r.limits || {};
+      if (workerLimitsLoaded) { workerLimits = r.limits || {}; workerSpend = r.spend || {}; }
     }).catch(function () { workerLimitsError = true; }).then(function () {
       workerLimitsLoading = false;
       renderBoardLimits();
@@ -6438,8 +6440,42 @@
   }
   function renderBoardLimits() {
     // Reset times read the clock: a new minute paints them again.
-    region($("boardUsage"), [workerLimits, workerLimitsLoaded, workerLimitsError, agentOptions, workers(),
+    region($("boardUsage"), [workerLimits, workerSpend, workerLimitsLoaded, workerLimitsError, agentOptions, workers(),
       Math.floor(Date.now() / 60000)], buildBoardLimits);
+  }
+  function localDayText(at) {
+    var d = new Date(at);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function usdText(n) {
+    return n < 0.01 ? "<$0.01" : "$" + n.toFixed(2);
+  }
+  /** APIs with a cost today; yesterday's totals wait for the daemon's next report. */
+  function todaysSpends() {
+    var today = localDayText(Date.now());
+    return Object.keys(workerSpend || {}).map(function (api) { return Object.assign({ api: api }, workerSpend[api]); })
+      .filter(function (s) { return s && s.day === today && Number(s.costUsd) > 0; });
+  }
+  function spendGroup(spend) {
+    var group = el("button", "board-quota lvl-ok");
+    group.type = "button";
+    group.dataset.provider = "api:" + spend.api;
+    var line = el("div", "board-quota-line");
+    line.appendChild(el("b", null, spend.label));
+    line.appendChild(el("span", null, usdText(spend.costUsd)));
+    group.appendChild(line);
+    var amounts = spend.balance && spend.balance.amounts || [];
+    var balance = amounts.map(function (a) {
+      try { return new Intl.NumberFormat(undefined, { style: "currency", currency: a.currency }).format(Number(a.total)); }
+      catch (err) { return a.total + " " + a.currency; }
+    }).join(" + ");
+    var details = [spend.label + " cost today", usdText(spend.costUsd) + (balance ? " / " + balance : "")];
+    if (balance) details.push("Today's cost / balance · balance checked " + new Date(spend.balance.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }));
+    if (spend.balance && !spend.balance.available) details.push("The balance does not cover new calls");
+    group.setAttribute("aria-label", spend.label + " cost today " + usdText(spend.costUsd));
+    group.dataset.tooltip = details.join("\n");
+    group.setAttribute("aria-description", details.join("\n"));
+    return group;
   }
   function buildBoardLimits() {
     var section = $("boardUsage");
@@ -6457,7 +6493,8 @@
       return limits && (!limits.availability || limits.availability === "available")
         && (limits.windows || []).some(function (w) { return Number.isFinite(w.utilization); });
     });
-    section.classList.toggle("hidden", !ids.length);
+    var spends = todaysSpends();
+    section.classList.toggle("hidden", !ids.length && !spends.length);
     var nodes = ids.map(function (provider) {
       var limits = workerLimits[provider];
       var name = provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : provider === "cursor" ? "Cursor" : "Pi";
@@ -6528,11 +6565,13 @@
       group.setAttribute("aria-description", details.join("\n"));
       return group;
     });
+    spends.forEach(function (spend) { nodes.push(spendGroup(spend)); });
     scribeSyncChildren(section, nodes);
   }
   if (scribe.agent && typeof scribe.agent.onLimits === "function") {
-    scribe.agent.onLimits(function (limits) {
+    scribe.agent.onLimits(function (limits, spend) {
       workerLimits = limits || {};
+      workerSpend = spend || {};
       workerLimitsLoaded = true;
       workerLimitsError = false;
       renderBoardLimits();

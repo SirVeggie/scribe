@@ -4993,6 +4993,14 @@ body.resizing-split main.has-split .agent-dock {
   background: rgba(var(--lift-rgb), 0.06);
 }
 
+/* Today's API cost (#980): a readout, not a button. */
+span.ag-usage {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  cursor: default;
+}
+
 .ag-usage-tip {
   position: fixed;
   z-index: var(--z-popover);

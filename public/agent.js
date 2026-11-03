@@ -856,6 +856,12 @@
         if (app()?.activeTab?.()?.id === msg.pageId) showPageThread(msg.threadId, msg.where);
         return;
       }
+      case "agent_spend": {
+        S.config.spend = msg.spend || {};
+        pageLimitsChanged();
+        for (const view of views()) view.renderComposerBar();
+        return;
+      }
       case "agent_limits": {
         S.config.limits = msg.limits || {};
         pageLimitsChanged();
@@ -11151,10 +11157,60 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return limits.windows.find((w) => w.id === "five_hour") || limits.windows.find((w) => w.id === "codex:codex:primary") || listed.reduce((a, b) => (a.utilization >= b.utilization ? a : b), listed[0]) || null;
   }
 
+  /* ----- pay-per-use API cost (#980) ----- */
+
+  function localDay(at = Date.now()) {
+    const d = new Date(at);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  /** Today's cost of the Native API a model runs on ("deepseek/…" → spend.deepseek), or null when there is none yet today. */
+  function todaysSpend(model) {
+    const at = typeof model === "string" ? model.indexOf("/") : -1;
+    const spend = at > 0 ? S.config.spend?.[model.slice(0, at)] : null;
+    return spend && spend.day === localDay() && spend.costUsd > 0 ? spend : null;
+  }
+
+  function usdText(n) {
+    return n < 0.01 ? "<$0.01" : `$${n.toFixed(2)}`;
+  }
+
+  function balanceText(a) {
+    const n = Number(a.total);
+    try {
+      return new Intl.NumberFormat(undefined, { style: "currency", currency: a.currency }).format(n);
+    } catch {
+      return `${a.total} ${a.currency}`;
+    }
+  }
+
+  function spendTip(spend) {
+    const tip = el("div", "ag-usage-tip");
+    tip.append(el("div", "ag-usage-tip-title", `${spend.label} cost today`));
+    const amounts = spend.balance?.amounts || [];
+    const row = el("div", "ag-usage-tip-row");
+    row.append(el("span", "ag-usage-tip-label", amounts.length ? `${usdText(spend.costUsd)} / ${amounts.map(balanceText).join(" + ")}` : usdText(spend.costUsd)));
+    tip.append(row);
+    if (amounts.length) tip.append(el("div", "ag-usage-tip-note", `Today's cost / balance · balance checked ${R.timeAgo(spend.balance.at)}`));
+    if (spend.balance && !spend.balance.available) tip.append(el("div", "ag-usage-tip-note", "The balance does not cover new calls"));
+    return tip;
+  }
+
+  /** Native chats on a pay-per-use API: today's running cost where plan usage would be. */
+  function spendChip(model, compact) {
+    const spend = todaysSpend(model);
+    if (!spend) return null;
+    const chip = el("span", "ag-usage lvl-ok");
+    chip.append(el("span", "ag-usage-w", compact ? usdText(spend.costUsd) : `today ${usdText(spend.costUsd)}`));
+    chip.setAttribute("aria-label", `${spend.label} cost today ${usdText(spend.costUsd)}`);
+    bindHoverTip(chip, () => spendTip(todaysSpend(model) || spend));
+    return chip;
+  }
+
   /** Plan usage on the composer: one percent in the floating chat and sidebar, or "5h 84%" windows in the full window. Nothing until the provider has reported. */
   function usageChip(provider, compact = false, model = null, thread = null) {
     const limits = planLimits(provider, thread);
-    if (!limits) return null;
+    if (!limits) return provider === "pi" ? spendChip(model, compact) : null;
     if ((provider === "codex" || provider === "claude") && limits.availability !== "available") {
       const source = limits.billingSource || {};
       const backend = source.apiProvider && source.apiProvider !== "firstParty" ? source.apiProvider : source.apiKeySource && source.apiKeySource !== "none" ? "API" : source.tokenSource && source.tokenSource !== "none" ? "Token" : "Source unknown";
@@ -12947,7 +13003,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const open = new Set((app()?.tabs?.() || []).map((tab) => tab.id));
     for (const id of pageLimitWatch) {
       if (!open.has(id)) { pageLimitWatch.delete(id); continue; }
-      app()?.postToPage?.(id, { type: "scribe-agent-limits", limits: pageLimits() });
+      app()?.postToPage?.(id, { type: "scribe-agent-limits", limits: pageLimits(), spend: S.config.spend || {} });
     }
   }
   /** Pages that called scribe.agent.options(): they get it again when a model is starred or unstarred. */
@@ -13509,7 +13565,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       }
       case "limits":
         pageLimitWatch.add(tab.id);
-        return { ok: true, limits: pageLimits() };
+        return { ok: true, limits: pageLimits(), spend: S.config.spend || {} };
       case "actions":
         // The template's right-click actions, for a page that draws its own menu (#161).
         return {

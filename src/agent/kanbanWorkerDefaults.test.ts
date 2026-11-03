@@ -103,6 +103,7 @@ test("usage changes reach subscribed pages and forget closed pages", () => {
   const context = vm.createContext({
     pageLimitWatch: watch,
     pageLimits: () => ({ codex: { windows: [{ utilization: 0.5 }] } }),
+    S: { config: { spend: { deepseek: { day: "2026-11-03", costUsd: 0.4, label: "DeepSeek" } } } },
     app: () => ({ tabs: () => [{ id: "open" }], postToPage: (id: string, message: any) => events.push({ id, message }) }),
   });
   vm.runInContext(fn(chat, "pageLimitsChanged") + "\npageLimitsChanged();", context);
@@ -110,6 +111,7 @@ test("usage changes reach subscribed pages and forget closed pages", () => {
   assert.equal(events[0].id, "open");
   assert.equal(events[0].message.type, "scribe-agent-limits");
   assert.equal(events[0].message.limits.codex.windows[0].utilization, 0.5);
+  assert.equal(events[0].message.spend.deepseek.costUsd, 0.4);
   assert.deepEqual([...watch], ["open"]);
 });
 

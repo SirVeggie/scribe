@@ -76,15 +76,20 @@ export function sourceProviderId(sourceId: string): string {
   return `src-${sourceId}`;
 }
 
-/** The catalog's DeepSeek model a source model is, only on the official endpoint, never a proxy or local copy. */
-function officialDeepSeekModel(source: OpenAISource, model: string, catalog: readonly Model[]): Model | undefined {
+/** DeepSeek's own API, never a proxy or local copy. */
+export function officialDeepSeekEndpoint(baseUrl: string): boolean {
   let url: URL;
   try {
-    url = new URL(source.baseUrl);
+    url = new URL(baseUrl);
   } catch {
-    return undefined;
+    return false;
   }
-  if (url.origin !== "https://api.deepseek.com" || !["", "/", "/v1", "/v1/", "/beta", "/beta/"].includes(url.pathname)) return undefined;
+  return url.origin === "https://api.deepseek.com" && ["", "/", "/v1", "/v1/", "/beta", "/beta/"].includes(url.pathname);
+}
+
+/** The catalog's DeepSeek model a source model is, only on the official endpoint, never a proxy or local copy. */
+function officialDeepSeekModel(source: OpenAISource, model: string, catalog: readonly Model[]): Model | undefined {
+  if (!officialDeepSeekEndpoint(source.baseUrl)) return undefined;
   // DeepSeek still accepts these retired Flash names at the current Flash price.
   const id = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].includes(model) ? "deepseek-flash" : model;
   return catalog.find((m) => m.provider === "deepseek" && m.id === id);
@@ -526,6 +531,21 @@ export class PiProvider implements AgentProvider {
   private currentModel(model: Model, runtime: ModelRuntime): Model {
     const source = this.sources().find((s) => sourceProviderId(s.id) === model.provider);
     return { ...model, cost: source ? sourceModelCost(source, model.id, runtime.getModels("deepseek")) : { ...model.cost } };
+  }
+
+  /** The DeepSeek API key of a Native API ("deepseek", or a source on DeepSeek's own endpoint), for its balance (#980). */
+  async deepSeekKey(api: string): Promise<string | null> {
+    if (api === "deepseek") {
+      const auth = await (await this.runtime()).getAuth("deepseek").catch(() => undefined);
+      return auth?.auth.apiKey || null;
+    }
+    const source = this.sources().find((s) => sourceProviderId(s.id) === api);
+    return source && officialDeepSeekEndpoint(source.baseUrl) && source.apiKey ? source.apiKey : null;
+  }
+
+  /** The name the model picker gives a Native API's models. */
+  apiLabel(api: string): string {
+    return this.cachedModels().find((m) => m.id.startsWith(`${api}/`))?.description ?? (api === "deepseek" ? "DeepSeek" : api);
   }
 
   rateSnapshot(model: Model, promptTokens?: number): RateSnapshot {

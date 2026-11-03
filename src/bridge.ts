@@ -1117,7 +1117,7 @@ ${POINTER_DRAG_JS}
     } else if (data.type === "scribe-agent-limits") {
       agentLimitListeners.slice().forEach(function (fn) {
         try {
-          fn(data.limits || {});
+          fn(data.limits || {}, data.spend || {});
         } catch (err) {
           console.error(err);
         }
@@ -1625,11 +1625,11 @@ ${POINTER_DRAG_JS}
         },
       };
     },
-    /** Provider plan usage: { ok, limits: { [provider]: { at, windows: [{ id, label, utilization, resetsAt? }], availability?, detail?, ordinaryUsageAllowed?, overage? } } }. Missing providers have no report. Also subscribes this page to onLimits updates. */
+    /** Provider plan usage: { ok, limits: { [provider]: { at, windows: [{ id, label, utilization, resetsAt? }], availability?, detail?, ordinaryUsageAllowed?, overage? } } }. Missing providers have no report. spend: { [api]: { day, costUsd, label, balance? } }, today's cost of Native chats per pay-per-use API ("deepseek"). Also subscribes this page to onLimits updates. */
     limits: function () {
       return agentCall({ op: "limits" });
     },
-    /** fn(limits) after limits() whenever provider usage changes. Returns an unsubscribe function. */
+    /** fn(limits, spend) after limits() whenever provider usage or API cost changes. Returns an unsubscribe function. */
     onLimits: function (fn) {
       agentLimitListeners.push(fn);
       return function () {

@@ -189,6 +189,7 @@ export function agentRouter(host: AgentHost): express.Router {
       prefs: host.prefs(),
       models: { claude: host.cachedModels("claude"), cursor: host.cachedModels("cursor"), codex: host.cachedModels("codex"), pi: host.cachedModels("pi") },
       limits: host.limits(),
+      spend: host.spend(),
       nativePlans: host.nativePlans(),
     }))
   );
