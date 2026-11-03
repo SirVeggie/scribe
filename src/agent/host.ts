@@ -3151,7 +3151,7 @@ export class AgentHost {
       { id: "deny", label: "Deny", kind: "reject_once" },
     ];
     this.closeBlocks(run);
-    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "fetch", tone: "internal", title: title.slice(0, 300), detail, options, status: "pending" });
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "fetch", title: title.slice(0, 300), detail, options, status: "pending" });
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     opts.signal?.addEventListener("abort", onAbort);
@@ -3299,7 +3299,7 @@ export class AgentHost {
   }
 
   /** Plugin consent is cancellable, bounded for unattended work, and never grants a page access. */
-  async requestPluginApproval(threadId: string, title: string, detail: string, allowThread: boolean, plugin?: string, opts:{signal?:AbortSignal;importance?:WebImportance;sourceUrl?:string}={}): Promise<{allowed:boolean}> {
+  async requestPluginApproval(threadId: string, title: string, detail: string, allowThread: boolean, plugin?: string, opts:{signal?:AbortSignal;importance?:WebImportance;sourceUrl?:string;tone?:"internal"}={}): Promise<{allowed:boolean}> {
     const thread = this.threads.get(threadId), run = this.runs.get(threadId);
     if (!thread || !run) return {allowed:false};
     const grants = thread.pluginGrants??[];
@@ -3312,7 +3312,7 @@ export class AgentHost {
     ];
     const waitMs=this.unattended(threadId)?WEB_IMPORTANCE_WAIT_MS[opts.importance??"useful"]:null;
     const deadline=waitMs===null?"":`\nRefused if not answered by ${new Date(Date.now()+waitMs).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}.`;
-    const item = this.addItem(threadId,run.turn.id,{kind:"approval",requestId:"",tool:"other",tone:"internal",title,detail:detail+deadline,options,status:"pending",...(opts.sourceUrl?{sourceUrl:opts.sourceUrl}:{})});
+    const item = this.addItem(threadId,run.turn.id,{kind:"approval",requestId:"",tool:"other",...(opts.tone?{tone:opts.tone}:{}),title,detail:detail+deadline,options,status:"pending",...(opts.sourceUrl?{sourceUrl:opts.sourceUrl}:{})});
     const abort=new AbortController(),onAbort=()=>abort.abort();opts.signal?.addEventListener("abort",onAbort);if(opts.signal?.aborted)abort.abort();
     const timer=waitMs===null?null:setTimeout(()=>abort.abort(),waitMs);
     try {
@@ -3364,7 +3364,7 @@ export class AgentHost {
       .filter(Boolean)
       .join("\n");
     this.closeBlocks(run);
-    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", tone: "internal", title: `Page access: ${what}`.slice(0, 300), detail, options, status: "pending" });
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", title: `Page access: ${what}`.slice(0, 300), detail, options, status: "pending" });
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     opts.signal?.addEventListener("abort", onAbort);
@@ -3430,7 +3430,7 @@ export class AgentHost {
     const waitMs = this.unattended(threadId) ? WEB_IMPORTANCE_WAIT_MS[importance] : null;
     const deadline = waitMs === null ? "" : `\nRefused if not answered by ${new Date(Date.now() + waitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}; the agent then goes on without it.`;
     this.closeBlocks(run);
-    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: ask.tool, tone: "internal", title: ask.title.slice(0, 300), detail: ask.detail + deadline, options: ask.options, status: "pending" });
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: ask.tool, title: ask.title.slice(0, 300), detail: ask.detail + deadline, options: ask.options, status: "pending" });
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     signal?.addEventListener("abort", onAbort);
@@ -3663,7 +3663,7 @@ export class AgentHost {
     ];
     this.closeBlocks(run);
     const title = want.length === 1 && want[0].kind === "search" ? "Search all threads (titles only outside this thread's scopes)" : `Read other threads: ${labels(want).join("; ")}`;
-    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", tone: "internal", title: title.slice(0, 300), detail, options, status: "pending" });
+    const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "read", title: title.slice(0, 300), detail, options, status: "pending" });
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     opts.signal?.addEventListener("abort", onAbort);
@@ -3765,7 +3765,7 @@ export class AgentHost {
         { id: "deny", label: "Deny", kind: "reject_once" },
       ];
       this.closeBlocks(run);
-      const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "other", tone: "internal", title: `Change workspace to ${cwd}`.slice(0, 300), detail, options, status: "pending" });
+      const item = this.addItem(threadId, run.turn.id, { kind: "approval", requestId: "", tool: "other", title: `Change workspace to ${cwd}`.slice(0, 300), detail, options, status: "pending" });
       const abort = new AbortController();
       const onAbort = () => abort.abort();
       opts.signal?.addEventListener("abort", onAbort);
@@ -4216,7 +4216,7 @@ export class AgentHost {
     ];
     this.closeBlocks(run);
     const detail = `The agent wants to hand this task to ${what}. It works in this thread's workspace on the ${APPROVAL_LABEL[access.approval]} rung with this thread's web setting.\n\n${clip(task, 2000)}`;
-    const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", tone: "internal", title: `Start a helper agent: ${what}`.slice(0, 300), detail, options, status: "pending" });
+    const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Start a helper agent: ${what}`.slice(0, 300), detail, options, status: "pending" });
     let decision: ApprovalDecision;
     try {
       decision = await this.waitPending<ApprovalDecision>(parent.id, run, "approval", item.id, signal);
@@ -4309,7 +4309,7 @@ export class AgentHost {
     this.closeBlocks(run);
     const until = new Date(Date.now() + TAINTED_HELPER_WAIT_MS).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const detail = `This thread has read Trusted only or Restricted pages. ${what} is not a trusted model, and the brief may carry that content to it.\nRefused if not answered by ${until}.`;
-    const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", tone: "internal", title: `Untrusted helper: ${what}`.slice(0, 300), detail, options, status: "pending" });
+    const item = this.addItem(parent.id, run.turn.id, { kind: "approval", requestId: "", tool: "task", title: `Untrusted helper: ${what}`.slice(0, 300), detail, options, status: "pending" });
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     signal?.addEventListener("abort", onAbort);

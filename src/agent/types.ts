@@ -661,9 +661,8 @@ export type ItemBody =
       detail?: string;
       sourceUrl?: string;
       /**
-       * Shown in violet so Scribe's own prompts stand apart from tool approvals. harness: a change to
-       * the user's agent setup (#79); internal: another of Scribe's asks (plugins, page and thread
-       * access, web, workspace, helpers).
+       * Shown in violet: a change to the app itself, so it stands apart from tool and access approvals.
+       * harness: a change to the user's agent setup (#79); internal: installing a plugin (#952).
        */
       tone?: "harness" | "internal";
       options: ApprovalOption[];

@@ -27,7 +27,7 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
   const user=(req:express.Request)=>{if(identify(req).viewer!=="user")throw new Error("Only the Scribe UI can change plugin settings");};
   const consent=async(req:express.Request,title:string,detail:string,signal:AbortSignal,sourceUrl?:string)=>{
     const t=author(req); if(!t)return true; if(t.approval==="full")return true;
-    return (await host.requestPluginApproval(t.id,title,detail,false,undefined,{signal,sourceUrl,importance:parseWebImportance(req.body?.importance)??"useful"})).allowed;
+    return (await host.requestPluginApproval(t.id,title,detail,false,undefined,{signal,sourceUrl,tone:"internal",importance:parseWebImportance(req.body?.importance)??"useful"})).allowed;
   };
   router.get("/reviews/:token",wrap((req,res)=>{user(req);const files=reviews.get(req.params.token);if(!files)throw new Error("This source review has ended");res.setHeader("Content-Security-Policy","default-src 'none'; sandbox");res.type("text/plain").send(Object.entries(files).filter(([name])=>!name.startsWith("scribe/")).map(([name,data])=>`${name}\n${data.toString("utf8")}`).join("\n\n"));}));
   router.get("/",wrap(req=>{

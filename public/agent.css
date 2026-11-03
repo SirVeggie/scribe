@@ -1945,7 +1945,7 @@ html[data-theme="cream"] .ag-md {
   color: var(--ag-warn);
 }
 
-/* Scribe's own prompts (agent setup #79, plugins, access, workspace, helpers): violet, so they read as different from a tool approval. */
+/* Changes to the app itself (agent setup #79, plugin install #952): violet, so they read as different from a tool approval. */
 .ag-approval.ag-approval-internal.s-pending {
   border-color: rgba(167, 139, 250, 0.6);
   box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.1);
