@@ -107,7 +107,8 @@
     const items = S.details.get(threadId)?.items || [];
     if (items.some((it) => it.kind === "user" && it.editing)) return null;
     const waiting = items.find((it) => it.kind === "user" && it.steer === "waiting");
-    if (waiting) return { id: waiting.id, action: "send-now" };
+    // Enter again on a waiting steer: the steer route sends it now after a short grace (#963).
+    if (waiting) return { id: waiting.id, action: "steer" };
     const queued = items.find((it) => it.kind === "user" && it.turnId == null && !it.dropped && !it.steer);
     if (queued) return { id: queued.id, action: emptyEnter() === "send" ? "send-now" : "steer" };
     return null;

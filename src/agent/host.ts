@@ -2824,18 +2824,18 @@ export class AgentHost {
       const queue = this.queues.get(threadId) ?? [];
       // steer: the composer's Steer (#963) skips the queue: steered into the turn when the provider
       // can take it now, else first in line, ahead of messages queued before it.
-      // now: Send now stops the turn for it, after the steer's short grace (a steer already waiting goes first).
+      // now: Send now stops the turn at once and runs it next; a steer already waiting still goes first.
       if (input.steer || input.now) queue.unshift(msg);
       else queue.push(msg);
       this.queues.set(threadId, queue);
       const item = this.addItem(threadId, null, userBody(msg));
       msg.itemId = item.id;
-      if (input.steer || input.now) this.steerFirst(threadId);
+      if (input.steer) this.steerFirst(threadId);
       this.emitThread(threadId);
       this.drainQueue(threadId);
       if (input.now) {
         const waiting = this.runs.get(threadId)?.steer?.itemId;
-        this.sendNow(threadId, waiting ?? item.id).catch((err) => log(`${threadId}: send now failed: ${(err as Error).message}`));
+        this.sendNow(threadId, waiting ?? item.id, { grace: false }).catch((err) => log(`${threadId}: send now failed: ${(err as Error).message}`));
       }
       return { queued: true, item };
     }
@@ -2860,7 +2860,7 @@ export class AgentHost {
     if (itemId) {
       const waiting = this.loadItems(threadId).find((it) => it.id === itemId && it.kind === "user" && it.steer === "waiting");
       if (waiting) {
-        await this.sendNow(threadId);
+        await this.sendNow(threadId, undefined, { grace: true });
         return { steered: false };
       }
       if (!this.preferQueued(threadId, itemId)) throw new Error("That message is not queued");
@@ -2868,7 +2868,7 @@ export class AgentHost {
     // The turn is wrapping up: the message stays first in the queue and starts the next turn.
     if (run.ended) return { steered: false };
     if (run.steer || !session?.steer) {
-      await this.sendNow(threadId);
+      await this.sendNow(threadId, undefined, { grace: true });
       return { steered: false };
     }
     const queue = this.queues.get(threadId);
@@ -3100,7 +3100,7 @@ export class AgentHost {
    * Stop the running turn and run the waiting steered message, or else the first queued one, as the
    * next turn. Unlike cancel, the rest of the queue stays.
    */
-  async sendNow(threadId: string, itemId?: string): Promise<void> {
+  async sendNow(threadId: string, itemId?: string, { grace = false }: { grace?: boolean } = {}): Promise<void> {
     const run = this.runs.get(threadId);
     if (itemId) {
       const waiting = this.loadItems(threadId).find((it) => it.kind === "user" && it.steer === "waiting");
@@ -3111,9 +3111,10 @@ export class AgentHost {
     if (this.queues.get(threadId)?.[0]?.edit) throw new Error("Finish editing the queued message first");
     if (!run) { this.drainQueue(threadId); return; }
     if (run.ended || (!run.steer && !this.queues.get(threadId)?.length)) return;
-    // A steer handed over a moment ago is often read at once (#963): give it a short grace before
-    // stopping the turn for it. Read in, withdrawn, or the turn ended meanwhile: nothing left to do.
-    const steer = run.steer;
+    // Enter again on a steer handed over a moment ago (#963): it is often read at once, so give it a
+    // short grace before stopping the turn. Read in, withdrawn, or the turn ended meanwhile: nothing left
+    // to do. Send now itself (button, menu) is the strict stop and does not wait.
+    const steer = grace ? run.steer : null;
     if (steer && steer.at + this.steerGraceMs > Date.now()) {
       while (run.steer === steer && !run.ended && this.runs.get(threadId) === run && steer.at + this.steerGraceMs > Date.now()) {
         await new Promise((resolve) => setTimeout(resolve, 50));

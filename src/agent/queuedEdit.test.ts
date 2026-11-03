@@ -182,25 +182,33 @@ test("a message sent to steer skips the queue: steered in, or first in line whil
   assert.match(f.inputs[2].text, /steer next/);
 });
 
-test("Send now gives a just-steered message a short grace: read in meanwhile, the turn goes on (#963)", async () => {
+test("Enter again gives a just-steered message a short grace; Send now stops at once without steering (#963)", async () => {
   host.steerGraceMs = 200;
+  const cancel = host.cancel.bind(host);
   try {
     const f = setup();
     let cancelled = 0;
-    const cancel = host.cancel.bind(host);
     host.cancel = async () => { cancelled++; };
     const read = host.send(f.id, { text: "read soon", steer: true }).item;
     const pending = host.steer(f.id, read.id);
     f.sinks[0].steered("steer-1");
     await pending;
     assert.equal(cancelled, 0);
-    host.send(f.id, { text: "not read", steer: true });
+    const late = host.send(f.id, { text: "not read", steer: true }).item;
     const started = Date.now();
-    await host.sendNow(f.id);
+    await host.steer(f.id, late.id);
     assert.equal(cancelled, 1);
     assert.ok(Date.now() - started >= 150);
-    host.cancel = cancel;
+    // Send now: no steer, no grace.
+    const g = setup();
+    const before = Date.now();
+    host.send(g.id, { text: "strict", now: true });
+    await tick();
+    assert.equal(g.steers.length, 0);
+    assert.equal(cancelled, 2);
+    assert.ok(Date.now() - before < 150);
   } finally {
+    host.cancel = cancel;
     host.steerGraceMs = 2000;
   }
 });
