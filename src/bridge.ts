@@ -69,6 +69,19 @@ ${POINTER_DRAG_JS}
     console.warn("[scribe] " + message, detail === undefined ? "" : detail);
   }
 
+  var errorListeners = [];
+
+  /** Tell the page's onError listeners that Scribe refused a write for good. */
+  function reportError(info) {
+    errorListeners.slice().forEach(function (fn) {
+      try {
+        fn(info);
+      } catch (err) {
+        console.error("[scribe] onError listener failed", err);
+      }
+    });
+  }
+
   function readEl(el) {
     return el.type === "checkbox" ? el.checked : el.value;
   }
@@ -191,10 +204,12 @@ ${POINTER_DRAG_JS}
       return res.json().catch(function () { return {}; }).then(function (data) {
         if (!res.ok) {
           var error = new Error((data && data.error) || "request failed (" + res.status + ")");
-          // A read-only copy (another device's mirror, #910) refuses every write: retrying can't help.
-          if (data && data.readOnly) {
-            error.readOnly = true;
-          }
+          error.status = res.status;
+          // A refusal that asking again won't change (a read-only mirror copy, #910; a page this
+          // viewer may not write; a deleted page): retrying can't help. Timeouts, conflicts, rate
+          // limits and server errors may pass later.
+          error.final = Boolean(data && data.readOnly) ||
+            (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 409 && res.status !== 429);
           throw error;
         }
         return data;
@@ -232,14 +247,15 @@ ${POINTER_DRAG_JS}
         confirm(sent, data);
       })
       .catch(function (err) {
-        if (err && err.readOnly) {
-          // Drop the edits and show the copy as it is again.
-          console.warn("[scribe] " + err.message);
+        if (err && err.final) {
+          // Drop the edits and show the page as it is again.
+          console.warn("[scribe] save refused: " + err.message);
           if (inFlight && inFlight.writeId === sent) {
             inFlight = null;
           }
           pending = [];
           resync();
+          reportError({ kind: "save", status: err.status, message: err.message });
           return;
         }
         console.error("[scribe] save failed", err);
@@ -279,6 +295,10 @@ ${POINTER_DRAG_JS}
       })
       .catch(function (err) {
         console.error("[scribe] signal failed", err);
+        if (err && err.final) {
+          // The event is dropped; its edits go back to pending, and their own save settles them.
+          reportError({ kind: "signal", name: next.name, status: err.status, message: err.message });
+        }
         if (inFlight && inFlight.writeId === sent) {
           pending = inFlight.ops.concat(pending);
           inFlight = null;
@@ -2143,6 +2163,18 @@ ${POINTER_DRAG_JS}
      * fn(state, { source, ops }) when the state changes. Remote and resync changes by default;
      * { local: true } also hears this page's own writes, batched once the writing code finishes.
      */
+    /**
+     * fn({ kind: "save" | "signal", status, message, name? }) when Scribe refuses a write for good
+     * (the page is read-only here, or gone). Refused edits are dropped and the state reloads.
+     */
+    onError: function (fn) {
+      errorListeners.push(fn);
+      return function () {
+        errorListeners = errorListeners.filter(function (item) {
+          return item !== fn;
+        });
+      };
+    },
     onChange: function (fn, opts) {
       var entry = { fn: fn, local: Boolean(opts && opts.local) };
       listeners.push(entry);
