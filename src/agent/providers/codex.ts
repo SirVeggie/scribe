@@ -486,7 +486,7 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
   const sandbox = sandboxFor(thread);
   return {
     ...(thread.model && thread.model !== "default" ? { model: thread.model } : {}),
-    ...(mxc ? { permissions: mxcProfile(sandbox, commandNetwork(thread)) } : { sandbox }),
+    ...(mxc ? {} : { sandbox }),
     cwd,
     approvalPolicy: thread.approval === "full" ? "never" : "on-request",
     // Native review only handles actions that need approval; keep the mode's sandbox.
@@ -494,7 +494,9 @@ export function threadOptions(thread: Pick<Thread, "model" | "effort" | "mode" |
     config: {
       ...(effort ? { model_reasoning_effort: effort } : {}),
       web_search: thread.web === "on" ? "live" : "disabled",
-      ...(mxc ?? {
+      // The profile goes in as the config default: Codex 0.166 fails every turn with "failed to load
+      // workspace requirements" when thread/start names a custom profile in `permissions` (#959).
+      ...(mxc ? { ...mxc, default_permissions: mxcProfile(sandbox, commandNetwork(thread)) } : {
         "sandbox_workspace_write.network_access": thread.web === "on" && thread.mode === "code" && !codexReadOnly(thread),
         // Keep Windows ready for a later sandboxed turn after Full access.
         ...windowsSandboxConfig(thread.mode === "code" && !codexReadOnly(thread) ? "workspace-write" : sandbox, cwd, platform),

@@ -63,13 +63,15 @@ test("MXC profiles: the sandbox mode picks one, and a reported profile id maps b
   assert.equal(full.sandbox, "danger-full-access");
 });
 
-test("threadOptions and turn overrides send a profile id under MXC, never a sandbox mode with it", () => {
+test("threadOptions and turn overrides select a profile id under MXC, never a sandbox mode with it", () => {
   const t = { model: "default", effort: null, mode: "code", approval: "auto", web: "off", cwd: null } as unknown as Thread;
   const mxc = mxcConfig([], null);
   const options = threadOptions(t, "/work", "win32", mxc);
   assert.equal(options.sandbox, undefined);
-  assert.equal(options.permissions, MXC_PROFILES.write);
+  // As the config default, not thread/start's `permissions`: Codex fails the turns then (#959).
+  assert.equal(options.permissions, undefined);
   const config = options.config as Record<string, unknown>;
+  assert.equal(config.default_permissions, MXC_PROFILES.write);
   assert.equal(config["windows.sandbox"], "mxc");
   assert.equal(config["sandbox_workspace_write.network_access"], undefined);
   assert.equal(config["sandbox_workspace_write.writable_roots"], undefined);
