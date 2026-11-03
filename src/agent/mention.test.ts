@@ -103,16 +103,15 @@ test("the composer searches # threads and replaces the selected token with a con
   const inline = source.slice(source.indexOf("    inlineMentions() {"), source.indexOf("    /** After an edit"));
   const methods = vm.runInNewContext(`${helpers}\n({${load}, ${pick}, ${caret}, ${inline}})`, {
     MENTION_LIMIT: 32, R: { basename: (p: string) => p },
-    api: async (method: string, route: string) => {
-      assert.equal(method, "GET");
-      assert.equal(route, "/threads");
-      return { threads: [
-        { id: "self", title: "Thread work" },
-        { id: "taken", title: "Thread taken" },
-        { id: "target", title: "Thread to read" },
-        { id: "other", title: "Something else" },
-      ] };
-    },
+    // Threads come from the live list in memory: no request per keystroke.
+    api: async () => assert.fail("the # picker must not fetch"),
+    S: { threads: new Map([
+      { id: "self", title: "Thread work", activityAt: 4 },
+      { id: "taken", title: "Thread taken", activityAt: 3 },
+      { id: "older", title: "Thread to skim", activityAt: 1 },
+      { id: "target", title: "Thread to read", activityAt: 2 },
+      { id: "other", title: "Something else", activityAt: 5 },
+    ].map((t) => [t.id, t])) },
   });
   let rendered: any;
   const input = { value: "see #Thread next", selectionStart: 11, selectionEnd: 11, setSelectionRange(start: number, end: number) { assert.equal(start, end); this.selectionStart = start; this.selectionEnd = end; } };
@@ -125,7 +124,7 @@ test("the composer searches # threads and replaces the selected token with a con
   };
   const token = { ...mentionAt(input.value, input.selectionStart, "#"), thread: true };
   await view.loadMentions(token, 1);
-  assert.deepEqual(Array.from(rendered.threads, (t: any) => t.id), ["target"]);
+  assert.deepEqual(Array.from(rendered.threads, (t: any) => t.id), ["target", "older"]);
   assert.equal(view.mentionLoading, false);
   view.pickMention(rendered.threads[0], token);
   // The pick stays in the text as one inline mention, with a space after it.

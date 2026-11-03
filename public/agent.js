@@ -6730,6 +6730,11 @@
         this.slash.setAttribute("aria-busy", "true");
       }
       clearTimeout(this.mentionTimer);
+      // Threads are matched locally, so they need no debounce.
+      if (mention.thread) {
+        void this.loadMentions(mention, gen);
+        return;
+      }
       this.mentionTimer = setTimeout(() => {
         void this.loadMentions(mention, gen);
       }, mention.query ? 70 : 0);
@@ -6740,19 +6745,14 @@
       const q = mention.query.trim();
       const taken = this.knownMentionKeys();
       if (mention.thread) {
-        if (this.slash.hidden || !this.slash.hasAttribute("aria-busy")) {
-          this.renderMentionPicker({ threads: [], mention, loading: true });
-        }
-        let threads = [];
-        try {
-          const data = await api("GET", "/threads");
-          const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-          threads = (data.threads || [])
-            .filter((t) => t.id !== this.threadId && !taken.has(`thread:${t.id}`) && words.every((w) => `${t.title} ${t.id}`.toLowerCase().includes(w)))
-            .slice(0, 20)
-            .map((t) => ({ kind: "thread", id: t.id, title: t.title }));
-        } catch { /* The picker shows an empty result if the thread list is unavailable. */ }
-        if (gen !== this.mentionGen) return;
+        // Match names only, from the thread list S.threads already keeps live: fetching /threads
+        // builds every thread's full view on the daemon (about half a second with a thousand threads).
+        const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+        const threads = [...S.threads.values()]
+          .filter((t) => t.id !== this.threadId && !taken.has(`thread:${t.id}`) && words.every((w) => `${t.title} ${t.id}`.toLowerCase().includes(w)))
+          .sort((a, b) => b.activityAt - a.activityAt)
+          .slice(0, 20)
+          .map((t) => ({ kind: "thread", id: t.id, title: t.title }));
         this.mentionLoading = false;
         this.renderMentionPicker({ threads, mention, loading: false });
         return;
