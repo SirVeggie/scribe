@@ -55,6 +55,7 @@ export const SCANNED_TOOLS: readonly string[] = [
   "plugin_read",
   "plugin_logs",
   "plugin_state",
+  "plugin_task",
 ];
 
 /** Scribe's own tools that only read, so a suspect turn may go on calling them without asking. */

@@ -8,7 +8,7 @@ import util from 'node:util';
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 for (const name of ['log','info','warn','error','debug']) console[name] = (...args) => process.stderr.write(util.format(...args) + '\n');
 let backend, config, database, seq = 0, leases = 0;
-const pending = new Map(), calls = new Map();
+const pending = new Map(), calls = new Map(), tasks = new Map();
 const rpc = (method, params) => new Promise((resolve,reject) => {
   const id = 'child:' + (++seq); pending.set(id,{resolve,reject}); send({id,method,params});
 });
@@ -18,6 +18,7 @@ lines.on('line', async line => {
   try { msg = JSON.parse(line); } catch { return; }
   if (msg.id && !msg.method) { const p = pending.get(msg.id); if (p) { pending.delete(msg.id); msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg.result); } return; }
   if (msg.method === 'cancel') { calls.get(msg.params?.id)?.abort(new Error('Plugin call was cancelled')); return; }
+  if (msg.method === 'task.stop') { tasks.get(msg.params?.id)?.abort(new Error('Task was stopped')); return; }
   const abort = new AbortController(); calls.set(msg.id, abort);
   try {
     let result;
@@ -57,9 +58,27 @@ function busy(work, label) {
   const result = started.then(() => promise); result.catch(() => {});
   return result;
 }
+// A task the host records and shows (progress, Stop, agent wait). It holds a lease until done or fail.
+async function task(caller, options) {
+  const opts = typeof options === 'string' ? {title:options} : (options ?? {}), title = String(opts.title ?? 'Task');
+  const {id} = await rpc('task',{op:'start',title,token:caller.token});
+  const abort = new AbortController(); tasks.set(id, abort);
+  let settle, ended = false;
+  busy(new Promise(resolve => { settle = resolve; }), title);
+  const send = (op, params) => rpc('task',{op,id,...params}).then(() => true, error => { console.error('Task ' + op + ' failed:', error?.message ?? error); return false; });
+  const end = (op, params) => { if (ended) return Promise.resolve(false); ended = true; tasks.delete(id); return send(op, params).finally(settle); };
+  return {
+    id, signal: abort.signal,
+    progress: update => ended ? Promise.resolve(false) : send('progress', typeof update === 'string' ? {text:update} : {text:update?.text, pct:update?.pct}),
+    log: line => ended ? Promise.resolve(false) : send('log',{line:String(line)}),
+    done: result => end('done',{result}),
+    fail: error => end('fail',{error:String(error?.message ?? error)}),
+  };
+}
 function context(caller, signal = new AbortController().signal) {
   return {
     settings: config.settings, dataDir:config.dataDir, caller, signal, busy,
+    task: options => task(caller, options),
     secret: name => rpc('secret',{name}),
     state: {get:key => rpc('state.get',{key}), set:(key,value) => rpc('state.set',{key,value})},
     emit: (name,data) => rpc('emit',{name,data}),

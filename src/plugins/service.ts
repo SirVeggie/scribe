@@ -11,6 +11,7 @@ import { PluginDatabase, type PluginRecord } from "./database.js";
 import { packageHash, packagePath, readPackage, writePackage, zip, type PackageFiles } from "./package.js";
 import { PluginRuntime } from "./runtime.js";
 import { PluginSecrets } from "./secrets.js";
+import { PluginTasks } from "./tasks.js";
 import { build } from "esbuild";
 import { unifiedDiff } from "../agent/textDiff.js";
 import { normalizeTemplateInput } from "../templates.js";
@@ -46,6 +47,8 @@ export class PluginService {
     this.listeners.add(listener); return () => { this.listeners.delete(listener); };
   }
   readonly database: PluginDatabase;
+  /** ctx.task records: progress, Stop and the agent wait (plugin_task). */
+  readonly tasks: PluginTasks;
   private secrets: PluginSecrets;
   private runtimes = new Map<string, PluginRuntime>();
   private stopping = new Map<string,Promise<void>>();
@@ -58,6 +61,7 @@ export class PluginService {
     this.event = (id, name, data, registry) => { emit(id, name, data, registry); for (const fn of this.listeners) fn(id, name, data, registry); };
     fs.mkdirSync(root, { recursive: true });
     this.database = new PluginDatabase(path.join(root, "plugins.sqlite")); this.secrets = new PluginSecrets(path.join(root, "secrets"));
+    this.tasks = new PluginTasks(this.database.db, (plugin, task) => this.event(plugin, "task", task));
     for (const record of this.database.list()) this.permission(record.manifest);
   }
   private permission(manifest: PluginManifest): void {
@@ -74,7 +78,7 @@ export class PluginService {
   }
   inspect(id: string) {
     const p = this.get(id);
-    return { ...this.list().find(p => p.id === id), manifest: p.manifest, settings: p.settings, secrets: Object.fromEntries(Object.entries(p.manifest.settings).filter(([,v]) => v.type === "secret").map(([k]) => [k, this.secrets.has(id,k)])), readme: this.text(id,p.manifest.readme), methods: p.manifest.methods, logs: this.logs(id) };
+    return { ...this.list().find(p => p.id === id), manifest: p.manifest, settings: p.settings, secrets: Object.fromEntries(Object.entries(p.manifest.settings).filter(([,v]) => v.type === "secret").map(([k]) => [k, this.secrets.has(id,k)])), readme: this.text(id,p.manifest.readme), methods: p.manifest.methods, logs: this.logs(id), tasks: this.tasks.list({ plugin: id, limit: 10 }) };
   }
   private text(id: string, file?: string): string { return file ? fs.readFileSync(packagePath(this.snapshot(this.get(id)),file),"utf8") : ""; }
   guide(id: string) { const p = this.get(id); return { id, summary: p.manifest.summary, guide: this.text(id,p.manifest.guide), methods: p.manifest.methods, components: p.manifest.components ?? {} }; }
@@ -259,12 +263,30 @@ export class PluginService {
       if (method === "secret") { const key = String(args.name); if (p.manifest.settings[key]?.type !== "secret") throw new Error("Unknown secret");if(!secretCache.has(key))secretCache.set(key,this.secrets.get(id,key).catch(error=>{secretCache.delete(key);throw error;}));return secretCache.get(key); }
       if (method === "state.get") return this.database.get(id,String(args.key));
       if (method === "state.set") { const key = String(args.key), result = this.database.set(id,key,args.value); this.event(id,"state",{key,...result}); return result; }
-      if (method === "emit") { this.event(id,String(args.name).slice(0,100),args.data); return true; }
+      if (method === "emit") { const name=String(args.name).slice(0,100); if (name==="task") throw new Error("The task event is Scribe's own; use ctx.task"); this.event(id,name,args.data); return true; }
       if (method === "context") { const ctx = this.contexts.get(String(args.token)); const fn = ctx?.[String(args.method)]; if (!fn) throw new Error("Action context expired"); return fn(...(Array.isArray(args.args) ? args.args : [])); }
+      if (method === "task") return this.task(id,args);
       if (method === "asset" && this.asset) {const caller=this.callers.get(String(args.token));if(!caller?.page)throw new Error("This call has no page for assets");return this.asset(caller.page,String(args.name),String(args.mimeType),Buffer.from(String(args.data),"base64"));}
       throw new Error("Unknown host RPC");
     },p.keepAlive);
+    runtime.onStopped=()=>this.tasks.interrupt(id);
     this.runtimes.set(id,runtime); return runtime;
+  }
+  private task(id:string,args:Record<string,unknown>):unknown {
+    const op=String(args.op),task=String(args.id);
+    if(op==="start")return {id:this.tasks.start(id,String(args.title??""),(args.token?this.callers.get(String(args.token)):undefined)??{kind:"system"}).id};
+    if(op==="progress")this.tasks.progress(id,task,args);
+    else if(op==="log")this.tasks.log(id,task,args.line);
+    else if(op==="done")this.tasks.finish(id,task,{result:args.result});
+    else if(op==="fail")this.tasks.finish(id,task,{error:args.error});
+    else throw new Error("Unknown task operation");
+    return true;
+  }
+  /** Stop on a running task: aborts its t.signal, and it ends when the plugin calls done or fail. */
+  stopTask(id:string,task:string){
+    const view=this.tasks.requestStop(id,task);
+    if(!this.runtimes.get(id)?.notify("task.stop",{id:task})){this.tasks.finish(id,task,{error:"Stopped"});return this.tasks.get(task);}
+    return view;
   }
   async call(id: string, method: string, args: unknown, caller: PluginCaller, signal?: AbortSignal): Promise<unknown> {
     await this.stopping.get(id);
@@ -300,7 +322,7 @@ export class PluginService {
     if(!runtime)return this.stopping.get(id)??Promise.resolve();
     const done=runtime.stop().finally(()=>{this.pastLogs.set(id,[...(this.pastLogs.get(id)??[]),...runtime.logs].slice(-200));if(this.stopping.get(id)===done)this.stopping.delete(id);});this.stopping.set(id,done);return done;
   }
-  async remove(id: string): Promise<void> {const p=this.get(id);p.enabled=false;this.database.save(p);await this.stop(id);this.secrets.remove(id);this.database.markRemoved(id,true);this.database.remove(id); this.event(id,"changed",null,true); }
+  async remove(id: string): Promise<void> {const p=this.get(id);p.enabled=false;this.database.save(p);await this.stop(id);this.secrets.remove(id);this.database.markRemoved(id,true);this.database.remove(id);this.tasks.remove(id); this.event(id,"changed",null,true); }
   async restart(id:string):Promise<void>{await this.stop(id);if(this.enabled(id)&&this.get(id).manifest.backend)await this.runtime(id).start();}
   export(id: string, parts: ExportParts = {source:true}): Buffer {
     const p = this.get(id), files = readPackage(this.snapshot(p));

@@ -19,6 +19,8 @@ export class PluginRuntime {
   private stopping = false;
   private generation = 0;
   readonly logs: string[] = [];
+  /** Called once the backend process has exited, after its pending calls failed (its running tasks become interrupted). */
+  onStopped?: () => void;
   constructor(private config: { entry: string; dataDir: string; settings: Record<string, unknown>; env?: string[] }, private host: (method: string, params: Record<string, unknown>) => Promise<unknown>, private keepAlive = false, private idleMs = IDLE_MS) {}
   status(): string { return this.crashes.length >= 3 ? "failing" : this.child ? "running" : "idle"; }
   /** Labels of the work in progress after its calls returned. */
@@ -55,6 +57,7 @@ export class PluginRuntime {
         this.log(`Stopped (${signal ?? code})`);
         for (const p of this.pending.values()) { clearTimeout(p.timer); p.cancel?.(); p.reject(new Error("Plugin backend stopped")); }
         this.pending.clear(); this.leases.clear();
+        this.onStopped?.();
       });
       try{await this.request("init", this.config);}catch(error){if(this.child===child)this.crashes.push(Date.now());await this.stop();throw error;}
       this.log("Started");
@@ -119,6 +122,11 @@ export class PluginRuntime {
       this.pending.set(id, p);
       child.stdin.write(JSON.stringify({ id, method, params }) + "\n", err => { if (err && this.pending.has(id)) { this.settle(id); reject(err); } });
     });
+  }
+  /** A one-way message to the running backend, such as task.stop. False when it isn't running. */
+  notify(method: string, params: unknown): boolean {
+    const child = this.child; if (!child || this.stopping) return false;
+    child.stdin.write(JSON.stringify({ method, params }) + "\n", () => {}); return true;
   }
   async call(method: string, params: unknown, options?: CallOptions): Promise<unknown> { await this.start(); return this.request(method, params, options); }
   stop(): Promise<void> {

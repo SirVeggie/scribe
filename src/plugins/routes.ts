@@ -87,13 +87,34 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
   // "core" is Scribe's own page components (#761), not an installed plugin.
   router.get("/:plugin/guide",wrap(req=>{thread(req);return req.params.plugin==="core"?coreComponentGuide():service.guide(req.params.plugin);}));
   router.get("/:plugin/logs",wrap(req=>{thread(req);return {logs:service.logs(req.params.plugin)};}));
+  /** An agent reads a plugin's data under its page's grant, else with the user's approval (Full skips it). */
+  const mayRead=async(t:ReturnType<typeof thread>,id:string,title:string,detail:string,signal:AbortSignal)=>{
+    if(!t)return;
+    const home=t.scope.kind==="page"&&t.scope.ref?store.get(t.scope.ref):null,permission=home?checkPermission(store.pagePermissions(home.id),{perm:`plugin.${id}`}):"ask";
+    if(permission==="deny")throw new Error("This page denies the plugin");
+    if(permission!=="allow"&&t.approval!=="full"&&!(await host.requestPluginApproval(t.id,title,detail,true,id,{signal})).allowed)throw new Error("Plugin access denied");
+  };
   router.get("/:plugin/state/:stateKey",wrap(async(req,_res,signal)=>{
     const t=thread(req),id=req.params.plugin;if(!service.enabled(id))throw new Error("Plugin is disabled");
-    const home=t?.scope.kind==="page"&&t.scope.ref?store.get(t.scope.ref):null,permission=home?checkPermission(store.pagePermissions(home.id),{perm:`plugin.${id}`}):"ask";
-    if(permission==="deny")throw new Error("This page denies the plugin");
-    if(t&&permission!=="allow"&&t.approval!=="full"&&!(await host.requestPluginApproval(t.id,`Read ${id} state`,req.params.stateKey,true,id,{signal})).allowed)throw new Error("Plugin state access denied");
+    await mayRead(t,id,`Read ${id} state`,req.params.stateKey,signal);
     return service.database.get(id,req.params.stateKey);
   }));
+  // Tasks (ctx.task). The chat's progress row reads its thread's tasks; an agent reads the ones its thread
+  // started, and others like plugin state.
+  router.get("/_tasks",wrap(req=>{
+    const t=thread(req),asked=typeof req.query.thread==="string"?req.query.thread:undefined;
+    return {tasks:service.tasks.list({thread:t?t.id:asked,limit:20})};
+  }));
+  router.get("/:plugin/tasks",wrap(req=>{const t=thread(req),id=req.params.plugin;service.get(id);return {tasks:service.tasks.list({plugin:id,...(t?{thread:t.id}:{}),limit:20})};}));
+  router.get("/:plugin/tasks/:task",wrap(async(req,_res,signal)=>{
+    const t=thread(req),id=req.params.plugin,task=service.tasks.get(req.params.task);
+    if(!task||task.plugin!==id)throw new Error("Task not found");
+    if(t&&task.thread!==t.id)await mayRead(t,id,`Read ${id} task`,task.title,signal);
+    const wait=Math.max(0,Math.min(600,Number(req.query.wait)||0));
+    const result=await service.tasks.wait(task.id,wait*1000,signal);
+    return {task:result.task,...(wait&&result.task?.status==="running"?{timedOut:true}:{})};
+  }));
+  router.post("/:plugin/tasks/:task/stop",wrap(req=>{user(req);return {task:service.stopTask(req.params.plugin,req.params.task)};}));
   router.get("/:plugin/files",wrap(req=>{thread(req);return {files:service.read(req.params.plugin,typeof req.query.path==="string"?req.query.path:undefined)};}));
   router.put("/:plugin/files",wrap(req=>{author(req);return service.patch(req.params.plugin,String(req.body?.path),String(req.body?.content));}));
   router.post("/:plugin/reload",wrap(req=>{author(req);return service.reload(req.params.plugin);}));
