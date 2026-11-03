@@ -6,6 +6,7 @@ import { log } from "./log.js";
 import { migrateLegacyData } from "./config.js";
 import { watchMemory } from "./memoryWatch.js";
 import { hideChildWindows } from "./hideWindows.js";
+import { adoptLoginPath } from "./loginPath.js";
 
 const argv = process.argv.slice(2);
 const args = new Set(argv);
@@ -148,6 +149,7 @@ async function main(): Promise<void> {
 
   if (args.has("--daemon")) {
     hideChildWindows();
+    adoptLoginPath();
     migrateLegacyData(log);
     watchMemory();
     await startHttp();
