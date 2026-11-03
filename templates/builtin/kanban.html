@@ -499,7 +499,8 @@
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding: 36px 16px 32px;
+    /* The bottom leaves room for Scribe's floating agent pill under the comment box. */
+    padding: 36px 16px 80px;
     z-index: 40;
     overflow: auto;
   }
@@ -3091,11 +3092,21 @@
   function resizeCardEditor(editor) {
     if (!editor.getClientRects().length) return;
     var style = getComputedStyle(editor);
+    // "auto" briefly shrinks the dialog, which clamps its scroll upward; put it back.
+    var scrollTop = overlay.scrollTop;
     editor.style.height = "auto";
     editor.style.height = (editor.scrollHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)) + "px";
+    if (overlay.scrollTop !== scrollTop) overlay.scrollTop = scrollTop;
+  }
+  // Room left under a growing editor, so Scribe's floating agent pill does not cover the line being typed.
+  var EDITOR_BOTTOM_ROOM = 96;
+  function keepEditorEndVisible(editor) {
+    if (document.activeElement !== editor || editor.selectionEnd !== editor.value.length) return;
+    var over = editor.getBoundingClientRect().bottom - (overlay.getBoundingClientRect().bottom - EDITOR_BOTTOM_ROOM);
+    if (over > 0) overlay.scrollTop += over;
   }
   [commentBox, mdEditor].forEach(function (editor) {
-    editor.addEventListener("input", function () { resizeCardEditor(editor); });
+    editor.addEventListener("input", function () { resizeCardEditor(editor); keepEditorEndVisible(editor); });
     // Wrapping changes when the dialog's available width changes.
     var width = 0;
     new ResizeObserver(function () {
