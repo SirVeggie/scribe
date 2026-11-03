@@ -11,7 +11,7 @@ Scribe is a local hub for notes, pages and coding work. A daemon on this machine
 - **Pages**: agents create and change pages with Scribe's MCP tools. New page (Ctrl+T or Ctrl+N) offers templates such as Notes, Todo and Kanban.
 - **Boards and workers**: a Kanban board's Workers button sets up agent workers that take assigned cards from ready columns, work them in their own git worktrees and merge the result.
 - **Settings**: Settings (Ctrl+, or the logo) covers the app; Agent settings (Ctrl+Shift+,) covers providers, models, access, MCP servers, hooks, skills, memories and instructions.
-- **Help**: Ctrl+H opens Help, where an agent answers questions about Scribe. Settings → Help → Setup guide shows the first-run setup and tour again.
+- **Help**: Ctrl+H opens Help, where an agent answers questions about Scribe. The clock button (and the list under the examples) reopens previous results without asking again. Settings → Help → Setup guide shows the first-run setup and tour again.
 
 ## Keyboard shortcuts
 

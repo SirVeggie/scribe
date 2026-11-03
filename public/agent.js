@@ -14072,6 +14072,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
    */
   const HELP_IDLE_MS = 12 * 60 * 60 * 1000;
   const HELP_MODEL_KEY = "scribe.agent.helpModel";
+  /** Previous results, newest first: { q, at, items }. Kept after the thread is gone, so a question needn't be asked twice. */
+  const HELP_HISTORY_KEY = "scribe.agent.helpHistory";
+  const HELP_HISTORY_MAX = 40;
   const HELP_EXAMPLES = [
     "List the keyboard shortcuts",
     "Change the theme",
@@ -14096,6 +14099,53 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     pending: null,
     open: false,
     gen: 0,
+    historyBtn: null,
+
+    history() {
+      try {
+        const list = JSON.parse(localStorage.getItem(HELP_HISTORY_KEY) || "[]");
+        return Array.isArray(list) ? list.filter((h) => h && typeof h.q === "string" && Array.isArray(h.items)) : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** Save an answer under its question; asking the same question again replaces the older result. */
+    remember(q, items) {
+      // Images and components are served from the thread, which is deleted, so a saved result leaves them out.
+      const kept = items.filter((it) => it.kind === "text" || it.kind === "settings").map(({ threadId, parentId, seq, ...rest }) => rest);
+      if (!kept.length) return;
+      const key = q.trim().toLowerCase();
+      const list = [{ q, at: Date.now(), items: kept }, ...this.history().filter((h) => h.q.trim().toLowerCase() !== key)].slice(0, HELP_HISTORY_MAX);
+      // Over the storage quota: drop the oldest results until it fits.
+      for (let n = list.length; n > 0; n--) {
+        try {
+          localStorage.setItem(HELP_HISTORY_KEY, JSON.stringify(list.slice(0, n)));
+          break;
+        } catch {}
+      }
+      this.renderHistoryBtn();
+    },
+
+    renderHistoryBtn() {
+      if (this.historyBtn) this.historyBtn.hidden = !this.history().length;
+    },
+
+    pickHistory(anchor) {
+      const items = this.history().map((h) => ({ label: h.q, detail: `${R.timeAgo(h.at)} ago`, icon: "clock", run: () => this.showSaved(h) }));
+      openMenu(anchor, items, { search: items.length > 6, width: 340, placeholder: "Search previous results" });
+    },
+
+    /** Show a saved result in place of an answer; the help thread, if any, stays as it is. */
+    showSaved(h) {
+      if (this.pending) return;
+      this.input.value = h.q;
+      this.status.replaceChildren();
+      const meta = el("div", "help-saved");
+      meta.append(icon("clock"), el("span", null, `Saved result · ${R.timeAgo(h.at)} ago`));
+      meta.append(button("Ask again", "ag-btn small ghost", () => void this.ask(h.q)));
+      this.render(h.items, null, meta);
+    },
 
     model() {
       let saved = null;
@@ -14122,8 +14172,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const head = el("div", "help-head");
       head.append(el("h1", "help-title", "Help"));
       this.modelBtn = button("", "ag-chip help-model", (event) => this.pickModel(event.currentTarget), "Model for Help");
+      this.historyBtn = button(icon("clock"), "ag-icon-btn help-history", (event) => this.pickHistory(event.currentTarget), "Previous results");
       const close = button(icon("close"), "ag-icon-btn help-close", () => this.close(), "Close Help");
-      head.append(this.modelBtn, close);
+      head.append(this.modelBtn, this.historyBtn, close);
       const form = el("form", "help-ask");
       this.input = el("input", "help-input");
       this.input.type = "text";
@@ -14157,6 +14208,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       });
       this.root = root;
       this.renderExamples();
+      this.renderHistoryBtn();
       return root;
     },
 
@@ -14223,6 +14275,17 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         void this.ask(text);
       }));
       wrap.append(list);
+      const recent = this.history().slice(0, 5);
+      if (recent.length) {
+        wrap.append(el("div", "help-examples-head", "Previous results"));
+        const rows = el("div", "help-recent");
+        for (const h of recent) {
+          const row = button("", "help-recent-row", () => this.showSaved(h));
+          row.append(icon("clock"), el("span", "help-recent-q", h.q), el("span", "help-recent-at", R.timeAgo(h.at)));
+          rows.append(row);
+        }
+        wrap.append(rows);
+      }
       this.result.replaceChildren(wrap);
     },
 
@@ -14305,6 +14368,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
 
     async finish(id, gen) {
+      const question = this.pending?.text;
       let detail;
       try {
         detail = await api("GET", `/threads/${encodeURIComponent(id)}`);
@@ -14321,17 +14385,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (it.kind === "user") from = i;
       });
       const answer = items.slice(from + 1).filter((it) => HELP_KINDS.has(it.kind) && !it.parentId);
+      if (question && !detail.error) this.remember(question, answer);
       this.render(answer, detail.error);
     },
 
-    render(answer, error) {
+    render(answer, error, meta = null) {
       const out = el("article", "help-answer");
       for (const it of answer) {
         const node = this.renderItem(it);
         if (node) out.append(node);
       }
       if (!out.childNodes.length) out.append(el("p", "ag-muted", error || "No answer came back. Try asking again."));
-      this.result.replaceChildren(out);
+      this.result.replaceChildren(...(meta ? [meta] : []), out);
       animateAnswer(out);
     },
 
