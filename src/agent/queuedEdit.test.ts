@@ -11,7 +11,7 @@ const { store } = await import("../store.js");
 const { AgentHost } = await import("./host.js");
 let host: InstanceType<typeof AgentHost>;
 // Memory makes a Native turn look up its model first; these tests time turns by the tick.
-before(() => { store.load(); host = new AgentHost(() => {}); host.setPrefs({ memory: false }); });
+before(() => { store.load(); host = new AgentHost(() => {}); host.setPrefs({ memory: false }); host.steerGraceMs = 0; });
 after(() => { host.dispose(); store.closeDb(); fs.rmSync(dir, { recursive: true, force: true }); });
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const users = (id: string) => host.threadDetail(id)!.items.filter((it) => it.kind === "user");
@@ -182,33 +182,32 @@ test("a message sent to steer skips the queue: steered in, or first in line whil
   assert.match(f.inputs[2].text, /steer next/);
 });
 
-test("Enter again gives a just-steered message a short grace; Send now stops at once without steering (#963)", async () => {
-  host.steerGraceMs = 200;
+test("the user's steer waits a short grace in Scribe: Enter again sends it now before the provider sees it (#963)", async () => {
+  host.steerGraceMs = 100;
   const cancel = host.cancel.bind(host);
   try {
     const f = setup();
     let cancelled = 0;
     host.cancel = async () => { cancelled++; };
-    const read = host.send(f.id, { text: "read soon", steer: true }).item;
-    const pending = host.steer(f.id, read.id);
-    f.sinks[0].steered("steer-1");
-    await pending;
-    assert.equal(cancelled, 0);
-    const late = host.send(f.id, { text: "not read", steer: true }).item;
-    const started = Date.now();
-    await host.steer(f.id, late.id);
+    const held = host.send(f.id, { text: "held", steer: true }).item;
+    assert.equal(users(f.id).find((it) => it.id === held.id)?.steer, "waiting");
+    assert.equal(f.steers.length, 0);
+    await host.steer(f.id, held.id);
     assert.equal(cancelled, 1);
-    assert.ok(Date.now() - started >= 150);
-    // Send now: no steer, no grace.
     const g = setup();
-    const before = Date.now();
-    host.send(g.id, { text: "strict", now: true });
-    await tick();
+    host.send(g.id, { text: "handed", steer: true });
     assert.equal(g.steers.length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(g.steers.length, 1);
+    assert.match(g.steers[0].text, /handed/);
+    // Send now: no steer at all.
+    const h = setup();
+    host.send(h.id, { text: "strict", now: true });
+    await tick();
+    assert.equal(h.steers.length, 0);
     assert.equal(cancelled, 2);
-    assert.ok(Date.now() - before < 150);
   } finally {
     host.cancel = cancel;
-    host.steerGraceMs = 2000;
+    host.steerGraceMs = 0;
   }
 });

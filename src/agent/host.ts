@@ -459,8 +459,11 @@ type RunState = {
   usage: Usage;
   /** For the turn's latency (latency.ts): prompt sent, first output, waits on the user. */
   clock?: { sentAt?: number; firstAt?: number; waits: Array<[number, number | undefined]> };
-  /** A queued message handed to this turn with steer, until the agent takes it in. */
-  steer: { id: string; msg: QueuedMessage; itemId: string | undefined; at: number } | null;
+  /**
+   * A queued message handed to this turn with steer, until the agent takes it in. id is null while
+   * Scribe still holds the user's steer for its grace (#963), so Enter again can send it now instead.
+   */
+  steer: { id: string | null; msg: QueuedMessage; itemId: string | undefined; at: number; hold?: NodeJS.Timeout } | null;
   /** The provider finished the turn and Scribe is wrapping it up: nothing more is steered in (#932). */
   ended?: boolean;
   /** A workspace the agent asked for with thread_update and the user allowed: the thread moves there when the turn ends. */
@@ -518,7 +521,10 @@ export class AgentHost {
   private status = new Map<string, RunStatus>();
   private unread = new Set<string>();
   private queues = new Map<string, QueuedMessage[]>();
-  /** How long Send now waits for a just-steered message to be read before it stops the turn (#963). */
+  /**
+   * How long the user's steered message stays in Scribe before it goes to the provider (#963): Codex
+   * takes a steer at once, which would leave no time to press Enter again and send it now instead.
+   */
   steerGraceMs = 2000;
   private items = new Map<string, Item[]>();
   private turns = new Map<string, Turn[]>();
@@ -2863,7 +2869,7 @@ export class AgentHost {
       this.drainQueue(threadId);
       if (input.now) {
         const waiting = this.runs.get(threadId)?.steer?.itemId;
-        this.sendNow(threadId, waiting ?? item.id, { grace: false }).catch((err) => log(`${threadId}: send now failed: ${(err as Error).message}`));
+        this.sendNow(threadId, waiting ?? item.id).catch((err) => log(`${threadId}: send now failed: ${(err as Error).message}`));
       }
       return { queued: true, item };
     }
@@ -2888,7 +2894,7 @@ export class AgentHost {
     if (itemId) {
       const waiting = this.loadItems(threadId).find((it) => it.id === itemId && it.kind === "user" && it.steer === "waiting");
       if (waiting) {
-        await this.sendNow(threadId, undefined, { grace: true });
+        await this.sendNow(threadId);
         return { steered: false };
       }
       if (!this.preferQueued(threadId, itemId)) throw new Error("That message is not queued");
@@ -2896,7 +2902,7 @@ export class AgentHost {
     // The turn is wrapping up: the message stays first in the queue and starts the next turn.
     if (run.ended) return { steered: false };
     if (run.steer || !session?.steer) {
-      await this.sendNow(threadId, undefined, { grace: true });
+      await this.sendNow(threadId);
       return { steered: false };
     }
     const queue = this.queues.get(threadId);
@@ -2995,14 +3001,22 @@ export class AgentHost {
     if (!queue.length) this.queues.delete(threadId);
     const item = this.loadItems(threadId).find((it) => it.id === msg.itemId);
     const thread = this.requireThread(threadId);
-    const id = session.steer({ text: this.commandText(thread, msg) ?? promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
-    run.steer = { id, msg, itemId: item?.id, at: Date.now() };
+    const steer: NonNullable<RunState["steer"]> = { id: null, msg, itemId: item?.id, at: Date.now() };
+    run.steer = steer;
+    const hand = () => {
+      delete steer.hold;
+      if (this.closed || run.steer !== steer || run.ended || this.runs.get(threadId) !== run) return;
+      steer.id = session.steer!({ text: this.commandText(thread, msg) ?? promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
+      if (item) this.hookPrompt(threadId, run, msg, item);
+    };
+    // The user's own steer waits its grace in Scribe; the board's comments and Scribe's notes go at once.
+    if (!msg.from && this.steerGraceMs > 0) steer.hold = setTimeout(hand, this.steerGraceMs);
+    else hand();
     if (item && item.kind === "user") {
       item.steer = "waiting";
       this.touch(item);
     }
     this.emitThread(threadId);
-    if (item) this.hookPrompt(threadId, run, msg, item);
     return true;
   }
 
@@ -3031,7 +3045,9 @@ export class AgentHost {
     const token = crypto.randomBytes(12).toString("hex");
     msg.edit = { token, steer: wasSteered };
     if (wasSteered && waiting) {
-      msg.edit.withdrawal = this.sessions.get(threadId)?.withdrawSteer?.(waiting.id).catch(() => false) ?? Promise.resolve(false);
+      // Still held for its grace: the provider has not seen it, so it simply comes back.
+      if (waiting.id === null) clearTimeout(waiting.hold);
+      msg.edit.withdrawal = waiting.id === null ? Promise.resolve(true) : this.sessions.get(threadId)?.withdrawSteer?.(waiting.id).catch(() => false) ?? Promise.resolve(false);
       const withdrawn = await msg.edit.withdrawal;
       if (!withdrawn) {
         delete msg.edit;
@@ -3128,7 +3144,7 @@ export class AgentHost {
    * Stop the running turn and run the waiting steered message, or else the first queued one, as the
    * next turn. Unlike cancel, the rest of the queue stays.
    */
-  async sendNow(threadId: string, itemId?: string, { grace = false }: { grace?: boolean } = {}): Promise<void> {
+  async sendNow(threadId: string, itemId?: string): Promise<void> {
     const run = this.runs.get(threadId);
     if (itemId) {
       const waiting = this.loadItems(threadId).find((it) => it.kind === "user" && it.steer === "waiting");
@@ -3139,16 +3155,6 @@ export class AgentHost {
     if (this.queues.get(threadId)?.[0]?.edit) throw new Error("Finish editing the queued message first");
     if (!run) { this.drainQueue(threadId); return; }
     if (run.ended || (!run.steer && !this.queues.get(threadId)?.length)) return;
-    // Enter again on a steer handed over a moment ago (#963): it is often read at once, so give it a
-    // short grace before stopping the turn. Read in, withdrawn, or the turn ended meanwhile: nothing left
-    // to do. Send now itself (button, menu) is the strict stop and does not wait.
-    const steer = grace ? run.steer : null;
-    if (steer && steer.at + this.steerGraceMs > Date.now()) {
-      while (run.steer === steer && !run.ended && this.runs.get(threadId) === run && steer.at + this.steerGraceMs > Date.now()) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      if (run.steer !== steer || run.ended || this.runs.get(threadId) !== run) return;
-    }
     await this.cancel(threadId, { keepQueue: true });
   }
 
@@ -4636,7 +4642,8 @@ export class AgentHost {
   async cancel(threadId: string, { keepQueue = false }: { keepQueue?: boolean } = {}): Promise<void> {
     const run = this.runs.get(threadId);
     if (!keepQueue && run?.steer) {
-      this.sessions.get(threadId)?.dropSteer?.(run.steer.id);
+      clearTimeout(run.steer.hold);
+      if (run.steer.id !== null) this.sessions.get(threadId)?.dropSteer?.(run.steer.id);
       const item = run.steer.itemId ? this.loadItems(threadId).find((it) => it.id === run.steer!.itemId) : undefined;
       if (item && item.kind === "user") {
         delete item.steer;
@@ -4828,7 +4835,8 @@ export class AgentHost {
     // A host shut down mid-turn (daemon exit) has closed its database: the turn is resumed on the next start.
     if (this.closed) return;
     // A steered message the turn did not take in: the provider runs it next (adopted below), or it lost it and it goes back to the front of the queue.
-    const carried = run.steer && result.next === run.steer.id ? run.steer : null;
+    if (run.steer) clearTimeout(run.steer.hold);
+    const carried = run.steer && run.steer.id !== null && result.next === run.steer.id ? run.steer : null;
     if (run.steer && !carried) {
       const queue = this.queues.get(threadId) ?? [];
       queue.unshift(run.steer.msg);
@@ -4954,7 +4962,7 @@ export class AgentHost {
 
     if (carried && latest) {
       const item = carried.itemId ? this.loadItems(threadId).find((it) => it.id === carried.itemId) : undefined;
-      void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id });
+      void this.runTurn(threadId, carried.msg, item ?? this.addItem(threadId, null, { kind: "user", text: carried.msg.text }), { adopt: carried.id ?? undefined });
       return;
     }
     // The user accepted the plan on its page: implement it at the thread's own rung.
