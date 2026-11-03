@@ -18,7 +18,7 @@ function client(options: { deferred?: boolean; manualTimers?: boolean } = {}) {
     clearTimeout: options.manualTimers ? (id: number) => timers.delete(id) : clearTimeout,
     renderLists: () => notifications.push("lists"),
     window: { dispatchEvent: () => notifications.push("invalidated") }, CustomEvent: class {},
-    views: () => [], dock: { onItem: () => {}, onDelta: () => {} }, pageStepsChanged: () => {},
+    views: () => [], help: { owns: () => false }, dock: { onItem: () => {}, onDelta: () => {} }, pageStepsChanged: () => {},
     scopeLabel: (scope: any) => ({ text: scope.ref || "Global" }),
     workspaceDir: (t: any) => t.cwd || "",
     hiddenWorkspaceKeys: () => new Set(), inHiddenWorkspace: () => false,
