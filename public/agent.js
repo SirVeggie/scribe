@@ -266,6 +266,8 @@
   const CHAT = SOLO && Boolean(window.scribePopout.chatChild);
 
   const S = {
+    /** Plugin tasks (ctx.task) by the thread that started them: threadId → Map(taskId → task). */
+    pluginTasks: new Map(),
     config: { providers: [], prefs: null, models: { claude: [], cursor: [], codex: [], pi: [] } },
     threads: new Map(),
     /** Help threads (#962): the Help panel's, kept out of `threads` and so out of every list. */
@@ -722,6 +724,30 @@
   }
 
   window.addEventListener("scribe:agent-event", (event) => onEvent(event.detail));
+  // A plugin task changed: the chat that started it shows its progress above the input.
+  window.addEventListener("scribe:plugin-task", (event) => {
+    const task = event.detail;
+    if (!task?.thread) return;
+    const list = S.pluginTasks.get(task.thread) || new Map();
+    S.pluginTasks.set(task.thread, list);
+    list.set(task.id, task);
+    for (const view of views()) if (view.threadId === task.thread) view.renderTaskDock();
+  });
+  const taskLoads = new Set();
+  /** Loads a thread's tasks once, for ones that started before this window connected. */
+  function loadPluginTasks(threadId) {
+    if (taskLoads.has(threadId)) return;
+    taskLoads.add(threadId);
+    fetch(`/api/plugins/_tasks?thread=${encodeURIComponent(threadId)}`).then((res) => res.ok ? res.json() : { tasks: [] }).then(({ tasks }) => {
+      const list = S.pluginTasks.get(threadId) || new Map();
+      for (const task of tasks || []) if (!list.has(task.id) || list.get(task.id).updatedAt < task.updatedAt) list.set(task.id, task);
+      S.pluginTasks.set(threadId, list);
+      for (const view of views()) if (view.threadId === threadId) view.renderTaskDock();
+    }).catch(() => taskLoads.delete(threadId));
+  }
+  const TASK_STALE_MS = 5 * 60_000;
+  // Stale marks appear without an event.
+  setInterval(() => { for (const view of views()) if (view.taskDockKey) view.renderTaskDock(); }, 30_000);
   // The working-thread look (Settings > Working threads), motion and synced appearance all change how rows show.
   for (const name of ["scribe:working-fx", "scribe:ui-fx", "scribe:appearance"]) {
     window.addEventListener(name, () => {
@@ -3633,6 +3659,7 @@
       this.renderHeader();
       this.renderTranscript();
       this.renderHelperDock();
+      this.renderTaskDock();
       this.renderComposerBar();
       this.renderContext();
     }
@@ -3641,6 +3668,7 @@
     renderChrome() {
       this.renderHeader();
       this.renderHelperDock();
+      this.renderTaskDock();
       this.renderComposerBar();
       this.renderContext();
     }
@@ -4993,6 +5021,38 @@
       }
     }
 
+    /** Above the input: plugin tasks this thread started that are still running, with progress and Stop. */
+    renderTaskDock() {
+      const box = this.taskDock;
+      if (!box) return;
+      if (this.threadId) loadPluginTasks(this.threadId);
+      const running = [...(this.threadId && S.pluginTasks.get(this.threadId)?.values() || [])].filter((t) => t.status === "running").sort((a, b) => a.startedAt - b.startedAt);
+      const stale = (t) => Date.now() - t.updatedAt > TASK_STALE_MS;
+      const key = running.length ? JSON.stringify(running.map((t) => [t.id, t.title, t.progress, t.stopRequested, stale(t)])) : "";
+      if (key === this.taskDockKey) return;
+      this.taskDockKey = key;
+      box.replaceChildren();
+      box.hidden = !running.length;
+      for (const t of running) {
+        const item = el("div", "ag-helper-item ag-task-item");
+        const pct = Number.isFinite(t.progress?.pct) ? t.progress.pct : null;
+        const step = t.stopRequested ? "Stopping…" : stale(t) ? `No progress for ${Math.round((Date.now() - t.updatedAt) / 60_000)} min` : [pct !== null ? `${pct}%` : "", t.progress?.text || ""].filter(Boolean).join(" · ");
+        const row = el("div", "ag-helper-row ag-task-row");
+        row.append(stale(t) ? el("span", "ag-dot s-waiting") : el("span", "ag-spin"), el("span", "ag-helper-name", t.title), el("span", "ag-helper-step", step));
+        if (pct !== null) row.style.setProperty("--task-pct", `${pct}%`);
+        const stop = button(icon("stop"), "ag-icon-btn small ag-helper-stop", () => {
+          stop.disabled = true;
+          fetch(`/api/plugins/${encodeURIComponent(t.plugin)}/tasks/${encodeURIComponent(t.id)}/stop`, { method: "POST" })
+            .then(async (res) => { const data = await res.json(); if (!res.ok) throw new Error(data.error || "Couldn't stop the task"); if (data.task) window.dispatchEvent(new CustomEvent("scribe:plugin-task", { detail: data.task })); })
+            .catch((err) => { stop.disabled = false; notice(err.message); });
+        }, "Stop this task");
+        stop.setAttribute("aria-label", "Stop this task");
+        stop.disabled = !!t.stopRequested;
+        item.append(row, stop);
+        box.append(item);
+      }
+    }
+
     /** A Scribe page write's head: what it did, and the page as a chip that opens it. */
     pageToolLabel(page) {
       const parts = [];
@@ -5804,10 +5864,13 @@
       this.helperDock.hidden = true;
       this.helperApprovals = el("div", "ag-helper-approvals");
       this.helperApprovals.hidden = true;
+      // Running plugin tasks this thread started.
+      this.taskDock = el("div", "ag-helpers ag-tasks");
+      this.taskDock.hidden = true;
       this.dictationLive = el("div", "ag-dictation-live");
       this.dictationLive.hidden = true;
       this.dictationLive.setAttribute("aria-live", "polite");
-      box.append(this.slash, this.helperApprovals, this.helperDock, this.forkNote, this.dictationLive, this.ctxRow);
+      box.append(this.slash, this.helperApprovals, this.helperDock, this.taskDock, this.forkNote, this.dictationLive, this.ctxRow);
       if (this.floating) {
         box.append(this.inputWrap);
       } else {
@@ -7484,6 +7547,7 @@
     plugin_list: () => ["List plugins"],
     plugin_guide: (i) => ["Read plugin guide", firstText(i, "id")],
     plugin_call: (i) => ["Call plugin", [firstText(i, "id"), firstText(i, "method")].filter(Boolean).join(" · ")],
+    plugin_task: (i) => [i?.wait ? "Wait for plugin task" : "Read plugin task", [firstText(i, "id"), firstText(i, "task")].filter(Boolean).join(" · ")],
     browser_snapshot: () => ["Read browser page"],
     browser_screenshot: () => ["Screenshot browser"],
     browser_act: (i) => ["Use browser", firstText(i, "action", "kind")],

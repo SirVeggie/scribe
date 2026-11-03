@@ -148,6 +148,8 @@
     }
     form.addEventListener("input",()=>{form.dataset.dirty="true";markDrafts();});
     form.addEventListener("submit",event=>event.preventDefault());parent.append(form);
+    const tasks=el("div","plugin-tasks");tasks.dataset.pluginTasks="";tasks.hidden=true;parent.append(tasks);
+    taskLists.set(view.id,new Map((view.tasks??[]).map(task=>[task.id,task])));
     const controls=el("div","settings-actions"),logs=el("pre","plugin-source");logs.hidden=true;logs.dataset.pluginLogs="";
     const remove=button("Remove",async()=>{if(await confirmRemove(`Remove “${view.name}”? Its source and data stay on disk.`,"Remove")){await request(`/${view.id}`,"DELETE");form.dataset.dirty="false";await refresh();}});remove.classList.add("plugin-remove");
     controls.append(button("Restart",async()=>{await request(`/${view.id}/restart`,"POST",{});await refresh();}),button("Logs",async()=>{const result=await request(`/${view.id}/logs`),current=panels.querySelector(`[data-plugin="${view.id}"] [data-plugin-logs]`);if(current){current.textContent=result.logs.join("\n")||"No backend log yet.";current.hidden=!current.hidden;}}),button("Export…",()=>exportPlugin(view.id)),...(window.scribeCopy?.available()?[copyButton(view.id)]:[]),button("Update from file…",()=>picker.click()),remove);parent.append(controls,logs);
@@ -155,6 +157,44 @@
     const methods=Object.entries(view.methods).filter(([,def])=>def.agent);
     if(methods.length){const methodsView=el("details","plugin-methods");methodsView.dataset.pluginView="methods";methodsView.append(el("summary","","Agent methods"));for(const [name,def]of methods)methodsView.append(el("p","settings-hint",`${name} · ${def.agent} — ${def.description}`));parent.append(methodsView);}
   }
+  // Tasks (ctx.task): running ones with Stop, then the last few that ended. Task events update them in place.
+  const STALE_MS=5*60_000,taskLists=new Map();
+  const minutes=ms=>{const m=Math.round(ms/60_000);return m<1?"under a minute":`${m} min`;};
+  const clock=at=>new Date(at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  function taskMeta(task){
+    const parts=[];
+    if(task.status==="running"){
+      const quiet=Date.now()-task.updatedAt;
+      parts.push(task.stopRequested?"Stopping":quiet>STALE_MS?`No progress for ${minutes(quiet)}`:`Running ${minutes(Date.now()-task.startedAt)}`);
+      if(Number.isFinite(task.progress?.pct))parts.push(`${task.progress.pct}%`);
+      if(task.progress?.text)parts.push(task.progress.text);
+    }else{
+      parts.push(`${{done:"Done",failed:"Failed",stopped:"Stopped",interrupted:"Interrupted"}[task.status]??task.status} ${clock(task.endedAt??task.updatedAt)}`);
+      if(task.error)parts.push(task.error);else if(task.progress?.text)parts.push(task.progress.text);
+    }
+    if(task.caller==="agent")parts.push("started by agent");else if(task.caller==="page")parts.push("started by a page");
+    return parts.join(" · ");
+  }
+  function renderTasks(id){
+    const box=panels.querySelector(`[data-plugin="${id}"] [data-plugin-tasks]`);if(!box)return;
+    const all=[...(taskLists.get(id)?.values()??[])].sort((a,b)=>b.startedAt-a.startedAt);
+    const shown=[...all.filter(t=>t.status==="running"),...all.filter(t=>t.status!=="running").slice(0,5)];
+    box.hidden=!shown.length;
+    box.replaceChildren(...(shown.length?[el("h4","","Tasks")]:[]),...shown.map(task=>{
+      const line=el("div","setting-row plugin-task"),info=el("span","plugin-identity");
+      info.append(el("strong","plugin-task-title",task.title),el("span",`plugin-meta plugin-task-${task.status==="running"&&Date.now()-task.updatedAt>STALE_MS?"stale":task.status}`,taskMeta(task)));
+      line.append(info);
+      if(task.status==="running"){const stop=button(task.stopRequested?"Stopping…":"Stop",async()=>{stop.disabled=true;const {task:next}=await request(`/${id}/tasks/${encodeURIComponent(task.id)}/stop`,"POST",{});if(next)taskChanged(next);});stop.disabled=!!task.stopRequested;stop.setAttribute("aria-label",`Stop ${task.title}`);line.append(stop);}
+      return line;
+    }));
+  }
+  function taskChanged(task){
+    if(!task?.plugin)return;
+    const list=taskLists.get(task.plugin)??new Map();taskLists.set(task.plugin,list);list.set(task.id,task);
+    renderTasks(task.plugin);
+  }
+  // Elapsed times and the stale mark move on without events.
+  setInterval(()=>{if(section.isConnected)for(const [id,list]of taskLists)if([...list.values()].some(t=>t.status==="running"))renderTasks(id);},30_000);
   function copyButton(id){const node=button("Copy to device…",()=>window.scribeCopy.menu(node,{plugins:[id]}));return node;}
   async function exportPlugin(id){const parts=await chooseParts();if(!parts)return;const query=new URLSearchParams(parts),link=el("a");link.href=`/api/plugins/${id}/export?${query}`;link.download="";document.body.append(link);link.click();link.remove();}
   async function chooseParts(){
@@ -216,11 +256,11 @@
         if(oldLogs&&newLogs){newLogs.hidden=oldLogs.hidden;newLogs.textContent=oldLogs.textContent;}
         return panel;
       });
-      list.replaceChildren(...entries);panels.replaceChildren(...nextViews);if(!data.plugins.some(item=>item.id===selectedPlugin))selectedPlugin=null;showPlugin(selectedPlugin,{navigate:false});
+      list.replaceChildren(...entries);panels.replaceChildren(...nextViews);for(const panel of nextViews)renderTasks(panel.dataset.plugin);if(!data.plugins.some(item=>item.id===selectedPlugin))selectedPlugin=null;showPlugin(selectedPlugin,{navigate:false});
       if(focused&&document.activeElement!==focused){if(focused.isConnected)focused.focus({preventScroll:true});else{const scope=(focusPanel?panels:list).querySelector(`[data-plugin="${focusPlugin}"]`);const replacement=[...(scope?.querySelectorAll("button,input,textarea")??[])].find(node=>focusLabel?node.getAttribute("aria-label")===focusLabel:node.textContent===focusText);replacement?.focus({preventScroll:true});}}
       if(content)content.scrollTop=scroll;
       if(!data.plugins.length)list.append(el("p","settings-hint","No plugins installed."));status.textContent="";
     }catch(error){status.textContent=error.message;}finally{refreshing=false;if(refreshAgain){refreshAgain=false;await refresh();}finish();}
   }
-  window.scribePluginSettings={sections:[section],refresh,importFile,reviewPackage,chooseParts,exportChoices,init({confirm}){if(confirm)confirmRemove=confirm;}};
+  window.scribePluginSettings={sections:[section],refresh,taskChanged,importFile,reviewPackage,chooseParts,exportChoices,init({confirm}){if(confirm)confirmRemove=confirm;}};
 })();

@@ -777,6 +777,10 @@
         for(const [id,frame]of frames)frame.el.contentWindow?.postMessage({type:"scribe-plugin-availability"},pageOrigin(id));
         window.scribePluginSettings.refresh();
       }
+      if (msg.name === "task" && msg.data) {
+        window.scribePluginSettings.taskChanged(msg.data);
+        window.dispatchEvent(new CustomEvent("scribe:plugin-task", { detail: msg.data }));
+      }
       forwardPluginEvent(msg);
       return;
     }

@@ -2782,6 +2782,27 @@ textarea.ag-q-input {
   color: var(--muted);
 }
 
+/* A plugin task's progress: a thin bar along the bottom of its row. */
+.ag-task-row {
+  position: relative;
+  cursor: default;
+}
+
+.ag-task-row[style*="--task-pct"]::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(to right, var(--accent) var(--task-pct), rgba(var(--lift-rgb), 0.1) var(--task-pct));
+}
+
+.ag-task-row:hover {
+  background: transparent;
+}
+
 /* The floating chat's input is one rounded row: the strip sits flush on top of the text. */
 .dock-input .ag-helpers {
   padding: 0 0 3px;

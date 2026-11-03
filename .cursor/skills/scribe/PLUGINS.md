@@ -60,11 +60,28 @@ export default {
 };
 ```
 
-`ctx` includes public `settings`, `dataDir`, `db()` (a plugin-owned SQLite database), async `secret(name)`, keyed `state.get/set`, `emit(name,data)`, `saveAsset(name,mimeType,bytes)` into the caller's page, and `caller` (`kind`, optional page/thread), `signal` (aborts when the call times out or its caller cancels) and `busy(work, label?)`. Never log or return secrets. Scribe stores them separately using Windows DPAPI and excludes them from settings tools and exports. Installing a plugin runs code as the user; declared access informs consent and is not a sandbox.
+`ctx` includes public `settings`, `dataDir`, `db()` (a plugin-owned SQLite database), async `secret(name)`, keyed `state.get/set`, `emit(name,data)`, `saveAsset(name,mimeType,bytes)` into the caller's page, and `caller` (`kind`, optional page/thread), `signal` (aborts when the call times out or its caller cancels), `busy(work, label?)` and `task({title})`. Never log or return secrets. Scribe stores them separately using Windows DPAPI and excludes them from settings tools and exports. Installing a plugin runs code as the user; declared access informs consent and is not a sandbox.
 
 ## Long-running work
 
-A call times out after 60 s (a method may declare `"timeoutMs"` up to 600000). The timeout rejects only that call and aborts `ctx.signal`; the backend keeps running unless its event loop is blocked. For a build or test run, start the work, wrap it in `ctx.busy(promise, "label")` and return an id at once: the backend then is not stopped for idleness until the work settles, so no detached process is needed while Scribe runs. Report progress with `ctx.state.set` or `ctx.emit`, and give agents a status or wait method that returns within the timeout. Work inside the backend still ends when Scribe or the plugin restarts. Declare environment variables the backend needs (`"access":{"env":["JAVA_HOME"]}`); the user approves them at install.
+A call times out after 60 s (a method may declare `"timeoutMs"` up to 600000). The timeout rejects only that call and aborts `ctx.signal`; the backend keeps running unless its event loop is blocked. For a build or test run, start the work, wrap it in `ctx.busy(promise, "label")` and return an id at once: the backend then is not stopped for idleness until the work settles, so no detached process is needed while Scribe runs. Work inside the backend still ends when Scribe or the plugin restarts.
+
+For work the user or an agent waits on, use a task instead of your own status method:
+
+```js
+run: async (args, ctx) => {
+  const t = await ctx.task({ title: `Tests: ${args.name}` });
+  (async () => {
+    t.signal.addEventListener("abort", () => child.kill());   // the user pressed Stop
+    await t.progress({ text: "42/120 tests", pct: 35 });      // also the heartbeat
+    await t.log("FooTest#bar passed");                        // last 20 lines are kept
+    await t.done({ passed: 120 });                            // or t.fail(error)
+  })();
+  return { task: t.id };
+}
+```
+
+A task holds a lease until `done` or `fail`. Scribe records it (status, progress, last lines, result up to 32 KiB, the caller's thread or page): the plugin's Settings list it with Stop, the chat that started it shows a progress row, and agents read or wait on it with `plugin_task {id, task, wait}` (wait up to 600 s). Stop aborts `t.signal`; the task ends when you call `done` or `fail`. A task with no progress for 5 minutes shows as stale; one cut off by a backend stop or a Scribe restart shows as interrupted. Pages and components get a `task` event (`scribe.plugin.on("task", task)`) on each change; a component declares `"task"` in its `events`. `ctx.emit("task")` is reserved. Declare environment variables the backend needs (`"access":{"env":["JAVA_HOME"]}`); the user approves them at install.
 
 ## Templates and lifecycle
 

@@ -5515,6 +5515,14 @@ button.plugin-back:hover { color: var(--heading); }
 .plugin-panel > details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 .plugin-methods .settings-hint { margin-top: 10px; }
 button.plugin-remove { color: var(--danger); }
+.plugin-tasks { margin: 18px 2px 0; }
+.plugin-tasks h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.plugin-panel .setting-row.plugin-task { align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--border); }
+.plugin-task-title { color: var(--heading); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.plugin-task .plugin-meta { overflow-wrap: anywhere; }
+.plugin-task .plugin-task-running { color: var(--accent); }
+.plugin-task .plugin-task-stale { color: rgb(var(--update-rgb)); }
+.plugin-task .plugin-task-failed, .plugin-task .plugin-task-interrupted { color: var(--danger); }
 .plugin-settings > [role="status"]:empty { display: none; }
 .plugin-source { max-width: 100%; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--code-bg); border-radius: 8px; font-size: 12px; }
 .plugin-consent { width: min(720px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px); }
