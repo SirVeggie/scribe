@@ -152,7 +152,7 @@ test("ZIP transfers preserve plugin code, selected state and settings, while def
   }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
 });
 
-test("DPAPI secrets stay outside settings and export payloads",{skip:process.platform!=="win32"},async()=>{
+test("Plugin secrets stay outside settings and export payloads",{skip:process.platform==="darwin"},async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-plugin-secret-")),service=new PluginService(root);
   try{
     const m={...manifest,settings:{token:{label:"Token",type:"secret"}}},files={"plugin.json":Buffer.from(JSON.stringify(m)),"index.mjs":Buffer.from('export default {methods:{echo:async(_args,ctx)=>({hasSecret:!!(await ctx.secret("token"))})}}')};

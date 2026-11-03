@@ -6,7 +6,7 @@ Plugins are local, user-approved Node packages. Installing one runs its code as 
 
 `plugin.json` declares `id`, `name`, semver `version`, a short `summary`, optional `author`, `risky`, `access: {files, network, env}`, a backend entry, settings, methods and templates. Backend code exports `{methods, templates, start?}`. Dependencies must be bundled into the package. Package paths are relative; links, path traversal and oversized archives are refused.
 
-`methods[name](args, ctx)` receives public settings, `secret(name)`, `dataDir`, `db()` (a private SQLite database), keyed `state.get/set`, `emit`, `saveAsset`, and the caller. Secrets are encrypted with Windows DPAPI and never appear in public settings or exports. Shared state is keyed JSON in SQLite with per-key revisions; pages write it only through methods.
+`methods[name](args, ctx)` receives public settings, `secret(name)`, `dataDir`, `db()` (a private SQLite database), keyed `state.get/set`, `emit`, `saveAsset`, and the caller. Secrets are encrypted (Windows DPAPI; elsewhere AES-256-GCM with a key in the macOS Keychain, libsecret, or a 0600 `secrets/master.key` on headless servers) and never appear in public settings or exports. Shared state is keyed JSON in SQLite with per-key revisions; pages write it only through methods.
 
 Source lives in `plugins/<id>/source` with Git history. Installation creates an immutable content-addressed version; edits do not change running code. Reload validates source and bumps a changed package's patch version. Installing/reloading runnable code requires consent except for Full agents. No package installation scripts execute.
 
