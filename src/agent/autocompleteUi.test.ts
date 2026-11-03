@@ -31,9 +31,6 @@ test("composer arrows keep slash and mention results open and accept the highlig
         : path === "/api/search" ? { tabs: [
           { id: "page-one", key: "scribe:one", title: "Page one" },
           { id: "page-two", key: "scribe:two", title: "Page two" },
-        ] }
-        : path === "/api/agent/threads" ? { threads: [
-          { id: "thread-one", title: "Thread one" }, { id: "thread-two", title: "Thread two" },
         ] } : {};
       return route.fulfill({ json: data });
     });
@@ -44,6 +41,9 @@ test("composer arrows keep slash and mention results open and accept the highlig
     await page.evaluate(() => {
       const { S, sidebar } = (window as any).autocompleteTest;
       S.config.providers = [{ id: "codex", label: "Codex", available: true }];
+      // The # picker matches the live thread list, newest activity first.
+      S.threads.set("thread-one", { id: "thread-one", title: "Thread one", activityAt: 2 });
+      S.threads.set("thread-two", { id: "thread-two", title: "Thread two", activityAt: 1 });
       sidebar.mount();
       sidebar.setOpen(true);
       sidebar.view.settings = () => ({ provider: "codex", mode: "ask" });
