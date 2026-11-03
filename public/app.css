@@ -5652,11 +5652,6 @@ html[data-theme="cream"] {
   color: var(--disk);
 }
 
-.choice-check {
-  margin: 0 0 12px;
-  color: var(--muted);
-}
-
 /* Settings → Files: a long default path stays on one line. */
 .files-default {
   max-width: 60%;
