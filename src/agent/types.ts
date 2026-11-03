@@ -382,6 +382,8 @@ export type ThreadView = Thread & {
   carry?: { how: "native" | "summary"; summarizer?: string };
   /** True while every user turn was sent by the page; a typed user message clears it. */
   fromPage: boolean;
+  /** The user chose Continue after reset on a usage limit card (#78): it goes on by itself at resetsAt. */
+  limitQueued?: { itemId: string; resetsAt: number };
   /** While waiting: the first question, approval or plan the user has not answered yet. */
   asking?: {
     kind: "approval" | "question" | "plan" | "limit";

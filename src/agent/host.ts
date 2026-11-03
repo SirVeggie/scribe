@@ -2400,6 +2400,9 @@ export class AgentHost {
     const grants = grantRows(thread, this.scopeLookup(), { page: (id) => store.get(id)?.title ?? null, folder: (id) => store.folderPath(id) });
     const usage = sumThreadUsage(turns);
     const pageRun = this.pageRuns.get(thread.id);
+    const queuedId = this.limitResumes.get(thread.id);
+    const queuedCard = queuedId ? items.find((it) => it.id === queuedId) : undefined;
+    const limitQueued = queuedCard?.kind === "usage_limit" && queuedCard.status === "queued" ? { itemId: queuedCard.id, resetsAt: queuedCard.resetsAt } : undefined;
     return {
       ...thread,
       ...(thread.provider === "claude" ? { claudeLimits: this.liveLimits().claude ?? claudePlanSnapshot(null, {}) } : {}),
@@ -2414,6 +2417,7 @@ export class AgentHost {
       ...(finishedAt ? { finishedAt } : {}),
       ...(thread.fork ? { carry: this.forkCarry(thread, thread.fork) } : {}),
       ...(asking ? { asking } : {}),
+      ...(limitQueued ? { limitQueued } : {}),
       ...(activity ? { activity } : {}),
       ...(grants.length ? { grants } : {}),
       ...(pageRun ? { run: runView(pageRun) } : {}),

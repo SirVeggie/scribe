@@ -3754,6 +3754,27 @@ html.fx-off .ag-slash { transition: none; }
 }
 
 /* Helpers under the thread that started them: indented, on a rail, in smaller rows. */
+/* Out of usage (#951): the limit card's answer under its thread's row. */
+.ag-list-limit-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 6px 14px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(var(--lift-rgb), 0.12);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.ag-list-limit-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ag-row-helpers {
   margin: 0 0 3px 14px;
   padding-left: 10px;

@@ -8266,6 +8266,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       .slice(0, 5);
   }
 
+  /** Threads a usage limit stopped that the user has not continued or dismissed yet, newest first. */
+  function limitStoppedThreads() {
+    return [...S.threads.values()]
+      .filter((t) => !t.archived && !t.helperOf && !t.fromPage && (waitingAsk(t)?.kind === "limit" || t.limitQueued))
+      .sort((a, b) => b.activityAt - a.activityAt);
+  }
+
   function renderThreadList(container, { onPick, currentId, onNew, onNewIn, recentList }) {
     // Thread updates re-render the list; typing in its search box keeps the focus and the highlighted row.
     const oldSearch = container.querySelector(".ag-list-top input[type=search]");
@@ -8397,6 +8404,29 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         for (const t of recent) body.append(threadRow(t, t.id === currentId, onPick));
         // Nothing recent (or nothing matching the search): leave the section out.
         if (recent.length) out.push(head, body);
+      }
+      // Threads a usage limit stopped (#951), from every scope, until continued or dismissed.
+      let stopped = limitStoppedThreads();
+      if (q) stopped = rankedThreads(stopped, q).map((row) => row.thread);
+      if (stopped.length) {
+        const head = el("div", "ag-list-group");
+        head.dataset.key = "limit-heading";
+        head.append(el("span", "ag-list-group-kind", "Out of usage"));
+        const body = el("div", "ag-list-group-body ag-list-limit");
+        body.dataset.key = "limit-body";
+        for (const t of stopped) {
+          body.append(threadRow(t, t.id === currentId, onPick));
+          const pending = waitingAsk(t)?.kind === "limit" ? t.asking : null;
+          const card = pending || t.limitQueued;
+          const line = el("div", "ag-list-limit-line");
+          line.dataset.key = `limit:${t.id}:${pending ? "pending" : "queued"}:${card.itemId}`;
+          line.append(
+            el("span", "ag-list-limit-text", card.resetsAt <= Date.now() ? (pending ? "Usage has reset" : "Continuing soon") : `${pending ? "Resets" : "Continues"} ${R.finishTime(card.resetsAt)}`),
+            limitButtons(t.id, card.itemId, pending ? "pending" : "queued", null, pending?.switchTo)
+          );
+          body.append(line);
+        }
+        out.push(head, body);
       }
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);

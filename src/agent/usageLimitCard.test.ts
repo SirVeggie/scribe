@@ -88,10 +88,12 @@ test("Continue before the reset waits, and a message the user sends meanwhile re
   const id = await limited(Date.now() + 60 * 60 * 1000);
   host.resolveUsageLimit(id, card(id)!.id, true);
   assert.equal(card(id)?.status, "queued");
+  assert.deepEqual(view(id).limitQueued, { itemId: card(id)!.id, resetsAt: card(id)!.resetsAt });
   assert.equal(runs.filter((r) => r.threadId === id).length, 1);
   host.send(id, { text: "never mind, try this" });
   await until(() => runs.filter((r) => r.threadId === id).length === 2 && view(id).status === "idle");
   assert.equal(card(id)?.status, "expired");
+  assert.equal(view(id).limitQueued, undefined);
   assert.equal((host as unknown as { limitResumes: Map<string, string> }).limitResumes.has(id), false);
 });
 
