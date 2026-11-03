@@ -26,7 +26,7 @@ function pageContext(threads: Array<[string, unknown]> = []) {
     loadStartupData: async () => {},
     pageThreadSettings: (data: any) => (settings.push(data), { approval: data.approval ?? "board", cwd: data.cwd ?? "" }),
     pageMayWrite: async () => ({ ok: true }), pageMayUseFolder: async () => ({ ok: true }), pageFolder: () => null,
-    ensureDetail: async () => {}, pageSentAt: new Map(), showPageThread: () => {},
+    ensureDetail: async () => {}, pageSentAt: new Map(), showPageThread: () => {}, pageSwitchModel: async () => ({}),
     api: async (method: string, url: string, body: any) => {
       calls.push({ method, url, body });
       return url === "/threads" ? { thread: { id: "new" } } : {};

@@ -22,6 +22,8 @@
       title: "Connect your agents",
       lede: "Sign in to the providers you use. Chats can only run on a provider that is ready.",
       settings: ["agent/providers"],
+      // The provider list is drawn when Agent settings opens; draw it for the rows lent here.
+      before: () => window.scribeChat?.renderProviders?.(),
     },
     {
       id: "import",
@@ -53,7 +55,8 @@
       lede: "The floating chat follows the page in front, so an agent knows which page you mean.",
       body: () => keys([
         [k("Ctrl", "K"), "Floating chat over the page"],
-        [`${k("Ctrl", "L")} / ${k("Ctrl", "Shift", "L")}`, "Chat in the sidebar / full window"],
+        [k("Ctrl", "L"), "Chat in the sidebar"],
+        [k("Ctrl", "Shift", "L"), "Chat in the full window"],
         [k("Ctrl", "'"), "Next starred model"],
         [k("Ctrl", "Shift", "'"), "Access level: from Read-only up to Full access"],
         [k("Ctrl", "."), "Workspace folder the chat works in"],
@@ -140,7 +143,7 @@
         line.textContent = "No MCP servers found in your other tools. You can add servers later in Agent settings.";
         return;
       }
-      line.textContent = `Found ${found.length} server${found.length === 1 ? "" : "s"}${sources.length ? ` in ${sources.join(", ")}` : ""}. Imported servers ask before each call until you change that.`;
+      line.textContent = `Found ${found.length} server${found.length === 1 ? "" : "s"}${sources.length ? ` in ${new Intl.ListFormat("en", { type: "conjunction" }).format(sources)}` : ""}. Imported servers ask before each call until you change that.`;
       pick.hidden = false;
     }, (err) => {
       line.textContent = err.message;
@@ -204,6 +207,7 @@
     parts.lede.textContent = step.lede;
     // Replacing the content gives lent settings rows back to their dialogs (settings-ui.js watches for it).
     parts.content.replaceChildren();
+    step.before?.();
     if (step.body) parts.content.append(step.body());
     if (step.settings && window.scribeSettingsUI) {
       const rows = document.createElement("div");
@@ -244,7 +248,7 @@
       const res = await fetch("/api/onboarding");
       if (!res.ok) return;
       const { done } = await res.json();
-      if (!done) open();
+      if (done === false) open();
     } catch {
       /* The daemon is not up yet: next load. */
     }
@@ -260,7 +264,7 @@
       <button type="button" class="ob-open-guide">Show again</button>
     </div>
     <div class="setting-row">
-      <span>Ask the Help agent (${k("Ctrl", "H")})</span>
+      <span>Help agent &nbsp;${k("Ctrl", "H")}</span>
       <button type="button" class="ob-open-help">Open Help</button>
     </div>`;
   section.querySelector(".ob-open-guide").addEventListener("click", open);
