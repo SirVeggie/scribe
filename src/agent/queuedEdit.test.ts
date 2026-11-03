@@ -21,15 +21,16 @@ function setup(withdraw: () => Promise<boolean> = async () => true) {
   const inputs: RunInput[] = [];
   const results: Array<(result: TurnResult) => void> = [];
   const steers: SteerInput[] = [];
+  const sinks: Array<{ steered(id: string): void }> = [];
   const session = {
     update() {}, dispose() {},
-    run(input: RunInput) { inputs.push(input); return new Promise<TurnResult>((resolve) => results.push(resolve)); },
+    run(input: RunInput, sink: { steered(id: string): void }) { inputs.push(input); sinks.push(sink); return new Promise<TurnResult>((resolve) => results.push(resolve)); },
     steer(input: SteerInput) { steers.push(input); return `steer-${steers.length}`; },
     withdrawSteer: withdraw,
   };
   (host as unknown as { sessions: Map<string, unknown> }).sessions.set(thread.id, session);
   host.send(thread.id, { text: "running" });
-  return { id: thread.id, inputs, results, steers };
+  return { id: thread.id, inputs, results, steers, sinks };
 }
 
 test("cancel targets an older message, and targeted steering still attaches to the right item", async () => {
@@ -179,4 +180,27 @@ test("a message sent to steer skips the queue: steered in, or first in line whil
   f.results[1]({ status: "done" });
   await tick();
   assert.match(f.inputs[2].text, /steer next/);
+});
+
+test("Send now gives a just-steered message a short grace: read in meanwhile, the turn goes on (#963)", async () => {
+  host.steerGraceMs = 200;
+  try {
+    const f = setup();
+    let cancelled = 0;
+    const cancel = host.cancel.bind(host);
+    host.cancel = async () => { cancelled++; };
+    const read = host.send(f.id, { text: "read soon", steer: true }).item;
+    const pending = host.steer(f.id, read.id);
+    f.sinks[0].steered("steer-1");
+    await pending;
+    assert.equal(cancelled, 0);
+    host.send(f.id, { text: "not read", steer: true });
+    const started = Date.now();
+    await host.sendNow(f.id);
+    assert.equal(cancelled, 1);
+    assert.ok(Date.now() - started >= 150);
+    host.cancel = cancel;
+  } finally {
+    host.steerGraceMs = 2000;
+  }
 });

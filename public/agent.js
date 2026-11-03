@@ -6365,7 +6365,10 @@
         const now = this.thread();
         if (!now || now.status === "idle") return;
         event.preventDefault();
-        openMenu(sendBtn, RUNNING_SEND.map((m) => ({ label: m.label, detail: m.id === how ? "Enter" : "Alt+Enter", run: () => this.send(m.id) })), { width: 180 });
+        openMenu(sendBtn, [
+          ...RUNNING_SEND.map((m) => ({ label: m.label, detail: m.id === how ? "Enter" : "Alt+Enter", run: () => this.send(m.id) })),
+          { label: "Send now", detail: "Stops the turn", run: () => this.send("now") },
+        ], { width: 180 });
       });
       tail.append(sendBtn);
       window.scribeSyncChildren(this.bar, [bar]);
@@ -6595,7 +6598,11 @@
         const mod = event.ctrlKey || event.metaKey;
         if (mod || sendKey() === "enter") {
           event.preventDefault();
-          if (!this.input.value.trim() && !this.attachments.length && !this.mentions.length && this.pushQueued()) return;
+          if (!this.input.value.trim() && !this.attachments.length && !this.mentions.length) {
+            // The message just sent is neither in the box nor queued yet: act on it once it is.
+            if (this.sending) { this.pendingPushes = (this.pendingPushes || 0) + 1; return; }
+            if (this.pushQueued()) return;
+          }
           this.send();
         }
         return;
@@ -6985,16 +6992,26 @@
     pushQueued() {
       const t = this.thread();
       if (!t || t.status === "idle") return false;
-      const target = emptyEnterTarget(t.id);
+      const target = emptyEnterTarget(t.id) || this.justQueuedTarget(t.id);
       if (!target) return false;
       this.queueAction(target.action, target.id);
       return true;
     }
 
+    /** The message this composer just queued, while its item has not reached the transcript yet. */
+    justQueuedTarget(threadId) {
+      const sent = this.justQueued;
+      if (!sent || sent.threadId !== threadId || Date.now() - sent.at > 5000) return null;
+      if (S.details.get(threadId)?.byId.has(sent.id)) return null;
+      return { id: sent.id, action: emptyEnter() === "send" ? "send-now" : "steer" };
+    }
+
+    /** One at a time, in the order pressed: a second Enter reaches the server after the first's steer. */
     queueAction(action, itemId) {
       const t = this.thread();
       if (!t) return;
-      api("POST", `/threads/${encodeURIComponent(t.id)}/${action}`, { itemId }).catch((err) => notice(err.message));
+      const path = `/threads/${encodeURIComponent(t.id)}/${action}`;
+      this.queueChain = (this.queueChain || Promise.resolve()).then(() => api("POST", path, { itemId }).catch((err) => notice(err.message)));
     }
 
     /** Up on an empty composer: take the latest queued or waiting steered message back into the input. */
@@ -7070,7 +7087,7 @@
       input.setSelectionRange(input.value.length, input.value.length);
     }
 
-    /** how: "queue" or "steer" for a message sent while a turn runs; Chat settings choose by default. */
+    /** how: "queue", "steer" or "now" (stop the turn for it) for a message sent while a turn runs; Chat settings choose by default. */
     async send(how = runningSend()) {
       if (this.withdrawing || this.sending) return;
       const text = this.input.value.trim();
@@ -7213,7 +7230,9 @@
         this.stick = true;
         // dock: the host watches a floating-chat turn for a new page on its way (pageIntent.ts).
         // plan: false too, so a planNext the user turned off is dropped.
-        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(how === "steer" ? { steer: true } : {}), ...(this.variant === "dock" ? { dock: true } : {}) });
+        const res = await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(how === "steer" ? { steer: true } : how === "now" ? { now: true } : {}), ...(this.variant === "dock" ? { dock: true } : {}) });
+        // Until its item reaches the transcript, Enter on the empty box still finds this message.
+        if (res?.queued && res.item?.id) this.justQueued = { threadId: id, id: res.item.id, at: Date.now() };
         this.renderComposerBar();
         if (archiveAfterSend) {
           const from = archiveAfterSend;
@@ -7236,6 +7255,10 @@
         }
       } finally {
         this.sending = false;
+        // Enter presses on the emptied box while the message was on its way act on it now.
+        const presses = this.pendingPushes || 0;
+        this.pendingPushes = 0;
+        for (let i = 0; i < presses; i++) this.pushQueued();
       }
     }
   }

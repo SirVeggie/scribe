@@ -460,7 +460,7 @@ type RunState = {
   /** For the turn's latency (latency.ts): prompt sent, first output, waits on the user. */
   clock?: { sentAt?: number; firstAt?: number; waits: Array<[number, number | undefined]> };
   /** A queued message handed to this turn with steer, until the agent takes it in. */
-  steer: { id: string; msg: QueuedMessage; itemId: string | undefined } | null;
+  steer: { id: string; msg: QueuedMessage; itemId: string | undefined; at: number } | null;
   /** The provider finished the turn and Scribe is wrapping it up: nothing more is steered in (#932). */
   ended?: boolean;
   /** A workspace the agent asked for with thread_update and the user allowed: the thread moves there when the turn ends. */
@@ -502,7 +502,7 @@ export type PageAskResult =
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
 /** plan: send it as a plan turn (#721), or false to drop a thread's planNext; text starting with /plan is one too. */
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "component" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean; steer?: boolean };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "component" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean; steer?: boolean; now?: boolean };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -518,6 +518,8 @@ export class AgentHost {
   private status = new Map<string, RunStatus>();
   private unread = new Set<string>();
   private queues = new Map<string, QueuedMessage[]>();
+  /** How long Send now waits for a just-steered message to be read before it stops the turn (#963). */
+  steerGraceMs = 2000;
   private items = new Map<string, Item[]>();
   private turns = new Map<string, Turn[]>();
   private seq = new Map<string, number>();
@@ -2822,14 +2824,19 @@ export class AgentHost {
       const queue = this.queues.get(threadId) ?? [];
       // steer: the composer's Steer (#963) skips the queue: steered into the turn when the provider
       // can take it now, else first in line, ahead of messages queued before it.
-      if (input.steer) queue.unshift(msg);
+      // now: Send now stops the turn for it, after the steer's short grace (a steer already waiting goes first).
+      if (input.steer || input.now) queue.unshift(msg);
       else queue.push(msg);
       this.queues.set(threadId, queue);
       const item = this.addItem(threadId, null, userBody(msg));
       msg.itemId = item.id;
-      if (input.steer) this.steerFirst(threadId);
+      if (input.steer || input.now) this.steerFirst(threadId);
       this.emitThread(threadId);
       this.drainQueue(threadId);
+      if (input.now) {
+        const waiting = this.runs.get(threadId)?.steer?.itemId;
+        this.sendNow(threadId, waiting ?? item.id).catch((err) => log(`${threadId}: send now failed: ${(err as Error).message}`));
+      }
       return { queued: true, item };
     }
     const item = this.addItem(threadId, null, userBody(msg));
@@ -2961,7 +2968,7 @@ export class AgentHost {
     const item = this.loadItems(threadId).find((it) => it.id === msg.itemId);
     const thread = this.requireThread(threadId);
     const id = session.steer({ text: this.commandText(thread, msg) ?? promptText(msg, thread, this.pageGuides(thread, msg)), images: msg.images, documents: pdfs(msg) });
-    run.steer = { id, msg, itemId: item?.id };
+    run.steer = { id, msg, itemId: item?.id, at: Date.now() };
     if (item && item.kind === "user") {
       item.steer = "waiting";
       this.touch(item);
@@ -3104,6 +3111,15 @@ export class AgentHost {
     if (this.queues.get(threadId)?.[0]?.edit) throw new Error("Finish editing the queued message first");
     if (!run) { this.drainQueue(threadId); return; }
     if (run.ended || (!run.steer && !this.queues.get(threadId)?.length)) return;
+    // A steer handed over a moment ago is often read at once (#963): give it a short grace before
+    // stopping the turn for it. Read in, withdrawn, or the turn ended meanwhile: nothing left to do.
+    const steer = run.steer;
+    if (steer && steer.at + this.steerGraceMs > Date.now()) {
+      while (run.steer === steer && !run.ended && this.runs.get(threadId) === run && steer.at + this.steerGraceMs > Date.now()) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (run.steer !== steer || run.ended || this.runs.get(threadId) !== run) return;
+    }
     await this.cancel(threadId, { keepQueue: true });
   }
 
