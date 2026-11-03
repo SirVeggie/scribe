@@ -864,12 +864,25 @@
     }).catch(function (err) { setError(err.message || "Could not open file location"); });
   });
 
+  function typingIn(el) {
+    var tag = el && el.tagName ? el.tagName.toLowerCase() : "";
+    return tag === "input" || tag === "textarea" || tag === "select" || Boolean(el && el.isContentEditable);
+  }
   // Registered before Scribe's own page keys: Ctrl+S saves the file instead of downloading the page,
   // and in the editor Ctrl+D (next occurrence) and Ctrl+H (replace) go to it instead of Scribe's
   // palette and help.
   window.addEventListener("keydown", function (event) {
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     var key = event.key.toLowerCase();
+    // Rendered Markdown with no block open (after ticking a checkbox): undo and redo still reach the file.
+    if ((key === "z" || key === "y") && editor && mode === "render" && file && file.kind === "markdown" && !editing && !typingIn(event.target)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (key === "y" || event.shiftKey) editor.redo();
+      else editor.undo();
+      renderMarkdown();
+      return;
+    }
     if ((key === "d" || key === "h") && !event.shiftKey) {
       if (!editor || mode !== "source" || !editor.view.dom.contains(event.target)) return;
       event.preventDefault();

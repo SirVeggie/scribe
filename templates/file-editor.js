@@ -5,7 +5,7 @@ import {
   EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection,
   dropCursor, rectangularSelection, highlightActiveLine, runScopeHandlers,
 } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentLess, indentMore, isolateHistory, undo } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore, isolateHistory, redo, undo } from "@codemirror/commands";
 import {
   search, highlightSelectionMatches, openSearchPanel, closeSearchPanel, findNext, findPrevious, replaceNext,
   replaceAll, selectNextOccurrence, selectSelectionMatches, gotoLine, SearchQuery, setSearchQuery, getSearchQuery,
@@ -473,6 +473,7 @@ function create(opts) {
     wrap() { return wrap; },
     toggleWrap() { return toggleWrap(view); },
     undo() { return undo(view); },
+    redo() { return redo(view); },
     focus() { if (!view.hasFocus) view.focus(); },
     hasFocus() { return view.hasFocus; },
     select(anchor, head) {
