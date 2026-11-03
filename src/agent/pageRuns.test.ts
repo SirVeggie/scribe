@@ -282,6 +282,15 @@ test("the page can hold a merge, and merge: false or no worktree skips it", asyn
     assert.equal(state.merges, 0);
   }
   {
+    // A turn without Scribe's MCP says so in the outcome, so the board can tell the user why (#924).
+    const { state, runs, turn } = harness();
+    state.hold = "it still holds #12";
+    runs.register("th", "page1", {});
+    turn({ mcpDown: "connection timed out" });
+    await runs.check("th");
+    assert.deepEqual(runs.get("th")!.outcome, { kind: "done", merged: false, held: "it still holds #12", mcpDown: "connection timed out" });
+  }
+  {
     const { state, runs, turn } = harness();
     runs.register("th", "page1", { merge: false });
     turn({});

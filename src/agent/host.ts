@@ -5675,6 +5675,9 @@ export class AgentHost {
         host.closeBlocks(run);
         host.addItem(threadId, turnId, { kind: "notice", level, text });
       },
+      mcpDown(why) {
+        run.turn.mcpDown = why;
+      },
       commands(list) {
         const t = thread();
         if (t && list.length) host.rememberCommands(t.provider, list);

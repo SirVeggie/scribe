@@ -64,6 +64,9 @@ export function printedLoginUrl(output: string): string | null {
 }
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const BOARD_SERVER = "scribe";
+/** How long a turn watches a still-connecting Scribe MCP (Claude Code itself gives up after 30 s). */
+const MCP_WATCH_MS = 500;
+const MCP_WATCH_POLLS = 120;
 /** Claude Code's read tools: a Pages thread with a workspace gets these and no others for files (#718). */
 const PAGES_READ_TOOLS = ["Read", "Grep", "Glob"];
 
@@ -1252,7 +1255,8 @@ class ClaudeSession implements ProviderSession {
     this.carry = null;
     this.buffer = [];
     try {
-      await this.ensureQuery();
+      const q = await this.ensureQuery();
+      void this.watchBoardMcp(q, sink);
       sink.usage({ billingSource: this.queryLimits.billingSource, costPartial: true });
       // The init message may have arrived during a warm-up, before there was a sink to tell.
       if (this.sessionId) sink.nativeId(this.sessionId);
@@ -1279,6 +1283,37 @@ class ClaudeSession implements ProviderSession {
     } finally {
       this.sink = null;
       this.armIdle();
+    }
+  }
+
+  /**
+   * Claude Code gives an MCP server 30 s to connect and never tries again, so a chat whose Scribe MCP
+   * timed out (a busy machine) had no board tools for the rest of its session, and a card chat could
+   * neither finish its card nor say why (#924). Each turn looks at it: a failed one is reconnected,
+   * and when that fails too the chat shows it and the turn records it for the board.
+   */
+  private async watchBoardMcp(q: Query, sink: RunSink): Promise<void> {
+    try {
+      const status = async () => (await q.mcpServerStatus()).find((server) => server.name === BOARD_SERVER);
+      let server = await status();
+      for (let i = 0; server?.status === "pending" && i < MCP_WATCH_POLLS && this.query === q; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, MCP_WATCH_MS));
+        server = await status();
+      }
+      if (server?.status !== "failed" || this.query !== q) return;
+      const first = server.error;
+      await q.reconnectMcpServer(BOARD_SERVER).catch(() => undefined);
+      server = await status();
+      if (this.sink !== sink) return;
+      if (server?.status === "connected") {
+        sink.notice("info", `Scribe's MCP didn't connect at first${first ? ` (${first})` : ""}; Scribe reconnected it.`);
+        return;
+      }
+      const why = server?.error || first || "it didn't connect";
+      sink.notice("warn", `Scribe's MCP didn't connect (${why}), so this chat has no Scribe tools this turn. Send another message to try again.`);
+      sink.mcpDown?.(why);
+    } catch {
+      // An older Claude Code without MCP status: nothing to watch.
     }
   }
 

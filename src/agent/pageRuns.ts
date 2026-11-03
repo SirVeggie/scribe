@@ -50,6 +50,8 @@ export type RunOutcome = {
   fixable?: boolean;
   /** done without a merge: the page's reason to keep the branch unmerged (a Kanban card the chat still holds). */
   held?: string;
+  /** done: the last turn ran without Scribe's MCP, and why (#924), so the agent couldn't reach the page. */
+  mcpDown?: string;
 };
 
 export type PageRun = {
@@ -299,13 +301,14 @@ export class PageRuns {
     }
     if (turn.status !== "done") return;
 
+    const mcp = turn.mcpDown ? { mcpDown: turn.mcpDown } : {};
     if (!run.merge || !deps.hasWorktree(run.threadId)) {
-      this.end(run, { kind: "done" });
+      this.end(run, { kind: "done", ...mcp });
       return;
     }
     const held = await deps.hold(run);
     if (held) {
-      this.end(run, { kind: "done", merged: false, held }, `Kept the branch unmerged: ${held}`);
+      this.end(run, { kind: "done", merged: false, held, ...mcp }, `Kept the branch unmerged: ${held}`);
       return;
     }
     let message: string;

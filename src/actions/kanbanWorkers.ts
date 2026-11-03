@@ -560,6 +560,12 @@ class Plan {
 
 // ---------- steps ----------
 
+/** Why a chat that ended still holds its card: the generic note, or that it had no Scribe MCP to finish with (#924). */
+function unfinishedNote(out: RunOutcome | undefined): string {
+  if (out?.mcpDown) return `The agent's Scribe MCP didn't connect (${out.mcpDown}), so it couldn't finish or comment on this card. Check its chat for what it did. ${KEPT_NOTE}`;
+  return `The agent ended its turn without finishing this card. ${KEPT_NOTE}`;
+}
+
 /**
  * The worker's last chat ended (its run's outcome): pause on a run that kept hitting its usage limit
  * or a merge no agent can fix; block the cards of a failed turn or a card it didn't finish; else go
@@ -604,7 +610,7 @@ function wrapUp(plan: Plan, state: BoardState, id: string, w: Worker, threadId: 
     const given = card ? cards(state).find((c) => c.num === card) : undefined;
     if (held.length) {
       // Scribe kept its branch unmerged; the chat keeps it.
-      blocked = plan.blockChatCards(id, threadId, `The agent ended its turn without finishing this card. ${KEPT_NOTE}`, "Agent didn't finish", usage).ids;
+      blocked = plan.blockChatCards(id, threadId, unfinishedNote(out), out?.mcpDown ? "Scribe MCP didn't connect" : "Agent didn't finish", usage).ids;
       go = plan.chatFailed(id, `the last agent ended without finishing #${held[0].num}`, usage);
     } else if (given && isReady(columnById(state, given.col)) && (Number(given.movedAt) || 0) <= (Number(w.run?.startedAt) || 0)) {
       blocked = plan.blockCards(id, [given.id], "The agent's chat ended without taking this card. Comment here to let the worker try again.", "Agent didn't take it", threadId, false, usage).ids;
@@ -638,12 +644,12 @@ function finishSolo(plan: Plan, state: BoardState, id: string, threadId: string,
   } else if (out?.kind === "merge_failed") {
     plan.mergeFailed(id, threadId, str(out.message), usage);
   } else if (out?.held) {
-    if (entry.queued) plan.blockChatCards(id, threadId, `The agent ended its turn without finishing this card. ${KEPT_NOTE}`, "Agent didn't finish", usage);
-    else plan.log(id, "solo", `${what} ended without finishing its card (${out.held}). Its chat keeps its branch.`, extra);
+    if (entry.queued) plan.blockChatCards(id, threadId, unfinishedNote(out), out?.mcpDown ? "Scribe MCP didn't connect" : "Agent didn't finish", usage);
+    else plan.log(id, "solo", `${what} ended without finishing its card (${out.held})${out.mcpDown ? `: its Scribe MCP didn't connect (${out.mcpDown})` : ""}. Its chat keeps its branch.`, extra);
   } else if (out) {
     if (entry.queued) {
       if (liveCards(state).some((c) => c.claim && !c.claim.stale && c.claim.thread === threadId)) {
-        plan.blockChatCards(id, threadId, `The agent ended its turn without finishing this card. ${KEPT_NOTE}`, "Agent didn't finish", usage);
+        plan.blockChatCards(id, threadId, unfinishedNote(out), out?.mcpDown ? "Scribe MCP didn't connect" : "Agent didn't finish", usage);
       }
       const given = cards(state).find((c) => c.num === cardNum);
       if (given && isReady(colOf(state, given)) && (Number(given.movedAt) || 0) <= (Number(entry.at) || 0) && given.status?.kind !== "blocked") {

@@ -108,6 +108,8 @@ export type RunSink = {
   todos(todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>): void;
   usage(usage: Usage): void;
   notice(level: "info" | "warn" | "error", text: string): void;
+  /** Scribe's own MCP isn't connected for this turn, and why: the chat has no board or page tools. */
+  mcpDown?(why: string): void;
   commands(commands: SlashCommand[]): void;
   title(title: string): void;
   /** A message handed to `steer` reached the model inside this turn. */
