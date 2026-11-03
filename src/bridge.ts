@@ -1405,10 +1405,20 @@ ${POINTER_DRAG_JS}
       message.prompt = agentText(prompt);
       return withImages(message, opts.images, AGENT_ASK_MS);
     },
-    /** Send to one of this page's threads; queued when it is still working: { ok, queued }. opts: { show, images (as in start) }. */
+    /**
+     * Send to one of this page's threads; queued when it is still working: { ok, queued }. opts: {
+     * show, images (as in start), provider, model, effort }. A model or effort on the thread's
+     * provider switches the thread in place. Another provider goes on in a fork that keeps the
+     * history and the open worktree: { ok, queued, threadId, forked: true }; keep that id from
+     * then on. error "busy" while the thread is still running a turn.
+     */
     send: function (threadId, prompt, opts) {
       opts = opts || {};
-      return withImages({ op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) }, opts.images, AGENT_ASK_MS);
+      var message = { op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) };
+      if (opts.provider) message.provider = agentText(opts.provider);
+      if (opts.model) message.model = agentText(opts.model);
+      if (opts.effort) message.effort = agentText(opts.effort);
+      return withImages(message, opts.images, AGENT_ASK_MS);
     },
     /** Delete one of this page's threads, e.g. a one-off chat once its reply is read; a running turn stops first: { ok }. */
     delete: function (threadId) {

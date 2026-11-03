@@ -13183,6 +13183,35 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   }
 
   /**
+   * scribe.agent.send's provider / model / effort: { thread } (the fork, on another provider), {} when
+   * nothing changes or the change applied in place, or { error }.
+   */
+  async function pageSwitchModel(thread, data) {
+    const provider = typeof data.provider === "string" && data.provider ? data.provider : thread.provider;
+    const model = typeof data.model === "string" && data.model ? data.model : provider === thread.provider ? thread.model : "default";
+    const effort = typeof data.effort === "string" && data.effort ? data.effort : undefined;
+    if (provider === thread.provider && model === thread.model && (!effort || effort === thread.effort)) return {};
+    if (!providerAvailable(provider)) return { error: "unknown_provider" };
+    if (model !== "default" && modelsOf(provider).length && !modelInfo(provider, model)) return { error: "unknown_model" };
+    const efforts = modelInfo(provider, model)?.efforts || [];
+    if (effort && efforts.length && !efforts.some((e) => e.id === effort)) return { error: "unknown_effort" };
+    const id = encodeURIComponent(thread.id);
+    if (provider === thread.provider) {
+      const { thread: next } = await api("PATCH", `/threads/${id}`, { model, ...(effort ? { effort } : {}) });
+      if (next) S.threads.set(next.id, next);
+      return {};
+    }
+    // A fork goes on from finished turns only, so wait for the running one.
+    if (thread.status === "running") return { error: "busy" };
+    const { thread: fork } = await api("POST", `/threads/${id}/fork`, { provider, model });
+    let next = fork;
+    if (effort) next = (await api("PATCH", `/threads/${encodeURIComponent(fork.id)}`, { effort })).thread || fork;
+    S.threads.set(next.id, next);
+    S.details.set(next.id, { items: [], byId: new Map(), turns: new Map() });
+    return { thread: next };
+  }
+
+  /**
    * One scribe.agent call from `tab` (app.js found it from the asking frame, and whether the click
    * or key press reached the board). Pages only see and drive threads that belong to them; the
    * permissions the user gave the page decide what else they may do.
@@ -13313,11 +13342,16 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           const folder = await pageMayUseFolder(tab, pageFolder(thread), thread.approval);
           if (!folder.ok) return folder;
         }
-        await ensureDetail(thread.id);
-        pageSentAt.set(thread.id, Date.now());
-        const sent = await api("POST", `/threads/${encodeURIComponent(thread.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images) });
-        showPageThread(thread.id, data.show, { reveal: activated });
-        return { ok: true, queued: Boolean(sent.queued) };
+        // A model the page picked since: the same provider switches in place; another provider
+        // goes on in a fork, which keeps the history and shares the open worktree (#960).
+        const switched = await pageSwitchModel(thread, data);
+        if (switched.error) return { ok: false, error: switched.error };
+        const target = switched.thread || thread;
+        await ensureDetail(target.id);
+        pageSentAt.set(target.id, Date.now());
+        const sent = await api("POST", `/threads/${encodeURIComponent(target.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images) });
+        showPageThread(target.id, data.show, { reveal: activated });
+        return { ok: true, queued: Boolean(sent.queued), ...(target.id !== thread.id ? { threadId: target.id, forked: true } : {}) };
       }
       case "card": {
         // A card comment for the thread working on the card (steered into its turn, or queued), or
