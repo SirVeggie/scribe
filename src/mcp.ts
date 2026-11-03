@@ -1961,6 +1961,39 @@ function registerThreadTools(server: McpServer): void {
     { readOnlyHint: true },
     async ({ thread, from, limit, q, kinds, full, importance }, extra) => call("read", { thread, from, limit, q, kinds, full, importance }, extra)
   );
+
+  server.tool(
+    "thread_worktree",
+    "Close another chat thread's worktree, as its chat's Merge, Leave and Discard buttons do: merge its branch into the branch it came from, leave the work on its branch, or discard the branch. Only for a thread you may read (thread_list), that is not running a turn. The user is asked in this chat first, each time. Your own worktree is not closed this way: the user or the board does that when your turn ends. Returns what was done.",
+    {
+      thread: z.string().describe("Thread id from thread_list."),
+      action: z.enum(["merge", "leave", "discard"]).describe("merge into its base branch, leave on its branch (uncommitted changes committed as WIP), or discard the branch and its work."),
+      reason: z.string().optional().describe("One or two lines on why, shown to the user."),
+    },
+    { destructiveHint: true },
+    async ({ thread, action, reason }, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      const startedAt = Date.now();
+      const heartbeat =
+        progressToken === undefined
+          ? undefined
+          : setInterval(() => {
+              const seconds = Math.round((Date.now() - startedAt) / 1000);
+              extra
+                .sendNotification({ method: "notifications/progress", params: { progressToken, progress: seconds, message: `Waiting for the user to allow closing the worktree (${seconds}s)` } })
+                .catch(() => {});
+            }, WAIT_HEARTBEAT_MS);
+      try {
+        const { status, data } = await api("POST", "/api/thread-worktree", { thread, action, reason }, { signal: extra.signal });
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "thread_worktree failed");
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
+  );
 }
 
 /**

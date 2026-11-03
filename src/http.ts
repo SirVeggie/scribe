@@ -1732,6 +1732,36 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /** thread_worktree from a Scribe chat's MCP (#961): asks the user in the chat, then closes another thread's worktree. */
+  app.post("/api/thread-worktree", (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "thread_worktree only works in Scribe chat threads." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    if (typeof body.thread !== "string" || !body.thread) {
+      res.status(400).json({ error: "thread is required" });
+      return;
+    }
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    agentHost
+      .threadWorktree(thread, { thread: body.thread.slice(0, 60), action: String(body.action ?? ""), reason: typeof body.reason === "string" ? body.reason : undefined }, abort.signal)
+      .then((result) => {
+        if (!res.writableEnded) res.json(result);
+      })
+      .catch((err: Error) => {
+        if (!res.writableEnded) res.status(400).json({ error: err.message });
+      })
+      .finally(() => res.off("close", onClientGone));
+  });
+
   /** memory_list, memory_save and memory_delete from a Scribe chat's MCP: the memories agents share (#104). */
   app.post("/api/memory/:op", (req, res) => {
     const thread = threadOf(req);

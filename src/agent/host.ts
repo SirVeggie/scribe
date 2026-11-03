@@ -4349,6 +4349,52 @@ export class AgentHost {
   }
 
   /**
+   * thread_worktree (#961): merge, leave or discard another thread's worktree, as its chat's Merge,
+   * Leave and Discard buttons do. Only a thread this one may read, and the user allows each call.
+   */
+  async threadWorktree(readerId: string, input: { thread: string; action: string; reason?: string }, signal?: AbortSignal): Promise<{ ok: true; message: string }> {
+    const reader = this.threads.get(readerId);
+    if (!reader) throw new Error("thread_worktree only works in Scribe chat threads.");
+    if (reader.helperOf) throw new Error("A helper cannot close worktrees. Say in your report what should be merged or closed.");
+    if (reader.approval === "readonly") throw new Error("A read-only thread cannot close worktrees. Ask the user to do it from that thread's chat.");
+    const how = input.action;
+    if (how !== "merge" && how !== "leave" && how !== "discard") throw new Error("action must be merge, leave or discard");
+    if (input.thread === readerId) throw new Error("This is your own thread: commit your work and end your turn; the user (or the board) merges or closes your worktree from this chat.");
+    const { threads } = await this.readableThreads(readerId, { signal });
+    const target = threads.find((t) => t.id === input.thread);
+    if (!target) {
+      const outside = this.threads.has(input.thread);
+      throw new Error(outside ? "That thread is outside the scopes this thread may read; thread_access with thread asks to read it first." : `No readable thread ${input.thread}. thread_list shows the ones you can read.`);
+    }
+    const wt = openWorktree(target);
+    if (!wt) throw new Error(`“${target.title}” has no open worktree.`);
+    if (this.runs.has(target.id)) throw new Error(`“${target.title}” is running a turn. Wait for it to end, or ask the user to stop it.`);
+    const run = this.runs.get(readerId);
+    if (!run) throw new Error("With no turn running the user cannot be asked to allow this.");
+    const status = await worktreeStatus(wt).catch(() => null);
+    const what = { merge: `Merge ${wt.branch} into ${wt.base}`, leave: `Leave the work on branch ${wt.branch}`, discard: `Discard ${wt.branch} and its work` }[how];
+    const facts = status
+      ? [`${status.ahead} commit${status.ahead === 1 ? "" : "s"} not on ${wt.base}`, status.dirty.length ? `${status.dirty.length} uncommitted file${status.dirty.length === 1 ? "" : "s"}${how === "merge" ? " (left out of the merge)" : how === "leave" ? " (committed as WIP)" : ""}` : ""].filter(Boolean).join(", ")
+      : "";
+    const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 1000) : "";
+    const detail = [reason, `${what}, and remove the worktree of “${target.title}”.`, facts ? `${facts}.` : "", how === "discard" ? "Discarding deletes the branch: its commits and uncommitted changes are lost." : ""].filter(Boolean).join("\n\n");
+    const options: ApprovalOption[] = [
+      { id: "allow", label: { merge: "Merge", leave: "Leave", discard: "Discard" }[how], kind: "allow_once" },
+      { id: "deny", label: "Deny", kind: "reject_once" },
+    ];
+    this.closeBlocks(run);
+    const item = this.addItem(readerId, run.turn.id, { kind: "approval", requestId: "", tool: "other", title: `${what} (“${target.title}”)`.slice(0, 300), detail: clip(detail, 6000), options, status: "pending" });
+    let decision: ApprovalDecision;
+    try {
+      decision = await this.waitPending<ApprovalDecision>(readerId, run, "approval", item.id, signal);
+    } catch {
+      throw new Error("The request to close the worktree was cancelled.");
+    }
+    if (decision.optionId === "deny") throw new Error(decision.note ? `The user denied it: ${decision.note}` : "The user denied it. Leave the worktree as it is.");
+    return this.finishWorktree(target.id, how);
+  }
+
+  /**
    * A tainted thread (#269) handing work to an untrusted model: its brief can carry trusted content,
    * so the user says yes each time, whatever the approval level. Nobody answering denies it after
    * TAINTED_HELPER_WAIT_MS, so a board worker does not wait for ever.

@@ -7518,6 +7518,7 @@
     thread_list: (i) => ["Find threads", firstText(i, "query", "q")],
     thread_read: (i) => ["Read thread", firstText(i, "thread", "id")],
     thread_access: (i) => ["Ask to read thread", firstText(i, "thread", "id")],
+    thread_worktree: (i) => [{ merge: "Merge thread's worktree", leave: "Leave thread's worktree", discard: "Discard thread's worktree" }[i?.action] || "Close thread's worktree", firstText(i, "thread")],
     skill_read: (i) => ["Read skill", [firstText(i, "name"), firstText(i, "file")].filter(Boolean).join(" · ")],
     memory_save: (i) => [i.id ? "Update memory" : "Save memory", firstText(i, "title", "text")],
     memory_delete: (i) => ["Delete memory", firstText(i, "id")],

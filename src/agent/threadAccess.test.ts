@@ -239,3 +239,41 @@ test("thread_list everywhere asks once to search, then shows outside hits as tit
   const again = await host.listReadableThreads(reader.id, { q: "focus border", everywhere: true });
   assert.equal(again.threads[0].outside, undefined);
 });
+
+test("thread_worktree closes a readable thread's worktree once the user allows it", async () => {
+  // A repo folder that is not there: no git process holds the scratch folder when it is removed.
+  const gone = path.resolve(dir, "gone");
+  const worktree = { home: ws, repo: gone, path: path.join(gone, "wt"), branch: "agent/x", base: "master", baseCommit: "c", links: [], createdAt: 0 };
+  const target = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: ws } });
+  const internals = host as unknown as Internals & { threads: Map<string, Thread>; finishWorktree(id: string, how: string): Promise<unknown> };
+  internals.threads.set(target.id, { ...internals.threads.get(target.id)!, worktree });
+  const reader = host.createThread({ provider: "claude", scope: { kind: "workspace", ref: ws } });
+  running(reader.id);
+  await assert.rejects(host.threadWorktree(reader.id, { thread: reader.id, action: "merge" }), /your own thread/);
+  await assert.rejects(host.threadWorktree(reader.id, { thread: target.id, action: "rebase" }), /merge, leave or discard/);
+  const closed: string[] = [];
+  internals.finishWorktree = async (id: string, how: string) => {
+    closed.push(`${id}:${how}`);
+    return { ok: true, message: "done" };
+  };
+  try {
+    const first = host.threadWorktree(reader.id, { thread: target.id, action: "merge", reason: "Card done" });
+    await answer(reader.id, "all");
+    // The card shows once the worktree's git status is read.
+    const shown = async () => {
+      for (let i = 0; i < 300 && !pendingApprovals(reader.id).length; i += 1) await new Promise((r) => setTimeout(r, 10));
+    };
+    await shown();
+    const asked = await answer(reader.id, "deny");
+    assert.match(asked.kind === "approval" ? asked.title : "", /Merge agent\/x into master/);
+    await assert.rejects(first, /denied/);
+    const second = host.threadWorktree(reader.id, { thread: target.id, action: "discard" });
+    await shown();
+    const card = await answer(reader.id, "allow");
+    assert.match(card.kind === "approval" ? card.detail ?? "" : "", /deletes the branch/);
+    assert.deepEqual(await second, { ok: true, message: "done" });
+    assert.deepEqual(closed, [`${target.id}:discard`]);
+  } finally {
+    delete (internals as Partial<typeof internals>).finishWorktree;
+  }
+});
