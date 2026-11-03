@@ -4532,9 +4532,12 @@
   function runShortcut(action) {
     if (action === "reload-frame") {
       // F5 / Ctrl+R in an embedded site (desktop app): reload just that frame.
+      // The shell's focus flag can be stale (#984): if no embed has focus, reload the board as usual.
       const frame = document.activeElement;
-      if (frame?.tagName === "IFRAME") {
+      if (frame?.tagName === "IFRAME" && !frame.hasAttribute("data-scribe-page")) {
         frame.src = frame.src;
+      } else {
+        location.reload();
       }
       return;
     }

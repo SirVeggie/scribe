@@ -471,7 +471,9 @@
 
   // The app catches the board's shortcuts natively only while focus is in an embedded site, which
   // keeps its key events from the board. The board and its pages see their keys first, as in a browser.
-  let embedFocus = false;
+  // Unknown until the first report: the shell keeps its flag across reloads and the offline page
+  // (a daemon restart), so a fresh board must say where focus is even when it isn't in an embed.
+  let embedFocus = null;
   let focusPoll = 0;
   function reportFocus() {
     const el = document.activeElement;
@@ -494,6 +496,7 @@
   addEventListener("focus", reportFocus);
   // Focus going into a frame blurs this window before activeElement names the frame.
   addEventListener("blur", () => setTimeout(reportFocus, 0));
+  reportFocus();
 
   // Lost the daemon for more than a moment (it restarts for a new build in about that long):
   // the app swaps in its offline page, which brings the board back once the daemon answers.
