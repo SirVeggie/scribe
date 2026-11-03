@@ -46,14 +46,14 @@ export function widgetSite(host: () => AgentHost | undefined, publicDir: string,
       }
       const thread = typeof req.query.thread === "string" ? req.query.thread : "";
       const item = host()?.componentItem(thread, id);
-      if (!item) throw new Error("Component not found.");
+      if (!item) throw new Error("Widget not found.");
       let renderItem = item;
       if (item.plugin) {
         host()!.componentPlugin(thread, id);
-        const current = plugins!.component(item.plugin, item.component!, item.props);
+        const current = plugins!.widget(item.plugin, item.component!, item.props);
         renderItem = { ...item, html: current.html };
       }
       res.set({ "Content-Security-Policy": widgetCsp(undefined, req), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" }).type("html").send(widgetDocument(renderItem, kit, host()!.componentProblems.boot(id, 0)));
-    } catch { res.status(404).type("text").send("Component not found."); }
+    } catch { res.status(404).type("text").send("Widget not found."); }
   };
 }

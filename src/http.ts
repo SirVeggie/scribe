@@ -813,7 +813,7 @@ export async function startHttp(): Promise<http.Server> {
     const guide=templateGuide;
     const thread = threadOf(req);
     const pluginGuides=declaredPlugins(tab.html).filter(id=>pluginService.enabled(id)).map(id=>{
-      const p=pluginService.guide(id),guide={id:`plugin:${p.id}`,title:`Plugin ${p.id}`,text:`${p.summary}\n${p.guide}\n${JSON.stringify({methods:p.methods,components:p.components})}`};
+      const p=pluginService.guide(id),guide={id:`plugin:${p.id}`,title:`Plugin ${p.id}`,text:`${p.summary}\n${p.guide}\n${JSON.stringify({methods:p.methods,widgets:p.widgets})}`};
       const sent=thread&&req.query.deliver==="1"?req.query.force!=="1"&&guideSent(thread,guide):undefined;
       if(thread&&req.query.deliver==="1")markGuideSent(thread,guide);return {guide,...(sent===undefined?{}:{sent})};
     });
@@ -986,7 +986,7 @@ export async function startHttp(): Promise<http.Server> {
   });
 
   const componentPage = (req: express.Request) => {
-    if (viewerOf(req) === "agent" || framePageId(req) !== req.params.id) throw new Error("Components must name their host page.");
+    if (viewerOf(req) === "agent" || framePageId(req) !== req.params.id) throw new Error("Widgets must name their host page.");
   };
   app.post("/api/tabs/:id/components", (req, res) => {
     try { componentPage(req); res.json({ ok: true, ...pageComponents.resolve(req.params.id, req.body ?? {}, host => requestOrigin(req, host), requestSuffix(req)) }); }
@@ -1420,7 +1420,7 @@ export async function startHttp(): Promise<http.Server> {
 
   app.post("/api/component", (req, res) => {
     const thread = threadOf(req);
-    if (!thread || !agentHost) { res.status(403).json({ error: "component_show only works in Scribe chat threads." }); return; }
+    if (!thread || !agentHost) { res.status(403).json({ error: "widget_show only works in Scribe chat threads." }); return; }
     let input;
     try { input = parseWidgetInput(req.body); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }

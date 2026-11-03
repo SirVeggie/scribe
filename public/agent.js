@@ -7555,7 +7555,8 @@
     scribe_docs: (i) => ["Read Scribe docs", firstText(i, "section", "topic")],
     settings_find: (i) => ["Find settings", firstText(i, "query", "q")],
     settings_show: () => ["Show settings"],
-    component_show: (i) => ["Show in chat", firstText(i, "title")],
+    widget_show: (i) => ["Show in chat", firstText(i, "title")],
+    component_show: (i) => ["Show in chat", firstText(i, "title")], // before #930
     harness_docs: () => ["Read agent setup docs"],
     harness_change: () => ["Change agent setup"],
     agent_models: () => ["List models"],

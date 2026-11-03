@@ -24,7 +24,7 @@ export type ScopeInfo = {
   memories?: Memory[];
   /** Optional app instructions the user turned off in Agent settings (APP_INSTRUCTIONS ids). */
   instructionsOff?: string[];
-  plugins?: Array<{id:string;summary:string;components?:Array<{name:string;description:string}>}>;
+  plugins?: Array<{id:string;summary:string;widgets?:Array<{name:string;description:string}>;components?:Array<{name:string;description:string}>}>; // components: catalogs cached before #930
   /** Scribe skills this thread may use (scribeSkills.ts effective): listed for skill_read. */
   skills?: Array<{ id: string; name: string; description: string; builtin?: boolean }>;
 };
@@ -132,7 +132,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     return lines.join("\n");
   }
   lines.push("");
-  if(scope.plugins?.length && !noPages(thread.scope)) lines.push(`Plugins available through plugin_guide and plugin_call (chat UI through component_show): ${scope.plugins.map(p=>`${p.id}: ${p.summary.slice(0,120)}${p.components?.length ? ` Components: ${p.components.map(c=>`${c.name}: ${c.description}`).join(", ")}` : ""}`).join("; ")}.`);
+  if(scope.plugins?.length && !noPages(thread.scope)) lines.push(`Plugins available through plugin_guide and plugin_call (chat UI through widget_show): ${scope.plugins.map(p=>`${p.id}: ${p.summary.slice(0,120)}${(p.widgets??p.components)?.length ? ` Widgets: ${(p.widgets??p.components)!.map(c=>`${c.name}: ${c.description}`).join(", ")}` : ""}`).join("; ")}.`);
   if (noPages(thread.scope)) {
     lines.push(
       `Pages: this thread has no access to Scribe pages (the user set its Scribe scope to None). The MCP server named \`${server}\` has its web, thread and browser tools here, plus file tools where the mode permits them. Do not try to read or show pages.`
@@ -149,7 +149,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       `Questions: when you need the user's decision or details to carry on, ask with ask_user on the \`${server}\` server rather than your own built-in question tool. It takes choices (single or multi-select), free text, numbers and scales, shows a few questions as a card in the chat and more as a form, and returns the answers.`,
       `Scribe settings: when the user asks where one of Scribe's own settings is or wants one changed, look it up with settings_find and show the rows that fit with settings_show. They appear in the chat as in the settings dialog and the user changes them there.`,
       `Agent setup: to help the user set up or change Scribe's agent harness beyond a settings click (their MCP servers, hook rules, skills, instruction files), read harness_docs and make the change with harness_change; the user approves it in the chat.`,
-      `Inline UI: component_show displays kit HTML in the chat, with no network or page API access. Include fallback text for history; wait:true returns a kit button or form's reply.`
+      `Inline UI: widget_show displays kit HTML in the chat, with no network or page API access. Include fallback text for history; wait:true returns a kit button or form's reply.`
     );
   }
   switch (thread.mode) {

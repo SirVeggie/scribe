@@ -30,7 +30,7 @@ export class PageWidgets {
     const tab = this.store.get(page);
     if (!tab) throw new Error("Page not found.");
     const spec = parseWidgetInput({ plugin: input.plugin, component: input.component, props: input.props });
-    const current = this.plugins.component(spec.plugin!, spec.component!, spec.props);
+    const current = this.plugins.widget(spec.plugin!, spec.component!, spec.props);
     if (checkPermission(this.store.pagePermissions(page), { perm: `plugin.${spec.plugin}` }) === "deny") throw new Error("This page denies the plugin.");
     return { tab, spec, current };
   }
@@ -44,11 +44,11 @@ export class PageWidgets {
     const { tab, spec, current } = this.inspect(page, input);
     const id = `pc_${randomBytes(8).toString("hex")}`;
     const local = widgetJson(input.local ?? {});
-    if (!local || typeof local !== "object" || Array.isArray(local)) throw new Error("Component local state must be an object.");
+    if (!local || typeof local !== "object" || Array.isArray(local)) throw new Error("Widget local state must be an object.");
     this.prune();
     const capture = input.capture === true;
-    if ([...this.mounts.values()].filter(mount => mount.page === page && mount.capture === capture).length >= PAGE_WIDGET_LIMIT) throw new Error(`Page component limit reached (${PAGE_WIDGET_LIMIT} active instances across this page's ${capture ? "captures" : "viewers"}). Scroll other components out of view or close another viewer, then reload.`);
-    if (this.mounts.size >= GLOBAL_WIDGET_LIMIT) throw new Error(`Component limit reached (${GLOBAL_WIDGET_LIMIT} active page instances). Close another page viewer.`);
+    if ([...this.mounts.values()].filter(mount => mount.page === page && mount.capture === capture).length >= PAGE_WIDGET_LIMIT) throw new Error(`Page widget limit reached (${PAGE_WIDGET_LIMIT} active instances across this page's ${capture ? "captures" : "viewers"}). Scroll other widgets out of view or close another viewer, then reload.`);
+    if (this.mounts.size >= GLOBAL_WIDGET_LIMIT) throw new Error(`Widget limit reached (${GLOBAL_WIDGET_LIMIT} active page instances). Close another page viewer.`);
     const mount: Mount = { id, page, revision: tab.revision, plugin: spec.plugin!, component: spec.component!, props: spec.props, local: local as Record<string, unknown>, hash: current.hash, token: randomBytes(16).toString("hex"), diagnostics: input.diagnostics === true, capture: input.capture === true, expires: this.now() + WIDGET_LEASE_MS, at: Date.now(), count: 0, active: 0 };
     this.mounts.set(id, mount);
     return { id, token: mount.token, height: current.definition.height, url: `${origin(pageComponentHost(id, suffix))}/component/${id}?page=${encodeURIComponent(page)}` };
@@ -56,11 +56,11 @@ export class PageWidgets {
 
   current(page: string, id: string, allowed = true) {
     const mount = this.mounts.get(id), tab = this.store.get(page);
-    if (!mount || mount.page !== page || !tab || tab.revision !== mount.revision) throw new Error("Component page changed or mount expired.");
+    if (!mount || mount.page !== page || !tab || tab.revision !== mount.revision) throw new Error("Widget page changed or mount expired.");
     const permission = checkPermission(this.store.pagePermissions(page), { perm: `plugin.${mount.plugin}` });
     if (permission === "deny") throw new Error("This page denies the plugin.");
     if (allowed && permission !== "allow") throw new Error("permission");
-    const current = this.plugins.component(mount.plugin, mount.component, mount.props);
+    const current = this.plugins.widget(mount.plugin, mount.component, mount.props);
     if (current.hash !== mount.hash) throw new Error("Plugin changed; reload the page.");
     return { ...current, mount };
   }
@@ -72,7 +72,7 @@ export class PageWidgets {
   }
 
   renewAll(page: string, ids: unknown) {
-    if (!Array.isArray(ids) || ids.length > PAGE_WIDGET_LIMIT || ids.some(id => typeof id !== "string")) throw new Error("Invalid component leases.");
+    if (!Array.isArray(ids) || ids.length > PAGE_WIDGET_LIMIT || ids.some(id => typeof id !== "string")) throw new Error("Invalid widget leases.");
     const errors: Record<string, string> = {};
     for (const id of ids) {
       try { this.renew(page, id); } catch (error) { errors[id] = (error as Error).message; }
@@ -86,22 +86,22 @@ export class PageWidgets {
     return limitWidgetAction(mount, () => this.performAction(page, mount, definition, input));
   }
 
-  private async performAction(page: string, mount: Mount, definition: ReturnType<PluginService["component"]>["definition"], input: Record<string, unknown>) {
+  private async performAction(page: string, mount: Mount, definition: ReturnType<PluginService["widget"]>["definition"], input: Record<string, unknown>) {
     const key = String(input.key ?? ""), method = String(input.method ?? "");
     if (input.op === "open") return { link: widgetLink(input.link) };
     if (input.op === "state") {
-      if (!key || key.length > 200 || !widgetStateAllowed(definition.state, key)) throw new Error("Component state key is not declared.");
+      if (!key || key.length > 200 || !widgetStateAllowed(definition.state, key)) throw new Error("Widget state key is not declared.");
       return this.plugins.database.get(mount.plugin, key);
     }
     if (input.op === "listen") {
-      if (!definition.events.length && !definition.state.length) throw new Error("Component has no live declarations.");
+      if (!definition.events.length && !definition.state.length) throw new Error("Widget has no live declarations.");
       return { ok: true };
     }
     if (input.op === "subscribe") {
-      if (!definition.events.includes(String(input.event))) throw new Error("Component event is not declared.");
+      if (!definition.events.includes(String(input.event))) throw new Error("Widget event is not declared.");
       return { ok: true };
     }
-    if (input.op !== "call" || !definition.methods.includes(method)) throw new Error("Component method is not declared.");
+    if (input.op !== "call" || !definition.methods.includes(method)) throw new Error("Widget method is not declared.");
     return this.plugins.call(mount.plugin, method, widgetJson(input.args ?? {}), { kind: "page", page });
   }
 

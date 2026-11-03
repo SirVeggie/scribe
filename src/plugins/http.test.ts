@@ -17,7 +17,7 @@ test("plugin HTTP gates, transfer and shell settings work on an isolated daemon"
   // Simulate an older bundled install with a disabled flag and uninstalled edits.
   const seed=new PluginService(path.join(root,"plugins"));
   const oldBundle=readPackage(path.resolve("plugins/builtin/git-history"));
-  oldBundle["plugin.json"]=Buffer.from(JSON.stringify({...JSON.parse(oldBundle["plugin.json"].toString()),version:"1.1.0",components:{}}));
+  oldBundle["plugin.json"]=Buffer.from(JSON.stringify({...JSON.parse(oldBundle["plugin.json"].toString()),version:"1.1.0",widgets:{}}));
   await seed.install(oldBundle,packageHash(oldBundle));await seed.enable("git-history",false);
   await seed.patch("git-history","local.txt","Keep this local edit");await seed.close();
   const probe=net.createServer();await new Promise<void>(resolve=>probe.listen(0,"127.0.0.1",resolve));const port=(probe.address() as net.AddressInfo).port;await new Promise<void>(resolve=>probe.close(()=>resolve()));

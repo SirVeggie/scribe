@@ -116,14 +116,14 @@
       ]
     },
     {
-      "id": "plugin-component",
-      "write": "<scribe-component plugin=\"…\" name=\"…\" props='{}'></scribe-component>",
-      "gives": "Embeds a plugin_guide component in an isolated frame on a page; props follow its schema, calls and live state/events use the page's plugin permission, and replies use the page's replyTo or a reply event.",
-      "example": "<scribe-component plugin=\"git-history\" name=\"activity\" props='{}'></scribe-component>",
+      "id": "plugin-widget",
+      "write": "<scribe-widget plugin=\"…\" name=\"…\" props='{}'></scribe-widget>",
+      "gives": "Embeds a plugin_guide widget in an isolated frame on a page; props follow its schema, calls and live state/events use the page's plugin permission, and replies use the page's replyTo or a reply event.",
+      "example": "<scribe-widget plugin=\"git-history\" name=\"activity\" props='{}'></scribe-widget>",
       "hooks": [
         {
           "file": "page-widgets.js",
-          "text": "customElements.define(\"scribe-component\", PageComponent)"
+          "text": "customElements.define(\"scribe-widget\", PageWidget)"
         }
       ]
     },

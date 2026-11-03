@@ -8,7 +8,7 @@
   async function api(method, path, body) {
     const response = await fetch(`/api/agent${path}`, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Component request failed");
+    if (!response.ok) throw new Error(result.error || "Widget request failed");
     return result;
   }
   /** .localhost, or .d-<device>.localhost in another device's UI through the gateway (#905). */
@@ -73,7 +73,7 @@
     function queueWrite(data) {
       const previous = queued.get(data.action);
       const ids = previous?.ids || [];
-      if (ids.length >= 100) throw new Error("Component updates are too frequent.");
+      if (ids.length >= 100) throw new Error("Widget updates are too frequent.");
       ids.push(data.id);
       queued.set(data.action, { data, ids });
       // A fixed window coalesces continuous typing without starving persistence.
@@ -92,7 +92,7 @@
     function load() {
       if (loaded) {
         dispose();
-        frame.replaceWith(document.createTextNode("Component navigated away. Reopen the chat to reload it."));
+        frame.replaceWith(document.createTextNode("Widget navigated away. Reopen the chat to reload it."));
         return;
       }
       loaded = true;
@@ -115,7 +115,7 @@
         try {
           if (data.action === "reply" || data.action === "open") {
             // Activation propagates from a child frame to its ancestors; a widget cannot mint it.
-            if (!navigator.userActivation?.isActive || document.activeElement !== frame) throw new Error("Click the component to continue.");
+            if (!navigator.userActivation?.isActive || document.activeElement !== frame) throw new Error("Click the widget to continue.");
             if (data.action === "reply" && Date.now() - lastReply < 5000) throw new Error("This click has already sent a reply.");
             // Activation stays active for seconds, so one click must not open a burst of links.
             if (data.action === "open") { if (Date.now() - lastOpen < 1000) throw new Error("This click has already opened a link."); lastOpen = Date.now(); }
@@ -161,7 +161,7 @@
               entry.item = { ...entry.item, status: "answered", summary: data.summary };
               sendReplyState();
             }
-          } else throw new Error("Unsupported component action.");
+          } else throw new Error("Unsupported widget action.");
           if (!disposed) port.postMessage({ id, result });
         } catch (error) { if (!disposed) port.postMessage({ id, error: error.message }); }
       };
@@ -179,14 +179,14 @@
     node.dataset.itemId = item.id;
     node._plugin = item.plugin;
     const head = el("div", "ag-card-head");
-    head.append(el("span", "ag-card-title", item.title || item.component || "Component"), el("span", "ag-tag", item.plugin || "Agent"));
+    head.append(el("span", "ag-card-title", item.title || item.component || "Widget"), el("span", "ag-tag", item.plugin || "Agent"));
     if (item.status !== "shown" && item.status !== "pending") head.append(el("span", "ag-tag", item.status));
     const expand = button("⤢", "ag-btn tiny", async () => {
       try { const result = await api("POST", `${base(item)}/expand`, {}); app()?.openLink(result.key); }
       catch (error) { app()?.showNotice(error.message); }
     });
-    expand.setAttribute("aria-label", "Expand component");
-    expand.dataset.tooltip = "Expand component";
+    expand.setAttribute("aria-label", "Expand widget");
+    expand.dataset.tooltip = "Expand widget";
     head.append(expand);
     node.append(head);
     const body = el("div", "ag-component-body");
@@ -209,9 +209,9 @@
         if (token !== generation || cleaned || !visible || !node.isConnected) return;
         note.remove();
         body.querySelector(".ag-component-disconnected")?.remove();
-        if (current.available === false) { note.textContent = current.reason || "Plugin component unavailable."; body.append(note); fallback.hidden = false; return; }
+        if (current.available === false) { note.textContent = current.reason || "Plugin widget unavailable."; body.append(note); fallback.hidden = false; return; }
         frame = document.createElement("iframe");
-        frame.title = item.title || item.component || "Agent component";
+        frame.title = item.title || item.component || "Agent widget";
         frame.style.height = `${heights.get(item.id) || current.height?.min || 160}px`;
         dispose = attach(frame, current);
         for (const entry of live) if (entry.frame === frame) entry.reload = reload;

@@ -1536,7 +1536,7 @@ export async function startMcp(): Promise<void> {
     registerQuestion(server);
     registerSettings(server);
     registerHarness(server);
-    registerComponent(server);
+    registerWidget(server);
     registerWebRequest(server);
     registerThreadUpdate(server);
     if (!off.has("threads")) registerThreadTools(server);
@@ -1715,17 +1715,17 @@ function registerHarness(server: McpServer): void {
   );
 }
 
-/** component_show: sandboxed kit HTML or a plugin component as a chat item (src/components.ts). */
-function registerComponent(server: McpServer): void {
-  server.tool("component_show", "Show UI inline in chat: provide either html (kit HTML, at most 256 KiB), or plugin/component/props from plugin_guide. Plugin props are schema-checked; saved items use the currently installed plugin version and fall back to markdown if unavailable. Only this tool creates chat components. No network or page API access. Plugin components can call only their own declared methods and read declared state/events, under the thread and page permissions. scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text. With wait:true, waits for scribe.reply(data,{summary}) or Skip; otherwise replies send their summary as a chat message. Include fallback markdown.", {
-    html: z.string().optional().describe("HTML fragment or document; kit.css and kit.js are included. Mutually exclusive with plugin/component/props."),
-    plugin: z.string().optional(), component: z.string().optional(), props: z.record(z.string(), z.unknown()).optional(),
+/** widget_show: sandboxed kit HTML or a plugin widget as a chat item (src/widgets.ts). */
+function registerWidget(server: McpServer): void {
+  server.tool("widget_show", "Show UI inline in chat: provide either html (kit HTML, at most 256 KiB), or plugin/widget/props from plugin_guide's widgets. Plugin props are schema-checked; saved items use the currently installed plugin version and fall back to markdown if unavailable. Only this tool creates chat widgets. No network or page API access. Plugin widgets can call only their own declared methods and read declared state/events, under the thread and page permissions. scribe.local/setLocal keeps view state; setSummary(text) supplies history/export text. With wait:true, waits for scribe.reply(data,{summary}) or Skip; otherwise replies send their summary as a chat message. Include fallback markdown.", {
+    html: z.string().optional().describe("HTML fragment or document; kit.css and kit.js are included. Mutually exclusive with plugin/widget/props."),
+    plugin: z.string().optional(), widget: z.string().optional(), props: z.record(z.string(), z.unknown()).optional(),
     title: z.string().optional(), fallback: z.string().optional(), wait: z.boolean().optional(),
   }, { readOnlyHint: true }, async (input, extra) => {
     const started = Date.now();
     const token = extra._meta?.progressToken;
     const heartbeat = input.wait && token !== undefined ? setInterval(() => {
-      extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: Math.round((Date.now() - started) / 1000), message: "Waiting for the component's reply" } }).catch(() => {});
+      extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: Math.round((Date.now() - started) / 1000), message: "Waiting for the widget's reply" } }).catch(() => {});
     }, WAIT_HEARTBEAT_MS) : undefined;
     try {
       const { status, data } = await api("POST", "/api/component", input, { signal: extra.signal });

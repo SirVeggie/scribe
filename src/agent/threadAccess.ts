@@ -149,7 +149,7 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
   switch (item.kind) {
     case "user": {
       if (item.dropped) return null;
-      const who = item.from === "page" ? "user (sent by page)" : item.from === "component" ? "user (sent by component)" : item.from === "scribe" ? "scribe" : item.from === "hook" ? "scribe hook" : item.from === "agent" ? "agent that started this helper" : "user";
+      const who = item.from === "page" ? "user (sent by page)" : item.from === "component" ? "user (sent by widget)" : item.from === "scribe" ? "scribe" : item.from === "hook" ? "scribe hook" : item.from === "agent" ? "agent that started this helper" : "user";
       return `[${who}] ${clip(item.text, max * 2)}`;
     }
     case "text":
@@ -169,7 +169,7 @@ export function itemText(item: Item, opts: { full?: boolean } = {}): string | nu
     case "plan":
       return `[plan ${item.status}] ${clip(item.text, max * 2)}`;
     case "component":
-      return `[component ${item.status}] ${clip(item.summary ?? item.fallback ?? item.title ?? "Interactive component", max * 2)}`;
+      return `[widget ${item.status}] ${clip(item.summary ?? item.fallback ?? item.title ?? "Interactive widget", max * 2)}`;
     case "settings":
       return `[settings shown] ${item.ids.join(", ")}`;
     case "todos":

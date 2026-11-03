@@ -8,7 +8,7 @@ export type WidgetRate = { at: number; count: number; active: number };
 export async function limitWidgetAction<T>(rate: WidgetRate, action: () => T | Promise<T>): Promise<T> {
   const now = Date.now();
   if (now - rate.at >= 1000) { rate.at = now; rate.count = 0; }
-  if (++rate.count > 100 || rate.active >= 16) throw new Error("Component plugin requests are too frequent.");
+  if (++rate.count > 100 || rate.active >= 16) throw new Error("Widget plugin requests are too frequent.");
   rate.active++;
   try { return await action(); }
   finally { rate.active--; }
@@ -30,7 +30,7 @@ function poll(check: () => void): () => void {
 export function relayWidgetEvents(res: express.Response, options: {
   plugins: Pick<PluginService, "subscribe">;
   plugin: string;
-  definition: Pick<PluginManifest["components"][string], "state" | "events">;
+  definition: Pick<PluginManifest["widgets"][string], "state" | "events">;
   valid: () => boolean;
 }): void {
   const { plugins, plugin, definition, valid } = options;

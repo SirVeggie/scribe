@@ -146,7 +146,7 @@ export function contentOriginGate(req: express.Request, res: express.Response, n
   if (component) {
     // No API, assets, blobs, pages or shell scripts are available on a component origin.
     if (req.method === "GET" && req.path === `/component/${component}`) next();
-    else res.status(403).type("text").send("This origin only serves its component.");
+    else res.status(403).type("text").send("This origin only serves its widget.");
     return;
   }
   if (previewThreadFromHost(req.hostname) !== undefined) {

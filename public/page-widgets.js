@@ -1,6 +1,6 @@
-/* Page-owned hosts for isolated plugin components. Injected with the page bridge. */
-function mountPageComponents(host) {
-  if (customElements.get("scribe-component")) return;
+/* Page-owned hosts for isolated plugin widgets (<scribe-widget>; <scribe-component> before #930). Injected with the page bridge. */
+function mountPageWidgets(host) {
+  if (customElements.get("scribe-widget")) return;
   const live = new Set();
   const leases = new Map();
   let renewing = false;
@@ -27,7 +27,7 @@ function mountPageComponents(host) {
   window.addEventListener("pagehide", () => { suspended = true; for (const el of live) el.suspend(true); });
   window.addEventListener("pageshow", event => { if (event.persisted) { suspended = false; for (const el of live) el.schedule(); } });
   document.addEventListener("focusin", () => { for (const el of live) if (!el.visible) el.suspend(); });
-  class PageComponent extends HTMLElement {
+  class PageWidget extends HTMLElement {
     static observedAttributes = ["plugin", "name", "props"];
     connectedCallback() { live.add(this); this.visible = Boolean(host.capturing); observer.observe(this); this.schedule(); }
     disconnectedCallback() { live.delete(this); observer.unobserve(this); this.suspend(true); }
@@ -62,10 +62,10 @@ function mountPageComponents(host) {
       this.dispose = cleanup;
       const fail = message => {
         if (disposed) return;
-        reports?.add("component_error", String(message));
+        reports?.add("widget_error", String(message));
         cleanup();
         const error = document.createElement("div"); error.className = "callout error"; error.setAttribute("role", "alert");
-        error.textContent = "Component: " + String(message).slice(0, 300);
+        error.textContent = "Widget: " + String(message).slice(0, 300);
         this.replaceChildren(error, ...(this.fallback || []));
       };
       const leaseFailure = message => {
@@ -81,7 +81,7 @@ function mountPageComponents(host) {
       };
       const themeObserver = new MutationObserver(theme);
       themeObserver.observe(document.documentElement, { attributes: true });
-      const timeout = setTimeout(() => { if (!loaded) fail("Component did not load."); finish(); }, reports ? 2200 : 10000);
+      const timeout = setTimeout(() => { if (!loaded) fail("Widget did not load."); finish(); }, reports ? 2200 : 10000);
       this.fallback ??= Array.from(this.childNodes);
       this.replaceChildren(...this.fallback);
       let props;
@@ -95,7 +95,7 @@ function mountPageComponents(host) {
           const permission = await host.allow(plugin);
           if (permission.ok) return request(path, body, false);
         }
-        if (!response.ok || result.ok === false) throw new Error(result.error || "Component request failed.");
+        if (!response.ok || result.ok === false) throw new Error(result.error || "Widget request failed.");
         return result;
       }
       const local = this.id ? host.local(this.id) : this.local || {};
@@ -110,7 +110,7 @@ function mountPageComponents(host) {
         mountId = mount.id;
         leases.set(mountId, leaseFailure);
         const frame = this.frame = document.createElement("iframe");
-        frame.title = name || "Plugin component";
+        frame.title = name || "Plugin widget";
         frame.addEventListener("blur", () => { if (!this.visible) this.suspend(); });
         frame.sandbox = "allow-scripts"; frame.referrerPolicy = "no-referrer";
         frame.setAttribute("allow", "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
@@ -119,7 +119,7 @@ function mountPageComponents(host) {
         this.style.minHeight = frame.style.height;
         frame.addEventListener("load", () => {
           if (disposed) return;
-          if (loaded) { fail("Component navigated away. Reload the page to reconnect."); return; }
+          if (loaded) { fail("Widget navigated away. Reload the page to reconnect."); return; }
           loaded = true;
           const channel = new MessageChannel(); port = channel.port1;
           port.onmessage = async ({ data }) => {
@@ -159,12 +159,12 @@ function mountPageComponents(host) {
                 result = { ok: true };
               } else if (data.action === "plugin-unlisten") { events?.close(); events = null; result = { ok: true }; }
               else if (data.action === "local") {
-                if (!data.local || typeof data.local !== "object" || Array.isArray(data.local) || JSON.stringify(data.local).length > 65536) throw new Error("Component local state must be an object of at most 64 KiB.");
+                if (!data.local || typeof data.local !== "object" || Array.isArray(data.local) || JSON.stringify(data.local).length > 65536) throw new Error("Widget local state must be an object of at most 64 KiB.");
                 this.local = data.local; if (this.id) host.local(this.id, data.local); result = { ok: true };
               }
               else if (data.action === "summary") { result = { ok: true }; }
               else if (data.action === "reply" || data.action === "open") {
-                if (!navigator.userActivation?.isActive || document.activeElement !== frame) throw new Error("Click the component to continue.");
+                if (!navigator.userActivation?.isActive || document.activeElement !== frame) throw new Error("Click the widget to continue.");
                 if (data.action === "open") {
                   if (Date.now() - lastOpen < 1000) throw new Error("This click has already opened a link.");
                   lastOpen = Date.now();
@@ -175,16 +175,18 @@ function mountPageComponents(host) {
                   if (Date.now() - lastReply < 5000) throw new Error("This click has already sent a reply.");
                   lastReply = Date.now();
                   const detail = { data: data.data, summary: data.summary };
-                  const event = new CustomEvent("scribe-component-reply", { bubbles: true, cancelable: true, detail });
-                  if (!this.dispatchEvent(event)) result = { ok: true };
+                  const event = new CustomEvent("scribe-widget-reply", { bubbles: true, cancelable: true, detail });
+                  // Pages written before #930 listen for scribe-component-reply.
+                  const legacy = new CustomEvent("scribe-component-reply", { bubbles: true, cancelable: true, detail });
+                  if (!this.dispatchEvent(event) || !this.dispatchEvent(legacy)) result = { ok: true };
                   else {
                     result = await host.reply(data.data, { summary: data.summary });
                     if (result?.ok === false && /no reply target/i.test(result.error || "")) {
-                      host.signal("submitted", { component: this.id || name, answers: data.data, summary: data.summary }); result = { ok: true };
+                      host.signal("submitted", { widget: this.id || name, component: this.id || name, answers: data.data, summary: data.summary }); result = { ok: true };
                     }
                   }
                 }
-              } else throw new Error("Unsupported component action.");
+              } else throw new Error("Unsupported widget action.");
               if (!disposed) port.postMessage({ id: data.id, result });
             } catch (error) { if (!disposed) port.postMessage({ id: data.id, error: error.message }); }
           };
@@ -197,5 +199,6 @@ function mountPageComponents(host) {
       }).catch(error => { if (!disposed) fail(error.message); });
     }
   }
-  customElements.define("scribe-component", PageComponent);
+  customElements.define("scribe-widget", PageWidget);
+  customElements.define("scribe-component", class extends PageWidget {});
 }

@@ -17,7 +17,7 @@ import { launchChromium } from "./chromium.js";
 
 const manifest = { id: "page-fixture", name: "Page fixture", version: "1.0.0", summary: "Tests", backend: "backend.mjs", risky: false,
   methods: { update: { description: "Update", agent: "board" }, hidden: { description: "Hidden", agent: "read" } },
-  components: { counter: { description: "Counter", html: "counter.html", props: { type: "object", required: ["name"], properties: { name: { type: "string" } } }, methods: ["update"], state: ["count", "rows/*"], events: ["tick"], height: { min: 100, max: 240 } } } };
+  widgets: { counter: { description: "Counter", html: "counter.html", props: { type: "object", required: ["name"], properties: { name: { type: "string" } } }, methods: ["update"], state: ["count", "rows/*"], events: ["tick"], height: { min: 100, max: 240 } } } };
 const html = `<p id="name"></p><p id="count"></p><button id="reply" data-reply="Choose" data-context='{"choice":1}'>Choose</button><script>
 document.getElementById('name').textContent=scribe.props.name;
 window.seen=[]; window.ticks=[];
@@ -47,6 +47,7 @@ test("page mounts validate props, identity, declarations, permissions, versions 
     assert.equal(pageComponentFromHost(pageComponentHost(mount.id)), mount.id);
     assert.equal(componentItemFromHost(pageComponentHost(mount.id)), undefined);
     assert.deepEqual(declaredPlugins(`<scribe-component plugin="page-fixture" name="counter"></scribe-component>`), [manifest.id]);
+    assert.deepEqual(declaredPlugins(`<scribe-widget plugin="page-fixture" name="counter"></scribe-widget>`), [manifest.id]);
     assert.throws(() => f.mounts.current("t_bbbbbbbb", mount.id), /expired/);
     assert.equal(await f.mounts.action("t_aaaaaaaa", mount.id, { op: "call", method: "update", args: { value: 2 } }), 2);
     assert.equal((await f.mounts.action("t_aaaaaaaa", mount.id, { op: "state", key: "count" }) as any).value, 2);
@@ -135,13 +136,13 @@ window.shellReplies=[];window.noTarget=false;
 addEventListener('message',e=>{if(e.data?.type==='scribe-reply'){shellReplies.push(e.data);e.source.postMessage({type:'scribe-open-result',id:e.data.id,reqId:e.data.reqId,result:window.noTarget?{ok:false,error:'no reply target'}:{ok:true,target:{key:'scribe:target'}}},e.origin)}});
 </script>`));
   app.get("/view/:id", (_req, res) => { const diagnostic = reporting.boot("t_aaaaaaaa", 1); res.type("html").send(`<!doctype html><head><script>window.__SCRIBE_BOOT__={id:'t_aaaaaaaa',state:{},local:{'component:live':{saved:7}}};window.__SCRIBE_PROBLEMS__={...${JSON.stringify(diagnostic)},id:'t_aaaaaaaa',tones:['error'],insertLine:0,insertedLines:0};${PAGE_PROBLEM_JS}\n${BOARD_BRIDGE_JS}</script></head><body>
-<scribe-component id="live" plugin="page-fixture" name="counter" props='{"name":"Hello"}'><p>Fallback</p></scribe-component>
-<scribe-component id="bad" plugin="page-fixture" name="counter" props='{"name":1}'></scribe-component>
-<scribe-component id="broken" plugin="page-fixture" name="counter" props='{"name":"Broken"}'></scribe-component>
+<scribe-widget id="live" plugin="page-fixture" name="counter" props='{"name":"Hello"}'><p>Fallback</p></scribe-widget>
+<scribe-widget id="bad" plugin="page-fixture" name="counter" props='{"name":1}'></scribe-widget>
+<scribe-widget id="broken" plugin="page-fixture" name="counter" props='{"name":"Broken"}'></scribe-widget>
 <div style="height:5000px"></div>
-<scribe-component id="offscreen" plugin="page-fixture" name="counter" props='{"name":"Far away"}'></scribe-component>
+<scribe-widget id="offscreen" plugin="page-fixture" name="counter" props='{"name":"Far away"}'></scribe-widget>
 <scribe-component id="offscreen-bad" plugin="page-fixture" name="counter" props='{}'></scribe-component>
-<script>window.replies=[];window.captureReply=e=>{e.preventDefault();replies.push(e.detail)};document.getElementById('live').addEventListener('scribe-component-reply',captureReply);</script></body>`); });
+<script>window.replies=[];window.captureReply=e=>{e.preventDefault();replies.push(e.detail)};document.getElementById('live').addEventListener('scribe-widget-reply',captureReply);</script></body>`); });
   app.get("/api/tabs/:id/plugins", (_req, res) => res.json({ plugins: [] }));
   app.post("/api/tabs/:id/problems", (req, res) => { if (req.body.phase === "done") problems = req.body; reporting.report(req.params.id, req.body); res.json({ ok: true }); });
   app.post("/api/tabs/:id/events", (req, res) => { signals.push(req.body); res.json({ ok: true }); });
@@ -182,12 +183,12 @@ addEventListener('message',e=>{if(e.data?.type==='scribe-reply'){shellReplies.pu
     assert.equal((await hostPage().evaluate(() => (window as any).replies[0])).summary, "Choose");
     await hostLocator.locator("#bad [role=alert]").waitFor();
     const deadline = Date.now() + 3000; while (!problems && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-    assert.ok(problems?.problems.some((p: any) => p.code === "component_error" && /props/i.test(p.message)), JSON.stringify(problems));
+    assert.ok(problems?.problems.some((p: any) => p.code === "widget_error" && /props/i.test(p.message)), JSON.stringify(problems));
     assert.ok(problems?.problems.some((p: any) => p.code === "uncaught_error" && /page-fixture\/counter:.*component exploded/.test(p.message)), JSON.stringify(problems));
     assert.ok((await collected).some(p => p.code === "uncaught_error" && /component exploded/.test(p.message)), "slow nested reports survive the actual server collection window");
     assert.equal(await hostLocator.locator("#offscreen iframe").count(), 0);
     await hostLocator.locator("#offscreen-bad [role=alert]").waitFor({ state: "attached" });
-    assert.ok(problems?.problems.some((p: any) => p.code === "component_error" && /required/.test(p.message)), "offscreen schema failures participate in diagnostics");
+    assert.ok(problems?.problems.some((p: any) => p.code === "widget_error" && /required/.test(p.message)), "offscreen schema failures participate in diagnostics");
     await (await child())!.evaluate(() => (window as any).scribe.setLocal({ saved: 9 }));
     const oldMount = new URL((await child())!.url()).pathname.split("/").pop()!;
     const oldHeight = await hostLocator.locator("#live").evaluate(el => el.getBoundingClientRect().height);
@@ -219,7 +220,7 @@ addEventListener('message',e=>{if(e.data?.type==='scribe-reply'){shellReplies.pu
     await widget.locator("#name").waitFor();
     await (await child())!.evaluate(() => (window as any).scribe.plugin.call("update", { value: 8 }));
     await (await child())!.waitForFunction(() => (window as any).seen.some((v: any) => v.value === 8) && (window as any).ticks.includes(8));
-    await hostPage().evaluate(() => { const el = document.getElementById('live')!; el.removeEventListener('scribe-component-reply', (window as any).captureReply); el.setAttribute('props', JSON.stringify({name:'Again'})); });
+    await hostPage().evaluate(() => { const el = document.getElementById('live')!; el.removeEventListener('scribe-widget-reply', (window as any).captureReply); el.setAttribute('props', JSON.stringify({name:'Again'})); });
     await widget.locator("#name").filter({ hasText: "Again" }).waitFor();
     assert.deepEqual(await (await child())!.evaluate(() => (window as any).initialLocal), { saved: 9 });
     await widget.locator("#reply").click();

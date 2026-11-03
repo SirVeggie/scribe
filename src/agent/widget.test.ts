@@ -45,12 +45,13 @@ test("input caps count UTF-8 bytes and enforce exclusive HTML or plugin inputs",
   assert.throws(() => parseWidgetInput({ html: "å".repeat(MAX_WIDGET_HTML) }), /UTF-8/);
   assert.throws(() => parseWidgetInput({ html: " " }), /empty/);
   assert.throws(() => parseWidgetInput({ html: "ok", plugin: "test" }), /either/);
+  assert.equal(parseWidgetInput({ plugin: "test", widget: "counter" }).component, "counter");
   assert.throws(() => parseWidgetInput({ html: "ok", wait: "yes" }), /true or false/);
 });
 
 const pluginManifest = { id: "component-fixture", name: "Component fixture", version: "1.0.0", summary: "Component tests", backend: "backend.mjs", risky: false,
   methods: { update: { description: "Update", agent: "board" }, read: { description: "Read", agent: "read" }, ask: { description: "Ask", agent: "ask" } },
-  components: { counter: { description: "Live counter", html: "counter.html", props: { type: "object", required: ["name"], additionalProperties: false, properties: { name: { type: "string" } } }, methods: ["update", "read", "ask"], state: ["count", "rows/*"], events: ["tick"], height: { min: 100, max: 220 } } } };
+  widgets: { counter: { description: "Live counter", html: "counter.html", props: { type: "object", required: ["name"], additionalProperties: false, properties: { name: { type: "string" } } }, methods: ["update", "read", "ask"], state: ["count", "rows/*"], events: ["tick"], height: { min: 100, max: 220 } } } };
 const pluginHtml = `<p id="name"></p><p id="count"></p><script>
   nameNode = document.getElementById('name'); nameNode.textContent = scribe.props.name;
   window.seen = []; window.ticks = [];
@@ -62,13 +63,17 @@ function pluginFiles(html = pluginHtml, manifest = pluginManifest) {
 }
 
 test("plugin manifests reject bad schemas, paths and capabilities", () => {
-  assert.equal(parseManifest(pluginManifest).components.counter.height.max, 220);
+  assert.equal(parseManifest(pluginManifest).widgets.counter.height.max, 220);
+  // Packages written before #930 name widgets "components".
+  const { widgets, ...legacy } = pluginManifest;
+  assert.equal(parseManifest({ ...legacy, components: widgets }).widgets.counter.height.max, 220);
+  assert.throws(() => parseManifest({ ...pluginManifest, components: widgets }), /not both/);
   for (const props of [{ type: "object", wat: true }, { type: "object", properties: { n: { type: "number", default: 1 } } }, { type: "array" }]) {
-    assert.throws(() => parseManifest({ ...pluginManifest, components: { counter: { ...pluginManifest.components.counter, props } } }), /props/i);
+    assert.throws(() => parseManifest({ ...pluginManifest, widgets: { counter: { ...pluginManifest.widgets.counter, props } } }), /props/i);
   }
   assert.equal(widgetStateAllowed(["rows/*"], "rows/a"), true);
   assert.equal(widgetStateAllowed(["rows/*"], "rows-private/a"), false);
-  assert.throws(() => parseManifest({ ...pluginManifest, components: { counter: { ...pluginManifest.components.counter, html: "../escape" } } }));
+  assert.throws(() => parseManifest({ ...pluginManifest, widgets: { counter: { ...pluginManifest.widgets.counter, html: "../escape" } } }));
 });
 
 test("plugin items validate before insertion, preserve identity, gate calls and use current versions", async () => {
@@ -98,10 +103,10 @@ test("plugin items validate before insertion, preserve identity, gate calls and 
     assert.equal(host.componentView(thread, item.id).available, false);
     store.setPagePermission(home.id, `plugin.${pluginManifest.id}`, "allow");
     const updated = pluginFiles("<p>Current version</p>", { ...pluginManifest, version: "1.1.0" });
-    assert.deepEqual(service.preview(updated).changes?.components, []);
+    assert.deepEqual(service.preview(updated).changes?.widgets, []);
     await service.install(updated, service.preview(updated).hash, true);
     assert.match(host.componentPlugin(thread, item.id).html, /Current version/);
-    const incompatible = pluginFiles("<p>New</p>", { ...pluginManifest, version: "1.2.0", components: { counter: { ...pluginManifest.components.counter, props: { ...pluginManifest.components.counter.props, required: ["missing"] } } } });
+    const incompatible = pluginFiles("<p>New</p>", { ...pluginManifest, version: "1.2.0", widgets: { counter: { ...pluginManifest.widgets.counter, props: { ...pluginManifest.widgets.counter.props, required: ["missing"] } } } });
     await service.install(incompatible, service.preview(incompatible).hash, true);
     assert.equal(host.componentView(thread, item.id).available, false);
     await service.enable(pluginManifest.id, false);
@@ -126,7 +131,7 @@ test("component hosts cannot collide with page or worktree origins and expose no
 });
 
 test("component links cannot open files or loopback aliases", () => {
-  for (const link of ["file:///C:/private.txt", "javascript:alert(1)", "http://localhost/", "http://127.1/", "http://0.0.0.0/", "http://[::ffff:7f00:1]/", "http://w-it-012345abcdef.localhost/"]) assert.throws(() => widgetLink(link), /Components can open/);
+  for (const link of ["file:///C:/private.txt", "javascript:alert(1)", "http://localhost/", "http://127.1/", "http://0.0.0.0/", "http://[::ffff:7f00:1]/", "http://w-it-012345abcdef.localhost/"]) assert.throws(() => widgetLink(link), /Widgets can open/);
   assert.equal(widgetLink("scribe:agent-todo#card=777"), "scribe:agent-todo#card=777");
   assert.equal(widgetLink("https://example.com/test"), "https://example.com/test");
 });
@@ -285,7 +290,7 @@ test("kit restores terminal reply state for buttons and forms, while shown compo
         channel.port1.postMessage({ type: "reply-state", replyState: { status: "skipped" } });
         await received;
         channel.port1.close();
-        (window as any).rejectReply?.(new Error("This component is no longer waiting."));
+        (window as any).rejectReply?.(new Error("This widget is no longer waiting."));
       });
       if (!closed) await page.locator(".kit-status.error").waitFor({ state: "attached" });
       assert.equal(await page.locator(":disabled").count(), 4);

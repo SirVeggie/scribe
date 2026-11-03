@@ -15,19 +15,21 @@ export function widgetString(value: unknown, name: string, max: number): string 
 
 export function widgetJson(value: unknown): unknown {
   const json = JSON.stringify(value ?? null);
-  if (Buffer.byteLength(json, "utf8") > MAX_WIDGET_STATE) throw new Error("Component data must be at most 64 KiB.");
+  if (Buffer.byteLength(json, "utf8") > MAX_WIDGET_STATE) throw new Error("Widget data must be at most 64 KiB.");
   return JSON.parse(json);
 }
 
 export function parseWidgetInput(value: unknown): WidgetInput {
-  if (!value || typeof value !== "object") throw new Error("Provide html for the component.");
+  if (!value || typeof value !== "object") throw new Error("Provide html for the widget.");
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some(key => !["html", "plugin", "component", "props", "title", "fallback", "wait"].includes(key))) throw new Error("Unknown component input.");
+  if (Object.keys(input).some(key => !["html", "plugin", "widget", "component", "props", "title", "fallback", "wait"].includes(key))) throw new Error("Unknown widget input.");
+  // Agents name a plugin widget with `widget`; page tags and stored chat items still pass `component`.
+  const name = input.widget ?? input.component;
   let source: WidgetInput;
-  if (input.plugin !== undefined || input.component !== undefined || input.props !== undefined) {
-    if (input.html !== undefined) throw new Error("Provide either html or plugin/component/props.");
-    const plugin = widgetString(input.plugin, "plugin", 64), component = widgetString(input.component, "component", 64);
-    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(plugin) || !/^[a-zA-Z][\w-]{0,63}$/.test(component)) throw new Error("Invalid plugin or component name.");
+  if (input.plugin !== undefined || name !== undefined || input.props !== undefined) {
+    if (input.html !== undefined) throw new Error("Provide either html or plugin/widget/props.");
+    const plugin = widgetString(input.plugin, "plugin", 64), component = widgetString(name, "widget", 64);
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(plugin) || !/^[a-zA-Z][\w-]{0,63}$/.test(component)) throw new Error("Invalid plugin or widget name.");
     source = { plugin, component, props: widgetJson(input.props ?? {}) };
   } else {
     const html = widgetString(input.html, "html", MAX_WIDGET_HTML);
@@ -39,10 +41,10 @@ export function parseWidgetInput(value: unknown): WidgetInput {
 }
 
 export function widgetText(item: WidgetItem): string {
-  return item.summary ?? item.fallback ?? item.title ?? "Interactive component";
+  return item.summary ?? item.fallback ?? item.title ?? "Interactive widget";
 }
 
-/** Only page/card keys and external websites. Components cannot promote files into page access. */
+/** Only page/card keys and external websites. Widgets cannot promote files into page access. */
 export function widgetLink(value: unknown): string {
   const link = widgetString(value, "link", 8000);
   if (/^scribe:[a-zA-Z0-9_-]+(?:#[^\s]*)?$/.test(link)) return link;
@@ -52,5 +54,5 @@ export function widgetLink(value: unknown): string {
     const name = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
     if (!isIP(name) && name !== "localhost" && !name.endsWith(".localhost")) return safe;
   }
-  throw new Error("Components can open Scribe page/card keys or external http(s) websites.");
+  throw new Error("Widgets can open Scribe page/card keys or external http(s) websites.");
 }

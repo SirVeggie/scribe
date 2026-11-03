@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import type { PluginManifest } from "./manifest.js";
+import { legacyManifest, type PluginManifest } from "./manifest.js";
 
 export type PluginRecord = { manifest: PluginManifest; enabled: boolean; keepAlive: boolean; hash: string; baseHash?: string; bundledHash?: string; settings: Record<string, unknown>; installedAt: number };
 export class PluginDatabase {
@@ -8,7 +8,7 @@ export class PluginDatabase {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS plugins (id TEXT PRIMARY KEY, record TEXT NOT NULL); CREATE TABLE IF NOT EXISTS plugin_state (plugin TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(plugin,key)); CREATE TABLE IF NOT EXISTS plugin_options (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
   }
-  list(): PluginRecord[] { return this.db.prepare("SELECT record FROM plugins ORDER BY id").all().map(r => JSON.parse(String(r.record))); }
+  list(): PluginRecord[] { return this.db.prepare("SELECT record FROM plugins ORDER BY id").all().map(r => { const record = JSON.parse(String(r.record)) as PluginRecord; return { ...record, manifest: legacyManifest(record.manifest) }; }); }
   save(record: PluginRecord): void { this.db.prepare("INSERT OR REPLACE INTO plugins VALUES (?,?)").run(record.manifest.id, JSON.stringify(record)); }
   remove(id: string): void { this.db.prepare("DELETE FROM plugins WHERE id=?").run(id); this.db.prepare("DELETE FROM plugin_state WHERE plugin=?").run(id); }
   get(plugin: string, key: string): { value: unknown; revision: number } {

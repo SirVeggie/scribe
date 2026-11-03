@@ -2186,7 +2186,7 @@ ${POINTER_DRAG_JS}
     }
   };
   ${PAGE_WIDGETS_JS}
-  mountPageComponents({ base: "/api/tabs/" + encodeURIComponent(tabId) + "/components", capturing: capturing,
+  mountPageWidgets({ base: "/api/tabs/" + encodeURIComponent(tabId) + "/components", capturing: capturing,
     allow: function (id) { return askBoard({ type: "scribe-plugin", op: "allow", plugin: id }, AGENT_ASK_MS); },
     open: open, reply: reply, signal: signal,
     local: function (id, value) {

@@ -69,7 +69,7 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "settings_find",
   "settings_show",
   "harness_docs",
-  "component_show",
+  "widget_show",
   "page_wait",
   "library_folders",
   "scribe_docs",

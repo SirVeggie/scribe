@@ -22,7 +22,7 @@ function checkPropsSchema(schema: unknown, depth = 0): void {
   }
 }
 const propsSchema = z.record(z.string(), z.unknown()).superRefine((schema, ctx) => {
-  try { if (schema.type !== "object") throw new Error("Props must have type object"); checkPropsSchema(schema); z.fromJSONSchema(schema); } catch (error) { ctx.addIssue({ code: "custom", message: `Invalid component props schema: ${String(error)}` }); }
+  try { if (schema.type !== "object") throw new Error("Props must have type object"); checkPropsSchema(schema); z.fromJSONSchema(schema); } catch (error) { ctx.addIssue({ code: "custom", message: `Invalid widget props schema: ${String(error)}` }); }
 });
 export const pluginWidgetSchema = z.object({
   description: z.string().min(1).max(1000), html: file, props: propsSchema,
@@ -42,7 +42,7 @@ export const manifestSchema = z.object({
   source: file.optional(),
   guide: file.optional(),
   readme: file.optional(),
-  components: z.record(componentName, pluginWidgetSchema).default({}),
+  widgets: z.record(componentName, pluginWidgetSchema).default({}),
   access: z.object({ files: z.array(z.string().max(1000)).max(50).default([]), network: z.array(z.string().max(250)).max(50).default([]),
     // Environment variables the backend gets from Scribe's own environment, shown for approval at install.
     env: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,99}$/).refine(name => !reservedEnv(name), "Scribe's own variables and NODE_OPTIONS cannot be passed to a plugin")).max(50).default([]) }).default({ files: [], network: [], env: [] }),
@@ -84,17 +84,25 @@ export function validateWidgetProps(schema: Record<string, unknown>, props: unkn
     if (s.oneOf && s.oneOf.filter(fits).length !== 1) return false;
     return true;
   };
-  if (!requiredFit(schema, props)) throw new Error("Invalid component props: required properties or schema alternatives do not match.");
+  if (!requiredFit(schema, props)) throw new Error("Invalid widget props: required properties or schema alternatives do not match.");
   const result = z.fromJSONSchema(schema).safeParse(props);
-  if (!result.success) throw new Error(`Invalid component props: ${result.error.message}`);
+  if (!result.success) throw new Error(`Invalid widget props: ${result.error.message}`);
 }
 
-export function parseManifest(value: unknown): PluginManifest { return manifestSchema.parse(value); }
+/** Widgets were called components before #930; installed packages and saved records still use that key. */
+export function legacyManifest<T>(value: T): T {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, "components")) return value;
+  const { components, ...rest } = value as Record<string, unknown>;
+  if (Object.hasOwn(rest, "widgets")) throw new Error("Use widgets in plugin.json, not both widgets and components.");
+  return { ...rest, widgets: components } as T;
+}
+
+export function parseManifest(value: unknown): PluginManifest { return manifestSchema.parse(legacyManifest(value)); }
 
 /** Declaration is metadata only; it can never grant access. */
 export function declaredPlugins(html: string): string[] {
   const ids = new Set<string>();
-  for (const tag of html.match(/<scribe-component\b[^>]*>/gi) ?? []) {
+  for (const tag of html.match(/<scribe-(?:widget|component)\b[^>]*>/gi) ?? []) {
     const match = /\bplugin\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
     const id = match?.[1] ?? match?.[2] ?? match?.[3];
     if (pluginId.safeParse(id).success) ids.add(id!);
