@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PlanLimits } from "./types.js";
-import { UsageWindowStarts, START_DELAY_MS, cleanWindowStarts, fiveHourReset, type WindowStartState, type WindowProvider } from "./usageWindowStarts.js";
+import { UsageWindowStarts, START_DELAY_MS, cleanWindowStarts, fiveHourReset, isSubscriptionPlan, type WindowStartState, type WindowProvider } from "./usageWindowStarts.js";
 
 const reset = 1_900_000_000_000;
 function quota(provider: WindowProvider, at = reset): PlanLimits {
@@ -198,4 +198,9 @@ test("each added Claude account gets its own window start, with its own reset, r
   scheduler.reset("claude:acc_a");
   assert.equal(state["claude:acc_a"], undefined);
   assert.ok(state.claude);
+});
+
+test("Claude plan names count as subscriptions in the SDK's display form (#981)", () => {
+  for (const name of ["Claude Pro", "Claude Max", "pro", "max", "claude_max", "Team", "Claude Enterprise"]) assert.equal(isSubscriptionPlan(name), true, name);
+  for (const name of [undefined, "", "Claude API", "Professional", "Free"]) assert.equal(isSubscriptionPlan(name), false, String(name));
 });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { planLimitsFromUsageReport, planLimitsFromCodexRateLimits } from "./planLimits.js";
-import { windowStartBlocked } from "./usageWindowStarts.js";
+import { isSubscriptionPlan, windowStartBlocked } from "./usageWindowStarts.js";
 
 // Execute the actual provider methods with SDK/filesystem doubles: no process,
 // credentials, account reads or model traffic leave this fixture.
@@ -15,7 +15,7 @@ function method(provider: string, deps: Record<string, unknown>) {
   return new AsyncFunction("signal", "dir", ...Object.keys(deps), "parsers", "guards", body).bind(null);
 }
 const parsers = { planLimitsFromUsageReport, planLimitsFromCodexRateLimits };
-const guards = { windowStartBlocked };
+const guards = { windowStartBlocked, isSubscriptionPlan };
 
 test("Claude releases one minimal message only after active-query subscription and usage checks", async () => {
   for (const source of ["subscription", "apiKey", "cloud", "exhausted", "unknown"]) {
@@ -23,7 +23,7 @@ test("Claude releases one minimal message only after active-query subscription a
     let options: any;
     const q = {
       accountInfo: async () => ({ apiProvider: source === "cloud" ? "bedrock" : "firstParty",
-        apiKeySource: source === "apiKey" ? "env" : "none", subscriptionType: source === "unknown" ? undefined : "max" }),
+        apiKeySource: source === "apiKey" ? "env" : "none", subscriptionType: source === "unknown" ? undefined : "Claude Pro" }),
       close() {},
       async *[Symbol.asyncIterator]() { yield { type: "result", subtype: "success", is_error: false }; },
     };

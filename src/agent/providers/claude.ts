@@ -502,14 +502,14 @@ export class ClaudeProvider implements AgentProvider {
         thinking: { type: "disabled" },
         ...(dir ? { env: { ...accountEnv(dir), CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" } } : {}),
       } });
+      const { windowStartBlocked, isSubscriptionPlan } = await import("../usageWindowStarts.js");
       const account = await q.accountInfo();
       if (account.apiProvider !== "firstParty" || (account.apiKeySource && account.apiKeySource !== "none") ||
-          !/^(pro|max|team|enterprise)/i.test(account.subscriptionType ?? "")) {
+          !isSubscriptionPlan(account.subscriptionType)) {
         throw new Error("Claude subscription source unavailable");
       }
       const usage = await queryPlanUsage(q);
       const { planLimitsFromUsageReport } = await import("../planLimits.js");
-      const { windowStartBlocked } = await import("../usageWindowStarts.js");
       const limits = planLimitsFromUsageReport(usage, Date.now());
       if (!limits || windowStartBlocked("claude", limits, Date.now()) || limits.windows.some((w) =>
         w.id === "five_hour" && w.utilization >= 1 && (!w.resetsAt || w.resetsAt > Date.now()))) {

@@ -20,6 +20,11 @@ export function fiveHourReset(provider: WindowProvider, limits: PlanLimits): num
   return window?.resetsAt && Number.isFinite(window.resetsAt) ? window.resetsAt : undefined;
 }
 
+/** The SDK reports plans as "Claude Pro", "Claude Max" and the like, not just "pro". */
+export function isSubscriptionPlan(type: string | undefined): boolean {
+  return /(?:^|[^a-z])(?:pro|max|team|enterprise)(?![a-z])/i.test(type ?? "");
+}
+
 export function windowStartBlocked(provider: WindowProvider, limits: PlanLimits, now: number): boolean {
   if (!limits.windows.some((w) => w.id === (provider === "claude" ? "five_hour" : "codex:codex:primary"))) return true;
   if (limits.availability && limits.availability !== "available") return true;
@@ -108,8 +113,9 @@ export class UsageWindowStarts {
       try {
         await this.deps.start(key, controller.signal);
         if (!this.closed && generation === this.generations.get(key)) this.record(key, reset, "Sent");
-      } catch {
-        if (!this.closed && generation === this.generations.get(key)) this.record(key, reset, "Failed or cancelled; no retry this window");
+      } catch (err) {
+        const why = controller.signal.aborted ? "cancelled" : (err as Error)?.message || "failed";
+        if (!this.closed && generation === this.generations.get(key)) this.record(key, reset, `Failed (${why}); no retry this window`);
       } finally {
         clearTimeout(deadline);
         this.controllers.delete(key);
