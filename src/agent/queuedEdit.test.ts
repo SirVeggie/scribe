@@ -161,3 +161,22 @@ test("a message steered while a finished turn wraps up starts the next turn inst
   assert.match(f.inputs[1].text, /late/);
   assert.equal(users(f.id).find((it) => it.id === late.id)?.steer, undefined);
 });
+
+test("a message sent to steer skips the queue: steered in, or first in line while another steer waits (#963)", async () => {
+  const f = setup();
+  const queued = host.send(f.id, { text: "queued" }).item;
+  const steered = host.send(f.id, { text: "steer me", steer: true }).item;
+  assert.equal(f.steers.length, 1);
+  assert.match(f.steers[0].text, /steer me/);
+  assert.equal(users(f.id).find((it) => it.id === steered.id)?.steer, "waiting");
+  assert.equal(users(f.id).find((it) => it.id === queued.id)?.steer, undefined);
+  host.send(f.id, { text: "steer next", steer: true });
+  assert.equal(f.steers.length, 1);
+  assert.equal((await host.withdraw(f.id, queued.id)).text, "queued");
+  f.results[0]({ status: "done" });
+  await tick();
+  assert.match(f.inputs[1].text, /steer me/);
+  f.results[1]({ status: "done" });
+  await tick();
+  assert.match(f.inputs[2].text, /steer next/);
+});

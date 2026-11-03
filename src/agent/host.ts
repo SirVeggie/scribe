@@ -502,7 +502,7 @@ export type PageAskResult =
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
 /** plan: send it as a plan turn (#721), or false to drop a thread's planNext; text starting with /plan is one too. */
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "component" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "component" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean; steer?: boolean };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -2820,10 +2820,14 @@ export class AgentHost {
     }
     if (this.runs.has(threadId) || this.queues.get(threadId)?.length) {
       const queue = this.queues.get(threadId) ?? [];
-      queue.push(msg);
+      // steer: the composer's Steer (#963) skips the queue: steered into the turn when the provider
+      // can take it now, else first in line, ahead of messages queued before it.
+      if (input.steer) queue.unshift(msg);
+      else queue.push(msg);
       this.queues.set(threadId, queue);
       const item = this.addItem(threadId, null, userBody(msg));
       msg.itemId = item.id;
+      if (input.steer) this.steerFirst(threadId);
       this.emitThread(threadId);
       this.drainQueue(threadId);
       return { queued: true, item };

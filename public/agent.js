@@ -15,6 +15,7 @@
     button: "scribe.agent.showButton",
     emptyEnter: "scribe.agent.emptyEnter",
     sendKey: "scribe.agent.sendKey",
+    runningSend: "scribe.agent.runningSend",
     tips: "scribe.agent.showTips",
     presets: "scribe.agent.showPresets",
     hidePage: "scribe.agent.hidePageThreads",
@@ -29,6 +30,12 @@
   const EMPTY_ENTER = [
     { id: "steer", label: "Steer, then send" },
     { id: "send", label: "Send now" },
+  ];
+
+  /** What sending does while a turn runs: wait in the queue, or steer into the turn ahead of the queue (#963). Alt+Enter does the other. */
+  const RUNNING_SEND = [
+    { id: "queue", label: "Queue" },
+    { id: "steer", label: "Steer" },
   ];
 
   /** Plain Enter sends, or only Ctrl+Enter. Shift+Enter is always a new line; Ctrl+Enter always sends. */
@@ -114,6 +121,10 @@
     const items = S.details.get(threadId)?.items || [];
     if (items.some((it) => it.kind === "user" && it.steer === "waiting")) return null;
     return emptyEnter() === "send" ? "send-now" : "steer";
+  }
+
+  function runningSend() {
+    return localStorage.getItem(LS.runningSend) === "steer" ? "steer" : "queue";
   }
 
   function sendKey() {
@@ -6346,7 +6357,17 @@
       if (running) {
         tail.append(button(icon("stop"), "ag-send stop", () => this.stop(), "Stop (Esc twice)", false));
       }
-      tail.append(button(icon("send"), "ag-send", () => this.send(), running ? "Queue message" : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)"));
+      const how = runningSend();
+      const other = how === "steer" ? "queue" : "steer";
+      const sendBtn = button(icon("send"), "ag-send", () => this.send(), running ? `${how === "steer" ? "Steer in" : "Queue message"} (Alt+Enter ${other === "steer" ? "steers" : "queues"})` : sendKey() === "mod" ? "Send (Ctrl+Enter)" : "Send (Enter)");
+      // While a turn runs, right-click picks queue or steer for this message.
+      sendBtn.addEventListener("contextmenu", (event) => {
+        const now = this.thread();
+        if (!now || now.status === "idle") return;
+        event.preventDefault();
+        openMenu(sendBtn, RUNNING_SEND.map((m) => ({ label: m.label, detail: m.id === how ? "Enter" : "Alt+Enter", run: () => this.send(m.id) })), { width: 180 });
+      });
+      tail.append(sendBtn);
       window.scribeSyncChildren(this.bar, [bar]);
       this.audioComposer.paint();
       this.ctxMeter = this.bar.lastChild;
@@ -6563,6 +6584,12 @@
         return;
       }
       if (this.inlineKey(event)) return;
+      // Alt+Enter sends the other way from Chat settings while a turn runs: queue it, or steer it in.
+      if (event.key === "Enter" && event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.isComposing) {
+        event.preventDefault();
+        this.send(runningSend() === "steer" ? "queue" : "steer");
+        return;
+      }
       // Shift+Enter always inserts a line. Ctrl+Enter always sends. Plain Enter follows Chat settings.
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         const mod = event.ctrlKey || event.metaKey;
@@ -7043,7 +7070,8 @@
       input.setSelectionRange(input.value.length, input.value.length);
     }
 
-    async send() {
+    /** how: "queue" or "steer" for a message sent while a turn runs; Chat settings choose by default. */
+    async send(how = runningSend()) {
       if (this.withdrawing || this.sending) return;
       const text = this.input.value.trim();
       const localCmd = /^\/(clear|here|folder|workspace|global)$/i.exec(text);
@@ -7089,7 +7117,7 @@
       if (!text && !this.attachments.length) return;
       if (this.attachments.some((f) => f.data === null)) {
         // Still being read (a large file just dropped): try again in a moment.
-        setTimeout(() => this.send(), 100);
+        setTimeout(() => this.send(how), 100);
         return;
       }
       this.sending = true;
@@ -7185,7 +7213,7 @@
         this.stick = true;
         // dock: the host watches a floating-chat turn for a new page on its way (pageIntent.ts).
         // plan: false too, so a planNext the user turned off is dropped.
-        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(this.variant === "dock" ? { dock: true } : {}) });
+        await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(how === "steer" ? { steer: true } : {}), ...(this.variant === "dock" ? { dock: true } : {}) });
         this.renderComposerBar();
         if (archiveAfterSend) {
           const from = archiveAfterSend;
@@ -11160,6 +11188,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     ["Enter", "Send (or a new line, from Chat settings)"],
     ["Ctrl+Enter", "Always send"],
     ["Shift+Enter", "Always a new line"],
+    ["Alt+Enter", "While the agent works: queue, or steer in (the other of Chat settings)"],
     ["Enter on an empty box", "Steer in, or send, the first queued message"],
     ["↑ on an empty box", "Edit the last queued message"],
     ["Esc Esc", "Stop the agent"],
@@ -12300,6 +12329,17 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           {
             id: "ag-send-key-label",
             hint: "Shift+Enter always inserts a line break. Ctrl+Enter always sends.",
+          }
+        ),
+        settingRow(
+          "Sending while the agent works",
+          choiceTrack(RUNNING_SEND, runningSend, (id) => {
+            localStorage.setItem(LS.runningSend, id);
+            for (const view of views()) view.renderComposerBar();
+          }),
+          {
+            id: "ag-running-send-label",
+            hint: "Steer hands the message to the running turn ahead of any queued ones. Alt+Enter or right-clicking Send does the other.",
           }
         ),
         settingRow(
