@@ -3932,31 +3932,9 @@
     }
   }
 
-  async function openWelcome() {
-    const html = await fetch("./welcome.html").then((res) => res.text());
-    pendingFocus = { key: "scribe:welcome" };
-    const res = await fetch("/api/tabs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        key: "scribe:welcome",
-        title: "Welcome",
-        html,
-        activate: true,
-      }),
-    });
-    if (!res.ok) {
-      if (pendingFocus?.key === "scribe:welcome") {
-        pendingFocus = null;
-      }
-      return;
-    }
-    const data = await res.json();
-    const id = data?.tab?.id;
-    if (id && pendingFocus?.key === "scribe:welcome" && state.tabs.some((tab) => tab.id === id)) {
-      pendingFocus = null;
-      selectTab(id, { fromUser: true });
-    }
+  /** Ctrl+H: the Help panel (agent.js), over the page area. */
+  function openHelp() {
+    window.scribeChat?.help.toggle();
   }
 
   async function downloadHref(href) {
@@ -4578,7 +4556,7 @@
     } else if (action === "download") {
       downloadActive();
     } else if (action === "help") {
-      openWelcome();
+      openHelp();
     } else if (action === "library") {
       setSideOpen(!state.sideOpen);
     } else if (action === "next-tab" || action === "prev-tab") {
@@ -4770,7 +4748,7 @@
     }
     if (key === "h" && !event.shiftKey) {
       event.preventDefault();
-      openWelcome();
+      openHelp();
       return;
     }
     if ((key === "t" || key === "n") && !event.shiftKey) {
@@ -6341,7 +6319,7 @@
     } else if (event.data?.type === "scribe-undo") {
       undoClose();
     } else if (event.data?.type === "scribe-help") {
-      openWelcome();
+      openHelp();
     } else if (event.data?.type === "scribe-palette") {
       togglePalette();
     } else if (event.data?.type === "scribe-shortcut") {

@@ -269,6 +269,8 @@
   const S = {
     config: { providers: [], prefs: null, models: { claude: [], cursor: [], codex: [], pi: [] } },
     threads: new Map(),
+    /** Help threads (#962): the Help panel's, kept out of `threads` and so out of every list. */
+    helpThreads: new Set(),
     details: new Map(),
     loading: new Map(),
     commands: new Map(),
@@ -669,7 +671,8 @@
   async function loadThreads() {
     try {
       const data = await api("GET", "/threads");
-      S.threads = new Map(data.threads.map((t) => [t.id, t]));
+      S.helpThreads = new Set(data.threads.filter((t) => t.help).map((t) => t.id));
+      S.threads = new Map(data.threads.filter((t) => !t.help).map((t) => [t.id, t]));
       invalidateMessageSearch(); // Reconnects may have missed message events.
     } catch {
       return;
@@ -754,6 +757,7 @@
   });
 
   function onEvent(msg) {
+    if (help.owns(msg)) return;
     // Search includes unloaded threads too; handle changes before detail-cache early returns.
     if (msg.type === "agent_item") {
       const prev = S.details.get(msg.item.threadId)?.byId.get(msg.item.id);
@@ -13843,6 +13847,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return true;
     }
     const where = focusedChat();
+    if (!where && help.close()) return true;
     const view = where === "full" ? full.view : where === "dock" ? dock.view : where === "side" ? sidebar.view : null;
     const helperOwner = view?.helperView?.visible() ? view : null;
     if (helperOwner) {
@@ -14058,7 +14063,369 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     setTimeout(() => view.focus(), 70);
   }
 
-  window.scribeChat = { customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), leaveForSpace, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  /* ---------- Help (#962) ---------- */
+
+  /**
+   * Help: a question field over the page area, with the agent's latest answer under it. The answer is
+   * drawn once the turn is done, then animated in. Its thread is a help thread (host.ts createHelpThread):
+   * Read-only, left out of the thread lists, and deleted when the panel closes, after HELP_IDLE_MS
+   * without a question, or when the daemon starts.
+   */
+  const HELP_IDLE_MS = 12 * 60 * 60 * 1000;
+  const HELP_MODEL_KEY = "scribe.agent.helpModel";
+  const HELP_EXAMPLES = [
+    "List the keyboard shortcuts",
+    "Change the theme",
+    "How do Kanban workers pick up cards?",
+    "What do the access levels mean?",
+    "Import my MCP servers from Claude Code",
+    "How do spaces differ from folders?",
+  ];
+  /** Answer items the panel shows; tool steps and reasoning stay out of a help result. */
+  const HELP_KINDS = new Set(["text", "settings", "component", "images", "notice"]);
+
+  const help = {
+    root: null,
+    input: null,
+    result: null,
+    status: null,
+    modelBtn: null,
+    sendBtn: null,
+    threadId: null,
+    askedAt: 0,
+    /** The question being answered: drawn when its turn ends. */
+    pending: null,
+    open: false,
+    gen: 0,
+
+    model() {
+      let saved = null;
+      try {
+        saved = JSON.parse(localStorage.getItem(HELP_MODEL_KEY) || "null");
+      } catch {}
+      if (saved?.provider && providerAvailable(saved.provider)) return { provider: saved.provider, model: saved.model || "default" };
+      const p = prefs();
+      const provider = providerAvailable(p.provider) ? p.provider : S.config.providers.find((x) => x.available)?.id || p.provider;
+      return { provider, model: p.models?.[provider] || "default" };
+    },
+
+    /** Help questions are lookups: the lowest effort a model offers from low up, else its default. */
+    effort({ provider, model }) {
+      const efforts = (modelInfo(provider, model)?.efforts || []).map((e) => (typeof e === "string" ? e : e?.id)).filter(Boolean);
+      return ["low", "medium"].find((e) => efforts.includes(e)) || null;
+    },
+
+    build() {
+      const root = el("section", "help-panel");
+      root.setAttribute("aria-label", "Help");
+      root.hidden = true;
+      const inner = el("div", "help-inner");
+      const head = el("div", "help-head");
+      head.append(el("h1", "help-title", "Help"));
+      this.modelBtn = button("", "ag-chip help-model", (event) => this.pickModel(event.currentTarget), "Model for Help");
+      const close = button(icon("close"), "ag-icon-btn help-close", () => this.close(), "Close Help");
+      head.append(this.modelBtn, close);
+      const form = el("form", "help-ask");
+      this.input = el("input", "help-input");
+      this.input.type = "text";
+      this.input.placeholder = "Ask how to do something in Scribe";
+      this.input.setAttribute("aria-label", "Question");
+      this.input.autocomplete = "off";
+      this.input.spellcheck = false;
+      this.sendBtn = button(icon("send"), "help-send", null, "Ask");
+      this.sendBtn.type = "submit";
+      form.append(this.input, this.sendBtn);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (this.pending) void this.stop();
+        else void this.ask(this.input.value);
+      });
+      this.status = el("div", "help-status");
+      this.status.setAttribute("role", "status");
+      this.result = el("div", "help-result");
+      this.result.setAttribute("aria-live", "polite");
+      inner.append(head, form, this.status, this.result);
+      root.append(inner);
+      root.addEventListener("click", (event) => onLinkClick(event));
+      root.addEventListener("auxclick", (event) => onLinkClick(event));
+      root.addEventListener("mousedown", preventLinkAutoscroll);
+      root.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !event.defaultPrevented && !openMenuEl) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.close();
+        }
+      });
+      this.root = root;
+      this.renderExamples();
+      return root;
+    },
+
+    show() {
+      if (!this.root) document.querySelector("main")?.append(this.build());
+      if (!this.root.isConnected) return;
+      if (this.threadId && Date.now() - this.askedAt > HELP_IDLE_MS) this.reset();
+      this.root.hidden = false;
+      this.open = true;
+      this.renderModel();
+      window.scribeMotion?.reveal(this.root, true, { translate: "translateY(8px)" });
+      this.input.focus();
+      this.input.select();
+    },
+
+    close() {
+      if (!this.root || this.root.hidden) return false;
+      this.root.hidden = true;
+      this.open = false;
+      // A closed Help starts over: the next question gets a fresh thread.
+      this.reset();
+      this.input.value = "";
+      this.renderExamples();
+      return true;
+    },
+
+    toggle() {
+      if (this.open) this.close();
+      else this.show();
+    },
+
+    /** Drop the thread: it was only ever this panel's. */
+    reset() {
+      const id = this.threadId;
+      this.threadId = null;
+      this.pending = null;
+      this.gen++;
+      this.renderBusy(false);
+      this.status.replaceChildren();
+      if (id) api("DELETE", `/threads/${encodeURIComponent(id)}`).catch(() => {});
+    },
+
+    renderModel() {
+      const current = this.model();
+      this.modelBtn.replaceChildren(icon("sparkle"), el("span", null, modelLabel(current.provider, current.model) || PROVIDER_LABEL[current.provider] || "Model"));
+    },
+
+    pickModel(anchor) {
+      const current = this.model();
+      openModelMenu(anchor, current, (provider, model) => {
+        localStorage.setItem(HELP_MODEL_KEY, JSON.stringify({ provider, model }));
+        this.renderModel();
+        // The next question goes to the new model in a thread of its own.
+        if (this.threadId && !this.pending) this.reset();
+      });
+    },
+
+    renderExamples() {
+      const wrap = el("div", "help-examples");
+      wrap.append(el("div", "help-examples-head", "Try"));
+      const list = el("div", "help-example-list");
+      for (const text of HELP_EXAMPLES) list.append(button(text, "ag-chip help-example", () => {
+        this.input.value = text;
+        void this.ask(text);
+      }));
+      wrap.append(list);
+      this.result.replaceChildren(wrap);
+    },
+
+    renderBusy(busy) {
+      this.root?.classList.toggle("busy", busy);
+      if (!this.sendBtn) return;
+      this.sendBtn.replaceChildren(icon(busy ? "stop" : "send"));
+      this.sendBtn.dataset.tooltip = busy ? "Stop" : "Ask";
+      this.sendBtn.setAttribute("aria-label", busy ? "Stop" : "Ask");
+    },
+
+    async ask(raw) {
+      const text = String(raw || "").trim();
+      if (!text || this.pending) return;
+      if (this.threadId && Date.now() - this.askedAt > HELP_IDLE_MS) this.reset();
+      const gen = ++this.gen;
+      this.askedAt = Date.now();
+      this.pending = { text, since: Date.now() };
+      this.renderBusy(true);
+      this.result.replaceChildren();
+      this.paintStatus("Looking it up…");
+      try {
+        if (!this.threadId) {
+          const choice = this.model();
+          const { thread } = await api("POST", "/threads", { help: true, provider: choice.provider, model: choice.model, effort: this.effort(choice), remember: false });
+          if (gen !== this.gen) {
+            api("DELETE", `/threads/${encodeURIComponent(thread.id)}`).catch(() => {});
+            return;
+          }
+          this.threadId = thread.id;
+        }
+        await api("POST", `/threads/${encodeURIComponent(this.threadId)}/messages`, { text });
+      } catch (err) {
+        if (gen !== this.gen) return;
+        this.pending = null;
+        this.renderBusy(false);
+        this.status.replaceChildren();
+        this.result.replaceChildren(el("div", "ag-notice error", err.message));
+      }
+    },
+
+    async stop() {
+      const id = this.threadId;
+      if (!id) return;
+      try {
+        await api("POST", `/threads/${encodeURIComponent(id)}/cancel`);
+      } catch (err) {
+        notice(err.message);
+      }
+    },
+
+    paintStatus(text) {
+      this.status.replaceChildren(el("span", "help-dots"), el("span", "help-status-text", text));
+    },
+
+    /** Events for help threads stop here: the chat's thread lists never see them. */
+    owns(msg) {
+      if (msg.type === "agent_thread") {
+        if (!msg.thread.help) return false;
+        if (msg.thread.id === this.threadId) this.onThread(msg.thread);
+        return true;
+      }
+      const id = msg.type === "agent_item" ? msg.item?.threadId : msg.type === "agent_thread_deleted" ? msg.id : msg.threadId;
+      if (!id || !(id === this.threadId || S.helpThreads.has(id))) return false;
+      if (msg.type === "agent_thread_deleted") S.helpThreads.delete(id);
+      return true;
+    },
+
+    onThread(t) {
+      S.helpThreads.add(t.id);
+      if (!this.pending) return;
+      if (t.status === "running" || t.status === "waiting") {
+        this.pending.started = true;
+        const line = t.status === "waiting" ? "Waiting for an answer the Help panel can't show. Stop and ask another way." : t.activity?.line;
+        if (line) this.paintStatus(line);
+        return;
+      }
+      // Idle again after running: the turn this question started has ended.
+      if (this.pending.started) void this.finish(t.id, this.gen);
+    },
+
+    async finish(id, gen) {
+      let detail;
+      try {
+        detail = await api("GET", `/threads/${encodeURIComponent(id)}`);
+      } catch (err) {
+        detail = { items: [], error: err.message };
+      }
+      if (gen !== this.gen || id !== this.threadId || !this.pending) return;
+      this.pending = null;
+      this.renderBusy(false);
+      this.status.replaceChildren();
+      const items = (detail.items || []).slice().sort((a, b) => a.seq - b.seq);
+      let from = -1;
+      items.forEach((it, i) => {
+        if (it.kind === "user") from = i;
+      });
+      const answer = items.slice(from + 1).filter((it) => HELP_KINDS.has(it.kind) && !it.parentId);
+      this.render(answer, detail.error);
+    },
+
+    render(answer, error) {
+      const out = el("article", "help-answer");
+      for (const it of answer) {
+        const node = this.renderItem(it);
+        if (node) out.append(node);
+      }
+      if (!out.childNodes.length) out.append(el("p", "ag-muted", error || "No answer came back. Try asking again."));
+      this.result.replaceChildren(out);
+      animateAnswer(out);
+    },
+
+    renderItem(it) {
+      switch (it.kind) {
+        case "text": {
+          if (!it.text?.trim()) return null;
+          const node = el("div", "ag-md help-md");
+          R.renderMarkdown(node, it.text, mdCtx);
+          return node;
+        }
+        case "settings": {
+          const node = el("div", "ag-card ag-settings-card help-block");
+          if (it.title) {
+            const head = el("div", "ag-card-head");
+            head.append(icon("gear"), el("span", "ag-card-title", it.title));
+            node.append(head);
+          }
+          const body = el("div");
+          const { missing } = window.scribeSettingsUI.lend(body, it.ids);
+          node.append(body);
+          if (missing.length === it.ids.length) return null;
+          return node;
+        }
+        case "component": {
+          const node = window.ScribeComponents.render(it, R, mdCtx);
+          node?.classList.add("help-block");
+          return node;
+        }
+        case "images": {
+          const node = el("div", "ag-output-images help-block");
+          for (const file of it.images) {
+            const image = el("img");
+            image.src = sentFileUrl(it.threadId, file.id);
+            image.alt = file.name;
+            node.append(image);
+          }
+          return node;
+        }
+        case "notice":
+          return it.level === "error" ? el("div", "ag-notice error help-block", it.text) : null;
+        default:
+          return null;
+      }
+    },
+  };
+
+  /**
+   * Bring an answer in word by word: each word fades up from a blur, in reading order, and blocks
+   * (code, tables, settings cards) fade in at their place in that order. The whole answer takes at most
+   * about 1.6 s. Reduced motion shows it at once.
+   */
+  function animateAnswer(root) {
+    if (!window.scribeMotion?.enabled()) return;
+    const BLOCK = "pre, table, .help-block, img, svg, iframe, .katex";
+    const steps = [];
+    const walk = (node) => {
+      for (const child of [...node.childNodes]) {
+        if (child.nodeType === 1) {
+          if (child.matches(BLOCK)) steps.push({ block: child });
+          else walk(child);
+        } else if (child.nodeType === 3 && child.textContent.trim()) steps.push({ text: child });
+      }
+    };
+    walk(root);
+    const words = steps.reduce((n, s) => n + (s.text ? s.text.textContent.split(/\s+/).filter(Boolean).length : 4), 0);
+    const step = Math.max(4, Math.min(28, 1600 / Math.max(1, words)));
+    let at = 0;
+    for (const s of steps) {
+      if (s.block) {
+        s.block.classList.add("help-in");
+        s.block.style.setProperty("--d", `${Math.round(at)}ms`);
+        at += step * 4;
+        continue;
+      }
+      const parts = s.text.textContent.split(/(\s+)/);
+      const frag = document.createDocumentFragment();
+      for (const part of parts) {
+        if (!part) continue;
+        if (/^\s+$/.test(part)) {
+          frag.append(part);
+          continue;
+        }
+        const w = el("span", "help-w", part);
+        w.style.setProperty("--d", `${Math.round(at)}ms`);
+        at += step;
+        frag.append(w);
+      }
+      s.text.replaceWith(frag);
+    }
+  }
+
+  window.scribeChat = { help: { open: () => help.show(), close: () => help.close(), toggle: () => help.toggle(), isOpen: () => help.open }, customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), leaveForSpace, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 

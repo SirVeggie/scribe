@@ -6962,3 +6962,181 @@ body.resizing-split main.has-split .agent-dock {
   align-items: center;
   gap: 10px;
 }
+
+/* ---------- Help panel (#962): a question field over the page area, the latest answer under it ---------- */
+
+.help-panel {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-peek-frame) + 1);
+  overflow-y: auto;
+  background: var(--bg);
+  background-image: var(--bg-image);
+}
+
+.help-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 36px 32px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.help-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-title {
+  margin: 0 auto 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--heading);
+}
+
+.help-model .ag-ico {
+  opacity: 0.7;
+}
+
+.help-ask {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 5px 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--ag-well);
+}
+
+.help-ask:focus-within {
+  border-color: var(--accent-ring);
+}
+
+.help-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.help-input::placeholder {
+  color: var(--muted);
+}
+
+.help-send {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--bg);
+  box-shadow: none;
+}
+
+.help-panel.busy .help-send {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.help-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.help-status:empty {
+  display: none;
+}
+
+.help-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help-dots {
+  width: 22px;
+  height: 6px;
+  flex: none;
+  background: radial-gradient(circle, var(--ag-live) 2.4px, transparent 2.6px) 0 50% / 8px 6px repeat-x;
+  animation: help-dots var(--dur-pulse) ease-in-out infinite;
+}
+
+@keyframes help-dots {
+  50% { opacity: 0.35; }
+}
+
+.help-examples-head {
+  margin: 6px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.help-example-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.help-example {
+  height: 28px;
+  padding: 0 11px;
+  font-size: 12.5px;
+}
+
+.help-example:hover {
+  color: var(--text);
+}
+
+.help-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.help-md table {
+  font-size: 13.5px;
+}
+
+.help-answer .help-w {
+  display: inline-block;
+  animation: help-word 520ms var(--ease) both;
+  animation-delay: var(--d);
+}
+
+.help-answer .help-in {
+  animation: help-block 420ms var(--ease) both;
+  animation-delay: var(--d);
+}
+
+@keyframes help-word {
+  from {
+    opacity: 0;
+    filter: blur(5px);
+    transform: translateY(0.3em);
+  }
+}
+
+@keyframes help-block {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
