@@ -6454,7 +6454,8 @@
   function todaysSpends() {
     var today = localDayText(Date.now());
     return Object.keys(workerSpend || {}).map(function (api) { return Object.assign({ api: api }, workerSpend[api]); })
-      .filter(function (s) { return s && s.day === today && Number(s.costUsd) > 0; });
+      .filter(function (s) { return s && s.day === today && Number(s.costUsd) > 0; })
+      .sort(function (x, y) { return str(x.label || x.api).localeCompare(str(y.label || y.api)); });
   }
   function spendGroup(spend) {
     var group = el("button", "board-quota lvl-ok");
@@ -6492,6 +6493,12 @@
       var limits = workerLimits[provider];
       return limits && (!limits.availability || limits.availability === "available")
         && (limits.windows || []).some(function (w) { return Number.isFinite(w.utilization); });
+    });
+    // Fixed order, whichever source (providers, limits, workers) names a provider first.
+    var order = ["claude", "cursor", "codex"];
+    ids.sort(function (x, y) {
+      var a = order.indexOf(x), b = order.indexOf(y);
+      return (a === -1 ? order.length : a) - (b === -1 ? order.length : b) || x.localeCompare(y);
     });
     var spends = todaysSpends();
     section.classList.toggle("hidden", !ids.length && !spends.length);
