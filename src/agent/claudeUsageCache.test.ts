@@ -124,7 +124,6 @@ test("readings from either thread publish globally and an in-flight probe cannot
     internal.ctx.claudeLimits(b, snapshot(45, now + 1));
     assert.equal(host.limits().claude?.windows[0].utilization, 0.45);
     assert.equal(events.filter(e => e.type === "agent_limits").at(-1).limits.claude.windows[0].utilization, 0.45);
-    assert.equal(internal.view(internal.threads.get(a)).claudeLimits.windows[0].utilization, 0.45);
     internal.ctx.claudeLimits(a, snapshot(10, now - 1));
     assert.equal(host.limits().claude?.windows[0].utilization, 0.45, "old observations do not roll the meter back");
     internal.ctx.claudeLimits(a, claudePlanSnapshot(null, { apiProvider: "bedrock" }, now + 2));

@@ -364,8 +364,6 @@ export type ClaudeBillingSource = {
 
 /** Thread plus runtime fields the UI needs in lists. */
 export type ThreadView = Thread & {
-  /** Isolated to this query; never fall back to another thread's quota. */
-  claudeLimits?: PlanLimits;
   effectivePermissions?: EffectivePermissions;
   status: RunStatus;
   /** True when the last turn finished and the user has not opened the thread. Never set on page-owned threads. */

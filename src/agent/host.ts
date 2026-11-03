@@ -2405,7 +2405,6 @@ export class AgentHost {
     const limitQueued = queuedCard?.kind === "usage_limit" && queuedCard.status === "queued" ? { itemId: queuedCard.id, resetsAt: queuedCard.resetsAt } : undefined;
     return {
       ...thread,
-      ...(thread.provider === "claude" ? { claudeLimits: this.liveLimits().claude ?? claudePlanSnapshot(null, {}) } : {}),
       ...(this.effectivePermissions.has(thread.id) ? { effectivePermissions: this.effectivePermissions.get(thread.id) } : {}),
       status,
       unread,
