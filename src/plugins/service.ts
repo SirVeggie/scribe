@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { dataDir } from "../config.js";
 import { PAGE_PERMISSIONS } from "../pagePermissions.js";
-import { parseManifest, pluginId, declarePlugins, declaredPlugins, validateComponentProps, type PluginManifest } from "./manifest.js";
+import { accessKey, parseManifest, pluginId, declarePlugins, declaredPlugins, validateComponentProps, type PluginManifest } from "./manifest.js";
 import { PluginDatabase, type PluginRecord } from "./database.js";
 import { packageHash, packagePath, readPackage, writePackage, zip, type PackageFiles } from "./package.js";
 import { PluginRuntime } from "./runtime.js";
@@ -70,7 +70,7 @@ export class PluginService {
   draft(id: string): string { return path.join(this.directory(id), "source"); }
   get(id: string): PluginRecord { pluginId.parse(id); const record = this.database.list().find(p => p.manifest.id === id); if (!record) throw new Error(`Plugin not found: ${id}`); return record; }
   list() {
-    return this.database.list().map(p => ({ id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, summary: p.manifest.summary, enabled: p.enabled && this.database.enabled(), configuredEnabled: p.enabled, keepAlive: p.keepAlive, status: this.runtimes.get(p.manifest.id)?.status() ?? "idle", edited: fs.existsSync(this.draft(p.manifest.id)) && packageHash(readPackage(this.draft(p.manifest.id))) !== p.hash, updateAvailable:this.bundledVersion(p) }));
+    return this.database.list().map(p => ({ id: p.manifest.id, name: p.manifest.name, version: p.manifest.version, summary: p.manifest.summary, enabled: p.enabled && this.database.enabled(), configuredEnabled: p.enabled, keepAlive: p.keepAlive, status: this.runtimes.get(p.manifest.id)?.status() ?? "idle", busy: this.runtimes.get(p.manifest.id)?.busy() ?? [], edited: fs.existsSync(this.draft(p.manifest.id)) && packageHash(readPackage(this.draft(p.manifest.id))) !== p.hash, updateAvailable:this.bundledVersion(p) }));
   }
   inspect(id: string) {
     const p = this.get(id);
@@ -128,7 +128,7 @@ export class PluginService {
     let sourceBytes=0;const source=detailed?Object.fromEntries(Object.entries(this.codeFiles(files)).filter(([,data])=>{sourceBytes+=data.length;return sourceBytes<250_000;}).map(([name,data])=>[name,data.toString("utf8")])):undefined;
     const order=previous?compareVersions(manifest.version,previous.manifest.version):0;
     const versionStatus=previous?(order>0?"newer":order<0?"older":"same"):"new";
-    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { components:changed(previous.manifest.components??{},manifest.components),methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:JSON.stringify(previous.manifest.access)!==JSON.stringify(manifest.access) } : null };
+    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { components:changed(previous.manifest.components??{},manifest.components),methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:accessKey(previous.manifest.access)!==accessKey(manifest.access) } : null };
   }
   /** Caller must collect consent for precisely this hash before invoking install. */
   async install(files: PackageFiles, expectedHash: string, replace = false,approvePaths=false): Promise<PluginRecord> {
@@ -254,7 +254,7 @@ export class PluginService {
     const p = this.get(id); if (!p.manifest.backend) throw new Error("Plugin has no backend");
     const secretCache=new Map<string,Promise<string|null>>();
     const folder = path.join(this.directory(id),"data"); fs.mkdirSync(folder,{recursive:true});
-    runtime = new PluginRuntime({entry:packagePath(this.snapshot(p),p.manifest.backend),dataDir:folder,settings:p.settings},async(method,args)=> {
+    runtime = new PluginRuntime({entry:packagePath(this.snapshot(p),p.manifest.backend),dataDir:folder,settings:p.settings,env:p.manifest.access.env??[]},async(method,args)=> {
       if (!this.enabled(id)||this.runtimes.get(id)!==runtime) throw new Error("Plugin is disabled or its runtime was replaced");
       if (method === "secret") { const key = String(args.name); if (p.manifest.settings[key]?.type !== "secret") throw new Error("Unknown secret");if(!secretCache.has(key))secretCache.set(key,this.secrets.get(id,key).catch(error=>{secretCache.delete(key);throw error;}));return secretCache.get(key); }
       if (method === "state.get") return this.database.get(id,String(args.key));
@@ -266,12 +266,12 @@ export class PluginService {
     },p.keepAlive);
     this.runtimes.set(id,runtime); return runtime;
   }
-  async call(id: string, method: string, args: unknown, caller: PluginCaller): Promise<unknown> {
+  async call(id: string, method: string, args: unknown, caller: PluginCaller, signal?: AbortSignal): Promise<unknown> {
     await this.stopping.get(id);
     const p = this.get(id);
     if (!Object.hasOwn(p.manifest.methods,method)) throw new Error(`Unknown plugin method: ${method}`);
     const token=randomUUID();this.callers.set(token,caller);
-    try{const result=await this.runtime(id).call("call",{method,args,caller:{...caller,token}});if(!this.enabled(id))throw new Error("Plugin was disabled during the call");return result;}finally{this.callers.delete(token);}
+    try{const result=await this.runtime(id).call("call",{method,args,caller:{...caller,token}},{timeoutMs:p.manifest.methods[method].timeoutMs,signal});if(!this.enabled(id))throw new Error("Plugin was disabled during the call");return result;}finally{this.callers.delete(token);}
   }
   async hook(id: string, template: string, hook: string, args: unknown[], caller: PluginCaller): Promise<unknown> {
     await this.stopping.get(id);

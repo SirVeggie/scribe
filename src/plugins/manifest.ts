@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const pluginId = z.string().max(64).regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
 const file = z.string().min(1).max(240).refine(v => !v.includes("\\") && !v.startsWith("/") && !v.split("/").some(p => !p || p === "." || p === "..") && !v.includes(":"), "Use a relative package path");
+/** Names a backend never gets through access.env: Scribe's own credentials and Node's loader options. */
+export const reservedEnv = (name: string): boolean => /^(SCRIBE_|NODE_OPTIONS$)/i.test(name);
 const componentName = z.string().regex(/^[a-zA-Z][\w-]{0,63}$/);
 // Fail closed: conversion libraries may preserve unknown validation keywords only as metadata.
 const schemaKeywords = new Set(["$schema", "title", "description", "type", "enum", "const", "properties", "required", "additionalProperties", "items", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "pattern", "minItems", "maxItems", "anyOf", "allOf", "oneOf"]);
@@ -41,11 +43,14 @@ export const manifestSchema = z.object({
   guide: file.optional(),
   readme: file.optional(),
   components: z.record(componentName, pluginComponentSchema).default({}),
-  access: z.object({ files: z.array(z.string().max(1000)).max(50).default([]), network: z.array(z.string().max(250)).max(50).default([]) }).default({ files: [], network: [] }),
+  access: z.object({ files: z.array(z.string().max(1000)).max(50).default([]), network: z.array(z.string().max(250)).max(50).default([]),
+    // Environment variables the backend gets from Scribe's own environment, shown for approval at install.
+    env: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,99}$/).refine(name => !reservedEnv(name), "Scribe's own variables and NODE_OPTIONS cannot be passed to a plugin")).max(50).default([]) }).default({ files: [], network: [], env: [] }),
   methods: z.record(z.string().regex(/^[a-zA-Z][\w-]{0,63}$/), z.object({
     description: z.string().max(1000),
     agent: z.enum(["read", "board", "ask"]).optional(),
     input: z.record(z.string(), z.unknown()).optional(),
+    timeoutMs: z.number().int().min(1000).max(600_000).optional(),
   })).default({}),
   settings: z.record(z.string().regex(/^[a-zA-Z][\w-]{0,63}$/), z.object({
     label: z.string().min(1).max(120),
@@ -56,6 +61,8 @@ export const manifestSchema = z.object({
   templates: z.array(z.object({ key: pluginId, metadata: file, html: file, guide: file.optional(), actions: z.record(z.string(), z.object({ description: z.string(), args: z.string() })).optional(), hooks: z.array(z.enum(["seed", "reply", "replyDelivered", "sweep", "drive", "launched", "launchAllowed", "runHold", "runEvent"])).optional() })).max(50).default([]),
 }).strict();
 export type PluginManifest = z.infer<typeof manifestSchema>;
+/** Compares declared access across versions; records saved before access.env read as having none. */
+export const accessKey = (access: Partial<PluginManifest["access"]>): string => JSON.stringify([access.files ?? [], access.network ?? [], access.env ?? []]);
 export type PluginMethod = PluginManifest["methods"][string];
 export function componentStateAllowed(patterns: string[], key: string): boolean {
   return patterns.some(pattern => pattern.endsWith("/*") ? key.startsWith(pattern.slice(0, -1)) : key === pattern);

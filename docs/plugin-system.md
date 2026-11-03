@@ -4,13 +4,13 @@ Plugins are local, user-approved Node packages. Installing one runs its code as 
 
 ## Package and backend contract
 
-`plugin.json` declares `id`, `name`, semver `version`, a short `summary`, optional `author`, `risky`, `access: {files, network}`, a backend entry, settings, methods and templates. Backend code exports `{methods, templates, start?}`. Dependencies must be bundled into the package. Package paths are relative; links, path traversal and oversized archives are refused.
+`plugin.json` declares `id`, `name`, semver `version`, a short `summary`, optional `author`, `risky`, `access: {files, network, env}`, a backend entry, settings, methods and templates. Backend code exports `{methods, templates, start?}`. Dependencies must be bundled into the package. Package paths are relative; links, path traversal and oversized archives are refused.
 
 `methods[name](args, ctx)` receives public settings, `secret(name)`, `dataDir`, `db()` (a private SQLite database), keyed `state.get/set`, `emit`, `saveAsset`, and the caller. Secrets are encrypted with Windows DPAPI and never appear in public settings or exports. Shared state is keyed JSON in SQLite with per-key revisions; pages write it only through methods.
 
 Source lives in `plugins/<id>/source` with Git history. Installation creates an immutable content-addressed version; edits do not change running code. Reload validates source and bumps a changed package's patch version. Installing/reloading runnable code requires consent except for Full agents. No package installation scripts execute.
 
-The child starts lazily, stops after ten idle minutes, bounds pending calls, times out hung calls and tracks repeated crashes. Keep-running is an explicit user setting. Backends receive a minimal environment, excluding Scribe credentials and provider keys.
+The child starts lazily, stops after ten idle minutes, bounds pending calls, times out hung calls and tracks repeated crashes. Keep-running is an explicit user setting. A call times out after 60 s, or the method's declared `timeoutMs` (up to 10 minutes); the timeout or a cancelled request rejects only that call and aborts its `ctx.signal`. The backend is stopped only when it then fails to answer a ping within five seconds (a blocked event loop). `ctx.busy(work, label?)` holds a lease for work that goes on after its call returned: the idle stop waits until every lease settles, and Settings shows the plugin as working meanwhile. Backends receive a minimal environment, excluding Scribe credentials and provider keys; `access.env` names further variables copied from Scribe's environment, shown for approval at install (`SCRIBE_*` and `NODE_OPTIONS` are refused).
 
 ## Permissions
 

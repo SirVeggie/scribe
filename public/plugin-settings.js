@@ -36,7 +36,7 @@
   function identity(item){
     const info=el("span","plugin-identity"),title=el("span","plugin-name"),meta=el("span","plugin-meta");
     title.append(el("strong","",item.name),el("span","plugin-version",item.version));
-    const state=el("span",`plugin-state${item.edited?" is-edited":item.enabled&&item.status==="running"?" is-running":""}`,item.edited?"edited by agent":!item.enabled?"off":item.status==="idle"?"ready":item.status);
+    const state=el("span",`plugin-state${item.edited?" is-edited":item.enabled&&item.status==="running"?" is-running":""}`,item.edited?"edited by agent":!item.enabled?"off":item.status==="idle"?"ready":item.status==="running"&&item.busy?.length?"working":item.status);
     meta.append(state);if(Number.isInteger(item.pages))meta.append(document.createTextNode(` · ${item.pages} ${item.pages===1?"page":"pages"}`));
     info.append(title,meta);if(item.updateAvailable){const update=button(`Review update ${item.updateAvailable}…`,()=>reviewBundled(item.id));update.className="plugin-update";info.append(update);}return info;
   }
@@ -86,10 +86,10 @@
     if(customized)body.append(el("p","plugin-consent-note","This plugin may have local source changes. Keep mine leaves them as they are, Take theirs replaces them, and Merge with an agent combines both."));
     // Facts: one labeled row each, so the dialog reads as a list rather than loose paragraphs.
     const facts=el("dl","plugin-consent-facts"),fact=(label,lines)=>{if(!lines.length)return;const dd=el("dd");for(const line of lines)dd.append(el("div","",line));facts.append(el("dt","",label),dd);};
-    fact("Access",[...m.access.files.map(folder=>`Files: ${folder}`),...m.access.network.map(host=>`Network: ${host}`)].concat(m.access.files.length||m.access.network.length?[]:["None declared"]));
+    const env=m.access.env??[];fact("Access",[...m.access.files.map(folder=>`Files: ${folder}`),...m.access.network.map(host=>`Network: ${host}`),...(env.length?[`Environment: ${env.join(", ")}`]:[])].concat(m.access.files.length||m.access.network.length||env.length?[]:["None declared"]));
     const count=(n,word)=>`${n} ${word}${n===1?"":"s"}`;
     fact("Contents",[`${count(m.templates.length,"template")} · ${count(Object.keys(m.methods).length,"method")}`,m.risky?"Resets page grants after agent edits":"Keeps page grants after agent edits"]);
-    if(preview.changes){const lines=[];for(const key of ["methods","settings","templates","components"])if(preview.changes[key]?.length)lines.push(`${key[0].toUpperCase()}${key.slice(1)}: ${preview.changes[key].join(", ")}`);if(preview.changes.access)lines.push("Declared file or network access changed");if(preview.changes.risky)lines.push("Page grant reset behavior changed");fact("Changed",lines);}
+    if(preview.changes){const lines=[];for(const key of ["methods","settings","templates","components"])if(preview.changes[key]?.length)lines.push(`${key[0].toUpperCase()}${key.slice(1)}: ${preview.changes[key].join(", ")}`);if(preview.changes.access)lines.push("Declared file, network or environment access changed");if(preview.changes.risky)lines.push("Page grant reset behavior changed");fact("Changed",lines);}
     if(preview.parts?.state)fact("State",[`Replaces shared state with ${count(preview.parts.stateKeys.length,"imported key")}`]);
     if(preview.parts?.data)fact("Data",[`Replaces the data folder with ${count(preview.parts.dataFiles.length,"imported file")}`]);
     body.append(facts);

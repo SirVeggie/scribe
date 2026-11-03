@@ -35,7 +35,7 @@ Source is kept in Scribe, with Git history. Board agents use `plugin_create`, `p
   "id":"example", "name":"Example", "version":"1.0.0",
   "summary":"One short line describing what this plugin does.",
   "backend":"backend.mjs", "guide":"guide.md", "risky":true,
-  "access":{"files":[],"network":["api.example.org"]},
+  "access":{"files":[],"network":["api.example.org"],"env":[]},
   "settings":{"token":{"label":"API token","type":"secret"}},
   "methods":{"list":{"description":"List items: {}","agent":"read"}},
   "templates":[]
@@ -60,7 +60,11 @@ export default {
 };
 ```
 
-`ctx` includes public `settings`, `dataDir`, `db()` (a plugin-owned SQLite database), async `secret(name)`, keyed `state.get/set`, `emit(name,data)`, `saveAsset(name,mimeType,bytes)` into the caller's page, and `caller` (`kind`, optional page/thread). Never log or return secrets. Scribe stores them separately using Windows DPAPI and excludes them from settings tools and exports. Installing a plugin runs code as the user; declared access informs consent and is not a sandbox.
+`ctx` includes public `settings`, `dataDir`, `db()` (a plugin-owned SQLite database), async `secret(name)`, keyed `state.get/set`, `emit(name,data)`, `saveAsset(name,mimeType,bytes)` into the caller's page, and `caller` (`kind`, optional page/thread), `signal` (aborts when the call times out or its caller cancels) and `busy(work, label?)`. Never log or return secrets. Scribe stores them separately using Windows DPAPI and excludes them from settings tools and exports. Installing a plugin runs code as the user; declared access informs consent and is not a sandbox.
+
+## Long-running work
+
+A call times out after 60 s (a method may declare `"timeoutMs"` up to 600000). The timeout rejects only that call and aborts `ctx.signal`; the backend keeps running unless its event loop is blocked. For a build or test run, start the work, wrap it in `ctx.busy(promise, "label")` and return an id at once: the backend then is not stopped for idleness until the work settles, so no detached process is needed while Scribe runs. Report progress with `ctx.state.set` or `ctx.emit`, and give agents a status or wait method that returns within the timeout. Work inside the backend still ends when Scribe or the plugin restarts. Declare environment variables the backend needs (`"access":{"env":["JAVA_HOME"]}`); the user approves them at install.
 
 ## Templates and lifecycle
 

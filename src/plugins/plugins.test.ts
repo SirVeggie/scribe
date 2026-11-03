@@ -83,6 +83,8 @@ test("manifest validates paths and method levels; declarations never grant acces
   assert.throws(()=>parseManifest({...manifest,backend:"../escape.mjs"}));
   assert.throws(()=>parseManifest({...manifest,methods:{echo:{description:"Echo",agent:"full"}}}));
   assert.throws(()=>parseManifest({...manifest,id:"ambiguous--id"}));
+  assert.throws(()=>parseManifest({...manifest,access:{env:["SCRIBE_TOKEN"]}}),/cannot be passed/);assert.throws(()=>parseManifest({...manifest,access:{env:["node_options"]}}));assert.throws(()=>parseManifest({...manifest,methods:{echo:{description:"Echo",timeoutMs:900_000}}}));
+  assert.deepEqual(parseManifest({...manifest,access:{env:["JAVA_HOME"]}}).access,{files:[],network:[],env:["JAVA_HOME"]});
   const full='<!DOCTYPE html><html><head><title>Example</title></head><body>Example</body></html>';
   const declared=declarePlugins(full,["fixture"]);assert.ok(declared.startsWith("<!DOCTYPE html>"));assert.match(declared,/<head>\s*<meta name="scribe-plugins"/);assert.equal((declared.match(/<!DOCTYPE/gi)??[]).length,1);
   assert.deepEqual(declaredPlugins(declarePlugins("<p>Fragment</p>",["fixture"])),["fixture"]);
