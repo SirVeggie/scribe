@@ -79,7 +79,11 @@ window.createSpaces = function createSpaces(host) {
   const head = el("div", "spaces-head");
   const heading = el("h1", "spaces-title", "Spaces");
   const sub = el("p", "spaces-sub", "Each space keeps its own tabs. Pages stay in the Library.");
-  head.append(heading, sub);
+  // Phones (#928) have no Esc and no chrome to tap while the overview is up.
+  const back = el("button", "spaces-back", "Back");
+  back.type = "button";
+  back.addEventListener("click", () => close());
+  head.append(back, heading, sub);
   const grid = el("div", "spaces-grid");
   grid.setAttribute("role", "listbox");
   grid.setAttribute("aria-label", "Spaces");

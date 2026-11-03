@@ -2,7 +2,7 @@
 <html lang="en" data-theme="neutral" data-restoring>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Scribe</title>
   <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml" sizes="any">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="./audio.css">
   <link rel="stylesheet" href="./harness.css?v=3">
   <link rel="stylesheet" href="./orb.css?v=4">
+  <link rel="stylesheet" href="./phone.css?v=1">
   <script src="/api/appearance/bootstrap.js"></script>
   <script src="./appearance.js"></script>
   <script>
@@ -142,6 +143,9 @@
   <div id="version-banner" class="persist-banner" hidden role="alert">
     <p><strong>The Scribe daemon is out of date.</strong> This page needs a newer daemon, so closing, opening, and the Library will not work. Restart it with <code>npm run stop</code> in the scribe folder; the next Scribe call starts the new one.</p>
     <p id="version-banner-detail" class="persist-banner-detail"></p>
+  </div>
+  <div id="session-banner" class="persist-banner" hidden role="alert">
+    <p><strong>Your web session ended.</strong> Changes are not saved until you <a id="session-banner-link" href="#">sign in again</a>.</p>
   </div>
   <div class="workspace">
     <main>
@@ -523,7 +527,7 @@
   <script src="./audio-composer.js"></script>
   <script src="./preview.js?v=3"></script>
   <script src="./permissions.js?v=2"></script>
-  <script src="./spaces.js?v=5"></script>
+  <script src="./spaces.js?v=6"></script>
   <script src="./glfx.js?v=4"></script>
   <script src="./orb.js?v=7"></script>
   <script src="./newpage.js?v=7"></script>
@@ -540,6 +544,8 @@
   <script src="./agent-render.js?v=17"></script>
   <script src="./memories.js?v=2"></script>
   <script src="./agent.js?v=76"></script>
+  <script src="./phone.js?v=1"></script>
+  <script src="./web-session.js?v=1"></script>
   <script src="./harness.js?v=6"></script>
   <script src="./desktop.js?v=10"></script>
 </body>

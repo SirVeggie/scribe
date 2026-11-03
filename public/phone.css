@@ -1,0 +1,376 @@
+/* Phone layout (#928, phone.js): one pane at a time with a switcher at the bottom, open pages as a list,
+ * and controls sized for touch. html.phone is set below 640px wide, a narrow desktop window included. */
+
+.phone-nav,
+.phone-title,
+.phone-tabs {
+  display: none;
+}
+
+html.phone body {
+  height: 100dvh;
+  max-height: 100dvh;
+}
+
+/* ---------- top bar: settings, space, the current page, new page ---------- */
+
+html.phone .chrome .tabs-wrap > .tabs,
+html.phone #clear,
+html.phone #library-toggle,
+html.phone #agent-toggle {
+  display: none;
+}
+
+html.phone .tabs-wrap {
+  flex: 0 0 auto;
+}
+
+html.phone .brand {
+  padding: 0 10px 0 14px;
+  min-height: 44px;
+}
+
+html.phone button.space-chip {
+  height: 32px;
+  max-width: 34vw;
+  margin-right: 4px;
+  border-radius: 16px;
+}
+
+html.phone button.new-tab {
+  width: 40px;
+  height: 40px;
+  margin: 0 4px 0 0;
+}
+
+html.phone .actions {
+  padding: 0 8px 0 0;
+}
+
+html.phone .phone-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: rgba(var(--lift-rgb), 0.05);
+  box-shadow: none;
+  color: var(--heading);
+  font-weight: 550;
+}
+
+html.phone .phone-title[aria-expanded="true"] {
+  background: rgba(var(--lift-rgb), 0.1);
+}
+
+.phone-title-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.phone-title-count:not(:empty) {
+  flex: 0 0 auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: rgba(var(--lift-rgb), 0.1);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* ---------- one pane at a time ---------- */
+
+html.phone .workspace {
+  padding: 0;
+}
+
+html.phone .workspace main,
+html.phone .side-pane,
+html.phone .agent-pane {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html.phone .side-pane:not(.closed),
+html.phone .agent-pane:not(.closed) {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  border: 0;
+}
+
+html.phone .side-pane:not(.closed) .side-inner {
+  width: 100%;
+  max-width: none;
+}
+
+html.phone :is(.side-resizer, .agent-resizer) {
+  display: none;
+}
+
+html.phone .workspace:has(.side-pane:not(.closed), .agent-pane:not(.closed)) main {
+  flex: 0 0 0;
+  visibility: hidden;
+}
+
+/* The switcher's Chat stands in for the floating chat. */
+html.phone .agent-dock {
+  display: none;
+}
+
+/* ---------- bottom switcher ---------- */
+
+html.phone .phone-nav {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  background: var(--chrome);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+  position: relative;
+  z-index: var(--z-raised);
+}
+
+html.spaces-open .phone-nav {
+  visibility: hidden;
+}
+
+.phone-nav-btn {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 52px;
+  padding: 0;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.phone-nav-btn.on {
+  color: var(--heading);
+  background: rgba(var(--lift-rgb), 0.07);
+}
+
+.phone-nav-btn.busy {
+  color: var(--ag-live, var(--accent));
+}
+
+.phone-nav-btn.waiting {
+  color: var(--ag-warn, var(--accent));
+}
+
+.phone-nav-btn svg {
+  display: block;
+}
+
+.phone-nav-btn .badge {
+  top: 4px;
+  right: calc(50% - 20px);
+}
+
+.phone-nav-btn .badge[hidden] {
+  display: none;
+}
+
+/* ---------- open pages ---------- */
+
+html.phone .phone-tabs:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  position: fixed;
+  inset: 48px 0 0;
+  z-index: var(--z-modal);
+  background: rgba(10, 11, 12, 0.48);
+}
+
+.phone-tabs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(70dvh, 100%);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+  background: var(--panel);
+  border-radius: 0 0 16px 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.phone-tab {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.phone-tab.active {
+  background: rgba(var(--lift-rgb), 0.08);
+  color: var(--heading);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.phone-tab.pinned .phone-tab-open::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+button.phone-tab-open {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  display: block;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font-size: 14px;
+}
+
+button.phone-tab-close {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+button.phone-tab-new {
+  gap: 10px;
+  justify-content: flex-start;
+  height: 44px;
+  padding: 0 12px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* ---------- touch sizes ---------- */
+
+/* Under 16px, phone browsers zoom into a field on focus. */
+html.phone :is(.ag-textarea, .ag-input-marks, .ag-input, #library-search) {
+  font-size: 16px;
+}
+
+html.phone #library-search {
+  height: 40px;
+}
+
+html.phone .ag-send {
+  width: 40px;
+  height: 40px;
+}
+
+html.phone .ag-btn {
+  height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+html.phone .ag-card-actions {
+  gap: 8px;
+}
+
+html.phone .lib-row {
+  min-height: 40px;
+}
+
+/* Toasts go to the top, clear of the composer and the switcher. */
+html.phone .ag-toasts {
+  top: 10px;
+  bottom: auto;
+  left: 10px;
+  right: 10px;
+  width: auto;
+}
+
+/* ---------- spaces and devices ---------- */
+
+html.phone .spaces-inner {
+  padding: 20px 12px 40px;
+}
+
+html.phone .spaces-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.phone .space-card {
+  min-height: 0;
+  /* Let the overview scroll under a finger; reordering spaces is for a wider window. */
+  touch-action: pan-y;
+}
+
+.spaces-back {
+  display: none;
+}
+
+html.phone .spaces-head {
+  position: relative;
+}
+
+html.phone button.spaces-back {
+  display: inline-flex;
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 36px;
+  padding: 0 14px;
+}
+
+html.phone .spaces-title {
+  line-height: 36px;
+}
+
+html.phone .spaces-keys {
+  display: none;
+}
+
+html.phone button.space-more {
+  width: 40px;
+  height: 36px;
+  opacity: 1;
+}
+
+html.phone .ag-thead .ag-icon-btn {
+  width: 34px;
+  height: 34px;
+}
+
+html.phone .ag-composer .ag-pill {
+  height: 32px;
+}
