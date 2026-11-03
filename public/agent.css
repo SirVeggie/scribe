@@ -1002,6 +1002,16 @@ html.tight-small .agent-pane {
   background: rgba(var(--lift-rgb), 0.08);
 }
 
+.ag-ide-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ag-ide-open > svg {
+  flex: 0 0 auto;
+}
+
 .ag-copy.done {
   color: var(--ag-ok);
 }

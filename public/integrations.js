@@ -106,6 +106,13 @@ ${file}`); }
   launcher.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); update(settings.enabled); } });
   const ready = refresh();
 
+  /** "IntelliJ ↗": short visible label, full action name for assistive tech. */
+  function ideLabel(button) {
+    button.classList.add("ag-ide-open");
+    button.setAttribute("aria-label", "Open in IntelliJ");
+    button.innerHTML = 'IntelliJ<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M11.5 9.5v3.2c0 .4-.3.8-.8.8H3.3c-.4 0-.8-.4-.8-.8V5.3c0-.5.4-.8.8-.8h3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+
   /** A diff keeps its selected line even when clicking the action moves focus. */
   function decorateDiff(head, diff, source, file, notify) {
     const actions = document.createElement("span");
@@ -133,7 +140,8 @@ ${file}`); }
       const button = document.createElement("button");
       button.type = "button";
       button.className = "ag-btn tiny";
-      button.textContent = label;
+      if (mode === "file") ideLabel(button);
+      else button.textContent = label;
       button.addEventListener("click", event => {
         event.stopPropagation();
         open(button, { ...source, path: file.path, mode, line, column }, notify);
@@ -151,7 +159,7 @@ ${file}`); }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ag-copy";
-    button.textContent = "Open in IntelliJ";
+    ideLabel(button);
     button.addEventListener("click", event => {
       event.stopPropagation();
       const from = typeof source === "function" ? source() : source;

@@ -394,7 +394,7 @@ A turn on a scoped or attached page keeps an HTML checkpoint. The footer can res
 
 - Find it: Settings → Integrations → IntelliJ IDEA
 
-Enable the integration, optionally set its launcher, then use Open diff or Open in IntelliJ on a diff. A selected diff line/column is carried into the editor.
+Enable the integration, optionally set its launcher, then use Open diff or IntelliJ on a diff. A selected diff line/column is carried into the editor.
 
 ### Workspaces & branches
 

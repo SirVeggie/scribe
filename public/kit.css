@@ -331,10 +331,35 @@
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
-:where(s-code) > :where(.kit-code-head) > :where(button) { margin-left: auto; min-height: 22px; padding: 0 9px; font-size: 0.76rem; }
-:where(s-code) > :where(.kit-code-head) > :where(.kit-code-open:not([hidden])) + :where(button) { margin-left: 0; }
-:where(s-code) > :where(.kit-code-head) > :where(.kit-code-open[hidden]) { display: none; }
-:where(s-code) > :where(pre) { margin: 0; padding: 10px 14px; overflow: auto; background: none; border: 0; border-radius: 0; font: 12.5px/1.55 var(--kit-mono); tab-size: 2; }
+/* The path is cut from the start (rtl box, ltr text inside) so the file name stays visible. */
+:where(s-code) > :where(.kit-code-head) > :where(.kit-code-name) { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; }
+:where(s-code) > :where(.kit-code-head) > :where(.kit-code-name) > :where(bdi) { direction: ltr; unicode-bidi: isolate; }
+/* Header buttons are quiet: no fill until hovered. Element + class keeps a page's own button styles off them. */
+s-code > .kit-code-head > .kit-code-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1;
+}
+s-code > .kit-code-head > .kit-code-copy { width: 24px; padding: 0; justify-content: center; }
+s-code > .kit-code-head > .kit-code-btn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+s-code > .kit-code-head > .kit-code-btn > svg { flex: 0 0 auto; }
+s-code > .kit-code-head > .kit-code-open[hidden] { display: none; }
+/* Element selectors so a page's own pre styles (radius, border, fill) don't box the code inside the frame. */
+s-code > pre { margin: 0; padding: 10px 14px; overflow: auto; background: none; border: 0; border-radius: 0; box-shadow: none; font: 12.5px/1.55 var(--kit-mono); tab-size: 2; }
 :where(s-code) > :where(pre) > :where(code) { display: block; padding: 0; background: none; font: inherit; }
 :where(s-code) :where(.kit-add, .kit-del, .kit-hunk) { display: block; margin: 0 -14px; padding: 0 14px; }
 :where(s-code) :where(.kit-add) { background: color-mix(in srgb, var(--kit-ok) 13%, transparent); }

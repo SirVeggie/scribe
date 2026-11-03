@@ -184,13 +184,21 @@
    * A code block that names a file offers to open it in the IDE when the file is in an IntelliJ
    * project in the page's workspace: at line, else a diff's first new line, else line 1.
    */
+  var CODE_ICONS = {
+    copy: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3.8C3 3.3 3.3 3 3.8 3h6.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+    done: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    failed: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    external: '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M11.5 9.5v3.2c0 .4-.3.8-.8.8H3.3c-.4 0-.8-.4-.8-.8V5.3c0-.5.4-.8.8-.8h3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  };
   function ideButton(head, copy, file, line, diffText) {
     var ide = window.scribe && window.scribe.ide;
     if (!ide) return;
     var hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/m.exec(diffText);
     var at = Number(line) || (hunk ? Number(hunk[1]) : 1);
-    var open = el("button", "kit-code-open", "Open in IntelliJ");
+    var open = el("button", "kit-code-btn kit-code-open", "IntelliJ");
     open.type = "button";
+    open.setAttribute("aria-label", "Open in IntelliJ");
+    open.insertAdjacentHTML("beforeend", CODE_ICONS.external);
     open.hidden = true;
     open.addEventListener("click", function () {
       ide.open(file, { line: at }).then(function (result) {
@@ -209,14 +217,24 @@
     var diff = block.hasAttribute("diff") || language === "diff";
     block.textContent = "";
     var head = el("div", "kit-code-head");
-    var copy = el("button", null, "Copy");
+    var copy = el("button", "kit-code-btn kit-code-copy");
     copy.type = "button";
+    function copyState(icon, label) {
+      copy.innerHTML = CODE_ICONS[icon];
+      copy.setAttribute("aria-label", label);
+      copy.dataset.tooltip = label;
+    }
+    copyState("copy", "Copy");
     copy.addEventListener("click", function () {
-      copyText(text).then(function () { copy.textContent = "Copied"; }, function () { copy.textContent = "Copy failed"; })
-        .then(function () { setTimeout(function () { copy.textContent = "Copy"; }, 1500); });
+      copyText(text).then(function () { copyState("done", "Copied"); }, function () { copyState("failed", "Copy failed"); })
+        .then(function () { setTimeout(function () { copyState("copy", "Copy"); }, 1500); });
     });
     var file = block.getAttribute("file") || "";
-    head.append(el("span", null, file || language || (diff ? "diff" : "")), copy);
+    // A long path keeps its file name: it is cut from the start, and the tip shows all of it.
+    var name = el("span", "kit-code-name");
+    name.append(el("bdi", null, file || language || (diff ? "diff" : "")));
+    if (file) name.dataset.tooltip = file;
+    head.append(name, copy);
     if (file) ideButton(head, copy, file, block.getAttribute("line"), diff ? text : "");
     var code = el("code");
     var pre = el("pre");
