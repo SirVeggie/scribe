@@ -6023,7 +6023,6 @@
   }
 
   function renderPalette() {
-    paletteList.replaceChildren();
     const empty = paletteHits.length === 0;
     paletteEmpty.hidden = !empty;
     const parsed = paletteQuery();
@@ -6045,93 +6044,139 @@
     if (semantic && semanticProgress) {
       paletteEmpty.textContent += ` Still ${semanticProgress}.`;
     }
-    for (let index = 0; index < paletteHits.length; index += 1) {
-      const tab = paletteHits[index];
+    // Keyed rows (#929): a row still listed after a keystroke stays in place, so its hover and the selection do not restart.
+    const items = [];
+    paletteHits.forEach((tab, index) => {
       if (tab.section) {
-        const head = document.createElement("div");
-        head.className = "palette-section";
-        head.textContent = tab.section;
-        paletteList.appendChild(head);
+        items.push({
+          key: `section:${tab.section}`,
+          create: () => Object.assign(document.createElement("div"), { className: "palette-section" }),
+          update: (head) => {
+            if (head.textContent !== tab.section) head.textContent = tab.section;
+          },
+        });
       }
-      const el = document.createElement("div");
-      el.className = "palette-row" + (index === paletteIndex ? " active" : "") + (tab.busy ? " busy" : "");
-      el.role = "option";
-      el.setAttribute("aria-selected", index === paletteIndex ? "true" : "false");
-      el.addEventListener("mouseenter", () => {
-        paletteIndex = index;
-        highlightPaletteRows();
+      items.push({
+        key: `${tab.kind || "page"}|${tab.id}|${tab.anchor || ""}`,
+        create: () => {
+          const el = document.createElement("div");
+          el.className = "palette-row";
+          el.role = "option";
+          return el;
+        },
+        update: (el) => {
+          paletteRowIndex.set(el, index);
+          window.scribeClasses(el, { active: index === paletteIndex, busy: tab.busy, "with-thumb": Boolean(tab.thumb) });
+          window.scribeAttr(el, "aria-selected", index === paletteIndex ? "true" : "false");
+          const folder = tab.folderId ? library.pathOf(tab.folderId) : tab.folderPath || "";
+          const sig = JSON.stringify([tab.thumb, tab.title, paletteChipLabels(tab), folder, tab.snippet, tab.matchLabel]);
+          window.scribeFill(el, sig, () => paletteRowContent(tab, folder));
+        },
       });
-      el.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        activatePaletteHit(tab, views.modeFromEvent(event));
-      });
-
-      // A row with a thumbnail keeps its text in a column beside it.
-      let body = el;
-      if (tab.thumb) {
-        el.classList.add("with-thumb");
-        const thumb = document.createElement("img");
-        thumb.className = "palette-thumb";
-        thumb.src = tab.thumb;
-        thumb.alt = "";
-        thumb.loading = "lazy";
-        body = document.createElement("div");
-        body.className = "palette-row-text";
-        el.append(thumb, body);
-      }
-      const main = document.createElement("div");
-      main.className = "palette-row-main";
-      const title = document.createElement("span");
-      title.className = "tab-title";
-      title.textContent = tab.title;
-      main.appendChild(title);
-
-      const chips = document.createElement("div");
-      chips.className = "palette-chips";
-      if (tab.locationLabel) {
-        chips.appendChild(paletteChip(tab.locationLabel, "location-" + tab.location));
-      }
-      if (tab.qualityLabel) {
-        chips.appendChild(paletteChip(tab.qualityLabel));
-      }
-      if (tab.kind === "space") {
-        if (tab.open) {
-          chips.appendChild(paletteChip("Current"));
-        }
-      } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask" || tab.kind?.startsWith("ai-") || tab.kind === "semantic-info") {
-        if (tab.open) {
-          chips.appendChild(paletteChip("Open"));
-        }
-      } else if (!tab.open) {
-        chips.appendChild(paletteChip("Closed"));
-      }
-      const folder = tab.folderId ? library.pathOf(tab.folderId) : tab.folderPath || "";
-      if (folder) {
-        chips.appendChild(paletteChip(folder, "folder"));
-      }
-      if (chips.childElementCount) {
-        main.appendChild(chips);
-      }
-      body.appendChild(main);
-
-      if (tab.snippet || tab.matchLabel) {
-        const snippet = document.createElement("div");
-        snippet.className = "palette-snippet";
-        if (tab.matchLabel) {
-          const label = document.createElement("span");
-          label.className = "palette-match";
-          label.textContent = tab.matchLabel;
-          snippet.appendChild(label);
-        }
-        snippet.append(tab.snippet || "");
-        body.appendChild(snippet);
-      }
-      paletteList.appendChild(el);
-    }
+    });
+    window.scribeKeyedList(paletteList, items);
     const active = paletteList.querySelector(".palette-row.active");
     if (active) {
       active.scrollIntoView({ block: "nearest" });
     }
+  }
+
+  /** Which row each palette element stands for now; rows are kept across renders, so listeners look it up. */
+  const paletteRowIndex = new WeakMap();
+  const paletteRowAt = (target) => {
+    const row = target.closest?.(".palette-row");
+    return row && paletteRowIndex.has(row) ? paletteRowIndex.get(row) : -1;
+  };
+  paletteList.addEventListener("mouseover", (event) => {
+    const index = paletteRowAt(event.target);
+    if (index >= 0 && index !== paletteIndex) {
+      paletteIndex = index;
+      highlightPaletteRows();
+    }
+  });
+  paletteList.addEventListener("mousedown", (event) => {
+    const index = paletteRowAt(event.target);
+    if (index < 0) return;
+    event.preventDefault();
+    activatePaletteHit(paletteHits[index], views.modeFromEvent(event));
+  });
+
+  /** The chips on a palette row, as [label, extra class] pairs (the folder chip is added apart). */
+  function paletteChipLabels(tab) {
+    const chips = [];
+    if (tab.locationLabel) {
+      chips.push([tab.locationLabel, "location-" + tab.location]);
+    }
+    if (tab.qualityLabel) {
+      chips.push([tab.qualityLabel]);
+    }
+    if (tab.kind === "space") {
+      if (tab.open) {
+        chips.push(["Current"]);
+      }
+    } else if (tab.kind === "thread" || tab.kind === "action" || tab.kind === "ask" || tab.kind?.startsWith("ai-") || tab.kind === "semantic-info") {
+      if (tab.open) {
+        chips.push(["Open"]);
+      }
+    } else if (!tab.open) {
+      chips.push(["Closed"]);
+    }
+    return chips;
+  }
+
+  /** A palette row's children: thumbnail, title with chips, snippet. */
+  function paletteRowContent(tab, folder) {
+    const out = [];
+    // A row with a thumbnail keeps its text in a column beside it.
+    let body = null;
+    if (tab.thumb) {
+      const thumb = document.createElement("img");
+      thumb.className = "palette-thumb";
+      thumb.src = tab.thumb;
+      thumb.alt = "";
+      thumb.loading = "lazy";
+      body = document.createElement("div");
+      body.className = "palette-row-text";
+      out.push(thumb, body);
+    }
+    const parts = [];
+    const main = document.createElement("div");
+    main.className = "palette-row-main";
+    const title = document.createElement("span");
+    title.className = "tab-title";
+    title.textContent = tab.title;
+    main.appendChild(title);
+
+    const chips = document.createElement("div");
+    chips.className = "palette-chips";
+    for (const [label, extra] of paletteChipLabels(tab)) {
+      chips.appendChild(paletteChip(label, extra));
+    }
+    if (folder) {
+      chips.appendChild(paletteChip(folder, "folder"));
+    }
+    if (chips.childElementCount) {
+      main.appendChild(chips);
+    }
+    parts.push(main);
+
+    if (tab.snippet || tab.matchLabel) {
+      const snippet = document.createElement("div");
+      snippet.className = "palette-snippet";
+      if (tab.matchLabel) {
+        const label = document.createElement("span");
+        label.className = "palette-match";
+        label.textContent = tab.matchLabel;
+        snippet.appendChild(label);
+      }
+      snippet.append(tab.snippet || "");
+      parts.push(snippet);
+    }
+    if (body) {
+      body.append(...parts);
+      return out;
+    }
+    return parts;
   }
 
   function paletteChip(label, extraClass) {

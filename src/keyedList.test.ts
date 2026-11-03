@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { launchChromium } from "./chromium.js";
+import { loadChatFixture } from "./testSupport/shell.js";
 
 test("scribeKeyedList keeps elements by key, moves only what is out of order, and leaves other classes alone", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Keyed list test" });
@@ -90,6 +91,91 @@ test("Trash rows are kept by key when the Trash reloads and a folder opens (#430
       return [rows.map(row => row.dataset.id), rows[0] === before[0], rows[2] === before[1], rows[0].getAttribute("aria-expanded"),
         rows[1].getAttribute("aria-level"), rows[2].querySelector(".tab-title")!.textContent];
     }, held), [["f", "q", "p"], true, true, "true", "2", "Page renamed"]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Palette rows are kept by key as the hits change, and hover and clicks read the row's current hit (#929)", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Palette keyed rows test" });
+  try {
+    const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.setContent('<div id="palette-list" style="max-height:400px;overflow:auto"></div><div id="palette-empty"></div>');
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/dom-sync.js", import.meta.url), "utf8") });
+    const app = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+    await page.addScriptTag({ content: `
+      const paletteList = document.querySelector("#palette-list"), paletteEmpty = document.querySelector("#palette-empty");
+      let paletteHits = [], paletteIndex = 0, paletteKind = "pages", semanticProgress = "";
+      const paletteQuery = () => ({ id: "pages", query: "x" });
+      const library = { pathOf: (id) => "Folder " + id };
+      const views = { modeFromEvent: () => null };
+      const activatePaletteHit = (tab) => { window.opened = tab.title; };
+      ${app.slice(app.indexOf("  function renderPalette("), app.indexOf("  function movePalette("))}
+      window.show = (hits, index = 0) => { paletteHits = hits; paletteIndex = index; renderPalette(); };
+      window.index = () => paletteIndex;
+    ` });
+    await page.evaluate(() => (window as any).show([
+      { id: "a", title: "Alpha", open: true },
+      { id: "b", title: "Beta", open: false, folderId: "f" },
+      { id: "c", title: "Gamma", open: true, section: "Related" },
+    ]));
+    const held = await page.evaluateHandle(() => [...document.querySelectorAll("#palette-list > *")]);
+    // The next keystroke drops Alpha, renames Beta and moves Gamma above it.
+    await page.evaluate(() => (window as any).show([
+      { id: "c", title: "Gamma", open: true, section: "Related" },
+      { id: "b", title: "Beta 2", open: false, folderId: "f" },
+    ], 1));
+    assert.deepEqual(await page.evaluate((before) => {
+      const nodes = [...document.querySelectorAll("#palette-list > *")];
+      return [nodes.length, nodes[0] === before[2], nodes[1] === before[3], nodes[2] === before[1],
+        nodes.map((n) => n.textContent), nodes[2].classList.contains("active"), (window as any).index()];
+    }, held), [3, true, true, true, ["Related", "Gamma", "Beta 2ClosedFolder f"], true, 1]);
+    await page.locator('#palette-list .palette-row').nth(0).hover();
+    assert.equal(await page.evaluate(() => (window as any).index()), 0);
+    await page.locator('#palette-list .palette-row').nth(1).click();
+    assert.equal(await page.evaluate(() => (window as any).opened), "Beta 2");
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("Chat thread list rows are kept by key as threads change, and pick through the latest render (#929)", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Thread list keyed rows test" });
+  try {
+    const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.stack || error.message));
+    await page.route("http://threads.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="threads"></div>' }));
+    await page.goto("http://threads.test/");
+    const agent = fs.readFileSync(new URL("../public/agent.js", import.meta.url), "utf8");
+    await loadChatFixture(page, agent.replace(/  if \(document.readyState === "loading"\)[\s\S]*?else boot\(\);/, `
+      S.filter = 'all';
+      const now = Date.now();
+      const thread = (id, title, extra = {}) => ({ id, title, provider: 'claude', model: 'm', status: 'idle', scope: { kind: 'global' },
+        stats: { turns: 1, files: 0 }, activityAt: now, createdAt: now, updatedAt: now, ...extra });
+      for (const t of [thread('a', 'Alpha'), thread('b', 'Beta', { activityAt: now - 1000 })]) S.threads.set(t.id, t);
+      window.render = (tag) => renderThreadList(document.querySelector('#threads'), { onPick: (id) => { window.picked = tag + ':' + id; }, currentId: 'a' });
+      window.change = () => {
+        S.threads.set('b', { ...S.threads.get('b'), status: 'running', title: 'Beta running' });
+        S.threads.set('c', thread('c', 'Gamma', { activityAt: now - 2000 }));
+      };
+    `));
+    await page.evaluate(() => (window as any).render("first"));
+    const held = await page.evaluateHandle(() => [...document.querySelectorAll("#threads .ag-row-wrap")]);
+    await page.evaluate(() => { (window as any).change(); (window as any).render("second"); });
+    assert.deepEqual(await page.evaluate((before) => {
+      const rows = [...document.querySelectorAll("#threads .ag-row-wrap")];
+      const b = rows.find((row) => row.querySelector('[data-id="b"]'))!;
+      const button = b.querySelector("button.ag-row")!;
+      return [rows.length, rows.includes(before[0]), b === before[1], button.classList.contains("s-running"),
+        button.querySelector(".ag-row-title")!.textContent];
+    }, held), [3, true, true, true, "Beta running"]);
+    await page.locator('#threads button.ag-row[data-id="b"]').click();
+    assert.equal(await page.evaluate(() => (window as any).picked), "second:b");
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

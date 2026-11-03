@@ -8517,12 +8517,16 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     // Keep the floating scrollbar's surface class when refreshing the existing list.
     list.classList.toggle("compact", compactThreads());
     window.scribeSyncChildren(container, [top, list, ...rowGlow.nodes(container)]);
+    // Rows, groups and sections are keyed (#929): each stays in the page while its key is listed and only what
+    // changed on it is set, so a running thread's row keeps its hover as its status changes. Their handlers close
+    // over the key; what may change between renders (the pick callback) they read from ctx.
+    const ctx = container.agCtx || (container.agCtx = {});
+    Object.assign(ctx, { onPick, onNewIn, fill: () => container.agFill() });
     const fill = () => {
       for (const row of list.querySelectorAll(".ag-row-active")) row.classList.remove("ag-row-active");
       const out = [];
       collect(out);
-      // Rows are patched where they stand, so a running thread's row keeps its hover as its status changes (#443).
-      window.scribeSyncChildren(list, out, { patch: true });
+      window.scribeKeyedList(list, out);
       const at = rows().findIndex((row) => row.dataset.id === container.dataset.activeId);
       highlight(Math.max(0, at), false);
       rowGlow.watch(container, list);
@@ -8534,44 +8538,45 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         }, Math.max(1, expiry - Date.now()));
       }
     };
-    // A kept row's button outlives this render, so it fills through the latest one.
     container.agFill = fill;
+    const row = (t, label) => threadItem(t, t.id === currentId, ctx, label);
     const collect = (out) => {
       const q = S.search.trim().toLowerCase();
       if (recentOn(recentList)) {
         let recent = recentThreads();
         if (q) recent = rankedThreads(recent, q).map((row) => row.thread).sort((a, b) => recentInteractionAt(b) - recentInteractionAt(a));
-        const head = el("div", "ag-list-group");
-        head.dataset.key = "recent-heading";
-        head.append(el("span", "ag-list-group-kind", "Recent"));
-        const body = el("div", "ag-list-group-body ag-list-recent");
-        body.dataset.key = "recent-body";
-        for (const t of recent) body.append(threadRow(t, t.id === currentId, onPick));
         // Nothing recent (or nothing matching the search): leave the section out.
-        if (recent.length) out.push(head, body);
+        if (recent.length) {
+          out.push(
+            listHeading("recent-heading", "Recent"),
+            keyedBox("recent-body", "ag-list-group-body ag-list-recent", recent.map((t) => row(t)))
+          );
+        }
       }
       // Threads a usage limit stopped (#951), from every scope, until continued or dismissed.
       let stopped = limitStoppedThreads();
       if (q) stopped = rankedThreads(stopped, q).map((row) => row.thread);
       if (stopped.length) {
-        const head = el("div", "ag-list-group");
-        head.dataset.key = "limit-heading";
-        head.append(el("span", "ag-list-group-kind", "Out of usage"));
-        const body = el("div", "ag-list-group-body ag-list-limit");
-        body.dataset.key = "limit-body";
+        const items = [];
         for (const t of stopped) {
-          body.append(threadRow(t, t.id === currentId, onPick));
           const pending = waitingAsk(t)?.kind === "limit" ? t.asking : null;
           const card = pending || t.limitQueued;
-          const line = el("div", "ag-list-limit-line");
-          line.dataset.key = `limit:${t.id}:${pending ? "pending" : "queued"}:${card.itemId}`;
-          line.append(
-            el("span", "ag-list-limit-text", card.resetsAt <= Date.now() ? (pending ? "Usage has reset" : "Continuing soon") : `${pending ? "Resets" : "Continues"} ${R.finishTime(card.resetsAt)}`),
-            limitButtons(t.id, card.itemId, pending ? "pending" : "queued", null, pending?.switchTo)
-          );
-          body.append(line);
+          const kind = pending ? "pending" : "queued";
+          items.push(row(t), {
+            key: `limit:${t.id}:${kind}:${card.itemId}:${JSON.stringify(pending?.switchTo ?? null)}`,
+            create: () => {
+              const line = el("div", "ag-list-limit-line");
+              line.append(el("span", "ag-list-limit-text"), limitButtons(t.id, card.itemId, kind, null, pending?.switchTo));
+              return line;
+            },
+            update: (line) => {
+              const text = card.resetsAt <= Date.now() ? (pending ? "Usage has reset" : "Continuing soon") : `${pending ? "Resets" : "Continues"} ${R.finishTime(card.resetsAt)}`;
+              const span = line.firstChild;
+              if (span.textContent !== text) span.textContent = text;
+            },
+          });
         }
-        out.push(head, body);
+        out.push(listHeading("limit-heading", "Out of usage"), keyedBox("limit-body", "ag-list-group-body ag-list-limit", items));
       }
       let threads = [...S.threads.values()].filter((t) => (S.filter === "archived" ? t.archived : !t.archived));
       if (S.filter === "here") threads = threads.filter(hereMatch);
@@ -8589,22 +8594,28 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       // Archived starts with the hidden workspaces: the folders alone, to show again or delete.
       const hiddenList = S.filter === "archived" && !q ? prefs().hiddenWorkspaces || [] : [];
       if (hiddenList.length) {
-        const head = el("div", "ag-list-group");
-        head.dataset.key = "group:hidden-workspaces";
-        head.append(icon("box"), el("span", "ag-list-group-kind", "Hidden workspaces"));
-        out.push(head);
+        out.push(listHeading("group:hidden-workspaces", "Hidden workspaces", "box"));
         for (const dir of hiddenList) {
-          const n = workspaceThreads(dir).length;
-          const row = el("div", "ag-hidden-ws");
-          row.dataset.key = `hidden-ws:${dirKey(dir)}`;
-          row.dataset.tooltip = dir;
-          const acts = el("div", "ag-hidden-ws-acts");
-          acts.append(
-            button("Show", "ag-btn small", () => setWorkspaceHidden(dir, false), "Back in the thread list and the workspace menus"),
-            button(icon("more"), "ag-icon-btn small", (event) => workspaceMenu(event.currentTarget, dir), "Workspace actions")
-          );
-          row.append(el("span", "ag-hidden-ws-name", R.basename(dir) || dir), el("span", "ag-hidden-ws-count", n === 1 ? "1 thread" : `${n} threads`), acts);
-          out.push(row);
+          out.push({
+            key: `hidden-ws:${dirKey(dir)}`,
+            create: () => {
+              const row = el("div", "ag-hidden-ws");
+              row.dataset.tooltip = dir;
+              const acts = el("div", "ag-hidden-ws-acts");
+              acts.append(
+                button("Show", "ag-btn small", () => setWorkspaceHidden(dir, false), "Back in the thread list and the workspace menus"),
+                button(icon("more"), "ag-icon-btn small", (event) => workspaceMenu(event.currentTarget, dir), "Workspace actions")
+              );
+              row.append(el("span", "ag-hidden-ws-name", R.basename(dir) || dir), el("span", "ag-hidden-ws-count"), acts);
+              return row;
+            },
+            update: (row) => {
+              const n = workspaceThreads(dir).length;
+              const count = row.querySelector(".ag-hidden-ws-count");
+              const text = n === 1 ? "1 thread" : `${n} threads`;
+              if (count.textContent !== text) count.textContent = text;
+            },
+          });
         }
       }
       const open = S.threads.get(currentId);
@@ -8616,27 +8627,30 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const must = (h) => h.status !== "idle" || h.id === currentId;
         const latest = all.filter((h) => !must(h)).slice(-2);
         const keep = helpersShown.has(parent.id) ? all : all.filter((h) => must(h) || latest.includes(h));
-        const box = el("div", "ag-row-helpers");
-        box.dataset.key = `helpers:${parent.id}`;
-        for (const h of keep) box.append(threadRow(h, h.id === currentId, onPick, helperName(h)));
+        const items = keep.map((h) => row(h, helperName(h)));
         const hidden = all.length - keep.length;
         if (hidden || (helpersShown.has(parent.id) && all.length > 2)) {
-          const more = button("", "ag-list-more", () => {
-            if (hidden) helpersShown.add(parent.id);
-            else helpersShown.delete(parent.id);
-            container.agFill();
-          });
-          more.append(el("span", null, hidden ? `Show ${hidden} earlier ${hidden === 1 ? "helper" : "helpers"}` : "Show fewer helpers"));
-          box.append(more);
+          const parentId = parent.id;
+          items.push(moreItem("more", [hidden ? `Show ${hidden} earlier ${hidden === 1 ? "helper" : "helpers"}` : "Show fewer helpers"], () => {
+            // Shown in full: show fewer. Else some are hidden: show them all.
+            if (helpersShown.has(parentId)) helpersShown.delete(parentId);
+            else helpersShown.add(parentId);
+            ctx.fill();
+          }));
         }
-        target.append(box);
+        target.push(keyedBox(`helpers:${parent.id}`, "ag-row-helpers", items));
       };
+      const empty = (text) => ({
+        key: "empty",
+        create: () => el("div", "ag-list-empty"),
+        update: (node) => {
+          if (node.textContent !== text) node.textContent = text;
+        },
+      });
       if (!threads.length) {
         if (hiddenList.length) return;
         out.push(
-          el(
-            "div",
-            "ag-list-empty",
+          empty(
             S.filter === "here"
               ? "No threads for this page yet. Threads for its folder, its workspace and global threads show here too."
               : S.filter === "workspaces"
@@ -8648,7 +8662,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       }
       // Grouping would put weaker hits from one workspace above stronger hits from another.
       if (q) {
-        for (const t of threads) out.push(threadRow(t, t.id === currentId, onPick));
+        for (const t of threads) out.push(row(t));
         return;
       }
       const order = [];
@@ -8679,15 +8693,88 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (!visible.length && !hidden) continue;
         shown++;
         const first = visible[0] || members[0];
-        const gt = groupTitle(first);
         // A search shows what it found, whatever is folded.
         const folded = !q && S.collapsedGroups.has(key);
-        const head = el("div", `ag-list-group foldable${folded ? " folded" : ""}`);
-        head.dataset.key = `group:${key}`;
+        // The folder a workspace group stands for: every group of the Workspaces list, and app scope None elsewhere.
+        const dir = S.filter === "workspaces" ? workspaceDir(first) : key.startsWith("ws:") ? activeTab()?.workspace : first.scope.kind === "workspace" ? first.scope.ref : null;
+        out.push(groupHead(key, groupTitle(first), { folded, count: members.length, dir, canAdd: S.filter !== "archived", ctx }));
+        if (folded) continue;
+        const items = [];
+        for (const t of visible) {
+          items.push(row(t));
+          helperRows(t, items);
+        }
+        if (hidden) {
+          items.push(moreItem(`more:${key}`, [visible.length ? "Show 10 more" : "Show older threads", hidden === 1 ? "1 hidden" : `${hidden} hidden`], () => {
+            S.groupExtra.set(key, (S.groupExtra.get(key) || 0) + LIST_PAGE);
+            ctx.fill();
+          }));
+        }
+        out.push(keyedBox(`group-body:${key}`, "ag-list-group-body", items));
+      }
+      if (!shown) {
+        out.push(
+          empty(
+            S.hidePageThreads
+              ? "No recent threads. Worker and older threads are hidden."
+              : "No recent threads. Older threads are hidden."
+          )
+        );
+      }
+    };
+    fill();
+    search.onfocus = () => container.classList.remove("ag-list-kb");
+    if (hadFocus) {
+      // A re-render while typing keeps the highlight shown or hidden.
+      const kb = container.classList.contains("ag-list-kb");
+      search.focus();
+      container.classList.toggle("ag-list-kb", kb);
+      search.setSelectionRange(caret[0], caret[1]);
+    }
+  }
+
+  /*
+   * Thread list items for window.scribeKeyedList (#929): { key, create, update }. create builds what never changes
+   * for the key, update sets the rest.
+   */
+
+  /** An element whose children are a keyed list of their own. */
+  function keyedBox(key, cls, items) {
+    return { key, create: () => el("div", cls), update: (box) => window.scribeKeyedList(box, items) };
+  }
+
+  /** A fixed section heading: Recent, Out of usage, Hidden workspaces. */
+  function listHeading(key, text, iconName) {
+    return {
+      key,
+      create: () => {
+        const head = el("div", "ag-list-group");
+        if (iconName) head.append(icon(iconName));
+        head.append(el("span", "ag-list-group-kind", text));
+        return head;
+      },
+    };
+  }
+
+  /** A Show more / fewer button: its first text is the label, a second one the hidden count. */
+  function moreItem(key, texts, onClick) {
+    return {
+      key,
+      create: () => button("", "ag-list-more", onClick),
+      update: (more) =>
+        window.scribeFill(more, JSON.stringify(texts), () => texts.map((text, i) => el("span", i ? "ag-list-more-count" : null, text))),
+    };
+  }
+
+  /** A foldable group's heading: workspace, folder, page or global, with its actions. */
+  function groupHead(key, gt, { folded, count, dir, canAdd, ctx }) {
+    const name = gt.kind === "Global" ? "" : gt.text;
+    return {
+      key: `group:${key}`,
+      create: () => {
+        const head = el("div", "ag-list-group foldable");
         head.setAttribute("role", "button");
         head.tabIndex = 0;
-        head.setAttribute("aria-expanded", String(!folded));
-        // The header is kept across renders, so its handlers read the fold as it is now.
         const fold = () => {
           if (S.collapsedGroups.has(key)) S.collapsedGroups.delete(key);
           else {
@@ -8705,62 +8792,30 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           event.preventDefault();
           fold();
         });
-        const name = gt.kind === "Global" ? "" : gt.text;
-        head.append(icon("chevron", "ag-ico ag-chev"), icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name));
-        if (folded) head.append(el("span", "ag-list-group-count", String(members.length)));
-        // The folder a workspace group stands for: every group of the Workspaces list, and app scope None elsewhere.
-        const dir = S.filter === "workspaces" ? workspaceDir(first) : key.startsWith("ws:") ? activeTab()?.workspace : first.scope.kind === "workspace" ? first.scope.ref : null;
-        if (dir) head.dataset.tooltip = dir;
-        const acts = el("span", "ag-list-group-acts");
-        if (dir) acts.append(button(icon("more"), "ag-icon-btn small ag-list-group-new", (event) => workspaceMenu(event.currentTarget, dir), "Workspace actions"));
-        if (S.filter !== "archived") {
-          const add = button(icon("plus"), "ag-icon-btn small ag-list-group-new", () => {
-            const draft = groupDraft(key);
-            if (draft) onNewIn(draft.scope, draft.settings);
-          }, `New thread here, with the settings of its latest thread`);
-          acts.append(add);
-        }
-        if (acts.childNodes.length) head.append(acts);
-        out.push(head);
-        if (folded) continue;
-        const body = el("div", "ag-list-group-body");
-        body.dataset.key = `group-body:${key}`;
-        for (const t of visible) {
-          body.append(threadRow(t, t.id === currentId, onPick));
-          helperRows(t, body);
-        }
-        if (hidden) {
-          const more = button("", "ag-list-more", () => {
-            S.groupExtra.set(key, (S.groupExtra.get(key) || 0) + LIST_PAGE);
-            container.agFill();
-          });
-          more.dataset.key = `more:${key}`;
-          more.append(el("span", null, visible.length ? "Show 10 more" : "Show older threads"), el("span", "ag-list-more-count", hidden === 1 ? "1 hidden" : `${hidden} hidden`));
-          body.append(more);
-        }
-        out.push(body);
-      }
-      if (!shown) {
-        out.push(
-          el(
-            "div",
-            "ag-list-empty",
-            S.hidePageThreads
-              ? "No recent threads. Worker and older threads are hidden."
-              : "No recent threads. Older threads are hidden."
-          )
-        );
-      }
+        return head;
+      },
+      update: (head) => {
+        window.scribeClasses(head, { folded });
+        window.scribeAttr(head, "aria-expanded", String(!folded));
+        window.scribeAttr(head, "data-tooltip", dir || null);
+        window.scribeFill(head, JSON.stringify([gt.icon, gt.kind, name, folded && count, dir, canAdd]), () => {
+          const out = [icon("chevron", "ag-ico ag-chev"), icon(gt.icon), el("span", "ag-list-group-kind", gt.kind), el("span", "ag-list-group-name", name)];
+          if (folded) out.push(el("span", "ag-list-group-count", String(count)));
+          const acts = el("span", "ag-list-group-acts");
+          if (dir) acts.append(button(icon("more"), "ag-icon-btn small ag-list-group-new", (event) => workspaceMenu(event.currentTarget, dir), "Workspace actions"));
+          if (canAdd) {
+            acts.append(
+              button(icon("plus"), "ag-icon-btn small ag-list-group-new", () => {
+                const draft = groupDraft(key);
+                if (draft) ctx.onNewIn(draft.scope, draft.settings);
+              }, `New thread here, with the settings of its latest thread`)
+            );
+          }
+          if (acts.childNodes.length) out.push(acts);
+          return out;
+        });
+      },
     };
-    fill();
-    search.onfocus = () => container.classList.remove("ag-list-kb");
-    if (hadFocus) {
-      // A re-render while typing keeps the highlight shown or hidden.
-      const kb = container.classList.contains("ag-list-kb");
-      search.focus();
-      container.classList.toggle("ag-list-kb", kb);
-      search.setSelectionRange(caret[0], caret[1]);
-    }
   }
 
   /** The line under a thread's title: provider, model, when, page, changes and worktree branch. */
@@ -8780,34 +8835,21 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return meta;
   }
 
-  /** label: the title to show instead of the thread's own (a helper under its thread drops the "Helper:"). */
-  function threadRow(t, current, onPick, label) {
-    // Working rows glow (rowGlow), waiting and unread ones get a gradient from the right: no status column.
-    const state = t.status === "running" || (t.status === "idle" && t.background) ? " s-running" : t.status === "waiting" ? " s-waiting" : "";
-    const row = button("", `ag-row${current ? " on" : ""}${t.unread && !t.fromPage ? " unread" : ""}${state}`, () => onPick(t.id));
-    row.dataset.id = t.id;
-    const main = el("span", "ag-row-main");
-    // Draft threads are all "New thread" until sent: tell them apart by what was written.
-    const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : label || t.title;
-    const title = el("span", "ag-row-title", name);
-    const compact = compactThreads();
-    if (compact) {
-      const line = el("span", "ag-row-line");
-      line.append(providerIcon(t.provider), title);
-      main.append(line);
-    } else main.append(title, threadRowMeta(t));
-    const found = threadMatchSnippet(t, S.search);
-    if (found) main.append(el("span", "ag-row-found", found));
-    if (hasDraft(t)) row.append(icon("pen", "ag-row-pen"));
-    row.append(main);
-    if (t.pinned) row.append(el("span", "ag-pin", "•"));
-    // Compact rows keep the changes, at the row's end.
-    if (compact && t.stats.files) {
-      const changes = R.counts(t.stats.added, t.stats.removed);
-      changes.classList.add("ag-row-counts");
-      row.append(changes);
-    }
-    // Measure the live title: rows are patched in place and the pane can be resized.
+  /** A thread's row. label: the title to show instead of the thread's own (a helper under its thread drops the "Helper:"). */
+  function threadItem(t, current, ctx, label) {
+    const id = t.id;
+    return {
+      key: id,
+      create: () => threadRowShell(id, ctx),
+      update: (wrap) => updateThreadRow(wrap, t, current, label),
+    };
+  }
+
+  /** What a thread's row keeps for as long as it is listed: the row button, its actions and their handlers. */
+  function threadRowShell(id, ctx) {
+    const row = button("", "ag-row", () => ctx.onPick(id));
+    row.dataset.id = id;
+    // Measure the live title: the pane can be resized.
     const titleTip = (event) => {
       const row = event.currentTarget;
       const title = row.querySelector(".ag-row-title");
@@ -8816,18 +8858,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     };
     row.addEventListener("pointerover", titleTip);
     row.addEventListener("focusin", titleTip);
-    const wrap = el("div", `ag-row-wrap${current ? " on" : ""}`);
-    wrap.dataset.key = t.id;
-    // The row stays in the list and is patched as the thread changes, so its handlers read the thread as it is now.
-    const id = t.id;
-    const first = t;
+    const wrap = el("div", "ag-row-wrap");
     wrap.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      const t = S.threads.get(id) || first;
+      const t = S.threads.get(id);
+      if (!t) return;
       openMenu(wrap, [
         { label: t.pinned ? "Unpin" : "Pin", run: () => api("PATCH", `/threads/${t.id}`, { pinned: !t.pinned }).catch((e) => notice(e.message)) },
         { label: t.archived ? "Unarchive" : "Archive", run: () => archiveThread(t) },
-        ...(t.stats.turns ? [{ label: "Fork thread", run: () => forkThread(t, onPick) }] : []),
+        ...(t.stats.turns ? [{ label: "Fork thread", run: () => forkThread(t, ctx.onPick) }] : []),
         ...(t.stats.files ? [{ label: "Changes in this thread", icon: "diff", run: () => openDiff({ kind: "thread", threadId: t.id }) }] : []),
         { label: "Copy thread id", detail: t.id, icon: "copy", run: () => navigator.clipboard?.writeText(t.id) },
         { separator: true },
@@ -8840,17 +8879,61 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     });
     const acts = el("div", "ag-row-actions");
     acts.append(
-      button(icon("archive"), "ag-icon-btn small", (e) => {
+      button(icon("archive"), "ag-icon-btn small ag-row-archive", (e) => {
         e.stopPropagation();
-        archiveThread(S.threads.get(id) || first);
-      }, t.archived ? "Unarchive" : "Archive"),
+        const t = S.threads.get(id);
+        if (t) archiveThread(t);
+      }, "Archive"),
       button(icon("trash"), "ag-icon-btn small danger", (e) => {
         e.stopPropagation();
-        void deleteThread(S.threads.get(id) || first);
+        const t = S.threads.get(id);
+        if (t) void deleteThread(t);
       }, "Delete thread"),
     );
     wrap.append(row, acts);
     return wrap;
+  }
+
+  function updateThreadRow(wrap, t, current, label) {
+    const row = wrap.firstChild;
+    // Working rows glow (rowGlow), waiting and unread ones get a gradient from the right: no status column.
+    const running = t.status === "running" || (t.status === "idle" && t.background);
+    window.scribeClasses(wrap, { on: current });
+    window.scribeClasses(row, { on: current, unread: t.unread && !t.fromPage, "s-running": running, "s-waiting": !running && t.status === "waiting" });
+    const archive = wrap.querySelector(".ag-row-archive");
+    const archiveTip = t.archived ? "Unarchive" : "Archive";
+    window.scribeAttr(archive, "data-tooltip", archiveTip);
+    window.scribeAttr(archive, "aria-label", archiveTip);
+    // Draft threads are all "New thread" until sent: tell them apart by what was written.
+    const name = !t.titleLocked && !t.stats.turns && t.draft?.text.trim() ? t.draft.text.trim().split("\n")[0].slice(0, 120) : label || t.title;
+    const compact = compactThreads();
+    const found = threadMatchSnippet(t, S.search);
+    const wt = openWorktree(t);
+    const sig = [
+      name, compact, t.provider, modelLabel(t.provider, t.model), threadWhenText(t), threadWhenMs(t), Boolean(t.fromPage), Boolean(t.helperOf),
+      t.stats.files, t.stats.added, t.stats.removed, wt && [wt.branch, Boolean(wt.ahead || wt.dirty)], found, Boolean(hasDraft(t)), Boolean(t.pinned),
+    ];
+    window.scribeFill(row, JSON.stringify(sig), () => {
+      const out = [];
+      const main = el("span", "ag-row-main");
+      const title = el("span", "ag-row-title", name);
+      if (compact) {
+        const line = el("span", "ag-row-line");
+        line.append(providerIcon(t.provider), title);
+        main.append(line);
+      } else main.append(title, threadRowMeta(t));
+      if (found) main.append(el("span", "ag-row-found", found));
+      if (hasDraft(t)) out.push(icon("pen", "ag-row-pen"));
+      out.push(main);
+      if (t.pinned) out.push(el("span", "ag-pin", "•"));
+      // Compact rows keep the changes, at the row's end.
+      if (compact && t.stats.files) {
+        const changes = R.counts(t.stats.added, t.stats.removed);
+        changes.classList.add("ag-row-counts");
+        out.push(changes);
+      }
+      return out;
+    });
   }
 
   /* ---------- sidebar pane ---------- */
