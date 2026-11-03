@@ -617,6 +617,7 @@ await scribe.agent.watch(threadId, { data: { job: 7 }, after: 0 }); // hand over
 - Agents can't read or change these grants, and an agent changing a page's HTML (or its template) resets the risky ones to Ask: tell the user to re-approve after you edit such a page.
 - Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
 - Keep the thread id in state if the page should continue the same conversation later.
+- A page that lets the user change the model of a thread it keeps passes the choice on each `send(threadId, text, { provider, model, effort })`. The same provider switches the thread in place. Another provider goes on in a fork that keeps the history and the open worktree: the result has `threadId` (the fork's) and `forked: true`, so store that id from then on. While the old thread still runs a turn, a provider switch returns `error: "busy"`.
 
 ### Forms for a card: replyTo and scribe.reply
 
