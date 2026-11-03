@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs (or reinstalls) Scribe's headless Linux release and runs it as a systemd user service (#942).
 #   curl -fsSL https://github.com/SirVeggie/scribe/releases/latest/download/install-linux.sh | sh
-# SCRIBE_APP_DIR: where the app goes (default ~/.local/share/scribe-app). Data stays in ~/scribe (SCRIBE_HOME).
+# SCRIBE_APP_DIR: where the app goes (default ~/.local/share/scribe-app). Data goes to ~/.local/share/scribe (SCRIBE_HOME overrides).
 # SCRIBE_RELEASE_URL: the release folder to install from (default: the latest GitHub release).
 # After this, Scribe updates itself from releases (Settings → Updates, on this device or a paired one).
 set -eu

@@ -70,11 +70,29 @@ pub fn data_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("SCRIBE_HOME") {
         return PathBuf::from(home);
     }
-    let root = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
+    if cfg!(windows) {
+        let root = std::env::var_os("LOCALAPPDATA")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        return root.join("scribe");
+    }
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    root.join("scribe")
+    // A ~/scribe data folder from before #938 stays in use; a repo clone of that name does not count.
+    let old = home.join("scribe");
+    if old.join("scribe.sqlite").is_file() && !old.join(".git").exists() {
+        return old;
+    }
+    if cfg!(target_os = "macos") {
+        return home.join("Library").join("Application Support").join("Scribe");
+    }
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("scribe")
 }
 
 /// Starts the daemon, or replaces one from another build, through the same code path the MCP uses.

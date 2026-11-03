@@ -1,5 +1,13 @@
 # Migrations
 
+## Data folder off Windows (#938, no version bump)
+
+- **What changed:** Without `SCRIBE_HOME`, Linux keeps data in `$XDG_DATA_HOME/scribe` (default `~/.local/share/scribe`) and macOS in `~/Library/Application Support/Scribe`, instead of `~/scribe`, which clashed with a repo clone of that name. Windows is unchanged.
+- **Data:** nothing moves. A `~/scribe` that holds `scribe.sqlite` and has no `.git` stays the data folder, because the databases, git worktrees and agent sessions record absolute paths inside it. To switch, stop Scribe, move the folder and run `git worktree repair` in the affected repos, or set `SCRIBE_HOME` to it. `~/agent-board` is migrated only when it holds a database and is not a checkout.
+- **Where:** `dataDir()` in `src/config.ts`, `data_dir()` in `desktop/src/board.rs` (keep the two the same).
+- **How to verify:** `src/dataDir.test.ts`.
+- **When to remove:** Keep.
+
 ## Agent port and a narrower local token (#915, #916, no version bump)
 
 - **What changed:** The daemon also listens on `AGENT_PORT` (`SCRIBE_AGENT_PORT`, default board port + 2, loopback). Every caller there is an agent; Scribe chats' MCP calls it and the sandbox allows only it, never the board port. On the board port, the `local-token` file now makes a caller the user only on `/api/devices*` (the `scribe` CLI's device commands); anywhere else it is an external MCP client, and it no longer opens a board WebSocket.

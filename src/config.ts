@@ -185,12 +185,38 @@ export function pageViewUrl(id: string): string {
   return `${pageOrigin(id)}/view/${encodeURIComponent(id)}`;
 }
 
+/** Before #938 the data folder off Windows was $HOME/scribe (and $HOME/agent-board before the rename). */
+function oldDataRoot(): string {
+  return process.env.LOCALAPPDATA || process.env.HOME || process.cwd();
+}
+
+/** A folder an earlier version used for data: it holds that database and is not a git checkout (a repo clone of the same name). */
+function holdsOldData(dir: string, db: string): boolean {
+  return fs.existsSync(path.join(dir, db)) && !fs.existsSync(path.join(dir, ".git"));
+}
+
+/**
+ * SCRIBE_HOME, else %LOCALAPPDATA%\scribe on Windows, ~/Library/Application Support/Scribe on macOS, and
+ * $XDG_DATA_HOME/scribe (~/.local/share/scribe) on Linux. An existing ~/scribe data folder from before #938 stays
+ * in use where it is: the database, git worktrees and agent sessions record absolute paths inside it.
+ */
 export function dataDir(): string {
   if (process.env.SCRIBE_HOME) {
     return process.env.SCRIBE_HOME;
   }
-  const root = process.env.LOCALAPPDATA || process.env.HOME || process.cwd();
-  return path.join(root, "scribe");
+  if (process.platform === "win32") {
+    return path.join(oldDataRoot(), "scribe");
+  }
+  const home = process.env.HOME || os.homedir();
+  const old = path.join(home, "scribe");
+  if (holdsOldData(old, "scribe.sqlite")) {
+    return old;
+  }
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "Scribe");
+  }
+  const xdg = process.env.XDG_DATA_HOME;
+  return path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(home, ".local", "share"), "scribe");
 }
 
 /** Where data lived before the app was renamed from Agent Board to Scribe. */
@@ -198,8 +224,9 @@ function legacyDataDir(): string | null {
   if (process.env.SCRIBE_HOME) {
     return null;
   }
-  const root = process.env.LOCALAPPDATA || process.env.HOME || process.cwd();
-  return path.join(root, "agent-board");
+  const dir = path.join(oldDataRoot(), "agent-board");
+  // Off Windows this is a home folder, where ~/agent-board may be a clone of the repo instead.
+  return process.platform === "win32" || holdsOldData(dir, "board.sqlite") || holdsOldData(dir, "scribe.sqlite") ? dir : null;
 }
 
 /**

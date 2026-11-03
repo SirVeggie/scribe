@@ -64,7 +64,7 @@ Settings has Import, Export and Export all (`.scribe.json` packs with HTML, stat
 
 ## Data
 
-The Library, tabs, page data and threads live in `%LOCALAPPDATA%\scribe` (`scribe.sqlite`, `agent.sqlite`). Set `SCRIBE_HOME` to use another folder.
+The Library, tabs, page data and threads live in `%LOCALAPPDATA%\scribe` (`scribe.sqlite`, `agent.sqlite`); on Linux in `~/.local/share/scribe` (`$XDG_DATA_HOME/scribe`), on macOS in `~/Library/Application Support/Scribe`. A `~/scribe` data folder from an earlier version stays in use. Set `SCRIBE_HOME` to use another folder.
 
 ## Find & navigate
 

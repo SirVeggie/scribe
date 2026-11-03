@@ -10,8 +10,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const [dest, source = path.join(process.env.LOCALAPPDATA || process.env.HOME || "", "scribe")] = process.argv.slice(2);
-if (!dest) {
+// Off Windows pass the source: the default data folder there depends on the platform (see dataDir in src/config.ts).
+const [dest, source = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "scribe") : ""] = process.argv.slice(2);
+if (!dest || !source) {
   console.error("usage: node tools/perf/prepare-data.mjs <scratch dir> [source dir]");
   process.exit(1);
 }
