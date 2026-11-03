@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { servicePlan, systemdUnit, windowsTaskScript } from "./service.js";
+import { launchdPlist, servicePlan, systemdUnit, windowsTaskScript } from "./service.js";
 
 test("servicePlan keeps only Scribe's own settings", () => {
   const plan = servicePlan({ SCRIBE_HOME: "/srv/scribe", SCRIBE_PORT: "4800", SCRIBE_THREAD: "th_1", HOME: "/home/me", SCRIBE_PEER_PORT: "" });
@@ -24,4 +24,14 @@ test("Windows task starts the daemon hidden at the user's logon", () => {
   assert.match(plain, /-RestartCount 999/);
   const withEnv = windowsTaskScript({ node: "node.exe", entry: "C:\\it's\\dist\\index.js", cwd: "C:\\it's", env: { SCRIBE_PORT: "4800" } }, "me");
   assert.match(withEnv, /-Execute 'conhost\.exe' -Argument '--headless cmd\.exe \/d \/c set "SCRIBE_PORT=4800"&& "node\.exe" "C:\\it''s\\dist\\index\.js" --daemon'/);
+});
+
+test("launchd agent runs the daemon at login, restarts it only on failure, and escapes paths", () => {
+  const plist = launchdPlist({ node: "/opt/scribe/node/bin/node", entry: "/Users/me/A&B/dist/index.js", cwd: "/Users/me/A&B", env: { SCRIBE_PORT: "4800" } });
+  assert.match(plist, /<string>\/opt\/scribe\/node\/bin\/node<\/string>\s*<string>\/Users\/me\/A&amp;B\/dist\/index\.js<\/string>\s*<string>--daemon<\/string>/);
+  assert.match(plist, /<key>WorkingDirectory<\/key><string>\/Users\/me\/A&amp;B<\/string>/);
+  assert.match(plist, /<key>SCRIBE_PORT<\/key><string>4800<\/string>/);
+  assert.match(plist, /<key>PATH<\/key>/);
+  assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
+  assert.match(plist, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
 });

@@ -18,7 +18,7 @@ const USAGE = `Usage:
   scribe leave                Leave the pairing: drop every paired device; they stay paired with each other
   scribe rename <name>        Rename this device
   scribe service install | uninstall | status
-                              Run the daemon at boot (systemd) or logon (Windows), without the desktop app`;
+                              Run the daemon at boot (systemd) or logon (Windows, macOS launchd), without the desktop app`;
 
 type DevicesView = {
   error?: string;

@@ -6,17 +6,19 @@ import { INSTALL_ROOT } from "./config.js";
 
 /**
  * `scribe service install | uninstall | status` (#909): run the daemon at boot (Linux) or logon
- * (Windows) with no desktop shell, for an always-on or headless device. It runs as the user who
+ * (Windows, macOS) with no desktop shell, for an always-on or headless device. It runs as the user who
  * installs it, not as root or SYSTEM: the data folder, provider logins (Claude, Codex, Cursor) and
  * worktrees are all that user's.
  *
  * Linux: a systemd user unit, plus lingering so it starts at boot without a login session.
  * Windows: a Task Scheduler task at logon (a real Windows service would run as SYSTEM, or need the
  * user's password), started hidden through conhost --headless, and restarted if it fails.
+ * macOS: a launchd LaunchAgent in ~/Library/LaunchAgents, started at login and restarted if it fails.
  */
 
 export const SERVICE_NAME = "scribe";
 const WINDOWS_TASK = "Scribe";
+const LAUNCHD_LABEL = "local.scribe.daemon";
 
 export type ServicePlan = {
   node: string;
@@ -64,6 +66,39 @@ export function systemdUnit(plan: ServicePlan): string {
   ].join("\n");
 }
 
+function xml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** The launchd LaunchAgent. KeepAlive on failure only, like the systemd unit: `scribe --stop` stays stopped. */
+export function launchdPlist(plan: ServicePlan): string {
+  const env = { ...plan.env, PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" };
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    `  <key>Label</key><string>${LAUNCHD_LABEL}</string>`,
+    "  <key>ProgramArguments</key>",
+    "  <array>",
+    ...[plan.node, plan.entry, "--daemon"].map((arg) => `    <string>${xml(arg)}</string>`),
+    "  </array>",
+    `  <key>WorkingDirectory</key><string>${xml(plan.cwd)}</string>`,
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    // Agents' tools (git, npx, brew's) come from the PATH the user had when installing: launchd's own is bare.
+    ...Object.entries(env).map(([key, value]) => `    <key>${xml(key)}</key><string>${xml(value)}</string>`),
+    "  </dict>",
+    "  <key>RunAtLoad</key><true/>",
+    "  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>",
+    "  <key>ThrottleInterval</key><integer>5</integer>",
+    "  <key>ProcessType</key><string>Background</string>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
+}
+
 function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
@@ -88,6 +123,14 @@ export function windowsTaskScript(plan: ServicePlan, user: string): string {
 function unitPath(): string {
   const config = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
   return path.join(config, "systemd", "user", `${SERVICE_NAME}.service`);
+}
+
+function plistPath(): string {
+  return path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+}
+
+function launchdDomain(): string {
+  return `gui/${os.userInfo().uid}`;
 }
 
 function run(command: string, args: string[], options: { quiet?: boolean } = {}): string {
@@ -140,7 +183,20 @@ export function installService(): string {
       "Pair it with: scribe pair <code>",
     ].join("\n");
   }
-  throw new Error("scribe service supports Linux (systemd) and Windows. On macOS, run npm start under launchd yourself.");
+  if (process.platform === "darwin") {
+    const file = plistPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Replacing an installed agent: launchd keeps the old definition until it is booted out.
+    tryRun("launchctl", ["bootout", `${launchdDomain()}/${LAUNCHD_LABEL}`]);
+    fs.writeFileSync(file, launchdPlist(plan));
+    run("launchctl", ["bootstrap", launchdDomain(), file]);
+    return [
+      `Installed ${file} and started it. It starts when you log in, and again if it fails.`,
+      "To have it start at boot without anyone at the screen, turn on automatic login for this user (System Settings → Users & Groups).",
+      "Pair it with: scribe pair <code>   (the code Settings → Devices → Add device shows on another device)",
+    ].join("\n");
+  }
+  throw new Error("scribe service supports Linux (systemd), macOS (launchd) and Windows.");
 }
 
 export function uninstallService(): string {
@@ -159,7 +215,14 @@ export function uninstallService(): string {
     );
     return out.includes("removed") ? `Removed the "${WINDOWS_TASK}" task. A daemon it started keeps running until scribe --stop.` : "The service was not installed.";
   }
-  throw new Error("scribe service supports Linux (systemd) and Windows.");
+  if (process.platform === "darwin") {
+    const file = plistPath();
+    tryRun("launchctl", ["bootout", `${launchdDomain()}/${LAUNCHD_LABEL}`]);
+    const existed = fs.existsSync(file);
+    fs.rmSync(file, { force: true });
+    return existed ? `Stopped and removed ${file}.` : "The service was not installed.";
+  }
+  throw new Error("scribe service supports Linux (systemd), macOS (launchd) and Windows.");
 }
 
 export function serviceStatus(): string {
@@ -175,6 +238,12 @@ export function serviceStatus(): string {
       `$task = Get-ScheduledTask -TaskName ${psQuote(WINDOWS_TASK)} -ErrorAction SilentlyContinue; if ($task) { $task.State } else { 'missing' }`
     ).trim();
     return out === "missing" ? "Not installed." : `Installed (task "${WINDOWS_TASK}"): ${out.toLowerCase()}.`;
+  }
+  if (process.platform === "darwin") {
+    if (!fs.existsSync(plistPath())) return "Not installed.";
+    const info = tryRun("launchctl", ["print", `${launchdDomain()}/${LAUNCHD_LABEL}`]);
+    const state = info.ok ? (/^\s*state = (\S+)/m.exec(info.out)?.[1] ?? "unknown") : "not loaded";
+    return `Installed (${plistPath()}): ${state}, starts at login.`;
   }
   return "Not supported on this platform.";
 }
