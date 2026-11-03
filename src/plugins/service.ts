@@ -1,3 +1,4 @@
+import type { PluginPageComponent } from "../coreComponents.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -81,7 +82,21 @@ export class PluginService {
     return { ...this.list().find(p => p.id === id), manifest: p.manifest, settings: p.settings, secrets: Object.fromEntries(Object.entries(p.manifest.settings).filter(([,v]) => v.type === "secret").map(([k]) => [k, this.secrets.has(id,k)])), readme: this.text(id,p.manifest.readme), methods: p.manifest.methods, logs: this.logs(id), tasks: this.tasks.list({ plugin: id, limit: 10 }) };
   }
   private text(id: string, file?: string): string { return file ? fs.readFileSync(packagePath(this.snapshot(this.get(id)),file),"utf8") : ""; }
-  guide(id: string) { const p = this.get(id); return { id, summary: p.manifest.summary, guide: this.text(id,p.manifest.guide), methods: p.manifest.methods, widgets: p.manifest.widgets ?? {} }; }
+  guide(id: string) {
+    const p = this.get(id);
+    const pageComponents = Object.entries(p.manifest.pageComponents ?? {}).map(([name, c]) => ({ name, summary: c.summary, src: `/c/${id}/${name}.js`, guide: this.text(id, c.guide) }));
+    return { id, summary: p.manifest.summary, guide: this.text(id,p.manifest.guide), methods: p.manifest.methods, widgets: p.manifest.widgets ?? {}, ...(pageComponents.length ? { pageComponents } : {}) };
+  }
+  /** Enabled plugins' page components, for plugin_guide({ id: "core" }). */
+  pageComponents(): PluginPageComponent[] {
+    return this.list().filter(p => p.enabled).flatMap(({ id }) => Object.entries(this.get(id).manifest.pageComponents ?? {}).map(([name, c]) => ({ plugin: id, name, summary: c.summary, src: `/c/${id}/${name}.js` })));
+  }
+  /** A page component's code (/c/<plugin>/<name>.js); undefined when the plugin is disabled or has no such component. */
+  pageComponent(id: string, name: string): string | undefined {
+    if (!this.enabled(id)) return undefined;
+    const file = this.get(id).manifest.pageComponents?.[name]?.file;
+    return file === undefined ? undefined : this.text(id, file);
+  }
   widget(id: string, name: string, props: unknown) {
     if (!this.enabled(id)) throw new Error("Plugin is disabled or removed.");
     const record = this.get(id), definition = record.manifest.widgets?.[name];
@@ -100,11 +115,12 @@ export class PluginService {
     for(const name of Object.keys(files))if(name.split("/").some(part=>[".git","node_modules",".scribe-merge"].includes(part)))throw new Error("Reserved package directory");
     if (!files["plugin.json"]) throw new Error("Package needs plugin.json");
     const manifest = parseManifest(JSON.parse(files["plugin.json"].toString("utf8")));
-    for (const file of [manifest.backend, manifest.source, manifest.guide, manifest.readme, ...Object.values(manifest.widgets).map(c => c.html), ...manifest.templates.flatMap(t => [t.metadata,t.html,t.guide])]) if (file && !files[file]) throw new Error(`Missing package file: ${file}`);
+    for (const file of [manifest.backend, manifest.source, manifest.guide, manifest.readme, ...Object.values(manifest.widgets).map(c => c.html), ...Object.values(manifest.pageComponents).flatMap(c => [c.file, c.guide]), ...manifest.templates.flatMap(t => [t.metadata,t.html,t.guide])]) if (file && !files[file]) throw new Error(`Missing package file: ${file}`);
     for (const component of Object.values(manifest.widgets)) {
       if (files[component.html].length > 256 * 1024) throw new Error("Widget HTML exceeds 256 KiB");
       for (const method of component.methods) if (!Object.hasOwn(manifest.methods, method) || !manifest.methods[method].agent) throw new Error(`Unknown or non-agent widget method: ${method}`);
     }
+    for (const component of Object.values(manifest.pageComponents)) if (files[component.file].length > 512 * 1024) throw new Error("Page component file exceeds 512 KiB");
     for(const template of manifest.templates)normalizeTemplateInput({...JSON.parse(files[template.metadata].toString("utf8")),html:files[template.html].toString("utf8")});
     if (!manifest.backend && (manifest.source || Object.keys(manifest.methods).length || manifest.templates.some(t => t.actions || t.hooks?.length))) throw new Error("Methods and hooks require a backend");
     for(const [key,field]of Object.entries(manifest.settings))if(field.type!=="secret"&&field.default!==undefined)this.settingValue(field.type,field.default,key);
@@ -132,7 +148,7 @@ export class PluginService {
     let sourceBytes=0;const source=detailed?Object.fromEntries(Object.entries(this.codeFiles(files)).filter(([,data])=>{sourceBytes+=data.length;return sourceBytes<250_000;}).map(([name,data])=>[name,data.toString("utf8")])):undefined;
     const order=previous?compareVersions(manifest.version,previous.manifest.version):0;
     const versionStatus=previous?(order>0?"newer":order<0?"older":"same"):"new";
-    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { widgets:changed(previous.manifest.widgets??{},manifest.widgets),methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:accessKey(previous.manifest.access)!==accessKey(manifest.access) } : null };
+    return { manifest, hash, codeHash,versionStatus,same:previous?.hash===codeHash, parts:{settings:payload.settings,state:payload.state!==undefined,stateKeys:Object.keys(payload.state??{}),data:payload.hasData,dataFiles:Object.keys(payload.data),paths}, ...(detailed?{diff,source,sourceTruncated:sourceBytes>=250_000}:{}), previous: previous ? { version: previous.manifest.version, author: previous.manifest.author, edited: this.list().find(p => p.id === manifest.id)?.edited } : null, changes: previous ? { widgets:changed(previous.manifest.widgets??{},manifest.widgets),pageComponents:changed(previous.manifest.pageComponents??{},manifest.pageComponents),methods:changed(previous.manifest.methods,manifest.methods),settings:changed(previous.manifest.settings,manifest.settings),templates:changed(Object.fromEntries(previous.manifest.templates.map(t=>[t.key,t])),Object.fromEntries(manifest.templates.map(t=>[t.key,t]))),risky:previous.manifest.risky!==manifest.risky,backend:previous.manifest.backend!==manifest.backend,access:accessKey(previous.manifest.access)!==accessKey(manifest.access) } : null };
   }
   /** Caller must collect consent for precisely this hash before invoking install. */
   async install(files: PackageFiles, expectedHash: string, replace = false,approvePaths=false): Promise<PluginRecord> {

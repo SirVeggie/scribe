@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { componentPlugins } from "../coreComponents.js";
 
 export const pluginId = z.string().max(64).regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
 const file = z.string().min(1).max(240).refine(v => !v.includes("\\") && !v.startsWith("/") && !v.split("/").some(p => !p || p === "." || p === "..") && !v.includes(":"), "Use a relative package path");
@@ -43,6 +44,8 @@ export const manifestSchema = z.object({
   guide: file.optional(),
   readme: file.optional(),
   widgets: z.record(componentName, pluginWidgetSchema).default({}),
+  // In-page JS (with its own CSS) a page loads with <script src="/c/<plugin>/<name>.js"> (#930); calls use the page's plugin permission.
+  pageComponents: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), z.object({ summary: z.string().min(1).max(300), file, guide: file.optional() }).strict()).default({}),
   access: z.object({ files: z.array(z.string().max(1000)).max(50).default([]), network: z.array(z.string().max(250)).max(50).default([]),
     // Environment variables the backend gets from Scribe's own environment, shown for approval at install.
     env: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,99}$/).refine(name => !reservedEnv(name), "Scribe's own variables and NODE_OPTIONS cannot be passed to a plugin")).max(50).default([]) }).default({ files: [], network: [], env: [] }),
@@ -107,6 +110,7 @@ export function declaredPlugins(html: string): string[] {
     const id = match?.[1] ?? match?.[2] ?? match?.[3];
     if (pluginId.safeParse(id).success) ids.add(id!);
   }
+  for (const id of componentPlugins(html)) if (pluginId.safeParse(id).success) ids.add(id);
   for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
     const attrs = new Map([...tag.matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(m => [m[1].toLowerCase(), m[2] ?? m[3]]));
     if (attrs.get("name")?.toLowerCase() !== "scribe-plugins") continue;

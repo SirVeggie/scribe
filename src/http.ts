@@ -64,7 +64,7 @@ import { findSettings, parseShowInput, setSettingsCatalog, settingsCatalog } fro
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
 import { BOARD_SCROLLBAR_CSS, inlineKit } from "./wrapHtml.js";
-import { COMPONENT_PATH, inlineComponents, readComponent } from "./coreComponents.js";
+import { COMPONENT_PATH, inlineComponents, readComponent, type ComponentReader } from "./coreComponents.js";
 import { spliceHtmlSlot } from "./htmlSlot.js";
 import { searchRouter } from "./search/routes.js";
 import { mlRouter } from "./ml/routes.js";
@@ -311,10 +311,11 @@ export async function startHttp(): Promise<http.Server> {
   };
   const mirrorStore = new MirrorStore(dataDir());
   const mirrorPusher = new MirrorPusher(peers, mirrorSource, dataDir());
-  // Page components (#761): no version in the URL, so the browser revalidates by ETag.
+  // Page components (#761), Scribe's own and plugins' (#930): no version in the URL, so the browser revalidates by ETag.
+  const readAnyComponent: ComponentReader = (name, plugin) => plugin ? pluginService.pageComponent(plugin, name) : readComponent(name);
   const componentFiles: express.RequestHandler = (req, res, next) => {
-    const name = req.method === "GET" ? COMPONENT_PATH.exec(req.path)?.[1] : undefined;
-    const code = name && readComponent(name);
+    const match = req.method === "GET" ? COMPONENT_PATH.exec(req.path) : undefined;
+    const code = match && readAnyComponent(match[2], match[1]);
     if (!code) return next();
     res.setHeader("Cache-Control", "no-cache");
     res.type("js").send(code);
@@ -2415,7 +2416,7 @@ export async function startHttp(): Promise<http.Server> {
     }
     const filename = `${safeFilename(tab.title)}.html`;
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.type("html").send(inlineComponents(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8"))));
+    res.type("html").send(inlineComponents(inlineKit(tab.html, (file) => fs.readFileSync(path.join(publicDir, file), "utf8")), readAnyComponent));
   });
 
   const sendExport=async(req:express.Request,res:express.Response,file:ReturnType<typeof store.exportFile>,filename:string)=>{

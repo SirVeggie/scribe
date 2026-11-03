@@ -24,7 +24,7 @@ export type ScopeInfo = {
   memories?: Memory[];
   /** Optional app instructions the user turned off in Agent settings (APP_INSTRUCTIONS ids). */
   instructionsOff?: string[];
-  plugins?: Array<{id:string;summary:string;widgets?:Array<{name:string;description:string}>;components?:Array<{name:string;description:string}>}>; // components: catalogs cached before #930
+  plugins?: Array<{id:string;summary:string;widgets?:Array<{name:string;description:string}>;components?:Array<{name:string;description:string}>;pageComponents?:Array<{name:string;description:string}>}>; // components: catalogs cached before #930
   /** Scribe skills this thread may use (scribeSkills.ts effective): listed for skill_read. */
   skills?: Array<{ id: string; name: string; description: string; builtin?: boolean }>;
 };
@@ -132,7 +132,7 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     return lines.join("\n");
   }
   lines.push("");
-  if(scope.plugins?.length && !noPages(thread.scope)) lines.push(`Plugins available through plugin_guide and plugin_call (chat UI through widget_show): ${scope.plugins.map(p=>`${p.id}: ${p.summary.slice(0,120)}${(p.widgets??p.components)?.length ? ` Widgets: ${(p.widgets??p.components)!.map(c=>`${c.name}: ${c.description}`).join(", ")}` : ""}`).join("; ")}.`);
+  if(scope.plugins?.length && !noPages(thread.scope)) lines.push(`Plugins available through plugin_guide and plugin_call (chat UI through widget_show): ${scope.plugins.map(p=>`${p.id}: ${p.summary.slice(0,120)}${(p.widgets??p.components)?.length ? ` Widgets: ${(p.widgets??p.components)!.map(c=>`${c.name}: ${c.description}`).join(", ")}` : ""}${p.pageComponents?.length ? ` Page components (<script src="/c/${p.id}/<name>.js">): ${p.pageComponents.map(c=>`${c.name}: ${c.description}`).join(", ")}` : ""}`).join("; ")}.`);
   if (noPages(thread.scope)) {
     lines.push(
       `Pages: this thread has no access to Scribe pages (the user set its Scribe scope to None). The MCP server named \`${server}\` has its web, thread and browser tools here, plus file tools where the mode permits them. Do not try to read or show pages.`

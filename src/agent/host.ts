@@ -2601,7 +2601,7 @@ export class AgentHost {
     if(plugins && !noPages(thread.scope)) {
       const key=`pluginCatalog:${thread.id}`;
       let catalog=this.db.getSetting<ScopeInfo["plugins"]|null>(key,null);
-      if(catalog===null){catalog=plugins.list().filter(p=>p.enabled).map(({id,summary})=>({id,summary,widgets:Object.entries(plugins!.get(id).manifest.widgets??{}).map(([name,c])=>({name,description:c.description}))}));this.db.setSetting(key,catalog);}
+      if(catalog===null){catalog=plugins.list().filter(p=>p.enabled).map(({id,summary})=>({id,summary,widgets:Object.entries(plugins!.get(id).manifest.widgets??{}).map(([name,c])=>({name,description:c.description})),pageComponents:Object.entries(plugins!.get(id).manifest.pageComponents??{}).map(([name,c])=>({name,description:c.summary}))}));this.db.setSetting(key,catalog);}
       info.plugins=catalog;
     }
     if (this.prefs().searxngUrl) info.webSearch = true;

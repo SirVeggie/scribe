@@ -85,7 +85,7 @@ export function pluginRouter(service: PluginService, store: BoardStore, host: Ag
   }));
   router.get("/:plugin/bundled-update",wrap(req=>{user(req);return service.bundledUpdate(req.params.plugin);}));
   // "core" is Scribe's own page components (#761), not an installed plugin.
-  router.get("/:plugin/guide",wrap(req=>{thread(req);return req.params.plugin==="core"?coreComponentGuide():service.guide(req.params.plugin);}));
+  router.get("/:plugin/guide",wrap(req=>{thread(req);return req.params.plugin==="core"?coreComponentGuide(service.pageComponents()):service.guide(req.params.plugin);}));
   router.get("/:plugin/logs",wrap(req=>{thread(req);return {logs:service.logs(req.params.plugin)};}));
   /** An agent reads a plugin's data under its page's grant, else with the user's approval (Full skips it). */
   const mayRead=async(t:ReturnType<typeof thread>,id:string,title:string,detail:string,signal:AbortSignal)=>{

@@ -247,3 +247,20 @@ test("imports validate settings, require folder approval and replace stale SQLit
     await service.install(files,service.preview(files).hash,true,true);assert.equal(fs.existsSync(path.join(data,"plugin.sqlite-wal")),false);assert.equal(fs.readFileSync(path.join(data,"plugin.sqlite"),"utf8"),"new database");
   }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test("plugin page components are served by name, listed by plugin_guide and declare their plugin (#930)",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"scribe-page-component-")),service=new PluginService(root);
+  try{
+    const files={"plugin.json":Buffer.from(JSON.stringify({...manifest,pageComponents:{gauge:{summary:"A gauge",file:"gauge.js",guide:"gauge.md"}}})),"index.mjs":Buffer.from("export default {}"),"gauge.js":Buffer.from("/* gauge */"),"gauge.md":Buffer.from("Use <s-gauge>.")};
+    assert.throws(()=>service.preview({...files,"gauge.md":undefined as unknown as Buffer}),/Missing package file: gauge.md/);
+    await service.install(files,service.preview(files).hash);
+    assert.equal(service.pageComponent("fixture","gauge"),"/* gauge */");
+    assert.equal(service.pageComponent("fixture","nope"),undefined);
+    assert.deepEqual(service.guide("fixture").pageComponents,[{name:"gauge",summary:"A gauge",src:"/c/fixture/gauge.js",guide:"Use <s-gauge>."}]);
+    assert.deepEqual(service.pageComponents(),[{plugin:"fixture",name:"gauge",summary:"A gauge",src:"/c/fixture/gauge.js"}]);
+    assert.deepEqual(declaredPlugins('<script src="/c/fixture/gauge.js"></script><script src="/c/chart.js"></script>'),["fixture"]);
+    await service.enable("fixture",false);
+    assert.equal(service.pageComponent("fixture","gauge"),undefined);
+    assert.deepEqual(service.pageComponents(),[]);
+  }finally{await service.close();fs.rmSync(root,{recursive:true,force:true});}
+});

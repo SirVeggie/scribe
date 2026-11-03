@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { launchChromium } from "./chromium.js";
-import { CORE_COMPONENTS, COMPONENT_PATH, coreComponentGuide, inlineComponents, readComponent, renderComponentDocs } from "./coreComponents.js";
+import { CORE_COMPONENTS, COMPONENT_PATH, componentPlugins, coreComponentGuide, inlineComponents, readComponent, renderComponentDocs } from "./coreComponents.js";
 
 test("the scribe skill lists every core page component", () => {
   const skill = fs.readFileSync(new URL("../.cursor/skills/scribe/SKILL.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -26,6 +26,16 @@ test("inlineComponents inlines known component scripts and leaves others", () =>
   const html = '<script src="/c/chart.js"></script><script src="/c/select.js?v=1" defer></script><script src="/c/nope.js"></script>';
   const out = inlineComponents(html, (name) => (name === "nope" ? undefined : `/* ${name} */ "</script>"`));
   assert.equal(out, '<script data-scribe-component="chart">/* chart */ "<\\/script>"</script><script data-scribe-component="select">/* select */ "<\\/script>"</script><script src="/c/nope.js"></script>');
+});
+
+test("plugin page components use /c/<plugin>/<name>.js and inline through the reader", () => {
+  assert.deepEqual([...COMPONENT_PATH.exec("/c/git-history/heat-map.js")!].slice(1), ["git-history", "heat-map"]);
+  assert.equal(COMPONENT_PATH.exec("/c/chart.js")![1], undefined);
+  assert.equal(readComponent("chart", "some-plugin"), undefined);
+  const html = '<script src="/c/fixture/gauge.js"></script><script src="/c/fixture/nope.js"></script>';
+  assert.deepEqual(componentPlugins(html), ["fixture"]);
+  const out = inlineComponents(html, (name, plugin) => (plugin === "fixture" && name === "gauge" ? "/* gauge */" : undefined));
+  assert.equal(out, '<script data-scribe-component="fixture/gauge">/* gauge */</script><script src="/c/fixture/nope.js"></script>');
 });
 
 test("select and chart components work in a page, inlined as an export would", async (t) => {
