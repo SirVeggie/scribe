@@ -702,6 +702,10 @@ body.dragging-tab {
   flex: 1;
 }
 
+.tab-folder {
+  color: var(--muted);
+}
+
 .tab-pin {
   color: var(--accent);
   display: inline-flex;

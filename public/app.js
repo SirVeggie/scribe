@@ -1944,8 +1944,29 @@
     }
     const title = el.querySelector(".tab-title");
     if (title) {
-      title.textContent = label;
+      const folder = twinFolder(tab, label);
+      if (folder) {
+        const dim = document.createElement("span");
+        dim.className = "tab-folder";
+        dim.textContent = folder + " / ";
+        title.replaceChildren(dim, label);
+        el.setAttribute("aria-label", folder + " / " + label);
+      } else {
+        title.textContent = label;
+      }
     }
+  }
+
+  /** The folder that tells a tab from another open tab with the same title (#993): its own folder name, or its whole path when those match too. */
+  function twinFolder(tab, label) {
+    const pathOfTab = (item) => (item.folderId ? library.pathOf(item.folderId) : "");
+    const twins = state.tabs.filter((item) => item.id !== tab.id && stripTitle(item) === label);
+    if (!twins.length) return "";
+    const path = pathOfTab(tab);
+    const paths = twins.map(pathOfTab);
+    if (!path || paths.every((other) => other === path)) return "";
+    const leaf = (value) => value.split(" / ").pop();
+    return paths.some((other) => other !== path && leaf(other) === leaf(path)) ? path : leaf(path);
   }
 
   /** A New page in the strip is named by its threads: "New - <thread>" or "Draft - <unsent text>". */
