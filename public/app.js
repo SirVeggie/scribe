@@ -1018,7 +1018,7 @@
     if (wasOpen) {
       views.onClosed(tab.id);
     }
-    const shown = views.isShown(tab.id) && state.activeId !== tab.id;
+    const shown = (childId === tab.id && popoutTab(tab.id)) || (views.isShown(tab.id) && state.activeId !== tab.id);
     if (shown) {
       refreshFrame(tab);
     } else {
@@ -1134,6 +1134,7 @@
   }
 
   function activeTab() {
+    if (childId && state.activeId === childId) return findAnyTab(childId);
     return state.tabs.find((tab) => tab.id === state.activeId) || (state.draft?.id === state.activeId ? state.draft : null);
   }
 
@@ -2568,11 +2569,14 @@
     return null;
   }
 
-  /**
-   * Windows and the strip agree before anything is drawn. A child window shows its page and closes
-   * when that page's tab leaves the strip. In the main window a page in its own window is never the
-   * one in front, and a window whose tab is gone is closed.
-   */
+  /** A window's page can belong to the live strip or a saved strip in another space. */
+  function popoutTab(id) {
+    return state.tabs.find((tab) => tab.id === id) ||
+      (spaces.list().some((space) => space.id !== spaces.activeId() && space.tabs.some((tab) => tab.id === id))
+        ? state.closed.find((tab) => tab.id === id) : null);
+  }
+
+  /** Keep child windows across space switches; close them when their tab is closed or deleted. */
   function settlePopouts() {
     if (!snapshotSeen) {
       return;
@@ -2582,14 +2586,14 @@
       return;
     }
     if (childId) {
-      state.activeId = state.tabs.some((tab) => tab.id === childId) ? childId : null;
+      state.activeId = popoutTab(childId) ? childId : null;
       if (!state.activeId) {
         popout.closeSelf();
       }
       return;
     }
     for (const id of popout.ids()) {
-      if (!state.tabs.some((tab) => tab.id === id)) {
+      if (!popoutTab(id)) {
         popout.close(id);
       }
     }

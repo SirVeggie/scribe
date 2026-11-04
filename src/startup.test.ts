@@ -167,15 +167,15 @@ test("effects wait for visible restored UI, cancel queued work, and keep fallbac
   } finally { await browser.close(); }
 });
 
-test("refresh keeps the restoring view until a snapshot, and retry recovers to true empty state", async () => {
+test("refresh restores the shell, and child windows keep their page across space switches", async () => {
   const browser = process.env.SCRIBE_TEST_CHROMIUM
     ? await chromium.launch({ executablePath: process.env.SCRIBE_TEST_CHROMIUM, headless: true })
     : await launchChromium({ headless: true, args: [], purpose: "Restore test" });
   try {
     const page = await browser.newPage();
-    await page.addInitScript({ content: "window.__name = value => value;" });
+    await page.context().addInitScript({ content: "window.__name = value => value;" });
     const root = new URL("../public/", import.meta.url);
-    await page.route("http://restore.local/**", route => {
+    await page.context().route(/^http:\/\/(?:[^/]+\.)?restore\.local\//, route => {
       const name = new URL(route.request().url()).pathname.slice(1);
       if (name.startsWith("api/")) return route.fulfill({ contentType: "application/json", body: "{}" });
       if (name.startsWith("view/")) return route.fulfill({ contentType: "text/html", body: "<p>Saved page</p>" });
@@ -189,7 +189,7 @@ test("refresh keeps the restoring view until a snapshot, and retry recovers to t
       return route.fulfill({ contentType: type, body: fs.readFileSync(new URL(name, root)) });
     });
     await page.route("https://fonts.googleapis.com/**", route => route.abort());
-    await page.addInitScript(() => {
+    await page.context().addInitScript(() => {
       const w = window as any;
       w.sockets = [];
       w.WebSocket = class extends EventTarget {
@@ -239,6 +239,60 @@ test("refresh keeps the restoring view until a snapshot, and retry recovers to t
     assert.equal(await page.locator("#empty").isVisible(), false);
     assert.equal(await page.getByRole("tab", { name: "Saved page" }).isVisible(), true);
     assert.equal(await page.locator(".space-chip").innerText(), "Work");
+
+    // A real popup keeps its page and live frame when the main strip changes spaces.
+    const popupOpened = page.waitForEvent("popup");
+    await page.evaluate(() => (window as any).scribePopout.open({ id: "saved", title: "Saved page" }));
+    const child = await popupOpened;
+    child.on("pageerror", error => errors.push(error.message));
+    const saved = { id: "saved", title: "Saved page", revision: 1 };
+    const snapshot = (away: boolean) => ({
+      type: "snapshot", reset: true, tabs: away ? [] : [saved],
+      closed: away ? [{ ...saved, closedAt: 1 }] : [], activeId: away ? null : "saved",
+      spaces: { activeId: away ? "other" : "work", spaces: [
+        { id: "work", name: "Work", tabs: [{ id: "saved" }], activeId: "saved" },
+        { id: "other", name: "Other", tabs: [], activeId: null },
+      ] },
+    });
+    const send = async (target: typeof page, message: unknown) => {
+      await target.waitForFunction(() => (window as any).sockets?.length);
+      await target.evaluate(message => new Promise<void>(resolve => {
+        addEventListener("scribe:render", () => resolve(), { once: true });
+        const socket = (window as any).sockets.at(-1);
+        socket.readyState = 1;
+        socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
+      }), message);
+    };
+    await send(child, snapshot(false));
+    await child.locator("#frames iframe[data-role=primary]").waitFor();
+    await child.frameLocator("#frames iframe").locator("p").waitFor();
+    const frame = await (await child.locator("#frames iframe").elementHandle())!.contentFrame();
+    await frame!.evaluate(() => { (window as any).unsavedValue = "keep me"; });
+    await child.evaluate(() => { (window as any).savedFrame = document.querySelector("#frames iframe"); });
+    for (const away of [true, false, true]) {
+      await send(page, snapshot(away));
+      await send(child, snapshot(away));
+      assert.equal(child.isClosed(), false);
+      assert.equal(await child.locator("#empty").isVisible(), false);
+      assert.equal(await child.title(), "Saved page");
+      assert.equal(await child.evaluate(() => (window as any).savedFrame === document.querySelector("#frames iframe[data-role=primary]")), true);
+      assert.equal(await frame!.evaluate(() => (window as any).unsavedValue), "keep me");
+    }
+    // Updates to a page parked in another space must keep the displayed frame too.
+    await send(child, { type: "tab_upserted", tab: { ...saved, closedAt: 1, stateRevision: 2 }, structural: false });
+    await child.waitForFunction(() => document.querySelector("iframe[data-role=primary]"));
+    assert.equal(await child.evaluate(() => (window as any).savedFrame === document.querySelector("#frames iframe")), true);
+    await child.reload();
+    await send(child, snapshot(true));
+    await child.locator("#frames iframe[data-role=primary]").waitFor();
+    assert.equal(await child.title(), "Saved page", "reload finds the page in its saved space");
+    await send(page, snapshot(false));
+    await send(child, snapshot(false));
+    const childClosed = child.waitForEvent("close");
+    await send(page, { type: "tab_upserted", tab: { ...saved, closedAt: 2 }, structural: true });
+    await childClosed;
+
+    await send(page, snapshot(false));
     await page.evaluate(() => (window as any).sockets.at(-1).close());
     assert.equal(await page.locator("#refresh-overlay").isVisible(), false, "reconnect does not replay the overlay");
     assert.equal(await page.getByRole("tab", { name: "Saved page" }).isVisible(), true, "reconnect keeps saved tabs visible");
