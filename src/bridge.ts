@@ -1823,9 +1823,34 @@ ${POINTER_DRAG_JS}
   };
 
   // ---------- audio ----------
-  var audioSessions = {};
+  var audioSessions = {}, speechSessions = {};
+  function speak(text, opts) {
+    opts = opts || {};
+    if (typeof text !== "string" || !text.trim()) return Promise.resolve({ ok: false, error: "invalid_audio" });
+    return askBoard({ type: "scribe-audio", op: "speak", text: text, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
+      if (!result || !result.ok) return result || { ok: false, error: "unavailable" };
+      var finish, done = false;
+      var session = { ok: true, onstate: null,
+        ended: new Promise(function (resolve) { finish = resolve; }),
+        stop: function () {
+          if (!done) void askBoard({ type: "scribe-audio", op: "speak-stop", sessionId: result.sessionId }, 30000);
+          return session.ended;
+        }
+      };
+      speechSessions[result.sessionId] = { session: session, finish: function (value) { done = true; finish(value); } };
+      return session;
+    });
+  }
   window.addEventListener("message", function (event) {
     if (event.source !== parent || event.data?.type !== "scribe-audio-event") return;
+    var speech = speechSessions[event.data.sessionId];
+    if (speech) {
+      if (event.data.ended) { delete speechSessions[event.data.sessionId]; speech.finish(event.data.ended); }
+      else if (event.data.state && typeof speech.session.onstate === "function") {
+        try { speech.session.onstate(event.data.state, { piece: event.data.piece, pieces: event.data.pieces }); } catch (_) {}
+      }
+      return;
+    }
     var data = event.data, session = audioSessions[data.sessionId];
     if (!session) return;
     if (data.level !== undefined && typeof session.onlevel === "function") { try { session.onlevel(data.level); } catch (_) {} }
@@ -1961,7 +1986,9 @@ ${POINTER_DRAG_JS}
         return askBoard({ type: "scribe-audio", op: "transcribe", buffer: buffer, mimeType: blob.type, language: opts.language, prompt: opts.prompt }, 120000);
       }).catch(function () { return { ok: false, error: "invalid_audio" }; });
     },
-    available: function () { return askBoard({ type: "scribe-audio", op: "available" }, 30000); }
+    available: function () { return askBoard({ type: "scribe-audio", op: "available" }, 30000); },
+    speak: speak,
+    voices: function () { return askBoard({ type: "scribe-audio", op: "voices" }, 30000); }
   };
 
   // ---------- page plugins ----------

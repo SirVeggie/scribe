@@ -13,7 +13,7 @@ This file covers building and changing pages. Read a file beside it when the tas
 |---|---|
 | `PAGE-SCRIPTS.md` | The page has its own script: `window.scribe` state, `bind`, `onChange`, signals and `page_wait`, page assets, `scribe.preview`, `scribe.reply` in your own markup. |
 | `PAGE-AGENT.md` | The page starts or drives agent chats (`scribe.agent`): prompts, model pickers, usage limits, agent runs. |
-| `PAGE-SERVICES.md` | The page plays sounds or uses the microphone (`scribe.audio`), the classifier (`scribe.ml`) or files in a folder (`scribe.files`). |
+| `PAGE-SERVICES.md` | The page plays sounds, reads text aloud or uses the microphone (`scribe.audio`), the classifier (`scribe.ml`) or files in a folder (`scribe.files`). |
 | `LARGE-PAGES.md` | A page over 24 KB: reading a window, grep, line edits, building in parts, checking out to a file. |
 | `TESTING.md` | Screenshots of a design for the current project (`page_screenshot`), or clicking through a page in your browser (`browser_*`). |
 | `TEMPLATES.md` | Only when the user asked to create or change a Scribe template. |

@@ -1,4 +1,4 @@
-# Page services: sounds, microphone, classifier, files
+# Page services: sounds, speech, microphone, classifier, files
 
 Builds on `SKILL.md` in this folder (showing and patching pages, theme, page kit): read that first if you have not.
 
@@ -78,6 +78,30 @@ const end = await sound.ended; // { ok: true, reason: "ended" | "stopped" } or {
 
 `error` is `hidden`, `denied`, `invalid_audio`, `not_found`, `too_large`, `busy` (8 sounds at once)
 or `unavailable` (it could not be decoded, or the browser has not allowed sound yet).
+
+## Reading text aloud: scribe.audio.speak
+
+`scribe.audio.speak(text, { voice, speed })` reads text through the text-to-speech source the user
+chose in Settings → Audio (an OpenAI-compatible source, or "This browser"). It asks for
+`audio.speak` ("Read text aloud", default ask): the text goes to that source, and a hosted one
+charges per character. Asking needs a click; once granted, a visible page may speak without one.
+Scribe splits long text at sentence ends and starts playing before the whole clip has arrived.
+One speech plays at a time across Scribe: a new one stops the one before. It keeps playing while
+the tab is in the background and stops when the page closes or reloads.
+
+```js
+const speech = await scribe.audio.speak(text, { voice: "nova", speed: 1.1 }); // both optional
+if (speech.ok) {
+  speech.onstate = (state, { piece, pieces }) => { status.textContent = `${piece + 1}/${pieces}`; };
+  stopButton.onclick = () => speech.stop();
+  const end = await speech.ended; // { ok: true, reason: "done" | "stopped" } or { ok: false, error, message }
+}
+const { voices } = await scribe.audio.voices(); // [{ id, name, lang? }] for the chosen source
+```
+
+`voice` is a `voices()` id; leave it out to use the voice from Settings. `speed` is 0.25 to 4.
+Failures: `denied`, `no_source`, `hidden`, `rate_limited` (30 requests/minute, 100,000 characters/hour
+per page), `blocked` (the browser blocked playback), `network`, `auth` or `engine`.
 
 ## Asking the classifier: scribe.ml
 

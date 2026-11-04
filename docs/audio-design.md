@@ -349,7 +349,15 @@ Original plan:
   its `AudioContext` on the first gesture; the desktop app can lift the restriction for the board
   origin (WebView2 `--autoplay-policy=no-user-gesture-required`).
 
-## Phase D: text-to-speech (todo)
+## Phase D: text-to-speech
+
+Built (#565): sources in Settings → Audio take an optional text-to-speech model, so speech uses the
+same source list and editor as transcription, with its own choice under "Text-to-speech" (`tts` in
+`audio-settings.json`: source, voice, speed; source `__browser__` is "This browser"). Shell code is
+`public/audio-speech.js` (`scribeAudio.speak`, `voices`, `splitSpeech`); it plays through an
+`<audio>` element until the Phase C mixer gives it the `speech` channel. Daily usage counts
+characters (`chars`, `speechCalls` in `audio-usage.json`).
+
 
 - Daemon `POST /api/audio/speech` → the engine's stream passed through (mp3 or opus). The shell plays
   it with `MediaSource` when the format allows, so speech starts before the whole clip has arrived;

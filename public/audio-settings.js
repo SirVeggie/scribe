@@ -55,6 +55,7 @@
   const model = row("Model", "model", "text", form); model.placeholder = "whisper-1";
   const language = row("Language", "language", "text", form); language.placeholder = "Auto";
   const streaming = row("Live transcription (experimental)", "streaming", "select", form);
+  const speechModel = row("Text-to-speech model", "speech-model", "text", form); speechModel.placeholder = "None (e.g. tts-1)";
   function button(label, run) {
     const node = document.createElement("button"); node.type = "button"; node.textContent = label;
     node.addEventListener("click", run); return node;
@@ -68,7 +69,7 @@
   addActions.className = "settings-actions"; addActions.append(add); section.append(addActions);
   function edit(profile) {
     editing = profile; name.value = profile?.name || ""; model.value = profile?.model || "whisper-1";
-    language.value = profile?.language || "";
+    language.value = profile?.language || ""; speechModel.value = profile?.speechModel || "";
     streaming.replaceChildren(); option(streaming, "", "Off"); option(streaming, "native", "Server stream (Moonshine)"); option(streaming, "window", "Sliding window");
     streaming.value = profile?.streaming || ""; streaming.parentElement.syncSelect(); customUrl = profile?.custom?.baseUrl || ""; key.value = "";
     key.placeholder = profile?.custom?.hasKey ? "Saved (type to replace)" : "Optional";
@@ -88,7 +89,7 @@
   }
   form.onsubmit = async event => {
     event.preventDefault(); submit.disabled = true;
-    const body = { name: name.value, source: source.value, model: model.value, language: language.value, streaming: streaming.value };
+    const body = { name: name.value, source: source.value, model: model.value, language: language.value, streaming: streaming.value, speechModel: speechModel.value };
     if (source.value === "__custom__") body.custom = { baseUrl: url.value, ...(key.value.trim() ? { apiKey: key.value.trim() } : {}) };
     if (await change(editing ? "sources/" + encodeURIComponent(editing.id) : "sources", editing ? "PUT" : "POST", body)) {
       form.hidden = true; add.hidden = false;
@@ -109,7 +110,7 @@
       const detail = document.createElement("span"); detail.className = "ml-source-detail";
       let host = view.sources.find(s => s.id === profile.source)?.name || "Unavailable";
       if (profile.custom?.baseUrl) { try { host = new URL(profile.custom.baseUrl).host; } catch { host = profile.custom.baseUrl; } }
-      detail.textContent = " " + profile.model + " · " + host + (profile.streaming ? " · live" : ""); text.append(title, detail);
+      detail.textContent = " " + profile.model + " · " + host + (profile.streaming ? " · live" : "") + (profile.speechModel ? " · speech " + profile.speechModel : ""); text.append(title, detail);
       const testSource = button("Test", async () => {
         testSource.disabled = true; status.textContent = "Testing…";
         try { const result = await request("test", "POST", { sourceId: profile.id }); status.textContent = result.ok ? "Transcript: " + (result.text || "(empty)") : result.message || result.error; }
@@ -146,6 +147,7 @@
     try {
       view = await window.scribeAudio.refresh();
       renderSources();
+      await renderSpeech();
       send.setAttribute("aria-checked", String(view.input.sendAfterDictation));
       push.setAttribute("aria-checked", String(view.input.pushToTalk));
       livePreview.setAttribute("aria-checked", String(view.input.livePreview !== false));
@@ -211,5 +213,60 @@
   [soundsOn, ...cueSwitches.map(([, input]) => input)].forEach(input => input.addEventListener("change", saveOutput));
   volume.addEventListener("input", () => { paintVolume(); window.scribeAudio.setOutput({ ...window.scribeAudio.output(), volume: Number(volume.value) / 100 }); });
   volume.addEventListener("change", saveOutput);
-  window.scribeAudioSettings = { sections: [section, sounds], refresh, receiveOutput, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
+
+  const speech = document.createElement("section"); speech.className = "settings-section audio-settings";
+  const speechHeading = document.createElement("h3"); speechHeading.textContent = "Text-to-speech";
+  const speechHelp = help.cloneNode(true); speechHelp.setAttribute("aria-label", "About text-to-speech");
+  speechHelp.dataset.tooltip = "Pages read text aloud with this source. A source needs a text-to-speech model (edit it above); hosted sources charge per character. This browser uses its own voices: free, no setup.";
+  speechHelp.setAttribute("aria-description", speechHelp.dataset.tooltip); speechHeading.append(" ", speechHelp); speech.append(speechHeading);
+  const ttsSource = row("Read aloud with", "tts-source", "select", speech);
+  const ttsVoice = row("Voice", "tts-voice", "select", speech);
+  const ttsVoiceName = row("Voice", "tts-voice-name", "text", speech); ttsVoiceName.placeholder = "alloy";
+  const ttsSpeed = row("Speed", "tts-speed", "number", speech);
+  Object.assign(ttsSpeed, { min: "0.25", max: "4", step: "0.05" });
+  const speechStatus = document.createElement("p"); speechStatus.className = "settings-hint"; speechStatus.setAttribute("role", "status");
+  let speaking = null;
+  const testSpeech = button("Test", async () => {
+    if (speaking) { speaking.stop(); return; }
+    speechStatus.textContent = ""; testSpeech.textContent = "Stop";
+    speaking = window.scribeAudio.speak("This is how Scribe reads text aloud.");
+    const result = await speaking.ended; speaking = null; testSpeech.textContent = "Test";
+    if (!result.ok) speechStatus.textContent = result.message || result.error;
+    void refresh();
+  });
+  const speechActions = document.createElement("div"); speechActions.className = "settings-actions"; speechActions.append(testSpeech);
+  speech.append(speechActions, speechStatus);
+  async function renderSpeech() {
+    const tts = view.tts || {}, browser = tts.source === "__browser__";
+    ttsSource.replaceChildren(); option(ttsSource, "", "Off"); option(ttsSource, "__browser__", "This browser");
+    view.profiles.filter(p => p.speechModel).forEach(p => option(ttsSource, p.id, p.name));
+    if (tts.source && ![...ttsSource.options].some(o => o.value === tts.source)) option(ttsSource, tts.source, "Saved source (no text-to-speech model)");
+    ttsSource.value = tts.source || ""; ttsSource.parentElement.syncSelect();
+    ttsVoice.closest(".setting-row").hidden = !browser;
+    ttsVoiceName.closest(".setting-row").hidden = browser || !tts.source;
+    ttsSpeed.closest(".setting-row").hidden = !tts.source; testSpeech.hidden = !tts.source;
+    ttsSpeed.value = String(tts.speed ?? 1);
+    if (browser) {
+      ttsVoice.replaceChildren(); option(ttsVoice, "", "Default voice");
+      const list = await window.scribeAudio.voices().catch(() => null);
+      (list?.voices || []).forEach(v => option(ttsVoice, v.id, v.lang ? v.name + " (" + v.lang + ")" : v.name));
+      if (tts.voice && ![...ttsVoice.options].some(o => o.value === tts.voice)) option(ttsVoice, tts.voice, tts.voice + " (unavailable)");
+      ttsVoice.value = tts.voice || ""; ttsVoice.parentElement.syncSelect();
+    } else ttsVoiceName.value = tts.voice || "";
+    const chars = view.usage?.chars || 0;
+    if (!speaking) speechStatus.textContent = chars && !browser ? "Read aloud today: " + chars.toLocaleString() + " characters" : "";
+  }
+  function saveSpeech(changes) {
+    const speed = Number(ttsSpeed.value);
+    const tts = { source: ttsSource.value, voice: ttsSource.value === "__browser__" ? ttsVoice.value : ttsVoiceName.value.trim(),
+      speed: Number.isFinite(speed) && speed > 0 ? speed : 1, ...changes };
+    saving = saving.then(async () => {
+      await request("settings", "PUT", { tts }); await refresh();
+    }).catch(err => { speechStatus.textContent = err.message; });
+  }
+  // Voices differ between sources, so a new source starts at its default voice.
+  ttsSource.addEventListener("change", () => saveSpeech({ voice: "" }));
+  [ttsVoice, ttsVoiceName, ttsSpeed].forEach(input => input.addEventListener("change", () => saveSpeech()));
+
+  window.scribeAudioSettings = { sections: [section, speech, sounds], refresh, receiveOutput, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
 })();

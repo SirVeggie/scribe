@@ -750,6 +750,7 @@
       if (msg.value !== "allow" && ((msg.perm === "audio.microphone" && pageAudioSessions.get(msg.id)?.mode !== "stream") ||
         (msg.perm === "audio.microphoneStream" && pageAudioSessions.get(msg.id)?.mode === "stream") ||
         (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
+      if (msg.value !== "allow" && msg.perm === "audio.speak") stopPageSpeech(msg.id);
       return;
     }
     if (msg.type === "update") {
@@ -5300,7 +5301,11 @@
     session.port?.postMessage({ end: reason });
     session.port?.close(); session.port = null;
   }
+  /** Text a page is having read aloud (scribe.audio.speak): one per page; it goes on while the tab is in the background. */
+  const pageSpeech = new Map();
+  function stopPageSpeech(id) { pageSpeech.get(id)?.session.stop(); pageSpeech.delete(id); }
   function cancelPageAudio(id, reason = "stopped") {
+    if (reason !== "hidden") stopPageSpeech(id);
     const session = pageAudioSessions.get(id);
     if (!session) return;
     endPageAudioStream(session, reason);
@@ -5372,6 +5377,39 @@
         if (session.cancelled) return reply({ ok: false, error: "cancelled" });
         if (result.ok && result.blob) return reply({ ok: true, buffer: await result.blob.arrayBuffer(), mimeType: result.blob.type, durationMs: result.durationMs });
         return reply(result);
+      }
+      if (data.op === "voices") return reply(api.voices ? await api.voices() : { ok: false, error: "unavailable" });
+      if (data.op === "speak-stop") {
+        if (pageSpeech.get(id)?.id === data.sessionId) stopPageSpeech(id);
+        return reply({ ok: true });
+      }
+      if (data.op === "speak") {
+        if (!api.speak) return reply({ ok: false, error: "unavailable" });
+        if (typeof data.text !== "string" || !data.text.trim()) return reply({ ok: false, error: "invalid_audio" });
+        if (data.text.length > 100000) return reply({ ok: false, error: "too_large" });
+        if (!pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
+        const entry = frames.get(id), revision = entry.revision, generation = entry.el.dataset?.audioGeneration;
+        // Like uploads: granted pages may speak without a click; asking still needs one.
+        if (!frameActivated(id)) {
+          const grants = await window.scribePermissions.query(tab);
+          if (grants.permissions?.find(p => p.id === "audio.speak")?.value !== "allow")
+            return reply({ ok: false, error: "denied", permission: "audio.speak" });
+        }
+        const permission = await window.scribePermissions.ensure(tab, { perm: "audio.speak" });
+        if (!permission.ok) return reply(permission);
+        if (frames.get(id) !== entry || entry.revision !== revision || entry.el.dataset?.audioGeneration !== generation) return reply({ ok: false, error: "cancelled" });
+        stopPageSpeech(id);
+        const sessionId = crypto.randomUUID(), source = event.source;
+        const session = api.speak(data.text, { tabId: id,
+          voice: typeof data.voice === "string" ? data.voice.slice(0, 200) : undefined,
+          speed: Number.isFinite(data.speed) ? data.speed : undefined,
+          onState: state => source?.postMessage({ type: "scribe-audio-event", sessionId, state: state.state, piece: state.piece, pieces: state.pieces }, event.origin) });
+        pageSpeech.set(id, { id: sessionId, session });
+        void session.ended.then(result => {
+          if (pageSpeech.get(id)?.id === sessionId) pageSpeech.delete(id);
+          source?.postMessage({ type: "scribe-audio-event", sessionId, ended: result }, event.origin);
+        });
+        return reply({ ok: true, sessionId });
       }
       if (!["listen", "record", "stream", "transcribe"].includes(data.op)) return reply({ ok: false, error: "unknown_op" });
       if (data.op !== "transcribe" && !frameActivated(id)) return reply({ ok: false, error: "no_gesture" });
