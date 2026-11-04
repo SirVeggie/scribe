@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RUNTIME = ["dist", "public", "templates", "plugins", path.join(".cursor", "skills"), "package.json", "package-lock.json"];
+const RUNTIME = ["dist", "public", "templates", "plugins", path.join("skills", "scribe"), "package.json", "package-lock.json"];
 
 /** The headless targets: the asset name in latest.json, npm's platform flags, and Node's build name. */
 export const HEADLESS_TARGETS = {

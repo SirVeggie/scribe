@@ -19,7 +19,7 @@ The app now has much of the groundwork, so this plan builds on it instead of add
 - **Codex** runs with Scribe's own CODEX_HOME; `dataDir/agent/codex/skills` is the folder it reads. `skill_search`, plugins and hooks are switched off.
 - **Native (Pi)** reads `dataDir/agent/pi/agent/skills` plus workspace `.agents/skills` and `.pi/skills`; its skills appear as `/skill:name` in the composer.
 - **Claude SDK 0.3.310** still has `plugins: [{ type: "local", path }]` and `skills: string[] | 'all'`. Pi still has `additionalSkillPaths`, `skillsOverride`, `noSkills`. Cursor still has only `dirs` (which also loads rules), so it stays MCP-only.
-- The scribe skill lives in this repo at `.cursor/skills/scribe` (`SKILL_DIR` in `src/skillDocs.ts`) and is served by `scribe_docs`. Users get it as a provider skill only if they installed it themselves.
+- The scribe skill lives in this repo at `skills/scribe` (`SKILL_DIR` in `src/skillDocs.ts`) and is served by `scribe_docs`. Users get it as a provider skill only if they installed it themselves.
 
 ## Design
 

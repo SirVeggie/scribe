@@ -188,7 +188,7 @@ Markdown notes, Todo lists, Kanban boards and Embed pages are starting points. O
 
 - Discoverability: Worth a closer look. Generated output can continue working after the originating chat ends.
 - Find it: Ask the agent to build an interactive page
-- Sources: `README.md:151`, `.cursor/skills/scribe/SKILL.md`
+- Sources: `README.md:151`, `skills/scribe/SKILL.md`
 
 Page state persists in the daemon and is available to the agent. Shared changes synchronize across viewers; per-viewer filters and drafts can stay private to that viewer. Pages can use forms, assets, template actions and model-backed buttons.
 
@@ -196,7 +196,7 @@ Page state persists in the daemon and is available to the agent. Shared changes 
 
 - Discoverability: Easy to miss. Reading a page, running its code and granting its agent access are separate controls.
 - Find it: Page menu → Permissions…
-- Sources: `src/pagePermissions.ts`, `public/permissions.js`, `.cursor/skills/scribe/SKILL.md`
+- Sources: `src/pagePermissions.ts`, `public/permissions.js`, `skills/scribe/SKILL.md`
 
 Control agent chats after a click, unattended chats, workspace access, classifier requests, microphone/transcription and plugin access where applicable. These are separate from the chat’s own access settings. Riskier grants return to Ask after an agent changes the page’s code or template.
 
@@ -204,7 +204,7 @@ Control agent chats after a click, unattended chats, workspace access, classifie
 
 - Discoverability: Worth a closer look. The same preview surface handles structured documents and media.
 - Find it: Click a chat attachment or a page’s preview action
-- Sources: `public/preview.js:1`, `.cursor/skills/scribe/SKILL.md`
+- Sources: `public/preview.js:1`, `skills/scribe/SKILL.md`
 
 The shared viewer handles PDFs, video/audio, Markdown, CSV/TSV tables, JSON, text/code and sandboxed HTML. Arrow keys step through a set of files. This is also available to custom pages without building another viewer.
 
@@ -526,7 +526,7 @@ The daemon dispatches and tracks worker runs, waits out provider plan limits and
 
 - Discoverability: Easy to miss. Replies can become resumable work without creating another task.
 - Find it: Card comments → Continue
-- Sources: `templates/builtin/kanban.guide.md:14`, `.cursor/skills/scribe/SKILL.md`
+- Sources: `templates/builtin/kanban.guide.md:14`, `skills/scribe/SKILL.md`
 
 A comment on a held card reaches its running chat. After the chat ends, Continue requests another turn of that conversation; dispatch waits for dependencies, scheduling, a running worker, inbox, slot and permissions. Form replies can route back to the same card as comments and request continuation.
 

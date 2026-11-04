@@ -1,6 +1,6 @@
 # Scribe templates
 
-Read this file only when the user asked you to create, edit, delete, or open a **Scribe template**. Do not create templates unprompted.
+Read this file only when the user asked you to create, edit, delete, or open a **Scribe template**. Do not create templates unprompted. Builds on `SKILL.md` in this folder (showing and patching pages, theme, page kit) and, for template scripts, `PAGE-SCRIPTS.md`: read those first if you have not.
 
 A template is reusable page HTML plus a form. The user opens instances from the Templates sidebar. Updating the template re-renders every linked page with that page's own form values.
 

@@ -80,24 +80,49 @@ test("skill_read stays inside the thread's skills and each skill's folder", () =
   }
 });
 
-test("skill_read returns a long skill as its opening sections and an outline, and sections on request (#918)", () => {
+test("skill_read returns the built-in skill whole, sections on request, and finds sections in its reference files", () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-skills-"));
   try {
     const skills = new ScribeSkills(memoryRows(), data, SKILL_DIR);
     const whole = fs.readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8");
     const first = skills.read(pageThread, "scribe");
-    assert.ok(first.text.length < 30_000, `first read is ${first.text.length} chars`);
-    assert.match(first.text, /## When to use it/);
-    assert.match(first.text, /- Pages that use the agent \(\d+k chars\)/);
-    assert.ok(first.files?.includes("TEMPLATES.md"));
+    assert.equal(first.text, whole);
+    assert.ok(first.files?.includes("TEMPLATES.md") && first.files.includes("PAGE-SCRIPTS.md"));
     const forms = skills.read(pageThread, "scribe", undefined, "forms for a card");
     assert.match(forms.text, /^### Forms for a card/);
-    assert.ok(!forms.text.includes("## Waiting for user input"));
+    assert.ok(!forms.text.includes("### Page components"));
     assert.equal(skills.read(pageThread, "scribe", undefined, "all").text, whole);
     assert.equal(skills.read(pageThread, "scribe", "TEMPLATES.md").text, fs.readFileSync(path.join(SKILL_DIR, "TEMPLATES.md"), "utf8"));
+    // A section SKILL.md does not have comes from the reference file that has it.
+    const runs = skills.read(pageThread, "scribe", undefined, "agent runs");
+    assert.match(runs.text, /^\(from PAGE-AGENT\.md\)\n\n## Agent runs/);
     assert.throws(() => skills.read(pageThread, "scribe", undefined, "no such heading"), /No section matches[\s\S]*- Page kit/);
+    // Lists read several files or sections in one call.
+    const two = skills.read(pageThread, "scribe", ["PAGE-SCRIPTS.md", "PAGE-AGENT.md"]);
+    assert.match(two.text, /^=== PAGE-SCRIPTS\.md ===\n\n# Page scripts[\s\S]*=== PAGE-AGENT\.md ===\n\n# Pages that use the agent/);
+    assert.equal(two.file, "PAGE-SCRIPTS.md, PAGE-AGENT.md");
+    const sections = skills.read(pageThread, "scribe", undefined, ["theme", "no such heading"]);
+    assert.match(sections.text, /=== SKILL\.md § theme ===\n\n### Theme[\s\S]*=== SKILL\.md § no such heading ===\n\nNo section matches/);
+    assert.throws(() => skills.read(pageThread, "scribe", ["NOPE.md", "GONE.md"]), /No NOPE\.md[\s\S]*No GONE\.md/);
+    assert.throws(() => skills.read(pageThread, "scribe", Array.from({ length: 9 }, (_, i) => `f${i}.md`)), /At most 8/);
   } finally {
     fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("skill_read still cuts a long file to its opening sections and an outline (#918)", () => {
+  const { skills, write, done } = sandbox();
+  try {
+    const made = skills.create("long", "Long.");
+    const section = (n: number) => `## Part ${n}\n\n${"x".repeat(5000)}\n`;
+    write(path.join(made.dir, "SKILL.md"), `---\nname: long\ndescription: Long.\n---\n\n# Long\n\n${Array.from({ length: 8 }, (_, i) => section(i + 1)).join("\n")}`);
+    skills.setEnabled(made.id, true);
+    const first = skills.read(pageThread, "long");
+    assert.ok(first.text.length < 30_000, `first read is ${first.text.length} chars`);
+    assert.match(first.text, /## Part 1/);
+    assert.match(first.text, /- Part 8 \(\d+k chars\)/);
+  } finally {
+    done();
   }
 });
 

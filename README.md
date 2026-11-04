@@ -30,9 +30,7 @@ npm run build
 
 `npm run build` type-checks all TypeScript tests before compiling the app. Use `npm run typecheck:tests` to check tests without emitting files.
 
-Then two copies outside the repo:
-
-1. **MCP** — add this to `%USERPROFILE%\.cursor\mcp.json`, with the `args` path pointing at this clone:
+To use Scribe's pages from Cursor or Claude Code outside Scribe, add its MCP server — in `%USERPROFILE%\.cursor\mcp.json`, with the `args` path pointing at this clone:
 
 ```json
 "scribe": {
@@ -41,14 +39,7 @@ Then two copies outside the repo:
 }
 ```
 
-2. **Skill** — copy `.cursor\skills\scribe` to `%USERPROFILE%\.cursor\skills\scribe`. A project skill only applies in this repo; the personal copy is what agents use from every other workspace. A junction stays in sync with git:
-
-```bat
-mklink /J %USERPROFILE%\.cursor\skills\scribe C:\path\to\scribe\.cursor\skills\scribe
-mklink /J %USERPROFILE%\.claude\skills\scribe C:\path\to\scribe\.cursor\skills\scribe
-```
-
-The skill is optional: clients without it (or with an old copy) can read the same text from the MCP's `scribe_docs` tool, which serves this clone's `.cursor/skills/scribe`. A test (`src/skillDocs.test.ts`) fails when `window.scribe` in `src/bridge.ts` gains a member the skill doesn't mention, or when the page-wrapper theme variables in `src/wrapHtml.ts` are missing from the skill.
+The scribe skill lives in `skills/scribe`, outside the folders providers scan (`.cursor`, `.claude`, `.agents`), so no provider loads its own copy. Scribe's chats read it with the MCP's `skill_read` tool, and any other client with `scribe_docs`; both serve this clone's `skills/scribe`, so the docs always match the daemon. Do not install it as a personal skill: a provider would then load the whole file on its own. `SKILL.md` holds the core rules for building pages, and the reference files beside it (large pages, page scripts, pages that use the agent, page services, testing, templates, plugins) are read when a task needs them. A test (`src/skillDocs.test.ts`) fails when `window.scribe` in `src/bridge.ts` gains a member the skill doesn't mention, or when the page-wrapper theme variables in `src/wrapHtml.ts` are missing from the skill.
 
 Reload MCP in Cursor after changing `mcp.json`. Then open http://127.0.0.1:4747 or ask the agent to present something visually.
 

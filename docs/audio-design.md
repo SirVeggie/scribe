@@ -232,7 +232,7 @@ scribe.audio.available();                                    // { mic, stt }
 ```
 
 - `var audio = { … }` in `src/bridge.ts`, added to `window.scribe` and to the `skillDocs.test.ts`
-  prefix list; documented in the scribe skill (`.cursor/skills/scribe/SKILL.md`) and in the
+  prefix list; documented in the scribe skill (`skills/scribe/SKILL.md`) and in the
   `scribe_docs` description in `src/mcp.ts`.
 - Transport: `scribe-audio` messages with `op: "listen" | "record" | "stop" | "cancel" | "transcribe"`;
   level updates and state changes come back as `scribe-audio-event` posts to that frame. A recorded

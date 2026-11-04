@@ -19,7 +19,7 @@ import { openBoard } from "./openBoard.js";
 import { clampWaitMs, parseEventNames } from "./signal.js";
 import { STATE_OP_NAMES, filterItems, getAt } from "./stateOps.js";
 import { clampLibraryPage } from "./librarySearch.js";
-import { skillDocs } from "./skillDocs.js";
+import { MAX_DOC_PARTS, skillDocs } from "./skillDocs.js";
 import {
   DEFAULT_GREP_MATCHES,
   DEFAULT_READ_LINES,
@@ -789,9 +789,9 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "scribe_docs",
-    "The scribe skill for this Scribe version: rules for building and changing pages, and the page API pages use (window.scribe: state and ops, signals, actions, assets, links, scribe.preview, scribe.agent, scribe.audio, permissions). Use it when the scribe skill is not loaded, or to check an API the skill you have does not mention. No topic: overview and table of contents. topic: a heading or part of one (e.g. \"Interactive pages\", \"Waiting\", \"Previewing files\"), \"templates\" for Scribe templates, or \"all\".",
+    "The scribe skill for this Scribe version: rules for building and changing pages, and the page API pages use (window.scribe: state and ops, signals, actions, assets, links, scribe.preview, scribe.agent, scribe.audio, permissions). Use it when the scribe skill is not loaded, or to check an API the skill you have does not mention. No topic: overview and table of contents. topic: a heading or part of one (e.g. \"Interactive pages\", \"Waiting\", \"Previewing files\"), a file's name (\"page-scripts\", \"templates\"), a list of those, or \"all\".",
     {
-      topic: z.string().optional().describe("Heading (or part of one) to read, \"templates\", or \"all\". Omit for the contents."),
+      topic: z.union([z.string(), z.array(z.string()).max(MAX_DOC_PARTS)]).optional().describe("Heading (or part of one), a file's name, a list of those, or \"all\". Omit for the contents."),
     },
     { readOnlyHint: true },
     async ({ topic }) => {
@@ -2003,11 +2003,11 @@ function registerThreadTools(server: McpServer): void {
 function registerSkillRead(server: McpServer): void {
   server.tool(
     "skill_read",
-    "Read one of the Scribe skills listed in your instructions: its SKILL.md (with a list of its other files) or, with file, one of those files. A long file comes as its opening sections and an outline of the rest; read those with section. Read a skill before the task it covers and follow it.",
+    "Read one of the Scribe skills listed in your instructions: its SKILL.md (with a list of its other files) or, with file, one of those files. A long file comes as its opening sections and an outline of the rest; read those with section. file and section also take a list, to read several in one call. Read a skill before the task it covers and follow it.",
     {
       name: z.string().describe("The skill's name as listed (or its id when two share a name)."),
-      file: z.string().optional().describe("A file inside the skill's folder, like references/api.md. Omit for SKILL.md."),
-      section: z.string().optional().describe("Only the sections whose ## or ### heading contains this (case-insensitive), or \"all\" for the whole file."),
+      file: z.union([z.string(), z.array(z.string()).max(MAX_DOC_PARTS)]).optional().describe("A file inside the skill's folder, like references/api.md, or a list of them. Omit for SKILL.md."),
+      section: z.union([z.string(), z.array(z.string()).max(MAX_DOC_PARTS)]).optional().describe("Only the sections whose ## or ### heading contains this (case-insensitive), a list of them, or \"all\" for the whole file."),
     },
     { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     async ({ name, file, section }, extra) => {

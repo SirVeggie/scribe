@@ -219,7 +219,7 @@
   - **Browser settings:** the UI moves `agent-board.*` localStorage keys to `scribe.*` on load. The desktop app has a new identifier (`local.scribe.desktop`), so its WebView profile, and with it window-only settings, starts fresh once.
   - **Desktop:** `scribe.exe` replaces `board.exe` (the installer removes the old exe), and the "Agent Board" startup entry moves to "Scribe".
 - **Protocol:** `VERSION` 2.5.0 → 3.0.0. State writes are ops only (`PUT /api/tabs/:id/state { ops }`), `tab_state` carries ops instead of the whole state, `POST /api/tabs/:id/signal` became `/events`, waits take a cursor and return events. MCP tools are renamed (`board_*` → `page_*` / `library_*` / `template_*`), the page API is `window.scribe` with `data-scribe-*` attributes, and the MCP server is named `scribe`. Pages written for the old API need updating; the built-in templates are updated and resync on startup.
-- **Outside the repo:** MCP configs must point a server named `scribe` at `dist/index.js` (Cursor: `~/.cursor/mcp.json`; Claude Code: `claude mcp`), and the skill folder is `.cursor/skills/scribe`.
+- **Outside the repo:** MCP configs must point a server named `scribe` at `dist/index.js` (Cursor: `~/.cursor/mcp.json`; Claude Code: `claude mcp`), and the skill folder is `skills/scribe`.
 - **How to verify:** `a schema v1 board migrates archived tabs into the Library` runs v1 → 3; the event, local state and key tests in `src/store.test.ts`; manually, copy an old `%LOCALAPPDATA%\agent-board` aside, start the daemon, and check that the folder moved and pages, keys and threads are intact.
 - **When to remove:** the folder move, key prefixing and localStorage move can go once no Agent Board install is left to upgrade. Keep `migrateV2ToV3`.
 

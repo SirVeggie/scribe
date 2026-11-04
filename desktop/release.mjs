@@ -13,7 +13,7 @@ const desktop = path.join(root, "desktop");
 // The app folder the installer puts beside scribe.exe (desktop/src/board.rs looks for it there). Kept on a
 // short path: makensis cannot open files past 260 characters, and some module paths are long.
 const stage = path.join(os.tmpdir(), "scribe-release-app");
-const RUNTIME = ["dist", "public", "templates", "plugins", path.join(".cursor", "skills"), "package.json", "package-lock.json"];
+const RUNTIME = ["dist", "public", "templates", "plugins", path.join("skills", "scribe"), "package.json", "package-lock.json"];
 const MIN_NODE = [22, 19];
 
 if (process.platform !== "win32") {

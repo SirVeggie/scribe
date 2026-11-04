@@ -1,5 +1,7 @@
 # Page plugins
 
+Builds on `SKILL.md` in this folder (showing and patching pages, theme, page kit) and `PAGE-SCRIPTS.md` (page scripts): read those first if you have not.
+
 Use `plugin_list` to discover installed plugins. `plugin_guide(id)` gives a plugin's guide and agent method signatures. `plugin_call({id,method,args})` calls a declared agent method. Calls return `{ok:true,result}` or an error; handle errors without retry loops.
 
 ## Using a plugin from a page

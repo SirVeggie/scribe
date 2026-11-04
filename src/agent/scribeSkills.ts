@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
-import { SKILL_DIR, sectionedRead } from "../skillDocs.js";
+import { SKILL_DIR, docParts, joinParts, sectionedRead, sectionsElsewhere } from "../skillDocs.js";
 import { estimateTokens, skillFrontmatter } from "./harness.js";
 import { noPages, type Thread } from "./types.js";
 
@@ -94,6 +94,14 @@ function walk(dir: string, limit = MAX_IMPORT_FILES + 1): Array<{ rel: string; s
     /* unreadable */
   }
   return out;
+}
+
+/** A skill folder's markdown files other than SKILL.md (links are not followed), for a section search. */
+function otherMarkdown(dir: string): Array<{ name: string; text: string }> {
+  return walk(dir, 200)
+    .filter((f) => /\.md$/i.test(f.rel) && f.rel !== "SKILL.md" && f.size <= MAX_READ_BYTES)
+    .sort((a, b) => a.rel.localeCompare(b.rel))
+    .map((f) => ({ name: f.rel.split(path.sep).join("/"), text: fs.readFileSync(path.join(dir, f.rel), "utf8") }));
 }
 
 /**
@@ -388,9 +396,33 @@ export class ScribeSkills {
   /**
    * skill_read: a skill's SKILL.md (with the list of its other files), or one of its files, for a
    * skill this thread may use. The file must resolve inside the skill's folder, links included.
-   * A long markdown file, or one read with section, goes through sectionedRead.
+   * A long markdown file, or one read with section, goes through sectionedRead. file and section
+   * each take a list too: every file is read with every section, one after another.
    */
   read(thread: Parameters<ScribeSkills["effective"]>[0], name: unknown, file?: unknown, section?: unknown): { skill: string; file: string; text: string; files?: string[]; truncated?: boolean } {
+    const files = docParts(file) ?? [undefined];
+    const sections = docParts(section) ?? [undefined];
+    if (files.length === 1 && sections.length === 1) return this.readOne(thread, name, files[0], sections[0]);
+    const parts: Array<{ label: string; text: string; error?: boolean }> = [];
+    let first: ReturnType<ScribeSkills["readOne"]> | undefined;
+    for (const f of files) {
+      for (const s of sections) {
+        const label = [f ?? "SKILL.md", s].filter(Boolean).join(" § ");
+        try {
+          const out = this.readOne(thread, name, f, s);
+          first ??= out;
+          parts.push({ label, text: out.text });
+        } catch (err) {
+          parts.push({ label, text: (err as Error).message, error: true });
+        }
+      }
+    }
+    const joined = joinParts(parts);
+    if (joined.error || !first) throw new Error(joined.text);
+    return { skill: first.skill, file: files.map((f) => f ?? "SKILL.md").join(", "), text: joined.text, ...(first.files ? { files: first.files } : {}) };
+  }
+
+  private readOne(thread: Parameters<ScribeSkills["effective"]>[0], name: unknown, file?: unknown, section?: unknown): { skill: string; file: string; text: string; files?: string[]; truncated?: boolean } {
     if (typeof name !== "string" || !name.trim()) throw new Error("name is required");
     const skills = this.effective(thread);
     const want = name.trim();
@@ -423,8 +455,10 @@ export class ScribeSkills {
     let text = buffer.subarray(0, MAX_READ_BYTES).toString("utf8");
     if (part || /\.md$/i.test(rel)) {
       const sectioned = sectionedRead(text, part, READ_WHOLE_CHARS);
-      if (sectioned.error) throw new Error(sectioned.text);
-      text = sectioned.text;
+      // A section SKILL.md does not have may be in one of the skill's reference files: return it from there.
+      const elsewhere = sectioned.error && part && rel === "SKILL.md" ? sectionsElsewhere(otherMarkdown(base), part) : undefined;
+      if (sectioned.error && !elsewhere) throw new Error(sectioned.text);
+      text = elsewhere ?? sectioned.text;
     }
     const out: { skill: string; file: string; text: string; files?: string[]; truncated?: boolean } = { skill: skill.name, file: rel, text, ...(truncated ? { truncated } : {}) };
     if (rel === "SKILL.md" && !part) {

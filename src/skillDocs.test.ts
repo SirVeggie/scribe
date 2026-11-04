@@ -34,7 +34,7 @@ test("the scribe skill documents the page wrapper theme", () => {
   assert.match(skill, /dark theme/);
   for (const name of Object.keys(PAGE_THEME)) {
     assert.ok(wrapped.includes(`${name}:`), `wrapper defines ${name}`);
-    assert.ok(skill.includes(name), `document ${name} in .cursor/skills/scribe/SKILL.md`);
+    assert.ok(skill.includes(name), `document ${name} in skills/scribe/SKILL.md`);
   }
   const docs = skillDocs("theme");
   assert.equal(docs.error, undefined);
@@ -43,7 +43,7 @@ test("the scribe skill documents the page wrapper theme", () => {
 });
 
 test("the scribe skill documents every member of window.scribe", () => {
-  const docs = ["SKILL.md", "TEMPLATES.md"].map((name) => fs.readFileSync(path.join(SKILL_DIR, name), "utf8")).join("\n");
+  const docs = fs.readdirSync(SKILL_DIR).filter((name) => name.endsWith(".md")).map((name) => fs.readFileSync(path.join(SKILL_DIR, name), "utf8")).join("\n");
   const apis: Array<[prefix: string, start: string]> = [
     ["scribe.", "window.scribe = {"],
     ["scribe.agent.", "var agent = {"],
@@ -55,7 +55,7 @@ test("the scribe skill documents every member of window.scribe", () => {
     const keys = objectKeys(start);
     assert.ok(keys.length > 1, `found no keys in ${start}`);
     const missing = keys.filter((key) => !docs.includes(prefix + key));
-    assert.deepEqual(missing, [], `document these in .cursor/skills/scribe: ${missing.map((key) => prefix + key).join(", ")}`);
+    assert.deepEqual(missing, [], `document these in skills/scribe: ${missing.map((key) => prefix + key).join(", ")}`);
   }
   assert.ok(objectKeys("window.scribe = {").includes("preview"));
 });
@@ -96,21 +96,52 @@ test("splitSections nests ### in ## and skips fenced headings", () => {
   assert.doesNotMatch(sections[0].text, /Wait for it/);
 });
 
-test("skillDocs serves contents, sections, all, and templates", () => {
-  const read = (name: string) => (name === "SKILL.md" ? SAMPLE : name === "TEMPLATES.md" ? "# Templates" : null);
-  const contents = skillDocs(undefined, read);
+const TEMPLATES = "# Templates\n\nNote.\n\n## Tools\n\nUse them.";
+const AGENT = "# Pages that use the agent\n\nStart chats.\n\n## Agent runs\n\nRun them.";
+
+test("skillDocs serves contents, sections in every file, files by name, lists and all", () => {
+  const files: Record<string, string> = { "SKILL.md": SAMPLE, "TEMPLATES.md": TEMPLATES, "PAGE-AGENT.md": AGENT };
+  const read = (name: string) => files[name] ?? null;
+  const list = () => ["PAGE-AGENT.md", "TEMPLATES.md"];
+  const contents = skillDocs(undefined, read, list);
   assert.match(contents.text, /Intro text\.[\s\S]*- Show\n {2}- Patch\n- Wait/);
-  assert.equal(skillDocs("patch", read).text, "### Patch\n\nPatch it.\n\n```md\n## Not a heading\n```");
+  assert.match(contents.text, /PAGE-AGENT\.md: Pages that use the agent\n- Agent runs/);
+  assert.match(contents.text, /TEMPLATES\.md: Templates\n- Tools/);
+  assert.equal(skillDocs("patch", read, list).text, "### Patch\n\nPatch it.\n\n```md\n## Not a heading\n```");
   // "Show" holds "Patch", so a query matching both returns the section once.
-  assert.equal(skillDocs("h", read).text.match(/Patch it/g)?.length, 1);
-  assert.equal(skillDocs("all", read).text.startsWith("# Scribe"), true);
-  assert.equal(skillDocs("templates", read).text, "# Templates");
-  assert.equal(skillDocs("nope", read).error, true);
-  assert.equal(skillDocs(undefined, () => null).error, true);
+  assert.equal(skillDocs("h", read, list).text.match(/Patch it/g)?.length, 1);
+  // A heading in a reference file, and a reference file by its # title (once, with its sections).
+  assert.equal(skillDocs("tools", read, list).text, "## Tools\n\nUse them.");
+  assert.equal(skillDocs("pages that use", read, list).text, AGENT);
+  assert.equal(skillDocs("agent", read, list).text.match(/Run them/g)?.length, 1);
+  // A file by name, with or without .md.
+  assert.equal(skillDocs("templates", read, list).text, TEMPLATES);
+  assert.equal(skillDocs("page-agent.md", read, list).text, AGENT);
+  const all = skillDocs("all", read, list).text;
+  assert.ok(all.startsWith("# Scribe") && all.includes("Use them.") && all.includes("Run them."));
+  // A list answers each topic in turn, and fails only when every one does.
+  const both = skillDocs(["wait", "tools"], read, list);
+  assert.equal(both.error, undefined);
+  assert.equal(both.text, "=== wait ===\n\n## Wait\n\nWait for it.\n\n=== tools ===\n\n## Tools\n\nUse them.");
+  assert.equal(skillDocs(["wait", "nope"], read, list).error, undefined);
+  assert.equal(skillDocs(["nope", "nada"], read, list).error, true);
+  assert.equal(skillDocs("nope", read, list).error, true);
+  assert.equal(skillDocs(undefined, () => null, list).error, true);
 });
 
-test("skillDocs reads the repo's skill", () => {
+test("skillDocs reads the repo's skill and its reference files", () => {
   const docs = skillDocs("Interactive pages");
   assert.equal(docs.error, undefined);
   assert.match(docs.text, /^## Interactive pages/);
+  assert.match(skillDocs("page-scripts").text, /^# Page scripts/);
+  assert.match(skillDocs().text, /PAGE-AGENT\.md: Pages that use the agent/);
+});
+
+test("SKILL.md fits skill_read's whole-file limit and indexes every reference file", () => {
+  const skill = fs.readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8");
+  assert.ok(skill.length <= 24_000, `SKILL.md is ${skill.length} chars; skill_read returns 24,000 whole. Move detail into a reference file.`);
+  for (const name of fs.readdirSync(SKILL_DIR).filter((f) => f.endsWith(".md") && f !== "SKILL.md")) {
+    assert.ok(skill.includes(`\`${name}\``), `list ${name} in SKILL.md's table of reference files`);
+    assert.match(fs.readFileSync(path.join(SKILL_DIR, name), "utf8"), /Builds on `SKILL\.md`/, `${name} should point back at SKILL.md`);
+  }
 });

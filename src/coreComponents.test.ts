@@ -5,7 +5,7 @@ import { launchChromium } from "./chromium.js";
 import { CORE_COMPONENTS, COMPONENT_PATH, componentPlugins, coreComponentGuide, inlineComponents, readComponent, renderComponentDocs } from "./coreComponents.js";
 
 test("the scribe skill lists every core page component", () => {
-  const skill = fs.readFileSync(new URL("../.cursor/skills/scribe/SKILL.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const skill = fs.readFileSync(new URL("../skills/scribe/SKILL.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const block = /<!-- page-components:start -->\n([\s\S]*?)\n<!-- page-components:end -->/.exec(skill);
   assert.ok(block, "SKILL.md has the page-components markers");
   assert.equal(block[1], renderComponentDocs());
