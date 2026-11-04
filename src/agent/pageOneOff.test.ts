@@ -153,4 +153,25 @@ test("the latest turn's own images reach the page as its assets, once each (#890
   assert.equal(last.reply, "Here it is.");
   assert.deepEqual(calls, ["/threads/th/files/out-a/page-asset"]);
   assert.equal(last.images[0].url, "/blob/pa_1");
+  assert.equal(last.imageErrors, undefined);
+});
+
+test("an image the page's full asset store refuses is reported, not dropped (#986)", async () => {
+  const detail = {
+    turns: new Map([["t1", { id: "t1", seq: 1, status: "done" }]]),
+    items: [
+      { kind: "images", turnId: "t1", images: [{ id: "out-a", name: "a.png" }, { id: "out-b", name: "b.png" }] },
+    ],
+  };
+  const context = vm.createContext({
+    ensureDetail: async () => detail,
+    api: async (_method: string, url: string) => {
+      if (url.includes("out-a")) throw new Error("page asset storage is full (300 MB needed, max 256 MB)");
+      throw new Error("disk error");
+    },
+  });
+  vm.runInContext(chat.match(/^  async function lastReply\([^]*?^  }/m)![0], context);
+  const last = await vm.runInContext("lastReply('th')", context);
+  assert.deepEqual(last.images.length, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(last.imageErrors)).map((e: { name: string; error: string }) => [e.name, e.error]), [["a.png", "asset_limit"], ["b.png", "save_failed"]]);
 });

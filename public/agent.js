@@ -13136,14 +13136,17 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const reply = own.filter((it) => it.kind === "text").map((it) => it.text).join("\n\n").trim();
     const files = [...new Map(own.filter((it) => it.kind === "images").flatMap((it) => it.images || []).map((f) => [f.id, f])).values()];
     const images = [];
+    // An image that could not be saved is named to the page, so it can free space and read the thread again (#986).
+    const imageErrors = [];
     for (const file of files.slice(0, 10)) {
       try {
         images.push((await api("POST", `/threads/${encodeURIComponent(id)}/files/${encodeURIComponent(file.id)}/page-asset`)).asset);
       } catch (err) {
-        console.warn("[agent] could not hand an image to the page", err);
+        const message = String(err?.message || err);
+        imageErrors.push({ name: file.name || "image", error: /^page asset/.test(message) ? "asset_limit" : "save_failed", message });
       }
     }
-    return { reply, images };
+    return { reply, images, ...(imageErrors.length ? { imageErrors } : {}) };
   }
 
   /**
