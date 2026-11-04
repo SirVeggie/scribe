@@ -509,7 +509,7 @@
     if (update.docChanged || update.selectionSet) updatePos();
   }
   function saveDraft() {
-    if (!file || !editor) return;
+    if (!file || !editor || closing) return;
     if (editor.length() > DRAFT_MAX || !editor.isDirty()) {
       if (scribe.local.draft) scribe.setLocal({ draft: null });
       return;
@@ -896,6 +896,24 @@
     if (event.shiftKey) saveAs();
     else save(false);
   }, true);
+
+  // ---------- closing the tab (#992) ----------
+  // The board asks before it closes this tab: query reports unsaved text (the board saves it), and
+  // discard drops the draft so the page opens with the file on disk next time.
+  var closing = false;
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (event.source !== window.parent || !data || data.type !== "scribe-file-close") return;
+    var reply = { type: "scribe-file-close-result", reqId: data.reqId, dirty: false };
+    if (data.op === "query" && isDirty()) {
+      reply = Object.assign(reply, { dirty: true, text: current(), mtime: file.mtime, eol: file.eol, bom: file.bom });
+    } else if (data.op === "discard") {
+      closing = true;
+      clearTimeout(draftTimer);
+      if (scribe.local.draft) scribe.setLocal({ draft: null });
+    }
+    event.source.postMessage(reply, "*");
+  });
 
   // ---------- changes on disk ----------
   var banner = "";  // "conflict": Reload / Overwrite; "undo": the reload that replaced unsaved changes

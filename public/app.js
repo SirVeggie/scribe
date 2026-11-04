@@ -3708,6 +3708,102 @@
     });
   }
 
+  /** Replies from file viewers to the questions closing a tab asks them (#992), by request id. */
+  const fileCloseReplies = new Map();
+  let fileCloseSeq = 0;
+
+  /** Ask a file page's live viewer about its unsaved text; null when it has no frame or does not answer. */
+  function askFileFrame(id, op) {
+    const win = frames.get(id)?.el.contentWindow;
+    if (!win) {
+      return Promise.resolve(null);
+    }
+    const reqId = `fc${++fileCloseSeq}`;
+    return new Promise((resolve) => {
+      const done = (result) => {
+        clearTimeout(timer);
+        fileCloseReplies.delete(reqId);
+        resolve(result);
+      };
+      const timer = setTimeout(() => done(null), 1500);
+      fileCloseReplies.set(reqId, done);
+      win.postMessage({ type: "scribe-file-close", op, reqId }, "*");
+    });
+  }
+
+  /**
+   * A file page's unsaved text: from its viewer, or else the draft this viewer kept for it while its
+   * frame was not loaded. null when nothing differs from the file on disk.
+   */
+  async function unsavedFile(tab) {
+    const live = await askFileFrame(tab.id, "query");
+    if (live) {
+      return live.dirty ? live : null;
+    }
+    const base = `/api/tabs/${encodeURIComponent(tab.id)}`;
+    const local = await fetch(`${base}/local?viewer=${viewerId()}`).then((res) => (res.ok ? res.json() : null)).catch(() => null);
+    const draft = local?.state?.draft;
+    if (!draft || typeof draft.text !== "string") {
+      return null;
+    }
+    const file = await fetch(`${base}/file`).then((res) => (res.ok ? res.json() : null)).catch(() => null);
+    if (!file || file.mtime !== draft.mtime || file.text === draft.text) {
+      return null;
+    }
+    return { text: draft.text, mtime: draft.mtime, eol: file.eol, bom: file.bom };
+  }
+
+  /** Drop a file page's draft, so the page opens with the file on disk next time. */
+  async function dropFileDraft(tab) {
+    await askFileFrame(tab.id, "discard");
+    const url = `/api/tabs/${encodeURIComponent(tab.id)}/local?viewer=${viewerId()}`;
+    const local = await fetch(url).then((res) => (res.ok ? res.json() : null)).catch(() => null);
+    if (!local?.state || !("draft" in local.state)) {
+      return;
+    }
+    const { draft: _draft, ...rest } = local.state;
+    await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: rest }) }).catch(() => undefined);
+  }
+
+  /**
+   * Closing a file page with unsaved changes asks to save them (#992); not saving goes back to the
+   * file on disk. False when the user cancels or the save fails, so the tab stays open.
+   */
+  async function settleUnsavedFile(tab) {
+    if (!tab?.file) {
+      return true;
+    }
+    const unsaved = await unsavedFile(tab);
+    if (!unsaved) {
+      return true;
+    }
+    const answer = await choose(
+      `Save changes to ${tab.title || "this file"}?`,
+      [
+        { value: "discard", label: "Don't save" },
+        { value: "save", label: "Save", primary: true },
+      ],
+      { focus: "save" }
+    );
+    if (!answer) {
+      return false;
+    }
+    if (answer === "save") {
+      const res = await fetch(`/api/tabs/${encodeURIComponent(tab.id)}/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: unsaved.text, mtime: unsaved.mtime, eol: unsaved.eol === "\r\n" ? "\r\n" : "\n", bom: unsaved.bom === true }),
+      }).catch(() => null);
+      if (!res?.ok) {
+        const json = await res?.json().catch(() => ({}));
+        showNotice(json?.conflict ? `Not saved: ${tab.title} changed on disk` : `Not saved: ${json?.error || "error"}`);
+        return false;
+      }
+    }
+    await dropFileDraft(tab);
+    return true;
+  }
+
   /** Closing keeps the page in the Library; `permanent` deletes it (the notice's Undo or Ctrl+Shift+T undoes it). */
   async function closeTab(id, { permanent = false } = {}) {
     if (state.draft?.id === id) {
@@ -3715,6 +3811,9 @@
       return;
     }
     const tab = findAnyTab(id);
+    if (!permanent && state.tabs.some((open) => open.id === id) && !(await settleUnsavedFile(tab))) {
+      return;
+    }
     if (tab?.key === "scribe:welcome" || tab?.temp || !permanent) {
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
       return;
@@ -3861,7 +3960,7 @@
     return { text: `agent · ${name}`, threadId: actor.thread, at: actor.at };
   }
 
-  /** opts.check: { label, checked } adds a checkbox; its state is written back to opts.check.checked. */
+  /** opts.check: { label, checked } adds a checkbox; its state is written back to opts.check.checked. opts.focus: the button value focused first (else Cancel). */
   function choose(message, buttons, opts = {}) {
     choiceMessage.textContent = message;
     choiceActions.replaceChildren();
@@ -3888,14 +3987,15 @@
       btn.type = "submit";
       btn.value = item.value;
       btn.textContent = item.label;
-      if (item.danger) {
-        btn.className = "danger";
+      if (item.danger || item.primary) {
+        btn.className = item.danger ? "danger" : "primary";
       }
       choiceActions.appendChild(btn);
     }
     choiceDlg.returnValue = "cancel";
     choiceDlg.showModal();
-    cancel.focus();
+    const focused = opts.focus ? [...choiceActions.children].find((btn) => btn.value === opts.focus) : null;
+    (focused || cancel).focus();
     return new Promise((resolve) => {
       choiceDlg.addEventListener(
         "close",
@@ -6425,6 +6525,8 @@
       void onPageBrowser(event);
     } else if (event.data?.type === "scribe-file") {
       void onPageFile(event);
+    } else if (event.data?.type === "scribe-file-close-result") {
+      fileCloseReplies.get(event.data.reqId)?.(event.data);
     } else if (event.data?.type === "scribe-ide") {
       void onPageIde(event);
     } else if (event.data?.type === "scribe-title") {
@@ -6510,6 +6612,11 @@
   window.addEventListener("scribe:page-hint", (event) => onPageHint(event.detail));
   auroraEdgeToggle.addEventListener("click", () => toggleFlag(auroraEdgeToggle, AURORA_EDGE_KEY));
   clearBtn.addEventListener("click", async () => {
+    for (const tab of state.tabs.filter((open) => open.file && !open.pinned)) {
+      if (!(await settleUnsavedFile(tab))) {
+        return;
+      }
+    }
     await fetch("/api/tabs?filter=unpinned", { method: "DELETE" });
   });
   libraryToggle.addEventListener("click", () => setSideOpen(!state.sideOpen));
