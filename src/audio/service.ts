@@ -1,8 +1,8 @@
 import type { OpenAISource } from "../agent/openaiSources.js";
 import { randomUUID } from "node:crypto";
-import { openAiEngine } from "./engine.js";
-import { fileStore, normalizeSettings, type AudioStore } from "./settings.js";
-import type { AudioResult, SttEngine, SttSource, AudioSettings, AudioOutput } from "./types.js";
+import { MAX_SPEECH_CHARS, openAiEngine, openAiTts } from "./engine.js";
+import { fileStore, normalizeSettings, normalizeTts, type AudioStore } from "./settings.js";
+import { BROWSER_SPEECH, type AudioResult, type SttEngine, type SttSource, type AudioSettings, type AudioOutput, type TtsEngine, type TtsFailure, type TtsResult } from "./types.js";
 import type { StreamTarget } from "./stream.js";
 
 const wavKey = (source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
@@ -10,14 +10,15 @@ export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export class AudioService {
   private store: AudioStore;
   private engine: SttEngine;
+  private tts: TtsEngine;
   private sources: () => OpenAISource[];
   private timeoutMs: number;
   /** Sources that rejected compressed audio this run; the shell sends them WAV. Not saved, so a fixed server is found again after a restart. */
   private wavOnly = new Set<string>();
   /** Open windows get sound settings over /ws, so a change in one applies in all. */
   private onOutput?: (output: AudioOutput) => void;
-  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void }) {
-    this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine; this.onOutput = options.onOutput;
+  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; tts?: TtsEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void }) {
+    this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine; this.tts = options.tts ?? openAiTts; this.onOutput = options.onOutput;
     this.sources = options.sources; this.timeoutMs = options.timeoutMs ?? 60_000;
   }
   view() {
@@ -28,13 +29,19 @@ export class AudioService {
       ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) }));
     return { stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },
       input: settings.input, output: settings.output, profiles, defaultSource: settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined),
-      sources, available: Boolean(source), streaming: source ? (selected as Partial<SttSource>).streaming : undefined, wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
+      sources, available: Boolean(source), tts: settings.tts, speech: this.speechMode(settings), streaming: source ? (selected as Partial<SttSource>).streaming : undefined, wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
   }
   private profiles(settings: AudioSettings): SttSource[] {
     return [...(settings.stt.source ? [{ ...settings.stt, id: "__legacy__", name: "Speech-to-text" }] : []), ...settings.sources];
   }
   private selected(settings: AudioSettings) {
     return settings.defaultSource ? this.profiles(settings).find(s => s.id === settings.defaultSource) ?? { model: "whisper-1" } : settings.stt;
+  }
+  /** How text is read aloud now: by the daemon's source, by the shell's speechSynthesis, or not at all. */
+  private speechMode(settings: AudioSettings): "source" | "browser" | undefined {
+    if (settings.tts.source === BROWSER_SPEECH) return "browser";
+    const profile = this.profiles(settings).find(s => s.id === settings.tts.source);
+    return profile?.speechModel && this.source(profile) ? "source" : undefined;
   }
   saveSource(value: unknown, id?: string) {
     const settings = this.store.read(), profiles = this.profiles(settings);
@@ -66,6 +73,7 @@ export class AudioService {
     settings.sources = profiles.filter(s => s.id !== id);
     const selected = settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined);
     settings.defaultSource = selected === id ? settings.sources[0]?.id : selected;
+    if (settings.tts.source === id) delete settings.tts.source;
     settings.stt = { model: "whisper-1" };
     this.store.write(settings); return this.view();
   }
@@ -80,7 +88,10 @@ export class AudioService {
     const next = normalizeSettings({ stt: { ...old.stt, ...body?.stt,
       ...(body?.stt?.custom ? { custom: { ...old.stt.custom, ...body.stt.custom } } : {}) }, input: { ...old.input, ...body?.input },
       output: { ...old.output, ...body?.output, cues: { ...old.output.cues, ...body?.output?.cues } },
-      sources: old.sources, defaultSource: (body as Partial<AudioSettings>)?.defaultSource ?? old.defaultSource });
+      sources: old.sources, defaultSource: (body as Partial<AudioSettings>)?.defaultSource ?? old.defaultSource,
+      tts: { ...old.tts, ...(body as Partial<AudioSettings>)?.tts } });
+    if (next.tts.source && next.tts.source !== BROWSER_SPEECH && !this.profiles(next).some(s => s.id === next.tts.source && s.speechModel))
+      throw new Error("Choose a source with a text-to-speech model.");
     if (next.defaultSource && !this.profiles(next).some(s => s.id === next.defaultSource)) throw new Error("Choose an existing speech-to-text source.");
     if (next.stt.custom?.baseUrl) {
       let url: URL;
@@ -107,7 +118,53 @@ export class AudioService {
   }
   usage() {
     const day = new Date().toISOString().slice(0, 10), saved = this.store.readUsage();
-    return saved?.day === day ? saved : { day, calls: 0, failed: 0, bytes: 0 };
+    return saved?.day === day ? { speechCalls: 0, speechFailed: 0, chars: 0, ...saved } : { day, calls: 0, failed: 0, bytes: 0, speechCalls: 0, speechFailed: 0, chars: 0 };
+  }
+  private recordSpeech(chars: number, ok: boolean) {
+    const usage = this.usage(); usage.speechCalls++; usage.chars += chars; if (!ok) usage.speechFailed++;
+    this.store.writeUsage(usage);
+  }
+  /**
+   * Text to an audio stream through the text-to-speech source (Phase D). One request takes at most
+   * MAX_SPEECH_CHARS; the shell splits longer text. The timeout covers the wait for the response;
+   * signal (the client going away) aborts the request and the stream.
+   */
+  async speak(text: unknown, options: { voice?: unknown; speed?: unknown; sourceId?: string; signal?: AbortSignal } = {}): Promise<TtsResult> {
+    const fail = (error: TtsFailure["error"], message: string): TtsFailure => ({ ok: false, error, message });
+    try {
+      if (typeof text !== "string" || !text.trim()) return fail("invalid_audio", "Give the text to read aloud.");
+      if (text.length > MAX_SPEECH_CHARS) return fail("too_large", `Text to read aloud must be at most ${MAX_SPEECH_CHARS} characters per request.`);
+      const settings = this.store.read();
+      const id = options.sourceId ?? settings.tts.source;
+      if (id === BROWSER_SPEECH) return fail("no_source", "This browser reads text aloud in the board, not through Scribe.");
+      const profile = this.profiles(settings).find(s => s.id === id), source = profile?.speechModel ? this.source(profile) : undefined;
+      if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
+      const tts = normalizeTts({ voice: options.voice ?? settings.tts.voice, speed: options.speed ?? settings.tts.speed });
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      if (options.signal?.aborted) return fail("network", "Reading aloud was stopped.");
+      options.signal?.addEventListener("abort", abort, { once: true });
+      let timer: ReturnType<typeof setTimeout> | undefined, timedOut = false;
+      const timeout = new Promise<TtsResult>(resolve => { timer = setTimeout(() => {
+        timedOut = true; controller.abort(); resolve(fail("timeout", "Text-to-speech timed out."));
+      }, this.timeoutMs); });
+      const run = async (): Promise<TtsResult> => {
+        for (let attempt = 0; ; attempt++) {
+          const result = await this.tts.speak({ source, model: profile.speechModel!, text, voice: tts.voice || "alloy", speed: tts.speed ?? 1, signal: controller.signal });
+          if (attempt || result.ok || controller.signal.aborted || !(result.error === "rate_limit" || result.retryable)) return result;
+          await new Promise(resolve => setTimeout(resolve, 300));
+          if (controller.signal.aborted) return fail("timeout", "Text-to-speech timed out.");
+        }
+      };
+      let result: TtsResult;
+      try { result = await Promise.race([run(), timeout]); }
+      catch { result = timedOut ? fail("timeout", "Text-to-speech timed out.")
+        : controller.signal.aborted ? fail("network", "Reading aloud was stopped.") : fail("network", "Cannot reach the text-to-speech source."); }
+      finally { clearTimeout(timer); }
+      if (!result.ok) options.signal?.removeEventListener("abort", abort);
+      this.recordSpeech(text.length, result.ok);
+      return result;
+    } catch { return fail("engine", "Text-to-speech is unavailable."); }
   }
   async transcribe(audio: Blob, options: { language?: string; prompt?: string; sourceId?: string } = {}): Promise<AudioResult> {
     try {

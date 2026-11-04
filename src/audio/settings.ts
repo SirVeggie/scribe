@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
-import { AUDIO_CUES, type AudioSettings, type AudioDayUsage, type AudioOutput } from "./types.js";
+import { AUDIO_CUES, type AudioSettings, type AudioDayUsage, type AudioOutput, type TtsSettings } from "./types.js";
 
 export function normalizeOutput(value: unknown): AudioOutput {
   const body = value as Partial<AudioOutput> | null;
@@ -19,12 +19,22 @@ export function normalizeSettings(value: unknown): AudioSettings {
     id: str(s.id, 100), name: str(s.name, 200), source: str(s.source, 100),
     model: str(s.model, 200) || "whisper-1", language: str(s.language, 20),
     ...(s.streaming === "native" || s.streaming === "window" ? { streaming: s.streaming } : {}),
+    ...(str(s.speechModel, 200) ? { speechModel: str(s.speechModel, 200) } : {}),
     ...(s.custom ? { custom: { baseUrl: str(s.custom.baseUrl, 2000), apiKey: str(s.custom.apiKey, 4000) } } : {}),
   })) : [], defaultSource: str(body?.defaultSource, 100) || undefined,
     stt: { ...(source ? { source } : {}), model: str(body?.stt?.model, 200) || "whisper-1", ...(language ? { language } : {}),
     ...(custom ? { custom: { baseUrl: str(custom.baseUrl, 2000), apiKey: str(custom.apiKey, 4000) } } : {}) },
+    tts: normalizeTts(body?.tts),
     input: { sendAfterDictation: body?.input?.sendAfterDictation === true, pushToTalk: body?.input?.pushToTalk !== false,
       livePreview: body?.input?.livePreview !== false }, output: normalizeOutput(body?.output) };
+}
+/** Speed as the OpenAI endpoint takes it: 0.25 to 4, 1 is normal. */
+export function normalizeTts(value: unknown): TtsSettings {
+  const body = value as Partial<TtsSettings> | null | undefined;
+  const source = typeof body?.source === "string" ? body.source.trim().slice(0, 100) : "";
+  const voice = typeof body?.voice === "string" ? body.voice.trim().slice(0, 200) : "";
+  const speed = typeof body?.speed === "number" && Number.isFinite(body.speed) ? Math.min(4, Math.max(0.25, Math.round(body.speed * 100) / 100)) : 1;
+  return { ...(source ? { source } : {}), ...(voice ? { voice } : {}), ...(speed !== 1 ? { speed } : {}) };
 }
 export interface AudioStore {
   read(): AudioSettings;

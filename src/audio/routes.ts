@@ -1,5 +1,7 @@
 import express, { Router } from "express";
 import fs from "node:fs/promises";
+import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { identify } from "../callers.js";
 import { AudioService, MAX_AUDIO_BYTES } from "./service.js";
 import type { PageAudio } from "./page.js";
@@ -35,6 +37,31 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
         prompt: typeof req.query.prompt === "string" ? req.query.prompt.slice(0, 2000) : undefined,
       }));
     } catch { res.json({ ok: false, error: "engine", message: "Speech-to-text is unavailable." }); }
+  });
+  /** Text-to-speech: JSON { text, voice?, speed? } in, the source's audio stream out (Phase D). Failures come back as JSON. */
+  router.post("/speech", async (req, res) => {
+    const controller = new AbortController();
+    res.on("close", () => { if (!res.writableFinished) controller.abort(); });
+    const body = req.body as { text?: unknown; voice?: unknown; speed?: unknown; sourceId?: unknown } | undefined;
+    const tab = req.get("x-scribe-tab");
+    try {
+      if (tab) {
+        const gate = identify(req).viewer === "agent" || !pagePermission ? { ok: false, error: "denied", permission: "audio.speak" }
+          : pagePermission.checkSpeech(tab, typeof body?.text === "string" ? body.text.length : 0);
+        if (!gate.ok) { res.status(403).json(gate); return; }
+      }
+      const result = await service.speak(body?.text, { voice: body?.voice, speed: body?.speed, signal: controller.signal,
+        // Settings → Audio tests a source before it is chosen; pages always use the chosen one.
+        sourceId: !tab && typeof body?.sourceId === "string" ? body.sourceId : undefined });
+      if (!result.ok) {
+        res.status(result.error === "too_large" ? 413 : result.error === "invalid_audio" ? 400 : result.error === "no_source" ? 409 : 502).json(result);
+        return;
+      }
+      res.status(200).set({ "Content-Type": result.type, "Cache-Control": "no-store" });
+      const stream = Readable.fromWeb(result.body as unknown as NodeReadableStream<Uint8Array>);
+      stream.on("error", () => res.destroy());
+      stream.pipe(res);
+    } catch { if (!res.headersSent) res.status(502).json({ ok: false, error: "engine", message: "Text-to-speech is unavailable." }); else res.destroy(); }
   });
   router.post("/test", async (req, res) => {
     try {

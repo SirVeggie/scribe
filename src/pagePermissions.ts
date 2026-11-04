@@ -55,6 +55,11 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
     default: "ask", risky: false,
   },
   {
+    id: "audio.speak", label: "Read text aloud",
+    detail: "Send the page's text to the text-to-speech source in Settings. A hosted source may charge per character.",
+    default: "ask", risky: false,
+  },
+  {
     id: "agent.chat",
     label: "Agent chats when you click",
     detail: "Start and continue its own agent chats after you click or press a key on the page. Pages mode with no folder only: no files or shell.",
