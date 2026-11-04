@@ -355,7 +355,8 @@ Built (#565): sources in Settings → Audio take an optional text-to-speech mode
 same source list and editor as transcription, with its own choice under "Text-to-speech" (`tts` in
 `audio-settings.json`: source, voice, speed; source `__browser__` is "This browser"). Shell code is
 `public/audio-speech.js` (`scribeAudio.speak`, `voices`, `splitSpeech`); it plays through an
-`<audio>` element until the Phase C mixer gives it the `speech` channel. Daily usage counts
+`<audio>` element routed into the mixer's `speech` channel (`scribeAudio.route`), or on its own while
+the context cannot start yet. Daily usage counts
 characters (`chars`, `speechCalls` in `audio-usage.json`).
 
 

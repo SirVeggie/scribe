@@ -166,3 +166,38 @@ test("page speech needs audio.speak and is limited per page by requests and char
     assert.equal(wrongType.status, 415);
   } finally { server.close(); }
 });
+
+test("scribeAudio.speak plays the pieces in order through the speech channel and stops on request", async () => {
+  const { launchChromium } = await import("../chromium.js");
+  const browser = await launchChromium({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"], purpose: "Speech playback test" });
+  try {
+    const page = await browser.newPage();
+    const wav = fs.readFileSync(new URL("../../public/audio-test.wav", import.meta.url));
+    const texts: string[] = [];
+    await page.route("http://audio.test/**", route => {
+      const req = route.request(), path = new URL(req.url()).pathname;
+      if (path === "/api/audio/speech") { texts.push(req.postDataJSON().text); return route.fulfill({ body: wav, headers: { "content-type": "audio/wav" } }); }
+      if (path === "/api/audio/settings") return route.fulfill({ json: { speech: "source", tts: {}, output: { sounds: false, volume: 0.6, cues: {} } } });
+      return route.fulfill({ body: "<!doctype html><title>t</title>", headers: { "content-type": "text/html" } });
+    });
+    await page.goto("http://audio.test/");
+    for (const name of ["audio.js", "audio-speech.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    // A string, so tsx's __name helper does not reach the page.
+    const result = await page.evaluate(`(async () => {
+      const audio = window.scribeAudio;
+      await audio.refresh();
+      let routed = 0; const route = audio.route;
+      audio.route = (el, channel) => { if (channel === "speech") routed++; return route(el, channel); };
+      const states = [];
+      const long = "First sentence here. " + "Another sentence follows. ".repeat(20);
+      const done = await audio.speak(long, { onState: s => states.push(s.piece) }).ended;
+      const end = await audio.speak("One more sentence.").stop();
+      return { done, states, routed, end };
+    })()`) as any;
+    assert.deepEqual(result.done, { ok: true, reason: "ended" });
+    assert.deepEqual(result.states, [0, 1]);
+    assert.ok(texts[0].length <= 300 && texts[0].startsWith("First sentence here."));
+    assert.equal(result.routed, 2);
+    assert.equal(result.end.reason, "stopped");
+  } finally { await browser.close(); }
+});

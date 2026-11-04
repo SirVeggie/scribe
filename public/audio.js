@@ -323,6 +323,18 @@
     })();
     return { ended, stop() { stopped = true; try { node?.stop(); } catch { /* not started */ } finish("stopped"); } };
   }
+  /**
+   * Routes a media element (streamed speech) through a channel so the master volume applies.
+   * Returns a function that undoes it, or null when the context cannot run yet: the element then plays on its own.
+   */
+  async function route(el, channel = "speech") {
+    if (!await running()) return null;
+    try {
+      const node = ctx.createMediaElementSource(el);
+      node.connect(channels[CHANNELS.includes(channel) ? channel : "page"]);
+      return () => node.disconnect();
+    } catch { return null; }
+  }
   /* With several windows open, one plays a cue: the focused one, else the one open longest. */
   const self = { id: Math.random().toString(36).slice(2), since: Date.now(), focused: false };
   const peers = new Map();
@@ -364,7 +376,7 @@
 
   window.scribeAudio = { capture, transcribe, dictate, stream, resampler, available, refresh, settings: () => view,
     device, setDevice, insertAtCaret, cancel: owner => { if (!owner || active?.owner === owner) active?.cancel(); },
-    play, cue, threadCue, setOutput, output: () => output };
+    play, route, cue, threadCue, setOutput, output: () => output };
   window.addEventListener("pagehide", () => active?.cancel());
   void refresh().catch(() => {});
 })();

@@ -198,7 +198,8 @@
     soundsOn.setAttribute("aria-checked", String(output.sounds));
     volume.value = String(Math.round(output.volume * 100)); paintVolume();
     for (const [name, input] of cueSwitches) input.setAttribute("aria-checked", String(output.cues?.[name] !== false));
-    for (const line of [volumeRow, ...cueSwitches.map(([, input]) => input.closest(".setting-row"))]) line.hidden = !output.sounds;
+    // Volume is the master: it also sets page sounds and speech, so it stays visible.
+    for (const line of [...cueSwitches.map(([, input]) => input.closest(".setting-row"))]) line.hidden = !output.sounds;
   }
   function saveOutput() {
     const output = { sounds: soundsOn.getAttribute("aria-checked") === "true", volume: Number(volume.value) / 100,

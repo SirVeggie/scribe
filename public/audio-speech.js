@@ -61,7 +61,7 @@
         await el.play();
       }
       const reason = await new Promise(resolve => {
-        el.onended = () => resolve("done");
+        el.onended = () => resolve("ended");
         el.onerror = () => resolve("error");
         signal.addEventListener("abort", () => resolve("stopped"), { once: true });
       });
@@ -90,6 +90,11 @@
   async function speakSource(pieces, opts, signal) {
     const el = new Audio();
     el.preload = "auto";
+    // The mixer's speech channel (#564), so the master volume applies.
+    const unroute = await Promise.resolve(window.scribeAudio.route?.(el, "speech")).catch(() => null);
+    try { return await playPieces(pieces, opts, signal, el); } finally { unroute?.(); }
+  }
+  async function playPieces(pieces, opts, signal, el) {
     let next = fetchPiece(pieces[0], opts, signal);
     for (let i = 0; i < pieces.length; i++) {
       const got = await next;
@@ -104,7 +109,7 @@
         return played;
       }
     }
-    return { ok: true, reason: "done" };
+    return { ok: true, reason: "ended" };
   }
 
   async function browserVoices() {
@@ -130,7 +135,7 @@
       utterance.rate = Math.min(4, Math.max(0.25, Number(opts.speed) || 1));
       opts.onState?.({ state: "speaking", piece: i, pieces: pieces.length });
       const result = await new Promise(resolve => {
-        utterance.onend = () => resolve("done");
+        utterance.onend = () => resolve("ended");
         utterance.onerror = event => resolve(event.error === "interrupted" || event.error === "canceled" ? "stopped" : "error");
         signal.addEventListener("abort", () => resolve("stopped"), { once: true });
         synth.speak(utterance);
@@ -138,13 +143,13 @@
       if (result === "stopped") return { ok: true, reason: "stopped" };
       if (result === "error") return failure("engine", "This browser could not read the text aloud.");
     }
-    return { ok: true, reason: "done" };
+    return { ok: true, reason: "ended" };
   }
 
   /**
    * Reads text aloud through the text-to-speech source in Settings → Audio, on the speech channel:
    * one speech at a time, so a new one stops the one before. Returns { stop(), ended } at once;
-   * ended resolves to { ok: true, reason: "done" | "stopped" } or a failure { ok: false, error, message }.
+   * ended resolves to { ok: true, reason: "ended" | "stopped" } or a failure { ok: false, error, message }.
    */
   function speak(text, opts = {}) {
     current?.stop();

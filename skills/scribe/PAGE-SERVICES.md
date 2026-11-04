@@ -86,7 +86,7 @@ chose in Settings → Audio (an OpenAI-compatible source, or "This browser"). It
 `audio.speak` ("Read text aloud", default ask): the text goes to that source, and a hosted one
 charges per character. Asking needs a click; once granted, a visible page may speak without one.
 Scribe splits long text at sentence ends and starts playing before the whole clip has arrived.
-One speech plays at a time across Scribe: a new one stops the one before. It keeps playing while
+It plays through the mixer, so the volume in Settings → Audio applies. One speech plays at a time across Scribe: a new one stops the one before. It keeps playing while
 the tab is in the background and stops when the page closes or reloads.
 
 ```js
@@ -94,7 +94,7 @@ const speech = await scribe.audio.speak(text, { voice: "nova", speed: 1.1 }); //
 if (speech.ok) {
   speech.onstate = (state, { piece, pieces }) => { status.textContent = `${piece + 1}/${pieces}`; };
   stopButton.onclick = () => speech.stop();
-  const end = await speech.ended; // { ok: true, reason: "done" | "stopped" } or { ok: false, error, message }
+  const end = await speech.ended; // { ok: true, reason: "ended" | "stopped" } or { ok: false, error, message }
 }
 const { voices } = await scribe.audio.voices(); // [{ id, name, lang? }] for the chosen source
 ```
