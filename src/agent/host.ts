@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { AGENT_PORT, PORT, dataDir } from "../config.js";
 import { browserControl, browserActivity, browserTurnEnded, browserUserMessage, closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
+import { toolLoadingFor } from "../toolLoading.js";
 import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
 import { waitForEvents } from "../wait.js";
@@ -4848,6 +4849,8 @@ export class AgentHost {
       effort: thread.effort,
       mode: msg?.plan ? planAccess(thread).mode : thread.mode,
       ...(msg?.plan ? { plan: true } : {}),
+      // How Scribe's tools reached the model (toolLoading.ts), so the stats can compare before and after.
+      ...(toolLoadingFor(thread.provider) ? { toolLoading: toolLoadingFor(thread.provider) } : {}),
       startedAt: Date.now(),
     };
     turns.push(turn);

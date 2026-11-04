@@ -11,6 +11,7 @@ import { mcpCall, toolUses, type ThreadStats, type ToolUse } from "./threadStats
 import type { Item, ProviderId, Thread, ThreadMode, Turn, TurnLatency, Usage } from "./types.js";
 import { summarize, type LatencySummary } from "./latency.js";
 import { threadToken } from "../callers.js";
+import { DEFERRED_TOOLS, TOOL_SEARCH } from "../toolLoading.js";
 
 export { mcpCall };
 
@@ -285,6 +286,36 @@ export type HarnessStats = {
   /** First response prompts, falling back to old first turns without tools when response counts are unknown. */
   baselines: Array<{ provider: ProviderId; mode: ThreadMode; samples: number; min: number; median: number }>;
   heavy: Array<TokenTotals & { id: string; title: string; provider: ProviderId; model: string; toolCalls: number }>;
+  /** Turns by how Scribe's tools reached the model (Turn.toolLoading; "all" for every tool up front), to see what a change to that did. */
+  toolLoading: ToolLoadingRow[];
+};
+
+export type ToolLoadingRow = {
+  provider: ProviderId;
+  mode: ThreadMode;
+  loading: string;
+  /** The window this scheme's turns cover. */
+  first: number;
+  last: number;
+  turns: number;
+  /** Failed and stopped turns. */
+  errorTurns: number;
+  cancelledTurns: number;
+  /** A new chat's first turns with a known first prompt, and their median prompt. */
+  firstTurns: number;
+  firstPromptMedian?: number;
+  /** Model calls per turn, over the turns that report them. */
+  modelCallsPerTurn?: number;
+  toolCalls: number;
+  toolErrors: number;
+  /** Tool search calls: Claude Code's ToolSearch or Scribe's tool_search. */
+  searches: number;
+  searchErrors: number;
+  /** Calls to deferred tools (toolLoading.ts), loaded or not, and how many failed. */
+  deferredCalls: number;
+  deferredErrors: number;
+  /** Median time of finished turns. */
+  medianMs?: number;
 };
 
 const emptyTotals = (): TokenTotals => ({ turns: 0, prompt: 0, cached: 0, output: 0, reasoning: 0, costUsd: 0 });
@@ -371,12 +402,13 @@ export function harnessStats(
   const baselines = new Map<string, { provider: ProviderId; mode: ThreadMode; values: number[] }>();
   const heavy: HarnessStats["heavy"] = [];
   const latencies = new Map<string, LatencySamples>();
+  const loading = new Map<string, ToolLoadingRow & { prompts: number[]; times: number[]; calls: number[] }>();
   let counted = 0;
 
   type Source = {
     thread: { id: string; provider: ProviderId; model: string; title?: string };
     forked: boolean;
-    turns: Array<Pick<Turn, "id" | "seq" | "status" | "model" | "mode" | "startedAt" | "usage" | "reverted">>;
+    turns: Array<Pick<Turn, "id" | "seq" | "status" | "model" | "mode" | "startedAt" | "usage" | "reverted" | "toolLoading">>;
     tools: () => ToolUse[];
   };
   const sources: Source[] = [
@@ -395,10 +427,31 @@ export function harnessStats(
     const own = { ...emptyTotals(), toolCalls: 0 };
     const kept = new Set(turns.map((turn) => turn.id));
     const toolTurns = new Set<string>();
+    const turnById = new Map(turns.map((turn) => [turn.id, turn]));
+    const loadingOf = (turn: (typeof turns)[number]) => {
+      const scheme = turn.toolLoading ?? "all";
+      return bump(loading, `${provider}\n${turn.mode}\n${scheme}`, () => ({
+        provider, mode: turn.mode, loading: scheme, first: turn.startedAt, last: turn.startedAt, turns: 0, errorTurns: 0, cancelledTurns: 0, firstTurns: 0,
+        toolCalls: 0, toolErrors: 0, searches: 0, searchErrors: 0, deferredCalls: 0, deferredErrors: 0, prompts: [], times: [], calls: [],
+      }));
+    };
 
     for (const use of source.tools()) {
       if (!kept.has(use.turnId)) continue;
       toolTurns.add(use.turnId);
+      const ofTurn = turnById.get(use.turnId);
+      if (ofTurn) {
+        const row = loadingOf(ofTurn);
+        row.toolCalls += use.calls;
+        row.toolErrors += use.errors;
+        if (use.name === "ToolSearch" || (use.mcp?.server === "scribe" && use.mcp.tool === TOOL_SEARCH)) {
+          row.searches += use.calls;
+          row.searchErrors += use.errors;
+        } else if (use.mcp?.server === "scribe" && DEFERRED_TOOLS.has(use.mcp.tool)) {
+          row.deferredCalls += use.calls;
+          row.deferredErrors += use.errors;
+        }
+      }
       const add = (into: { calls: number; errors: number; outputTokens: number; ms?: number }) => {
         into.calls += use.calls;
         into.errors += use.errors;
@@ -446,6 +499,15 @@ export function harnessStats(
       if (turn.seq === 1 && turn.status === "done" && firstPrompt > 0 && !source.forked) {
         bump(baselines, `${provider}\n${turn.mode}`, () => ({ provider, mode: turn.mode, values: [] as number[] })).values.push(firstPrompt);
       }
+      const scheme = loadingOf(turn);
+      scheme.turns += 1;
+      scheme.first = Math.min(scheme.first, turn.startedAt);
+      scheme.last = Math.max(scheme.last, turn.startedAt);
+      if (turn.status === "error") scheme.errorTurns += 1;
+      if (turn.status === "cancelled") scheme.cancelledTurns += 1;
+      if (turn.seq === 1 && turn.status === "done" && firstPrompt > 0 && !source.forked) scheme.prompts.push(firstPrompt);
+      if (turn.status === "done" && turn.usage?.latency) scheme.times.push(turn.usage.latency.totalMs);
+      if (turn.usage?.modelCalls !== undefined) scheme.calls.push(turn.usage.modelCalls);
     }
     if (thread.title !== undefined) {
       heavy.push({ ...own, id: thread.id, title: thread.title, provider, model: thread.model });
@@ -472,6 +534,20 @@ export function harnessStats(
       })
       .sort((a, b) => a.provider.localeCompare(b.provider) || a.mode.localeCompare(b.mode)),
     heavy: heavy.sort((a, b) => b.prompt - a.prompt).slice(0, 12),
+    toolLoading: [...loading.values()]
+      .map(({ prompts, times, calls, ...row }) => {
+        const median = (values: number[]) => (values.length ? [...values].sort((a, b) => a - b)[values.length >> 1] : undefined);
+        const firstPromptMedian = median(prompts);
+        const medianMs = median(times);
+        return {
+          ...row,
+          firstTurns: prompts.length,
+          ...(firstPromptMedian !== undefined ? { firstPromptMedian } : {}),
+          ...(calls.length ? { modelCallsPerTurn: Math.round((10 * calls.reduce((n, c) => n + c, 0)) / calls.length) / 10 } : {}),
+          ...(medianMs !== undefined ? { medianMs } : {}),
+        };
+      })
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.mode.localeCompare(b.mode) || a.first - b.first),
   };
 }
 

@@ -383,6 +383,34 @@
         : empty("No first-prompt samples in this range yet.")
     );
     out.push(base);
+
+    // Turns by how Scribe's tools reached the model (toolLoading.ts), once some ran with tools on demand.
+    const loading = (stats.toolLoading || []).filter((r) => stats.toolLoading.some((o) => o.provider === r.provider && o.mode === r.mode && o.loading !== "all"));
+    if (loading.length) {
+      const scheme = (r) => (r.loading === "all" ? "All up front" : `On demand (${r.loading})`);
+      const day = (ms) => new Date(ms).toLocaleDateString();
+      const tools = card("Tool loading", "Compares turns that got all of Scribe's tools up front with turns that loaded the rarely used ones on demand. Check the first call's size, failed tools and failed turns.");
+      tools.append(
+        table(
+          [
+            { label: "Provider", get: (r) => providerChip(r.provider) },
+            { label: "Mode", get: (r) => MODE_LABEL[r.mode] || r.mode },
+            { label: "Tools", get: (r) => scheme(r) },
+            { label: "Turns from", get: (r) => `${day(r.first)} – ${day(r.last)}` },
+            { label: "Turns", num: true, get: (r) => count(r.turns) },
+            { label: "Typical first call", num: true, get: (r) => (r.firstPromptMedian ? `${tokens(r.firstPromptMedian)} (${count(r.firstTurns)})` : "–") },
+            { label: "Responses a turn", num: true, get: (r) => (r.modelCallsPerTurn ? r.modelCallsPerTurn.toFixed(1) : "–") },
+            { label: "Turns failed", num: true, get: (r) => pct(r.errorTurns, r.turns) },
+            { label: "Tools failed", num: true, get: (r) => pct(r.toolErrors, r.toolCalls) },
+            { label: "Searches", num: true, get: (r) => (r.searches ? `${count(r.searches)}${r.searchErrors ? ` (${count(r.searchErrors)} failed)` : ""}` : "–") },
+            { label: "Rare tools failed", num: true, get: (r) => (r.deferredCalls ? `${pct(r.deferredErrors, r.deferredCalls)} of ${count(r.deferredCalls)}` : "–") },
+            { label: "Typical turn", num: true, get: (r) => duration(r.medianMs) },
+          ],
+          loading
+        )
+      );
+      out.push(tools);
+    }
     return out;
   }
 

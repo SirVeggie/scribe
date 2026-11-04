@@ -479,3 +479,39 @@ test("Harness day tooltips show unknown, free, mixed and incomplete cost coverag
     assert.ok((await page.locator(".hx-body").innerText()).includes("Partial $2.50 · 2 unpriced turns"));
   } finally { await browser.close(); }
 });
+
+test("harnessStats compares turns by how Scribe's tools were loaded", () => {
+  const threads = [{ id: "old", provider: "claude", model: "opus" }, { id: "new", provider: "claude", model: "opus" }, { id: "pi", provider: "pi", model: "m" }] as Thread[];
+  const turns: Record<string, Turn[]> = {
+    old: [turn("o1", "old", { startedAt: 100, usage: { firstPromptTokens: 30000, modelCalls: 2 } }), turn("o2", "old", { seq: 2, startedAt: 200, status: "error" })],
+    new: [turn("n1", "new", { startedAt: 300, toolLoading: "deferred-1", usage: { firstPromptTokens: 13000, modelCalls: 3, latency: { totalMs: 5000, toolMs: 0, waitMs: 0, modelMs: 5000 } } })],
+    pi: [turn("p1", "pi", { mode: "board", startedAt: 400, toolLoading: "deferred-1", usage: { firstPromptTokens: 9000 } })],
+  };
+  const items: Record<string, Item[]> = {
+    old: [tool("a", "old", "o1", { name: "mcp__scribe__settings_find", tool: "mcp", title: "Scribe: settings_find" })],
+    new: [
+      tool("b", "new", "n1", { name: "ToolSearch", tool: "other", title: "ToolSearch" }),
+      tool("c", "new", "n1", { name: "mcp__scribe__settings_find", tool: "mcp", title: "Scribe: settings_find", status: "error" }),
+      tool("d", "new", "n1", { name: "mcp__scribe__page_show", tool: "mcp", title: "Scribe: page_show" }),
+    ],
+    // Pi titles Scribe's tools "Scribe: name"; a tool_call shows as the tool it ran.
+    pi: [tool("e", "pi", "p1", { name: "tool_search", tool: "mcp", title: "Scribe: tool_search" }), tool("f", "pi", "p1", { name: "page_pin", tool: "mcp", title: "Scribe: page_pin" })],
+  };
+  const rows = harnessStats(threads, (id) => turns[id], (id) => items[id]).toolLoading;
+  const pick = (provider: string, loading: string) => rows.find((r) => r.provider === provider && r.loading === loading);
+  assert.deepEqual(
+    { ...pick("claude", "all") },
+    { provider: "claude", mode: "code", loading: "all", first: 100, last: 200, turns: 2, errorTurns: 1, cancelledTurns: 0, firstTurns: 1, firstPromptMedian: 30000, modelCallsPerTurn: 2, toolCalls: 1, toolErrors: 0, searches: 0, searchErrors: 0, deferredCalls: 1, deferredErrors: 0 }
+  );
+  const after = pick("claude", "deferred-1")!;
+  assert.equal(after.firstPromptMedian, 13000);
+  assert.equal(after.searches, 1);
+  assert.equal(after.deferredCalls, 1);
+  assert.equal(after.deferredErrors, 1);
+  assert.equal(after.toolCalls, 3);
+  assert.equal(after.medianMs, 5000);
+  const pi = pick("pi", "deferred-1")!;
+  assert.equal(pi.mode, "board");
+  assert.equal(pi.searches, 1);
+  assert.equal(pi.deferredCalls, 1);
+});

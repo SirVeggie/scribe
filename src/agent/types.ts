@@ -518,6 +518,8 @@ export type Turn = {
   mode: ThreadMode;
   /** A plan turn (#721): it ran at planAccess, to propose a plan without changing files. */
   plan?: boolean;
+  /** How Scribe's MCP tools reached the model (toolLoading.ts TOOL_LOADING); missing: all of them up front. */
+  toolLoading?: string;
   startedAt: number;
   endedAt?: number;
   /** Latest model output in this turn; lets boards recognize even a short completed turn. */

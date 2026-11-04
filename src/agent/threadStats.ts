@@ -99,6 +99,8 @@ export type TurnStats = {
   interrupted?: boolean;
   /** The turn failed on a plan usage limit. */
   limited?: boolean;
+  /** Turn.toolLoading: how Scribe's tools reached the model. */
+  toolLoading?: string;
   files: number;
   added: number;
   removed: number;
@@ -230,6 +232,7 @@ export function threadStats(thread: Thread, turns: Turn[], items: Item[], worksp
       ...(turn.reverted ? { reverted: true } : {}),
       ...(turn.interrupted ? { interrupted: true } : {}),
       ...(turn.limitResetsAt ? { limited: true } : {}),
+      ...(turn.toolLoading ? { toolLoading: turn.toolLoading } : {}),
       files: turn.files?.length ?? 0,
       added: (turn.files ?? []).reduce((n, file) => n + file.added, 0),
       removed: (turn.files ?? []).reduce((n, file) => n + file.removed, 0),

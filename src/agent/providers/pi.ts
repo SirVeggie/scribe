@@ -17,6 +17,7 @@ import { McpBridge, type BridgeAsk } from "../mcpBridge.js";
 import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
+import { DEFERRED_TOOLS, TOOL_CALL, TOOL_SEARCH, toolLoadingFor } from "../../toolLoading.js";
 import { checkPath, policyFor } from "../access.js";
 import { sandboxed, sandboxedRun, type SandboxHooks } from "../sandbox.js";
 import { pathInside } from "../toolGrants.js";
@@ -632,21 +633,13 @@ class BoardTools {
     await client.connect(new StdioClientTransport({ command: this.spec.command, args: this.spec.args, env, stderr: "ignore" }));
     this.client = client;
     const { tools } = await client.listTools();
-    return tools.map(
-      (tool): ToolDefinition => ({
-        name: tool.name,
-        label: `Scribe: ${tool.name}`,
-        description: tool.description ?? "",
-        // Pi takes plain JSON Schema, as its own MCP extension does.
-        parameters: { ...tool.inputSchema, type: "object", properties: tool.inputSchema.properties ?? {} } as unknown as ToolDefinition["parameters"],
-        execute: async (_id, params, signal) => {
-          const result = await client.callTool({ name: tool.name, arguments: isPlainRecord(params) ? params : {} }, undefined, { signal, timeout: 24 * 60 * 60 * 1000 });
-          const content = mcpContent(result.content);
-          if (result.isError === true) throw new Error(textOf(content) || "The tool failed.");
-          return { content, details: undefined };
-        },
-      })
-    );
+    const call = async (name: string, params: unknown, signal?: AbortSignal) => {
+      const result = await client.callTool({ name, arguments: isPlainRecord(params) ? params : {} }, undefined, { signal, timeout: 24 * 60 * 60 * 1000 });
+      const content = mcpContent(result.content);
+      if (result.isError === true) throw new Error(textOf(content) || "The tool failed.");
+      return { content, details: undefined };
+    };
+    return boardToolDefinitions(tools, call, toolLoadingFor("pi") !== undefined);
   }
 
   close(): void {
@@ -654,6 +647,89 @@ class BoardTools {
     this.client = null;
     this.opening = null;
   }
+}
+
+type McpTool = { name: string; description?: string; inputSchema: { properties?: Record<string, unknown> } & Record<string, unknown> };
+type BoardCall = (name: string, params: unknown, signal?: AbortSignal) => Promise<{ content: Array<TextContent | ImageContent>; details: undefined }>;
+
+/**
+ * The board's MCP tools as Pi custom tools. With defer (toolLoading.ts), the rarely used ones are
+ * not sent: tool_search hands the agent a deferred tool's description and parameters, and tool_call
+ * runs it. The tool list stays the same for the whole session, so a provider's prompt cache (and a
+ * local model's) is not thrown away when the agent loads one.
+ */
+export function boardToolDefinitions(tools: McpTool[], call: BoardCall, defer: boolean): ToolDefinition[] {
+  const definition = (tool: McpTool): ToolDefinition => ({
+    name: tool.name,
+    label: `Scribe: ${tool.name}`,
+    description: tool.description ?? "",
+    // Pi takes plain JSON Schema, as its own MCP extension does.
+    parameters: { ...tool.inputSchema, type: "object", properties: tool.inputSchema.properties ?? {} } as unknown as ToolDefinition["parameters"],
+    execute: async (_id, params, signal) => call(tool.name, params, signal),
+  });
+  const deferred = defer ? tools.filter((tool) => DEFERRED_TOOLS.has(tool.name)) : [];
+  if (!deferred.length) return tools.map(definition);
+  const byName = new Map(deferred.map((tool) => [tool.name, tool]));
+  const names = deferred.map((tool) => tool.name);
+  return [
+    ...tools.filter((tool) => !byName.has(tool.name)).map(definition),
+    {
+      name: TOOL_SEARCH,
+      label: "Scribe: tool search",
+      description: `More Scribe tools, loaded on demand: ${names.join(", ")}. Before using one, get its description and parameters here (names), or find one by what it does (query). Then run it with ${TOOL_CALL}.`,
+      parameters: {
+        type: "object",
+        properties: {
+          names: { type: "array", items: { type: "string", enum: names }, maxItems: 8, description: "Tools to describe." },
+          query: { type: "string", description: "Words to look for in the tools' names and descriptions." },
+        },
+      } as unknown as ToolDefinition["parameters"],
+      execute: async (_id, params) => text(describeTools(deferred, isPlainRecord(params) ? params : {})),
+    },
+    {
+      name: TOOL_CALL,
+      label: "Scribe: tool call",
+      description: `Run one of the tools ${TOOL_SEARCH} lists, with args as its parameters describe.`,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", enum: names, description: "The tool." },
+          args: { type: "object", description: "Its arguments." },
+        },
+        required: ["name"],
+      } as unknown as ToolDefinition["parameters"],
+      execute: async (_id, params, signal) => {
+        const input = isPlainRecord(params) ? params : {};
+        const name = typeof input.name === "string" ? input.name : "";
+        if (!byName.has(name)) throw new Error(`No tool "${name}" to call this way. ${TOOL_CALL} runs these: ${names.join(", ")}.`);
+        return call(name, isPlainRecord(input.args) ? input.args : {}, signal);
+      },
+    },
+  ];
+}
+
+/** tool_search's answer: the named tools, or the best matches for the query, each with its parameters. */
+export function describeTools(tools: McpTool[], params: Record<string, unknown>): string {
+  const names = Array.isArray(params.names) ? params.names.filter((n): n is string => typeof n === "string") : [];
+  const words = (typeof params.query === "string" ? params.query : "").toLowerCase().split(/\W+/).filter((w) => w.length > 1);
+  let picked: McpTool[];
+  if (names.length) picked = tools.filter((tool) => names.includes(tool.name));
+  else if (words.length) {
+    const score = (tool: McpTool) => words.reduce((n, w) => n + (tool.name.toLowerCase().includes(w) ? 3 : 0) + ((tool.description ?? "").toLowerCase().includes(w) ? 1 : 0), 0);
+    picked = tools.map((tool) => ({ tool, s: score(tool) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.tool);
+  } else {
+    return tools.map((tool) => `- ${tool.name}: ${(tool.description ?? "").split(/(?<=\.)\s/)[0]}`).join("\n");
+  }
+  if (!picked.length) return `No tool matches. These load on demand: ${tools.map((tool) => tool.name).join(", ")}.`;
+  return picked
+    .map((tool) => `## ${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON Schema): ${JSON.stringify({ type: "object", properties: tool.inputSchema.properties ?? {}, ...(Array.isArray(tool.inputSchema.required) ? { required: tool.inputSchema.required } : {}) })}\n\nRun it with ${TOOL_CALL}({ name: "${tool.name}", args: { … } }).`)
+    .join("\n\n");
+}
+
+/** A tool_call names the tool it runs: hooks, the transcript and the stats see that tool and its arguments. */
+export function effectiveTool(name: string, args: Record<string, unknown>): { name: string; args: Record<string, unknown> } {
+  if (name === TOOL_CALL && typeof args.name === "string" && DEFERRED_TOOLS.has(args.name)) return { name: args.name, args: isPlainRecord(args.args) ? args.args : {} };
+  return { name, args };
 }
 
 function mcpContent(content: unknown): Array<TextContent | ImageContent> {
@@ -933,10 +1009,11 @@ class PiSession implements ProviderSession {
 
   /** Approvals for Pi's own tools, from the tool_call hook. Scribe's custom tools gate themselves. */
   private async gate(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    const name = event.toolName;
+    // A tool_call is gated as the tool it runs.
+    const { name, args: inner } = effectiveTool(event.toolName, isPlainRecord(event.input) ? event.input : {});
     // Scribe's hooks (Agent settings, Hooks) first, for every tool: they may deny the call or have the user approve it.
     if (this.ctx.toolGate) {
-      const args: Record<string, unknown> = isPlainRecord(event.input) ? event.input : {};
+      const args: Record<string, unknown> = inner;
       const filePath = str(args.path);
       const held = await this.ctx
         .toolGate(this.thread.id, {
@@ -1348,14 +1425,15 @@ class PiSession implements ProviderSession {
         if (event.toolName === "todo_write" || event.toolName === "ask_user") return;
         sink.breakBlock();
         this.lastBlock = null;
-        const args = isPlainRecord(event.args) ? event.args : {};
+        // A tool_call shows (and counts) as the tool it runs.
+        const { name, args } = effectiveTool(event.toolName, isPlainRecord(event.args) ? event.args : {});
         const filePath = str(args.path);
         sink.toolStart({
           toolId: event.toolCallId,
-          name: event.toolName,
-          tool: toolKind(event.toolName),
-          title: this.toolTitle(event.toolName, args),
-          ...(event.toolName === "bash" || event.toolName === "powershell" ? { detail: str(args.command) } : {}),
+          name,
+          tool: toolKind(name),
+          title: this.toolTitle(name, args),
+          ...(name === "bash" || name === "powershell" ? { detail: str(args.command) } : {}),
           input: args,
           ...(filePath ? { paths: [path.resolve(this.cwd(), filePath)] } : {}),
           ...(event.parentToolCallId ? { parentToolId: event.parentToolCallId } : {}),
