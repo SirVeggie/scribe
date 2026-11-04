@@ -81,27 +81,42 @@ or `unavailable` (it could not be decoded, or the browser has not allowed sound 
 
 ## Reading text aloud: scribe.audio.speak
 
-`scribe.audio.speak(text, { voice, speed })` reads text through the text-to-speech source the user
-chose in Settings → Audio (an OpenAI-compatible source, or "This browser"). It asks for
-`audio.speak` ("Read text aloud", default ask): the text goes to that source, and a hosted one
-charges per character. Asking needs a click; once granted, a visible page may speak without one.
+`scribe.audio.speak(text, { source, model, voice, speed })` reads text aloud. Every option is
+optional and defaults to what the user chose in Settings → Audio. Sources are the user's
+OpenAI-compatible servers or "This browser". Reading and listing ask for `audio.speak` ("Read text
+aloud", default ask): the text goes to that source, and a hosted one charges per character. Asking
+needs a click; once granted, a visible page may speak, and list, without one.
 Scribe splits long text at sentence ends and starts playing before the whole clip has arrived.
-It plays through the mixer, so the volume in Settings → Audio applies. One speech plays at a time across Scribe: a new one stops the one before. It keeps playing while
-the tab is in the background and stops when the page closes or reloads.
+It plays through the mixer, so the volume in Settings → Audio applies. One speech plays at a time
+across Scribe: a new one stops the one before. It keeps playing while the tab is in the background
+and stops when the page closes or reloads.
 
 ```js
-const speech = await scribe.audio.speak(text, { voice: "nova", speed: 1.1 }); // both optional
+const speech = await scribe.audio.speak(text, { voice: "nova", speed: 1.1 });
 if (speech.ok) {
   speech.onstate = (state, { piece, pieces }) => { status.textContent = `${piece + 1}/${pieces}`; };
   stopButton.onclick = () => speech.stop();
   const end = await speech.ended; // { ok: true, reason: "ended" | "stopped" } or { ok: false, error, message }
 }
-const list = await scribe.audio.voices(); // { ok, voices: [{ id, name, lang? }], default?, listed } for the chosen source
 ```
 
-`voice` is a `voices()` id; leave it out to use the voice from Settings. `speed` is 0.25 to 4.
-`voices()` lists the server's own voices when it has a list (`listed: true`, with its `default`);
-otherwise it returns OpenAI's names, which other servers may not know.
+To offer a choice, list what the user has set up:
+
+```js
+const { sources, default: chosen } = await scribe.audio.sources();
+// sources: [{ id, name, kind: "browser" | "server", model? }]; chosen: the Settings choice, or null when off
+const { models } = await scribe.audio.models({ source: id });
+// [{ id, default?, loaded?, streaming?: "sentence" | "native" }]; empty for This browser
+const { voices, default: voice, listed } = await scribe.audio.voices({ source: id, model });
+// [{ id, name, lang? }]
+await scribe.audio.speak(text, { source: id, model, voice });
+```
+
+`source` is a `sources()` id, `model` a `models()` id (`""` asks for the server's loaded model),
+`voice` a `voices()` id, and `speed` is 0.25 to 4. `voices()` without a source lists the chosen
+source's voices. It shows the server's own list when it has one (`listed: true`, with its `default`);
+otherwise it returns OpenAI's names, which other servers may not know. Asking a server for a model's
+voices can load that model, which takes several seconds; `models()` loads nothing.
 Failures: `denied`, `no_source`, `hidden`, `rate_limited` (30 requests/minute, 100,000 characters/hour
 per page), `blocked` (the browser blocked playback), `network`, `auth` or `engine`.
 

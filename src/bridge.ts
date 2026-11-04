@@ -1827,7 +1827,7 @@ ${POINTER_DRAG_JS}
   function speak(text, opts) {
     opts = opts || {};
     if (typeof text !== "string" || !text.trim()) return Promise.resolve({ ok: false, error: "invalid_audio" });
-    return askBoard({ type: "scribe-audio", op: "speak", text: text, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
+    return askBoard({ type: "scribe-audio", op: "speak", text: text, source: opts.source, model: opts.model, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
       if (!result || !result.ok) return result || { ok: false, error: "unavailable" };
       var finish, done = false;
       var session = { ok: true, onstate: null,
@@ -1988,7 +1988,10 @@ ${POINTER_DRAG_JS}
     },
     available: function () { return askBoard({ type: "scribe-audio", op: "available" }, 30000); },
     speak: speak,
-    voices: function () { return askBoard({ type: "scribe-audio", op: "voices" }, 30000); }
+    sources: function () { return askBoard({ type: "scribe-audio", op: "speech-sources" }, 30000); },
+    models: function (opts) { return askBoard({ type: "scribe-audio", op: "models", source: opts && opts.source }, 30000); },
+    // A server may load the model to list its voices (several seconds).
+    voices: function (opts) { return askBoard({ type: "scribe-audio", op: "voices", source: opts && opts.source, model: opts && opts.model }, 60000); }
   };
 
   // ---------- page plugins ----------

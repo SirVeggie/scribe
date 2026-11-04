@@ -361,7 +361,10 @@ streaming are rows under the list, and only the rows that source can use show (T
 and speed; streaming only for a model the server lists with `streaming`). Model pickers read
 `GET …/models` (`POST /api/audio/models`, cached a minute): an audio server's list carries `default`,
 `loaded` and `streaming` (`sentence` or `native`, shown since native is usually more reliable), and a
-plain OpenAI list is cut down to the speech or transcription models. Voices come
+plain OpenAI list is cut down to the speech or transcription models. Pages may choose too:
+`scribe.audio.speak(text, { source, model, voice, speed })` with `sources()`, `models({ source })`
+and `voices({ source, model })` to offer the choice, all behind `audio.speak`; each defaults to the
+Settings choice. Voices come
 from the server's `GET …/audio/voices?model=` (`{ voices, default }`), cached for 10 minutes per URL
 and model because asking can load that model; servers without the list get OpenAI's names. An early
 build kept a `speechModel` on speech-to-text sources; `normalizeSettings` moves those once. Shell code is

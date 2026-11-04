@@ -5378,7 +5378,29 @@
         if (result.ok && result.blob) return reply({ ok: true, buffer: await result.blob.arrayBuffer(), mimeType: result.blob.type, durationMs: result.durationMs });
         return reply(result);
       }
-      if (data.op === "voices") return reply(api.voices ? await api.voices() : { ok: false, error: "unavailable" });
+      /*
+       * Reading aloud and listing its sources, models and voices share audio.speak: the lists name the
+       * user's servers, and asking a server for a model's voices can load that model. Granted pages need
+       * no click; asking does.
+       */
+      const speakGate = async () => {
+        if (!frameActivated(id)) {
+          const grants = await window.scribePermissions.query(tab);
+          if (grants.permissions?.find(p => p.id === "audio.speak")?.value !== "allow") return { ok: false, error: "denied", permission: "audio.speak" };
+        }
+        const permission = await window.scribePermissions.ensure(tab, { perm: "audio.speak" });
+        return permission.ok ? null : permission;
+      };
+      const sourceArg = typeof data.source === "string" ? data.source.slice(0, 100) : undefined;
+      const modelArg = typeof data.model === "string" ? data.model.slice(0, 200) : undefined;
+      if (data.op === "speech-sources" || data.op === "models" || data.op === "voices") {
+        if (!api.voices) return reply({ ok: false, error: "unavailable" });
+        const denied = await speakGate();
+        if (denied) return reply(denied);
+        if (data.op === "speech-sources") return reply(await api.speechSources());
+        if (data.op === "models") return reply(await api.models({ source: sourceArg }));
+        return reply(await api.voices(sourceArg ? { source: sourceArg, model: modelArg } : {}));
+      }
       if (data.op === "speak-stop") {
         if (pageSpeech.get(id)?.id === data.sessionId) stopPageSpeech(id);
         return reply({ ok: true });
@@ -5389,18 +5411,12 @@
         if (data.text.length > 100000) return reply({ ok: false, error: "too_large" });
         if (!pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
         const entry = frames.get(id), revision = entry.revision, generation = entry.el.dataset?.audioGeneration;
-        // Like uploads: granted pages may speak without a click; asking still needs one.
-        if (!frameActivated(id)) {
-          const grants = await window.scribePermissions.query(tab);
-          if (grants.permissions?.find(p => p.id === "audio.speak")?.value !== "allow")
-            return reply({ ok: false, error: "denied", permission: "audio.speak" });
-        }
-        const permission = await window.scribePermissions.ensure(tab, { perm: "audio.speak" });
-        if (!permission.ok) return reply(permission);
+        const denied = await speakGate();
+        if (denied) return reply(denied);
         if (frames.get(id) !== entry || entry.revision !== revision || entry.el.dataset?.audioGeneration !== generation) return reply({ ok: false, error: "cancelled" });
         stopPageSpeech(id);
         const sessionId = crypto.randomUUID(), source = event.source;
-        const session = api.speak(data.text, { tabId: id,
+        const session = api.speak(data.text, { tabId: id, sourceId: sourceArg, model: modelArg,
           voice: typeof data.voice === "string" ? data.voice.slice(0, 200) : undefined,
           speed: Number.isFinite(data.speed) ? data.speed : undefined,
           onState: state => source?.postMessage({ type: "scribe-audio-event", sessionId, state: state.state, piece: state.piece, pieces: state.pieces }, event.origin) });

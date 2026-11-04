@@ -87,7 +87,8 @@
     try {
       const res = await fetch("/api/audio/speech", { method: "POST", signal,
         headers: { "Content-Type": "application/json", ...(opts.tabId ? { "x-scribe-tab": opts.tabId } : {}) },
-        body: JSON.stringify({ text, voice: opts.voice, speed: opts.speed, ...(opts.sourceId ? { sourceId: opts.sourceId } : {}) }) });
+        body: JSON.stringify({ text, voice: opts.voice, speed: opts.speed, ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
+          ...(typeof opts.model === "string" ? { model: opts.model } : {}) }) });
       if (res.ok && !(res.headers.get("content-type") || "").includes("json")) return { ok: true, res };
       const result = await res.json().catch(() => null);
       return result && result.ok === false ? result : failure("engine", "Text-to-speech is unavailable.");
@@ -186,6 +187,9 @@
    * opts.source: "browser", or a source to ask about: { id } for a saved one, or the editor's draft.
    */
   async function voices(opts = {}) {
+    // A source id from sources(): This browser's, or a saved source's (with an optional model).
+    if (typeof opts.source === "string" && opts.source !== "browser")
+      opts = { ...opts, source: opts.source === "__browser__" ? "browser" : { id: opts.source, ...(typeof opts.model === "string" ? { model: opts.model } : {}) } };
     let mode = opts.source === "browser" ? "browser" : opts.source ? "source" : undefined;
     if (!mode) mode = (await window.scribeAudio.refresh().catch(() => window.scribeAudio.settings()))?.speech;
     if (mode === "browser")
@@ -201,6 +205,27 @@
     } catch { return failure("network", "Cannot reach text-to-speech."); }
   }
 
-  Object.assign(window.scribeAudio, { speak, voices, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
+  /** The text-to-speech choices: This browser, then the user's sources; default is the one Settings picked (null: off). */
+  async function sources() {
+    const view = await window.scribeAudio.refresh().catch(() => window.scribeAudio.settings());
+    if (!view) return failure("unavailable", "Cannot read Audio settings.");
+    return { ok: true, default: view.tts?.source || null, sources: [
+      ...(window.speechSynthesis ? [{ id: "__browser__", name: "This browser", kind: "browser" }] : []),
+      ...(view.ttsSources || []).map(s => ({ id: s.id, name: s.name, kind: "server", ...(s.model ? { model: s.model } : {}) }))] };
+  }
+  /** A source's models (GET …/models through the daemon). This browser has none. */
+  async function models(opts = {}) {
+    const view = window.scribeAudio.settings() || await window.scribeAudio.refresh().catch(() => null);
+    const id = typeof opts.source === "string" && opts.source ? opts.source : view?.tts?.source;
+    if (!id) return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
+    if (id === "__browser__") return { ok: true, source: id, models: [] };
+    try {
+      const res = await fetch("/api/audio/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "tts", id }) });
+      const result = await res.json();
+      return result.ok ? { ok: true, source: id, models: result.models } : result;
+    } catch { return failure("network", "Cannot reach text-to-speech."); }
+  }
+
+  Object.assign(window.scribeAudio, { speak, voices, speechSources: sources, models, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
   window.addEventListener("pagehide", () => current?.stop());
 })();

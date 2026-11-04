@@ -185,7 +185,7 @@ test("page speech needs audio.speak and is limited per page by requests and char
   assert.equal(gate.checkSpeech("page", 10).ok, true);
   assert.equal(gate.checkSpeech("other", 4000).ok, true);
 
-  const { service, calls } = setup();
+  const { service, calls, id } = setup();
   const app = express(); app.use("/api/audio", audioRouter(service, gate));
   const server = app.listen(0, "127.0.0.1"); await new Promise<void>(r => server.once("listening", r));
   try {
@@ -201,7 +201,11 @@ test("page speech needs audio.speak and is limited per page by requests and char
     assert.equal(calls.length, 1);
     grants.set("audio.speak", { value: "allow", updatedAt: 3 });
     now = 3600000 * 2;
-    assert.equal((await post({ text: "Hello.", sourceId: "ignored" }, { "x-scribe-tab": "page" })).status, 200);
+    // Pages may pick any of the user's sources and a model.
+    const picked = await post({ text: "Hello.", sourceId: id, model: "tts-1-hd", voice: "nova" }, { "x-scribe-tab": "page" });
+    assert.equal(picked.status, 200); await picked.arrayBuffer();
+    assert.equal(calls.at(-1)!.model, "tts-1-hd"); assert.equal(calls.at(-1)!.voice, "nova");
+    assert.equal((await post({ text: "Hello.", sourceId: "missing" }, { "x-scribe-tab": "page" })).status, 409);
     assert.equal((await post({ text: "" })).status, 400);
     assert.equal((await post({ text: "a".repeat(MAX_SPEECH_CHARS + 1) })).status, 413);
     const wrongType = await fetch(base, { method: "POST", body: "Hello.", headers: { "Content-Type": "text/plain" } });
@@ -276,4 +280,18 @@ test("listModels reads OpenAI's list and the audio server's flags", async () => 
     assert.deepEqual(result, { ok: true, flagged: true, models: [{ id: "kokoro", default: true, loaded: true, streaming: "sentence", aliases: ["k"] },
       { id: "chatterbox-nano", streaming: "native" }, { id: "old" }] });
   } finally { globalThis.fetch = realFetch; }
+});
+
+test("speak takes a source and model from the caller; an empty model asks for the server's loaded one", async () => {
+  const { service, calls } = setup();
+  const other = service.saveTtsSource({ name: "Kokoro", source: "__custom__", model: "kokoro", voice: "af_heart", custom: { baseUrl: "https://audio.invalid/tts/v1" } })
+    .ttsSources.find(s => s.name === "Kokoro")!.id;
+  await service.speak("Hi.", { sourceId: other });
+  assert.equal(calls.at(-1)!.source.baseUrl, "https://audio.invalid/tts/v1"); assert.equal(calls.at(-1)!.model, "kokoro"); assert.equal(calls.at(-1)!.voice, "af_heart");
+  await service.speak("Hi.", { sourceId: other, model: "chatterbox-nano" });
+  assert.equal(calls.at(-1)!.model, "chatterbox-nano");
+  await service.speak("Hi.", { sourceId: other, model: "" });
+  assert.equal(calls.at(-1)!.model, undefined);
+  await service.speak("Hi.");
+  assert.equal(calls.at(-1)!.model, "tts-1", "without a source it is the Settings choice");
 });

@@ -161,7 +161,7 @@ export class AudioService {
    * MAX_SPEECH_CHARS; the shell splits longer text. The timeout covers the wait for the response;
    * signal (the client going away) aborts the request and the stream.
    */
-  async speak(text: unknown, options: { voice?: unknown; speed?: unknown; sourceId?: string; signal?: AbortSignal } = {}): Promise<TtsResult> {
+  async speak(text: unknown, options: { voice?: unknown; speed?: unknown; model?: unknown; sourceId?: string; signal?: AbortSignal } = {}): Promise<TtsResult> {
     const fail = (error: TtsFailure["error"], message: string): TtsFailure => ({ ok: false, error, message });
     try {
       if (typeof text !== "string" || !text.trim()) return fail("invalid_audio", "Give the text to read aloud.");
@@ -173,6 +173,8 @@ export class AudioService {
       if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
       const voice = (typeof options.voice === "string" && options.voice.trim().slice(0, 200)) || profile.voice || "alloy";
       const speed = options.speed === undefined ? profile.speed ?? 1 : normalizeSpeed(options.speed) ?? 1;
+      // A model given by the caller wins; "" asks for the server's loaded model.
+      const model = typeof options.model === "string" ? options.model.trim().slice(0, 200) || undefined : profile.model;
       const controller = new AbortController();
       const abort = () => controller.abort();
       if (options.signal?.aborted) return fail("network", "Reading aloud was stopped.");
@@ -183,7 +185,7 @@ export class AudioService {
       }, this.timeoutMs); });
       const run = async (): Promise<TtsResult> => {
         for (let attempt = 0; ; attempt++) {
-          const result = await this.tts.speak({ source, model: profile.model, text, voice, speed, stream: profile.stream, signal: controller.signal });
+          const result = await this.tts.speak({ source, model, text, voice, speed, stream: profile.stream, signal: controller.signal });
           if (attempt || result.ok || controller.signal.aborted || !(result.error === "rate_limit" || result.retryable)) return result;
           await new Promise(resolve => setTimeout(resolve, 300));
           if (controller.signal.aborted) return fail("timeout", "Text-to-speech timed out.");

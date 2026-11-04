@@ -55,7 +55,7 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
   router.post("/speech", async (req, res) => {
     const controller = new AbortController();
     res.on("close", () => { if (!res.writableFinished) controller.abort(); });
-    const body = req.body as { text?: unknown; voice?: unknown; speed?: unknown; sourceId?: unknown } | undefined;
+    const body = req.body as { text?: unknown; voice?: unknown; speed?: unknown; sourceId?: unknown; model?: unknown } | undefined;
     const tab = req.get("x-scribe-tab");
     try {
       if (tab) {
@@ -63,9 +63,9 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
           : pagePermission.checkSpeech(tab, typeof body?.text === "string" ? body.text.length : 0);
         if (!gate.ok) { res.status(403).json(gate); return; }
       }
-      const result = await service.speak(body?.text, { voice: body?.voice, speed: body?.speed, signal: controller.signal,
-        // Settings → Audio tests a source before it is chosen; pages always use the chosen one.
-        sourceId: !tab && typeof body?.sourceId === "string" ? body.sourceId : undefined });
+      // Pages may pick any of the user's sources and models too (scribe.audio.speak); the permission covers all of them.
+      const result = await service.speak(body?.text, { voice: body?.voice, speed: body?.speed, model: body?.model, signal: controller.signal,
+        sourceId: typeof body?.sourceId === "string" && body.sourceId ? body.sourceId.slice(0, 100) : undefined });
       if (!result.ok) {
         res.status(result.error === "too_large" ? 413 : result.error === "invalid_audio" ? 400 : result.error === "no_source" ? 409 : 502).json(result);
         return;

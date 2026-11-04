@@ -363,3 +363,24 @@ test("page listen, record and live samples round trip through a cross-origin ifr
   assert.ok(workletRequests.includes(`127.0.0.1:${port}`));
   assert.ok(workletRequests.includes(`127.0.0.2:${port}`));
 });
+
+test("pages list speech sources, models and voices only with audio.speak, and pass their source and model on", async () => {
+  const h = pageAudioHarness(), win = h.context.window;
+  let grant = "ask", ensured = 0;
+  const asked: any[] = [];
+  win.scribePermissions.query = async () => ({ permissions: [{ id: "audio.speak", value: grant }] });
+  win.scribePermissions.ensure = async () => { ensured++; return grant === "allow" ? { ok: true } : { ok: false, error: "denied", permission: "audio.speak" }; };
+  Object.assign(win.scribeAudio, {
+    speechSources: async () => ({ ok: true, default: "k", sources: [{ id: "k", name: "Kokoro", kind: "server" }] }),
+    models: async (opts: any) => { asked.push(["models", opts]); return { ok: true, models: [] }; },
+    voices: async (opts: any) => { asked.push(["voices", opts]); return { ok: true, voices: [] }; },
+    speak: (_text: string, opts: any) => { asked.push(["speak", opts]); return { stop() {}, ended: new Promise(() => {}) }; } });
+  assert.equal((await h.request("speech-sources")).permission, "audio.speak", "no click and no grant");
+  assert.equal(ensured, 0);
+  grant = "allow";
+  assert.equal((await h.request("speech-sources")).sources[0].name, "Kokoro");
+  await h.request("models", { source: "k" });
+  await h.request("voices", { source: "k", model: "kokoro" });
+  await h.request("speak", { text: "Hi.", source: "k", model: "kokoro", voice: "af_heart" });
+  assert.deepEqual(asked.map(([op, o]) => [op, o.source ?? o.sourceId, o.model]), [["models", "k", undefined], ["voices", "k", "kokoro"], ["speak", "k", "kokoro"]]);
+});
