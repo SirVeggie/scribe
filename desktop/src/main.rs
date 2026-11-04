@@ -26,6 +26,10 @@ pub(crate) const MAIN: &str = "main";
 /// Labels of the windows that show one page on their own (public/popout.js).
 pub(crate) const CHILD_PREFIX: &str = "child-";
 const CHILD_SIZE: (f64, f64) = (960.0, 720.0);
+/// WebView2 arguments for every window. They share one data folder, so the arguments must match.
+/// Setting them replaces wry's defaults, which are kept here; autoplay lets notification sounds
+/// and page sounds play without a click first (#564).
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
 
 /// Why the daemon last failed to start, for the offline page.
 #[derive(Default)]
@@ -171,6 +175,7 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>, or
     let board_origin = url.origin();
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title(title)
+        .additional_browser_args(BROWSER_ARGS)
         .zoom_hotkeys_enabled(true)
         .disable_drag_drop_handler()
         .on_download(downloads::handle)
@@ -310,6 +315,7 @@ fn main() {
             }
             let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
                 .title("Scribe")
+                .additional_browser_args(BROWSER_ARGS)
                 .zoom_hotkeys_enabled(true)
                 // Let the board's HTML drop handlers receive files on Windows.
                 .disable_drag_drop_handler()

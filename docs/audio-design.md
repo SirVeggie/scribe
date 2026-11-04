@@ -317,10 +317,10 @@ As built: `public/audio.js` has the mixer (`play`, `cue`, `threadCue`, `setOutpu
 `audio_output`. The election uses each window's load time rather than its `/ws` age. Pages get
 `scribe.audio.play` (permission `audio.play`); its `ended` resolves `{ ok, reason }` when the sound ends.
 
-Desktop: the WebView2 flag `--autoplay-policy=no-user-gesture-required` is not set. Tauri passes
-browser arguments to the whole WebView2 process, so it would also let every page iframe autoplay,
-not just the board. The shell starts its context on the first click or key press, so cues play from
-then on; until the first gesture after launch they are dropped.
+Desktop: every window passes `--autoplay-policy=no-user-gesture-required` to WebView2
+(`BROWSER_ARGS` in `desktop/src/main.rs`, with wry's default arguments kept), so cues play before
+the first click. It applies to the whole WebView2 process, so page iframes can autoplay too; the
+user chose that because pages are almost always theirs.
 
 Original plan:
 
