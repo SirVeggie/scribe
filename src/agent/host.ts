@@ -2806,17 +2806,45 @@ export class AgentHost {
     }
     const items = [...this.dirty.values()].filter((item) => this.threads.has(item.threadId));
     this.dirty.clear();
-    try {
-      this.db.saveItems(items);
-    } catch (err) {
-      log(`Agent item save failed: ${(err as Error).message}`);
-    }
+    this.saveRows(() => this.db.saveItems(items), items.map((item) => item.threadId), "Agent item save");
   }
 
   private saveTurn(turn: Turn): void {
     if (!this.threads.has(turn.threadId)) return;
-    this.db.saveTurn(turn);
+    this.saveRows(() => this.db.saveTurn(turn), [turn.threadId], "Agent turn save");
     this.emit({ type: "agent_turn", turn });
+  }
+
+  /**
+   * A save that fails because a thread's row went missing (another process deleted it, #985) puts the row back
+   * from memory and tries again. It never throws: a turn that cannot be saved must still end.
+   */
+  private saveRows(save: () => void, threadIds: string[], what: string): void {
+    try {
+      save();
+      return;
+    } catch (err) {
+      const restored = [...new Set(threadIds)].filter((id) => {
+        const thread = this.threads.get(id);
+        if (!thread || this.db.getThread(id)) return false;
+        try {
+          this.db.saveThread(thread);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (!restored.length) {
+        log(`${what} failed: ${(err as Error).message}`);
+        return;
+      }
+      log(`${what} failed (${(err as Error).message}); restored missing thread rows ${restored.join(", ")}`);
+    }
+    try {
+      save();
+    } catch (err) {
+      log(`${what} failed: ${(err as Error).message}`);
+    }
   }
 
   private setStatus(threadId: string, status: RunStatus): void {

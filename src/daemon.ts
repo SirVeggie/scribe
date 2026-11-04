@@ -2,9 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { AGENT_CLIENT, AGENT_LABEL_HEADER, AGENT_PORT, CLIENT_HEADER, INSTALL_ROOT, LOCAL_TOKEN_HEADER, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, agentBaseUrl, baseUrl, dataDir } from "./config.js";
+import { AGENT_CLIENT, AGENT_LABEL_HEADER, AGENT_PORT, CLIENT_HEADER, HOST, INSTALL_ROOT, LOCAL_TOKEN_HEADER, PORT, SESSION_HEADER, THREAD_HEADER, THREAD_TOKEN_HEADER, VERSION, agentBaseUrl, baseUrl, dataDir } from "./config.js";
 
 /** Identifies this MCP process to the daemon, so claims can tell a live agent from one that stopped. */
 const SESSION_ID = randomBytes(6).toString("hex");
@@ -77,7 +78,12 @@ export async function health(): Promise<Health | null> {
  */
 export async function ensureDaemon(options: { replace?: boolean } = {}): Promise<string> {
   const url = baseUrl();
-  const running = await health();
+  let running = await health();
+  // A busy daemon can miss the short health check (#985): while something holds the port, give it longer.
+  for (let i = 0; !running && i < 20 && (await portTaken(PORT)); i += 1) {
+    await sleep(500);
+    running = await health();
+  }
   if (running?.version === VERSION) {
     return url;
   }
@@ -107,6 +113,19 @@ export async function ensureDaemon(options: { replace?: boolean } = {}): Promise
     }
   }
   throw new Error(`Scribe daemon did not start at ${url}`);
+}
+
+function portTaken(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: HOST });
+    const done = (taken: boolean) => {
+      socket.destroy();
+      resolve(taken);
+    };
+    socket.setTimeout(800, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
 }
 
 function sameInstall(root: string): boolean {

@@ -3,7 +3,8 @@ import { startHttp } from "./http.js";
 import { startMcp } from "./mcp.js";
 import { api, ensureDaemon, health } from "./daemon.js";
 import { log } from "./log.js";
-import { migrateLegacyData } from "./config.js";
+import { PORT, dataDir, migrateLegacyData } from "./config.js";
+import { acquireInstanceLock } from "./instanceLock.js";
 import { watchMemory } from "./memoryWatch.js";
 import { hideChildWindows } from "./hideWindows.js";
 import { adoptLoginPath } from "./loginPath.js";
@@ -148,6 +149,12 @@ async function main(): Promise<void> {
   }
 
   if (args.has("--daemon")) {
+    // Before any data is touched (#985): a second daemon on this home would clean up the running one's chats.
+    const lock = await acquireInstanceLock(dataDir(), { port: PORT, answers: answersHealth });
+    if (!lock.ok) {
+      log(`Scribe daemon ${lock.owner.pid} already runs on ${dataDir()}; this one (${process.pid}) exits without touching its data`);
+      return;
+    }
     hideChildWindows();
     adoptLoginPath();
     migrateLegacyData(log);
@@ -171,6 +178,15 @@ async function main(): Promise<void> {
   }
 
   await startMcp();
+}
+
+async function answersHealth(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForExit(pid: number): Promise<void> {
