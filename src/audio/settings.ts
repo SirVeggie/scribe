@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
-import type { AudioSettings, AudioDayUsage } from "./types.js";
+import { AUDIO_CUES, type AudioSettings, type AudioDayUsage, type AudioOutput } from "./types.js";
+
+export function normalizeOutput(value: unknown): AudioOutput {
+  const body = value as Partial<AudioOutput> | null;
+  const volume = Number(body?.volume);
+  return { sounds: body?.sounds === true, volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0.6,
+    cues: Object.fromEntries(AUDIO_CUES.map(cue => [cue, body?.cues?.[cue] !== false])) as AudioOutput["cues"] };
+}
 
 export function normalizeSettings(value: unknown): AudioSettings {
   const body = value as Partial<AudioSettings> | null;
@@ -17,7 +24,7 @@ export function normalizeSettings(value: unknown): AudioSettings {
     stt: { ...(source ? { source } : {}), model: str(body?.stt?.model, 200) || "whisper-1", ...(language ? { language } : {}),
     ...(custom ? { custom: { baseUrl: str(custom.baseUrl, 2000), apiKey: str(custom.apiKey, 4000) } } : {}) },
     input: { sendAfterDictation: body?.input?.sendAfterDictation === true, pushToTalk: body?.input?.pushToTalk !== false,
-      livePreview: body?.input?.livePreview !== false } };
+      livePreview: body?.input?.livePreview !== false }, output: normalizeOutput(body?.output) };
 }
 export interface AudioStore {
   read(): AudioSettings;

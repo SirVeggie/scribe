@@ -45,6 +45,11 @@ export const PAGE_PERMISSIONS: PermissionDef[] = [
     default: "ask", risky: true,
   },
   {
+    id: "audio.play", label: "Play sounds",
+    detail: "Play sounds at your Scribe volume. Without a click only while the page is visible.",
+    default: "allow", risky: false,
+  },
+  {
     id: "audio.transcribe", label: "Turn speech into text",
     detail: "Send audio to the speech-to-text source in Settings. With a hosted source, the audio leaves this PC.",
     default: "ask", risky: false,

@@ -150,6 +150,7 @@
       push.setAttribute("aria-checked", String(view.input.pushToTalk));
       livePreview.setAttribute("aria-checked", String(view.input.livePreview !== false));
       livePreview.closest(".setting-row").hidden = !view.profiles.some(p => p.streaming);
+      receiveOutput(view.output);
       status.textContent = "";
       await devices();
     } catch (err) { status.textContent = err.message; }
@@ -169,5 +170,46 @@
   mic.addEventListener("change", () => window.scribeAudio.setDevice(mic.value));
   navigator.mediaDevices?.addEventListener("devicechange", devices);
   section.append(status);
-  window.scribeAudioSettings = { sections: [section], refresh, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
+
+  /* Notification sounds (#564): saved in the daemon, pushed to every window over /ws. */
+  const sounds = document.createElement("section"); sounds.className = "settings-section audio-settings";
+  const soundsHeading = document.createElement("h3"); soundsHeading.textContent = "Notification sounds"; sounds.append(soundsHeading);
+  const soundsOn = row("Play sounds", "sounds", "switch", sounds);
+  const volumeRow = document.createElement("div"); volumeRow.className = "setting-row";
+  const volumeLabel = document.createElement("label"); volumeLabel.textContent = "Volume"; volumeLabel.htmlFor = "audio-volume";
+  const volumeBox = document.createElement("div"); volumeBox.className = "orb-settings-size";
+  const volume = document.createElement("input"); volume.type = "range"; volume.className = "orb-range"; volume.id = "audio-volume";
+  volume.min = "0"; volume.max = "100"; volume.step = "5";
+  const volumeText = document.createElement("output"); volumeText.htmlFor = volume.id;
+  volumeBox.append(volume, volumeText); volumeRow.append(volumeLabel, volumeBox); sounds.append(volumeRow);
+  const CUES = [["thread-finish", "When a chat finishes"], ["thread-ask", "When a chat needs you"]];
+  const cueSwitches = CUES.map(([name, label]) => {
+    const input = row(label, "cue-" + name, "switch", sounds);
+    input.after(button("Play", () => window.scribeAudio.play(`/sounds/${name}.wav`, { channel: "cue" })));
+    return [name, input];
+  });
+  const soundsStatus = document.createElement("p"); soundsStatus.className = "settings-hint"; soundsStatus.setAttribute("role", "status");
+  sounds.append(soundsStatus);
+  const paintVolume = () => { volumeText.value = volume.value + "%"; volume.style.setProperty("--fill", volume.value + "%"); };
+  function receiveOutput(output) {
+    if (!output) return;
+    soundsOn.setAttribute("aria-checked", String(output.sounds));
+    volume.value = String(Math.round(output.volume * 100)); paintVolume();
+    for (const [name, input] of cueSwitches) input.setAttribute("aria-checked", String(output.cues?.[name] !== false));
+    for (const line of [volumeRow, ...cueSwitches.map(([, input]) => input.closest(".setting-row"))]) line.hidden = !output.sounds;
+  }
+  function saveOutput() {
+    const output = { sounds: soundsOn.getAttribute("aria-checked") === "true", volume: Number(volume.value) / 100,
+      cues: Object.fromEntries(cueSwitches.map(([name, input]) => [name, input.getAttribute("aria-checked") === "true"])) };
+    receiveOutput(output); window.scribeAudio.setOutput(output);
+    saving = saving.then(async () => {
+      const res = await fetch("/api/audio/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ output }) });
+      const result = await res.json(); if (!res.ok) throw new Error(result.error);
+      soundsStatus.textContent = "";
+    }).catch(err => { soundsStatus.textContent = err.message; });
+  }
+  [soundsOn, ...cueSwitches.map(([, input]) => input)].forEach(input => input.addEventListener("change", saveOutput));
+  volume.addEventListener("input", () => { paintVolume(); window.scribeAudio.setOutput({ ...window.scribeAudio.output(), volume: Number(volume.value) / 100 }); });
+  volume.addEventListener("change", saveOutput);
+  window.scribeAudioSettings = { sections: [section, sounds], refresh, receiveOutput, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
 })();

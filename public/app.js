@@ -677,6 +677,11 @@
       window.scribeAppearance?.receive(msg.settings, msg.revision);
       return;
     }
+    if (msg.type === "audio_output") {
+      window.scribeAudio?.setOutput(msg.output);
+      window.scribeAudioSettings?.receiveOutput(msg.output);
+      return;
+    }
     if (typeof msg.type === "string" && msg.type.startsWith("agent_")) {
       dispatchEvent(new CustomEvent("scribe:agent-event", { detail: msg }));
       return;
@@ -5308,6 +5313,33 @@
   }
   function checkPageAudioVisibility() {
     for (const [id] of pageAudioSessions) if (!pageAudioVisible(id)) cancelPageAudio(id, "hidden");
+    // A closed or reloaded page's sounds stop with it.
+    for (const play of pagePlays.values()) if (frames.get(play.tabId) !== play.entry || !play.entry.el.isConnected) play.handle.stop();
+  }
+  /** scribe.audio.play (#564): through the shell's mixer, on the page channel. Without a click only while the tab shows. */
+  const pagePlays = new Map();
+  async function playPageSound(id, tab, source, data) {
+    const gesture = frameActivated(id);
+    if (!gesture && !pageAudioVisible(id)) return { ok: false, error: "hidden" };
+    if (!(data.buffer instanceof ArrayBuffer) || !data.buffer.byteLength) return { ok: false, error: "invalid_audio" };
+    if (data.buffer.byteLength > 8 * 1024 * 1024) return { ok: false, error: "too_large" };
+    if (pagePlays.size >= 8) return { ok: false, error: "busy" };
+    const entry = frames.get(id);
+    if (!gesture) {
+      const grants = await window.scribePermissions.query(tab);
+      if (grants.permissions?.find(p => p.id === "audio.play")?.value !== "allow") return { ok: false, error: "denied", permission: "audio.play" };
+    } else {
+      const permission = await window.scribePermissions.ensure(tab, { perm: "audio.play" });
+      if (!permission.ok) return permission;
+    }
+    if (frames.get(id) !== entry) return { ok: false, error: "cancelled" };
+    const volume = Number.isFinite(data.volume) ? Math.min(1, Math.max(0, data.volume)) : 1;
+    const handle = window.scribeAudio.play(new Blob([data.buffer], { type: typeof data.mimeType === "string" ? data.mimeType : "" }), { volume, channel: "page" });
+    const key = String(data.playId);
+    pagePlays.set(key, { tabId: id, entry, source, handle });
+    const reason = await handle.ended;
+    pagePlays.delete(key);
+    return reason === "failed" ? { ok: false, error: "unavailable" } : { ok: true, reason };
   }
   document.addEventListener("visibilitychange", checkPageAudioVisibility);
   setInterval(checkPageAudioVisibility, 100);
@@ -5325,6 +5357,12 @@
       const opts = { language: typeof data.language === "string" ? data.language.slice(0, 20) : undefined,
         prompt: typeof data.prompt === "string" ? data.prompt.slice(0, 2000) : undefined, tabId: id };
       if (data.op === "available") { await api.refresh(); return reply(api.available()); }
+      if (data.op === "play") return reply(await playPageSound(id, tab, event.source, data));
+      if (data.op === "stopPlay") {
+        const play = pagePlays.get(String(data.playId));
+        if (play?.source === event.source) play.handle.stop();
+        return reply({ ok: true });
+      }
       if (data.op === "stop" || data.op === "cancel") {
         const session = pageAudioSessions.get(id);
         if (!session || session.id !== data.sessionId || session.source !== event.source) return reply({ ok: false, error: "cancelled" });

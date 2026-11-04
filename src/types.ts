@@ -467,6 +467,8 @@ export type BoardEvent =
   | { type: "spaces"; spaces: SpacesView }
   | { type: "page_permission"; id: string; perm: string; value: string }
   | { type: "appearance"; settings: Record<string, string>; revision: number }
+  /** Notification sound settings (src/audio), pushed so every open window plays by the same rules. */
+  | { type: "audio_output"; output: { sounds: boolean; volume: number; cues: Record<string, boolean> } }
   | { type: "tab_upserted"; tab: TabMeta; index?: number; structural: boolean; template?: boolean; markUnread?: boolean }
   | { type: "tab_deleted"; id: string }
   | { type: "tab_focused"; id: string | null }

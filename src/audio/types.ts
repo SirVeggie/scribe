@@ -8,7 +8,12 @@ export type AudioSettings = {
   defaultSource?: string;
   stt: { source?: string; model: string; language?: string; custom?: { baseUrl: string; apiKey?: string } };
   input: { sendAfterDictation: boolean; pushToTalk: boolean; livePreview: boolean };
+  /** Notification sounds (phase C): off until the user turns them on. */
+  output: AudioOutput;
 };
+export const AUDIO_CUES = ["thread-finish", "thread-ask"] as const;
+export type AudioCue = typeof AUDIO_CUES[number];
+export type AudioOutput = { sounds: boolean; volume: number; cues: Record<AudioCue, boolean> };
 export type AudioErrorKind = "no_source" | "invalid_audio" | "too_large" | "timeout" | "network" | "auth" | "rate_limit" | "engine" | "permission" | "format";
 export type AudioResult = { ok: true; text: string } | { ok: false; error: AudioErrorKind; message: string; retryable?: boolean };
 export type SttRequest = { source: OpenAISource; model: string; audio: Blob; language?: string; prompt?: string; signal: AbortSignal };

@@ -12,7 +12,16 @@ const ASSET_MIME: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".avif": "image/avif",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
 };
+
+/** Images and sounds an agent may attach with page_show. */
+const ASSET_KINDS = "png, jpg, gif, webp, svg, ico, avif, mp3, ogg, wav, m4a";
+const isAssetMime = (type: string) => type.startsWith("image/") || type.startsWith("audio/");
 
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 
@@ -69,7 +78,7 @@ export function readAssetFile(input: AssetInput): PreparedAsset {
   const name = sanitizeAssetName(input.name ?? path.basename(resolved));
   const mimeType = mimeForName(name);
   if (!mimeType) {
-    throw new Error(`unsupported image type "${path.extname(name) || name}" (png, jpg, gif, webp, svg, ico, avif)`);
+    throw new Error(`unsupported asset type "${path.extname(name) || name}" (${ASSET_KINDS})`);
   }
   return { name, mimeType, buffer: fs.readFileSync(resolved) };
 }
@@ -147,9 +156,9 @@ export function prepareAssetFromBuffer(name: string, mimeType: string, buffer: B
   const safe = sanitizeAssetName(name);
   const expected = mimeForName(safe);
   if (!expected) {
-    throw new Error(`unsupported image type "${path.extname(safe) || safe}" (png, jpg, gif, webp, svg, ico, avif)`);
+    throw new Error(`unsupported asset type "${path.extname(safe) || safe}" (${ASSET_KINDS})`);
   }
-  if (typeof mimeType !== "string" || !mimeType.startsWith("image/")) {
+  if (typeof mimeType !== "string" || !isAssetMime(mimeType)) {
     throw new Error(`invalid asset mime type: ${mimeType}`);
   }
   if (buffer.length <= 0) {
@@ -210,7 +219,7 @@ export function normalizeTabAssets(value: unknown): TabAsset[] {
     if (typeof record.name !== "string" || !isSafeAssetName(record.name)) {
       return [];
     }
-    if (typeof record.mimeType !== "string" || !record.mimeType.startsWith("image/")) {
+    if (typeof record.mimeType !== "string" || !isAssetMime(record.mimeType)) {
       return [];
     }
     if (typeof record.bytes !== "number" || !Number.isFinite(record.bytes) || record.bytes < 0) {

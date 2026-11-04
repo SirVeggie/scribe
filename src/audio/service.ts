@@ -2,7 +2,7 @@ import type { OpenAISource } from "../agent/openaiSources.js";
 import { randomUUID } from "node:crypto";
 import { openAiEngine } from "./engine.js";
 import { fileStore, normalizeSettings, type AudioStore } from "./settings.js";
-import type { AudioResult, SttEngine, SttSource, AudioSettings } from "./types.js";
+import type { AudioResult, SttEngine, SttSource, AudioSettings, AudioOutput } from "./types.js";
 import type { StreamTarget } from "./stream.js";
 
 const wavKey = (source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
@@ -14,8 +14,10 @@ export class AudioService {
   private timeoutMs: number;
   /** Sources that rejected compressed audio this run; the shell sends them WAV. Not saved, so a fixed server is found again after a restart. */
   private wavOnly = new Set<string>();
-  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; timeoutMs?: number }) {
-    this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine;
+  /** Open windows get sound settings over /ws, so a change in one applies in all. */
+  private onOutput?: (output: AudioOutput) => void;
+  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void }) {
+    this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine; this.onOutput = options.onOutput;
     this.sources = options.sources; this.timeoutMs = options.timeoutMs ?? 60_000;
   }
   view() {
@@ -25,7 +27,7 @@ export class AudioService {
     const profiles = this.profiles(settings).map(({ custom, ...profile }) => ({ ...profile,
       ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) }));
     return { stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },
-      input: settings.input, profiles, defaultSource: settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined),
+      input: settings.input, output: settings.output, profiles, defaultSource: settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined),
       sources, available: Boolean(source), streaming: source ? (selected as Partial<SttSource>).streaming : undefined, wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
   }
   private profiles(settings: AudioSettings): SttSource[] {
@@ -73,10 +75,11 @@ export class AudioService {
     return { id: "custom", name: "Custom", ...stt.custom, models: [] };
   }
   update(value: unknown) {
-    const body = value as { stt?: { custom?: { baseUrl?: string; apiKey?: string } }; input?: object } | null;
+    const body = value as { stt?: { custom?: { baseUrl?: string; apiKey?: string } }; input?: object; output?: Partial<AudioOutput> } | null;
     const old = this.store.read();
     const next = normalizeSettings({ stt: { ...old.stt, ...body?.stt,
       ...(body?.stt?.custom ? { custom: { ...old.stt.custom, ...body.stt.custom } } : {}) }, input: { ...old.input, ...body?.input },
+      output: { ...old.output, ...body?.output, cues: { ...old.output.cues, ...body?.output?.cues } },
       sources: old.sources, defaultSource: (body as Partial<AudioSettings>)?.defaultSource ?? old.defaultSource });
     if (next.defaultSource && !this.profiles(next).some(s => s.id === next.defaultSource)) throw new Error("Choose an existing speech-to-text source.");
     if (next.stt.custom?.baseUrl) {
@@ -86,7 +89,9 @@ export class AudioService {
       next.stt.custom.baseUrl = url.toString().replace(/\/+$/, "");
     }
     if (next.stt.source && next.stt.source !== "__custom__" && !this.sources().some(s => s.id === next.stt.source)) throw new Error("Choose an existing OpenAI source.");
-    this.store.write(next); return this.view();
+    this.store.write(next);
+    if (body?.output) this.onOutput?.(next.output);
+    return this.view();
   }
   /** Where a live recording goes (#832): the default source's own stream, or a sliding window over its upload endpoint. */
   streamTarget(): StreamTarget | AudioResult {

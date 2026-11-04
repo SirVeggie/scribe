@@ -422,7 +422,7 @@ export async function startMcp(): Promise<void> {
       assets: z
         .array(z.union([z.string(), z.object({ path: z.string(), name: z.string().optional().describe("Name for asset:name. Default: the file's basename.") })]))
         .optional()
-        .describe("Local image files to attach; reference them in the HTML as asset:name. Re-showing without assets keeps the attached ones."),
+        .describe("Local image or sound (mp3, ogg, wav, m4a) files to attach; reference them in the HTML as asset:name. Re-showing without assets keeps the attached ones."),
       background: z
         .boolean()
         .optional()

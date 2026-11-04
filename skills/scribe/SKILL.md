@@ -13,7 +13,7 @@ This file covers building and changing pages. Read a file beside it when the tas
 |---|---|
 | `PAGE-SCRIPTS.md` | The page has its own script: `window.scribe` state, `bind`, `onChange`, signals and `page_wait`, page assets, `scribe.preview`, `scribe.reply` in your own markup. |
 | `PAGE-AGENT.md` | The page starts or drives agent chats (`scribe.agent`): prompts, model pickers, usage limits, agent runs. |
-| `PAGE-SERVICES.md` | The page uses the microphone (`scribe.audio`), the classifier (`scribe.ml`) or files in a folder (`scribe.files`). |
+| `PAGE-SERVICES.md` | The page plays sounds or uses the microphone (`scribe.audio`), the classifier (`scribe.ml`) or files in a folder (`scribe.files`). |
 | `LARGE-PAGES.md` | A page over 24 KB: reading a window, grep, line edits, building in parts, checking out to a file. |
 | `TESTING.md` | Screenshots of a design for the current project (`page_screenshot`), or clicking through a page in your browser (`browser_*`). |
 | `TEMPLATES.md` | Only when the user asked to create or change a Scribe template. |
@@ -210,6 +210,7 @@ page_show({ key: "mockup", title: "Mockup", html: `<img src="asset:hero.png" alt
 
 - `assets` may be plain paths (name = basename). Use the names the result lists.
 - No `file://`, workspace paths or base64 data URIs. png, jpg, gif, webp, svg, ico, avif; 8 MB each, 16 per page, 32 MB total.
+- Sounds attach the same way (mp3, ogg, wav, m4a): `<audio src="asset:ding.mp3">`, or play one from a script with `scribe.audio.play("asset:ding.mp3")` (`PAGE-SERVICES.md`).
 - Re-showing without `assets` keeps attached images; the same name replaces one.
 - A file in a page's data (an image on a card or todo): `assets` on `page_update` (Page assets in `PAGE-SCRIPTS.md`).
 

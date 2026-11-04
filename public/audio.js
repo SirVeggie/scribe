@@ -8,6 +8,7 @@
     const res = await fetch("/api/audio/settings");
     if (!res.ok) throw new Error("Cannot read Audio settings. Restart Scribe after updating.");
     view = await res.json();
+    setOutput(view.output);
     document.querySelectorAll(".ag-mic").forEach(button => {
       button.hidden = !view.available && (!button.dataset.state || button.dataset.state === "idle");
     });
@@ -248,8 +249,122 @@
     const right = after && !/^[\s,.;:!?)}\]]/.test(after) && !/[\s([{]$/.test(text) ? " " : "";
     return { value: before + left + text + right + after, caret: before.length + left.length + text.length + right.length };
   }
+  /* ---------- output: one AudioContext, master volume, channels (#564) ---------- */
+  // audio-cues.js loads first in the shell; cues stay silent without it.
+  const rules = () => window.scribeAudioCues;
+  const CHANNELS = ["cue", "page", "speech"];
+  let output = { sounds: false, volume: 0.6, cues: {} };
+  let ctx = null, master = null;
+  const channels = {}, decoded = new Map();
+  function context() {
+    if (ctx) return ctx;
+    const Context = window.AudioContext || window.webkitAudioContext;
+    if (!Context) return null;
+    try {
+      ctx = new Context(); master = ctx.createGain(); master.connect(ctx.destination);
+      for (const name of CHANNELS) { channels[name] = ctx.createGain(); channels[name].connect(master); }
+      master.gain.value = output.volume;
+    } catch { ctx = null; }
+    return ctx;
+  }
+  /** Browsers start sound only after a gesture. Without one the context stays suspended and play() drops the sound. */
+  async function running() {
+    const audio = context();
+    if (!audio) return false;
+    if (audio.state === "running") return true;
+    // Where autoplay is allowed (the desktop app), resume() succeeds without a gesture.
+    await Promise.race([audio.resume().catch(() => {}), new Promise(resolve => setTimeout(resolve, 250))]);
+    return audio.state === "running";
+  }
+  // Cues have no gesture of their own, so the first gesture in the shell starts the context for them.
+  // Page sounds come with the page's own click, which also activates the shell.
+  const GESTURES = ["pointerdown", "pointerup", "keydown", "touchend"];
+  const unlock = () => {
+    if (!output.sounds) return;
+    const audio = context();
+    audio?.resume().then(() => {
+      if (audio.state === "running") GESTURES.forEach(type => window.removeEventListener(type, unlock, true));
+    }).catch(() => {});
+  };
+  GESTURES.forEach(type => window.addEventListener(type, unlock, true));
+  function setOutput(next) {
+    if (!next || typeof next !== "object") return;
+    output = { sounds: next.sounds === true, volume: Number.isFinite(next.volume) ? Math.min(1, Math.max(0, next.volume)) : 0.6, cues: { ...next.cues } };
+    if (master) master.gain.value = output.volume;
+  }
+  async function bufferFor(src) {
+    if (typeof src === "string" && decoded.has(src)) return decoded.get(src);
+    const bytes = src instanceof ArrayBuffer ? src.slice(0) : src instanceof Blob ? await src.arrayBuffer()
+      : await (await fetch(src)).arrayBuffer();
+    const buffer = await ctx.decodeAudioData(bytes);
+    // Cues come back often; page sounds are usually one-off.
+    if (typeof src === "string" && src.startsWith("/sounds/")) decoded.set(src, buffer);
+    return buffer;
+  }
+  /**
+   * Play a sound through the mixer. src: a URL, a Blob or an ArrayBuffer. Returns at once with
+   * { stop(), ended }; ended resolves "ended", "stopped" or "failed" (dropped before a gesture counts as failed).
+   */
+  function play(src, { volume = 1, channel = "page" } = {}) {
+    let node = null, stopped = false, done;
+    const ended = new Promise(resolve => { done = resolve; });
+    const finish = reason => { if (done) { done(reason); done = null; } };
+    (async () => {
+      try {
+        if (!await running() || stopped) return finish(stopped ? "stopped" : "failed");
+        const buffer = await bufferFor(src);
+        if (stopped) return finish("stopped");
+        const gain = ctx.createGain(); gain.gain.value = Math.min(1, Math.max(0, Number(volume) || 0));
+        node = ctx.createBufferSource(); node.buffer = buffer;
+        node.connect(gain).connect(channels[CHANNELS.includes(channel) ? channel : "page"]);
+        node.onended = () => { gain.disconnect(); finish(stopped ? "stopped" : "ended"); };
+        node.start();
+      } catch { finish("failed"); }
+    })();
+    return { ended, stop() { stopped = true; try { node?.stop(); } catch { /* not started */ } finish("stopped"); } };
+  }
+  /* With several windows open, one plays a cue: the focused one, else the one open longest. */
+  const self = { id: Math.random().toString(36).slice(2), since: Date.now(), focused: false };
+  const peers = new Map();
+  const bus = "BroadcastChannel" in window ? new BroadcastChannel("scribe-audio") : null;
+  function announce() {
+    self.focused = !document.hidden && document.hasFocus();
+    bus?.postMessage({ id: self.id, since: self.since, focused: self.focused });
+  }
+  if (bus) {
+    bus.onmessage = event => {
+      const msg = event.data;
+      if (!msg || typeof msg.id !== "string" || msg.id === self.id) return;
+      if (msg.gone) peers.delete(msg.id);
+      else peers.set(msg.id, { id: msg.id, since: Number(msg.since) || 0, focused: msg.focused === true, at: Date.now() });
+      if (msg.hello) announce();
+    };
+    bus.postMessage({ id: self.id, since: self.since, focused: false, hello: true });
+    setInterval(announce, 2000);
+    ["focus", "blur"].forEach(type => window.addEventListener(type, announce));
+    document.addEventListener("visibilitychange", announce);
+    window.addEventListener("pagehide", () => bus.postMessage({ id: self.id, gone: true }));
+  }
+  let merge = null;
+  /** Play a named cue if the settings allow it and this is the window that plays. Returns whether it tried. */
+  function cue(name) {
+    const cues = rules();
+    if (!cues) return false;
+    self.focused = !document.hidden && document.hasFocus();
+    merge ||= cues.merger();
+    if (!cues.cueEnabled(output, name) || !cues.elected(self, [...peers.values()], Date.now()) || !merge.admit(Date.now())) return false;
+    play(`/sounds/${name}.wav`, { channel: "cue" });
+    return true;
+  }
+  /** A thread finished (kind "finish") or started waiting on the user ("ask"); called by the toast manager. */
+  function threadCue(t, kind, onScreen) {
+    const name = rules()?.cueFor(t, kind, { watching: onScreen && !document.hidden && document.hasFocus() });
+    return name ? cue(name) : false;
+  }
+
   window.scribeAudio = { capture, transcribe, dictate, stream, resampler, available, refresh, settings: () => view,
-    device, setDevice, insertAtCaret, cancel: owner => { if (!owner || active?.owner === owner) active?.cancel(); } };
+    device, setDevice, insertAtCaret, cancel: owner => { if (!owner || active?.owner === owner) active?.cancel(); },
+    play, cue, threadCue, setOutput, output: () => output };
   window.addEventListener("pagehide", () => active?.cancel());
   void refresh().catch(() => {});
 })();

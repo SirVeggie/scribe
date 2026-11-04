@@ -1916,7 +1916,40 @@ ${POINTER_DRAG_JS}
       return { ok: false, error: "unavailable" };
     }
   }
+  var audioPlaySeq = 0;
+  /** A sound through the shell's mixer: the user's volume applies. src: "asset:name", a data: or same-origin URL, or a Blob. */
+  function playAudio(src, opts) {
+    opts = opts || {};
+    var playId = client + ":play:" + (++audioPlaySeq), stopped = false, started = false;
+    function load() {
+      if (src instanceof Blob) return src.arrayBuffer().then(function (buffer) { return { buffer: buffer, type: src.type }; });
+      var url = String(src || "");
+      if (url.indexOf("asset:") === 0) url = "/view/" + encodeURIComponent(tabId) + "/asset/" + encodeURIComponent(url.slice(6));
+      if (!/^(data:audio\\/|blob:|\\/)/i.test(url) || url.indexOf("//") === 0) return Promise.reject(new Error("invalid_audio"));
+      return fetch(url).then(function (res) {
+        if (!res.ok) throw new Error("not_found");
+        return res.arrayBuffer().then(function (buffer) { return { buffer: buffer, type: res.headers.get("Content-Type") || "" }; });
+      });
+    }
+    var ended = load().then(function (data) {
+      if (stopped) return { ok: true, reason: "stopped" };
+      if (!data.buffer.byteLength) return { ok: false, error: "invalid_audio" };
+      if (data.buffer.byteLength > 8 * 1024 * 1024) return { ok: false, error: "too_large" };
+      started = true;
+      // The answer comes when the sound ends (or is stopped), so the wait is long.
+      return askBoard({ type: "scribe-audio", op: "play", playId: playId, buffer: data.buffer, mimeType: data.type, volume: opts.volume }, 3600000);
+    }, function (err) { return { ok: false, error: err.message === "not_found" ? "not_found" : "invalid_audio" }; });
+    return {
+      ended: ended,
+      stop: function () {
+        stopped = true;
+        if (started) askBoard({ type: "scribe-audio", op: "stopPlay", playId: playId }, 30000);
+        return ended;
+      }
+    };
+  }
   var audio = {
+    play: function (src, opts) { return playAudio(src, opts); },
     listen: function (opts) { return startAudio("listen", opts); },
     record: function (opts) { return startAudio("record", opts); },
     stream: function (opts) { return streamAudio(opts); },

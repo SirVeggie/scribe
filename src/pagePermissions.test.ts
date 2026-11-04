@@ -19,6 +19,7 @@ test("permissions without a grant are at their defaults", () => {
     [
       ["audio.microphone", "ask"],
       ["audio.microphoneStream", "ask"],
+      ["audio.play", "allow"],
       ["audio.transcribe", "ask"],
       ["agent.chat", "allow"],
       ["agent.unattended", "ask"],

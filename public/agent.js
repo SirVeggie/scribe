@@ -10275,6 +10275,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           live.add(key);
           if (prev && prev.finishedAt !== t.finishedAt && !threadOnScreen(t.id)) this.add(key, t, "finish");
         }
+        // Sounds (#564) also play for a thread on screen in an unfocused window; audio-cues.js has the rules.
+        if (prev && ask && prev.ask !== ask) window.scribeAudio?.threadCue(t, "ask", threadOnScreen(t.id));
+        else if (prev && t.status === "idle" && t.finishedAt && prev.finishedAt !== t.finishedAt) window.scribeAudio?.threadCue(t, "finish", threadOnScreen(t.id));
       }
       for (const id of this.seen.keys()) if (!S.threads.has(id)) this.seen.delete(id);
       // Answered, opened or gone: drop its toast. A snooze ends with its request.

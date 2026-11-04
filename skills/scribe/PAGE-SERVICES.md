@@ -1,4 +1,4 @@
-# Page services: microphone, classifier, files
+# Page services: sounds, microphone, classifier, files
 
 Builds on `SKILL.md` in this folder (showing and patching pages, theme, page kit): read that first if you have not.
 
@@ -61,6 +61,23 @@ A failed start returns that object instead of a session. Captures cap at five mi
 shell recording marker and Stop recording button. Hiding, closing or reloading the page cancels
 its session; the shell Stop button and time cap finish the clip. Call `stop()` to collect the
 result even when capture ended automatically. Handle failure before reading the transcript or clip.
+
+## Playing sounds: scribe.audio.play
+
+`scribe.audio.play(src, { volume })` plays a sound through Scribe's mixer, so the user's volume in
+Settings → Audio applies. `src` is `"asset:<name>"` (a sound attached with `page_show`), a
+`data:audio/…` or same-origin URL (such as a page asset's `/blob/…` URL), or a Blob; up to 8 MB.
+`volume` is 0..1 (default 1). It needs `audio.play` ("Play sounds", allowed by default). Without a
+click it plays only while the page is visible; closing or reloading the page stops its sounds.
+
+```js
+const sound = scribe.audio.play("asset:ding.mp3", { volume: 0.5 });
+// From a Stop button: sound.stop();
+const end = await sound.ended; // { ok: true, reason: "ended" | "stopped" } or { ok: false, error }
+```
+
+`error` is `hidden`, `denied`, `invalid_audio`, `not_found`, `too_large`, `busy` (8 sounds at once)
+or `unavailable` (it could not be decoded, or the browser has not allowed sound yet).
 
 ## Asking the classifier: scribe.ml
 

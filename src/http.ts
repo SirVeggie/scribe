@@ -478,7 +478,7 @@ export async function startHttp(): Promise<http.Server> {
   peers.on("paired", (result) => broadcast({ type: "device_paired", ...result }));
   askSource.refresh();
   app.use(devicesApi);
-  const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [] });
+  const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [], onOutput: output => broadcast({ type: "audio_output", output }) });
   const pageAudio = new PageAudio(id => store.pagePermissions(id));
   const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
   app.use("/api/audio", audioRouter(audioService, pageAudio));
