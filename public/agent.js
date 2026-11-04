@@ -13010,7 +13010,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   const FOLDER_MODES = new Set(["code"]);
   /** board.agent.wait calls by thread id. */
   const pageWaiters = new Map();
-  /** When a page last sent to each thread: until the thread has been active since, it is not done with it. */
+  /** When a page last sent to each thread, by the daemon's clock: until the thread has been active since, it is not done with it. */
   const pageSentAt = new Map();
 
   function ownedBy(tab, t) {
@@ -13648,11 +13648,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         S.details.set(created.id, { items: [], byId: new Map(), turns: new Map() });
         if (data.run) {
           // Handed over before its first message, so Scribe sees its first turn through.
-          const { thread: watched } = await api("POST", `/threads/${encodeURIComponent(created.id)}/run`, { ...pageRunInput(data.run), after: Date.now() });
+          const { thread: watched } = await api("POST", `/threads/${encodeURIComponent(created.id)}/run`, pageRunInput(data.run));
           if (watched) S.threads.set(created.id, watched);
         }
         pageSentAt.set(created.id, Date.now());
         const sent = await api("POST", `/threads/${encodeURIComponent(created.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images), ...(data.cardContext != null ? { cardContext: data.cardContext } : {}) });
+        if (sent.at) pageSentAt.set(created.id, sent.at);
         showPageThread(created.id, data.show, { reveal: activated });
         return { ok: true, threadId: created.id, queued: Boolean(sent.queued) };
       }
@@ -13674,6 +13675,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         await ensureDetail(target.id);
         pageSentAt.set(target.id, Date.now());
         const sent = await api("POST", `/threads/${encodeURIComponent(target.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images) });
+        if (sent.at) pageSentAt.set(target.id, sent.at);
         showPageThread(target.id, data.show, { reveal: activated });
         return { ok: true, queued: Boolean(sent.queued), ...(target.id !== thread.id ? { threadId: target.id, forked: true } : {}) };
       }
@@ -13706,7 +13708,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           board: tab.title || "Kanban board",
           boardKey: tab.key || "",
         });
-        if (sent.delivered && own) pageSentAt.set(thread.id, Date.now());
+        if (sent.delivered && own) pageSentAt.set(thread.id, sent.at || Date.now());
         return { ok: true, delivered: sent.delivered || null };
       }
       case "delete": {

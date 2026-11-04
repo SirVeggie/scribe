@@ -88,6 +88,16 @@ test("after: 0 takes the thread as it is", async () => {
   assert.equal(runs.get("th")!.outcome?.kind, "done");
 });
 
+test("an after ahead of the daemon's clock is clamped to now (#991)", async () => {
+  const { state, runs, turn } = harness();
+  runs.register("th", "page1", { after: state.now + 90 });
+  assert.equal(runs.get("th")!.after, state.now);
+  state.now += 50;
+  turn({});
+  await runs.check("th");
+  assert.equal(runs.get("th")!.outcome?.kind, "done");
+});
+
 test("nothing happens while the thread is busy", async () => {
   const { state, runs, turn } = harness();
   runs.register("th", "page1", {});

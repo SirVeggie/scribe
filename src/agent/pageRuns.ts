@@ -169,14 +169,15 @@ export class PageRuns {
   /**
    * Hand a page's thread to Scribe. A new run replaces an earlier one on the same thread. after
    * defaults to now: hand it over before sending the message that starts its turn. after: 0 takes
-   * the thread as it is, so an idle thread whose last turn is done is merged at once.
+   * the thread as it is, so an idle thread whose last turn is done is merged at once. A later
+   * after is clamped to now: it may come from a window whose clock reads ahead of the daemon's.
    */
   register(threadId: string, pageId: string, input: RunInput): PageRun {
     const now = this.deps.now();
     const prompt = typeof input.resumePrompt === "string" ? input.resumePrompt.trim().slice(0, 20000) : "";
     const tag = typeof input.tag === "string" ? input.tag.trim().slice(0, 200) : "";
     const data = cleanData(input.data);
-    const after = typeof input.after === "number" && Number.isFinite(input.after) ? Math.max(0, input.after) : now;
+    const after = typeof input.after === "number" && Number.isFinite(input.after) ? Math.max(0, Math.min(input.after, now)) : now;
     const run: PageRun = {
       threadId,
       pageId,
