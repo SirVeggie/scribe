@@ -940,7 +940,10 @@ class ClaudeSession implements ProviderSession {
       perTaskStopAffordance: true,
       mcpServers: {
         ...Object.fromEntries(userServers.map((s) => [s.name, claudeServerConfig(s) as McpServerConfig])),
-        [BOARD_SERVER]: { type: "stdio", command, args, env },
+        // alwaysLoad: Scribe's tools stay in the prompt whatever Claude Code's tool-search threshold
+        // decides, except the ones the server marks as deferred (mcp.ts DEFERRED_TOOLS), which load
+        // through ToolSearch when the agent needs them.
+        [BOARD_SERVER]: { type: "stdio", command, args, env, alwaysLoad: true },
       },
       // The host resolves Scribe's list and the Code-mode Keeper fallback. Do not load other servers
       // from ~/.claude.json, .mcp.json or plugins alongside them.
@@ -996,8 +999,9 @@ class ClaudeSession implements ProviderSession {
     if (board) {
       // Read-only and Board: with a workspace, they read and search files there (#718), with no shell (#733).
       const reads = pagesReadsFiles(thread) ? PAGES_READ_TOOLS : [];
-      options.tools = [...reads, ...webTools, "Skill", "TodoWrite"];
-      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...reads, ...webTools, "Skill", "TodoWrite"];
+      // ToolSearch loads the schemas of Scribe's deferred tools (mcp.ts DEFERRED_TOOLS); without it every one rides along.
+      options.tools = [...reads, ...webTools, "Skill", "TodoWrite", "ToolSearch"];
+      options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers, ...reads, ...webTools, "Skill", "TodoWrite", "ToolSearch"];
     } else {
       options.tools = { type: "preset", preset: "claude_code" };
       options.allowedTools = [`mcp__${BOARD_SERVER}__*`, ...autoServers];
@@ -1489,7 +1493,7 @@ class ClaudeSession implements ProviderSession {
         return { behavior: "deny", message: "The question was cancelled." };
       }
     }
-    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
+    if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", "ToolSearch", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
       return { behavior: "deny", message: pagesReadsFiles(this.thread) ? `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools, file reads and web search are available.` : `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools and web search are available.` };
     }
     const described = describeTool(name, input, this.thread.cwd);

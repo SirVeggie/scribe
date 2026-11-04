@@ -265,6 +265,44 @@ function outsideOf(outside: TabMeta[] | undefined): { outside?: Array<{ id: stri
   };
 }
 
+/**
+ * Tools few turns need (#tool-size): in a Claude chat they are listed by name only and their schemas
+ * load through tool search when the agent asks, instead of riding along on every model call. Each
+ * is a task the user asks for by name or a narrow follow-up (templates, plugins, the browser,
+ * helpers, settings, the harness, other threads, screenshots, pin, access asks). The rest of the
+ * server stays loaded: claude.ts sets alwaysLoad on it, so Claude Code's own threshold never defers
+ * the page tools a chat uses all the time.
+ */
+export const DEFERRED_TOOLS = new Set([
+  "template_list", "template_get", "template_upsert", "template_delete", "template_open",
+  "plugin_list", "plugin_guide", "plugin_call", "plugin_state", "plugin_task", "plugin_logs",
+  "plugin_create", "plugin_read", "plugin_patch", "plugin_reload", "plugin_install",
+  "browser_open", "browser_act", "browser_snapshot", "browser_screenshot", "browser_eval",
+  "browser_console", "browser_network", "browser_viewport", "browser_tabs", "browser_control",
+  "agent_models", "agent_run",
+  "harness_docs", "harness_change",
+  "settings_find", "settings_show",
+  "thread_list", "thread_read", "thread_access", "thread_worktree",
+  "memory_list", "memory_delete",
+  "page_screenshot", "page_pin", "page_unpin", "page_access", "page_wait",
+  "device_list", "web_request", "widget_show", "scribe_docs",
+]);
+
+/**
+ * Mark DEFERRED_TOOLS for Claude Code's tool search (`_meta["anthropic/alwaysLoad"]: false`) in a
+ * Claude chat. Other providers ignore the flag, so they are left as they are. Call it before the
+ * tools are registered.
+ */
+export function deferTools(server: McpServer, env = process.env, deferred: ReadonlySet<string> = DEFERRED_TOOLS): void {
+  if (!env.SCRIBE_THREAD || env.SCRIBE_PROVIDER !== "claude") return;
+  const register = server.tool as (...args: unknown[]) => unknown;
+  (server as unknown as { tool: unknown }).tool = (...args: unknown[]) => {
+    const tool = register.apply(server, args) as { _meta?: Record<string, unknown> } | undefined;
+    if (tool && deferred.has(String(args[0]))) tool._meta = { ...tool._meta, "anthropic/alwaysLoad": false };
+    return tool;
+  };
+}
+
 /** Tools that create or change pages and templates: left out on the Read-only rung. page_action stays, and the daemon refuses an action that would change the page. */
 const PAGE_WRITE_TOOLS = new Set(["page_intent", "page_show", "page_patch", "page_update", "template_upsert", "template_delete", "template_open", "plugin_create", "plugin_patch", "plugin_reload", "plugin_install"]);
 
@@ -327,6 +365,7 @@ export async function startMcp(): Promise<void> {
   // Registered first, so it wraps inside the gate: a denied call returns no result to scan.
   scanTools(server);
   gateTools(server);
+  deferTools(server);
   registerCodexFileTools(server);
   registerPluginTools(pageTool);
   // Claims on cards show who holds them; the client's own name is the best label we get.
