@@ -195,3 +195,45 @@ test("a slow post-turn quota read cannot supersede a newer reading from another 
     session.dispose();
   } finally { host.dispose(); }
 });
+
+test("an added account's reading never lands on the default meter, also from a spare's draft or after a restart (#987)", () => {
+  const accounts = { accounts: [{ id: "acc_1", dir: path.join(dir, "acc_1"), email: "two@example.invalid", addedAt: 0 }], use: "distribute", picked: {} };
+  const now = Date.now();
+  const reading = (email: string, percent: number, at: number) => claudePlanSnapshot({ rate_limits: {
+    five_hour: { utilization: percent, resets_at: now + 3600000 } } }, { tokenSource: "oauth", email }, at);
+  const quiet = (internal: any) => {
+    internal.fakes = {};
+    internal.claudePool.deps.offline = true;
+    for (const timer of internal.claudePool.timers.values()) clearTimeout(timer);
+    internal.claudePool.defaultEmailRead = { at: Infinity, email: "one@example.invalid" };
+  };
+  let host = new AgentHost(() => {}, async () => null);
+  let internal = host as any;
+  try {
+    host.db.setSetting("claudeAccounts", accounts);
+    internal.claudePool.state = structuredClone(accounts);
+    quiet(internal);
+    internal.planLimits = {};
+    internal.commitLimits("claude", reading("one@example.invalid", 90, now), false);
+    // A spare session warms up under its draft's id, which is no thread yet.
+    internal.ctx.claudeLimits("th_draft", reading("two@example.invalid", 20, now + 1), "acc_1");
+    // A chat that changed account still names the old one: its email tells.
+    const moved = host.createThread({ provider: "claude" }).id;
+    internal.ctx.claudeLimits(moved, reading("two@example.invalid", 25, now + 2));
+    // A reading of an account that is no longer signed in belongs to nobody.
+    internal.ctx.claudeLimits(moved, reading("gone@example.invalid", 5, now + 3));
+    assert.equal(internal.planLimits.claude.windows[0].utilization, 0.9);
+    assert.equal(internal.claudePool.limits.acc_1.windows[0].utilization, 0.25);
+    // What an older version saved: the added account's reading as the default's.
+    host.db.setSetting("limits", { claude: reading("two@example.invalid", 25, now + 2) });
+  } finally { host.dispose(); }
+
+  host = new AgentHost(() => {}, async () => null);
+  internal = host as any;
+  try {
+    quiet(internal);
+    // Earlier tests' default threads may fill it in again, never with the added account's reading.
+    assert.notEqual(internal.planLimits.claude?.billingSource?.email, "two@example.invalid", "a saved default meter with another account's email is dropped");
+    assert.equal(internal.claudePool.limits.acc_1.windows[0].utilization, 0.25);
+  } finally { host.dispose(); }
+});

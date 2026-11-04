@@ -192,7 +192,8 @@ export type SessionContext = {
   mcpServers?(thread: Thread): ResolvedMcpServer[];
   /** The provider reported plan usage (Claude's rate_limit_event), in its own shape. */
   limits?(provider: ProviderId, info: unknown): void;
-  claudeLimits?(threadId: string, limits: import("../types.js").PlanLimits): void;
+  /** account: the one the session signed in with (undefined for the default), which a spare's draft or a switched thread may not show. */
+  claudeLimits?(threadId: string, limits: import("../types.js").PlanLimits, account?: string): void;
   /** Environment a Claude session starts with for its account (#452): CLAUDE_CONFIG_DIR for an added one, else nothing. Read when a session starts. */
   claudeEnv?(thread: Thread): Record<string, string>;
   /**

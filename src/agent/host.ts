@@ -665,10 +665,11 @@ export class AgentHost {
       cursorHostShell: (threadId) => this.prefs().cursorHostShell && !this.unattended(threadId),
       limits: (provider, info) => this.recordLimits(provider, info),
       claudeEnv: (thread) => this.claudePool.env(thread.claudeAccount),
-      claudeLimits: (threadId, limits) => {
+      claudeLimits: (threadId, limits, session) => {
         if (this.closed) return;
-        const account = this.threads.get(threadId)?.claudeAccount;
-        if (account && account !== DEFAULT_ACCOUNT) {
+        const account = this.claudePool.owner(limits, session ?? this.threads.get(threadId)?.claudeAccount);
+        if (account === null) return;
+        if (account !== DEFAULT_ACCOUNT) {
           // An added account's reading (#452): its own meter, never the default account's.
           this.claudeThreadLimits.set(threadId, limits);
           this.db.setSetting("claudeThreadLimits", Object.fromEntries(this.claudeThreadLimits));
@@ -762,9 +763,15 @@ export class AgentHost {
       observed: (account, limits) => this.usageWindowStarts.observe(`claude:${account}`, limits),
       offline: Boolean(this.fakes),
     });
+    // An added account's reading once landed on the default meter (#987): drop it, the next read fills it in.
+    if (this.planLimits.claude && this.claudePool.owner(this.planLimits.claude, DEFAULT_ACCOUNT) !== DEFAULT_ACCOUNT) {
+      delete this.planLimits.claude;
+      this.db.setSetting("limits", this.planLimits);
+    }
     for (const [id, limits] of [...this.claudeThreadLimits].sort((a, b) => a[1].at - b[1].at)) {
-      const account = this.threads.get(id)?.claudeAccount;
-      if (!account || account === DEFAULT_ACCOUNT) this.recordClaudeLimits(limits);
+      const account = this.claudePool.owner(limits, this.threads.get(id)?.claudeAccount);
+      if (account === DEFAULT_ACCOUNT) this.recordClaudeLimits(limits);
+      else if (account) this.claudePool.record(account, limits);
     }
     if (!this.fakes) {
       this.usageWindowTimer = setInterval(() => void this.usageWindowStarts.tick(), 30_000);
@@ -1029,6 +1036,7 @@ export class AgentHost {
 
   /** Publish live query readings to the same persisted snapshot used by board and chat meters. */
   private recordClaudeLimits(next: PlanLimits): void {
+    if (this.claudePool.owner(next, DEFAULT_ACCOUNT) !== DEFAULT_ACCOUNT) return;
     const merged = mergeClaudeLimits(this.planLimits.claude, next);
     if (!merged) return;
     if (merged.fresh) this.usageWindowStarts.observe("claude", next);
@@ -1149,8 +1157,10 @@ export class AgentHost {
       if (this.closed) return;
       if (this.planLimits.claude !== beforeRead) return;
       const parsed = this.claudeUsageSnapshot(report);
-      if (parsed) this.usageWindowStarts.observe("claude", parsed);
-      if (parsed && (parsed.availability === "available" || beforeRead?.availability !== "available")) this.commitLimits("claude", applyExpiredWindows(parsed), false);
+      // Not the default's usage when the daemon signed in as an added account (CLAUDE_CONFIG_DIR inherited from a chat).
+      const own = this.claudePool.owner(parsed, DEFAULT_ACCOUNT) === DEFAULT_ACCOUNT;
+      if (own) this.usageWindowStarts.observe("claude", parsed);
+      if (own && (parsed.availability === "available" || beforeRead?.availability !== "available")) this.commitLimits("claude", applyExpiredWindows(parsed), false);
     } catch {
       if (this.closed) return;
       // Retain the observation (and its timestamp) when the background probe fails.

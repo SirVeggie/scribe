@@ -230,6 +230,29 @@ export class ClaudeAccountPool {
     this.deps.changed();
   }
 
+  /**
+   * Whose usage a reading is (#987): the account whose email it names, else the account its session
+   * ran on (undefined: the default). A spare session's draft, or a chat that changed account, may not
+   * name the account that read it; its email does. Null: an email no signed-in account has.
+   */
+  owner(limits: PlanLimits, account: string | undefined): string | null {
+    if (!this.multi()) return DEFAULT_ACCOUNT;
+    const email = limits.billingSource?.email?.toLowerCase();
+    const named = email ? this.state.accounts.find((a) => a.email?.toLowerCase() === email) : undefined;
+    if (named) return named.id;
+    const defaultEmail = email ? this.defaultEmail() : undefined;
+    if (email && defaultEmail) return defaultEmail === email ? DEFAULT_ACCOUNT : null;
+    return account && this.account(account) ? account : DEFAULT_ACCOUNT;
+  }
+
+  private defaultEmailRead = { at: 0, email: undefined as string | undefined };
+  /** The default login's email, read again at most every 10 s: rate limit events come often. */
+  private defaultEmail(): string | undefined {
+    const now = Date.now();
+    if (now - this.defaultEmailRead.at > 10_000) this.defaultEmailRead = { at: now, email: readAccountProfile(null).email?.toLowerCase() };
+    return this.defaultEmailRead.email;
+  }
+
   /** A turn on an added account reported usage. Older or empty readings are left out. */
   record(id: string, next: PlanLimits): void {
     if (!this.account(id)) return;

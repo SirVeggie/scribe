@@ -798,6 +798,8 @@ class ClaudeSession implements ProviderSession {
   private accounting = new ClaudeUsageDelta();
   private queryReady: Promise<void> = Promise.resolve();
   private queryLimits = claudePlanSnapshot(null, {});
+  /** The Claude account the running query signed in with (#987): a spare's draft is no thread yet, and a thread can change account. */
+  private queryAccount: string | undefined;
   private query: Query | null = null;
   private input: InputQueue | null = null;
   private abortController: AbortController | null = null;
@@ -1101,6 +1103,9 @@ class ClaudeSession implements ProviderSession {
     const sdk = await loadSdk();
     this.input = new InputQueue();
     this.abortController = new AbortController();
+    // Another account's readings must not carry over into this one's.
+    if (this.queryAccount !== this.thread.claudeAccount) this.queryLimits = claudePlanSnapshot(null, {});
+    this.queryAccount = this.thread.claudeAccount;
     const options = { ...this.buildOptions(), abortController: this.abortController };
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;
@@ -1114,7 +1119,7 @@ class ClaudeSession implements ProviderSession {
       if (this.query !== q) return;
       this.accounting.baseline(report);
       this.queryLimits = claudePlanSnapshot(report, source, requestedAt, this.queryLimits);
-      this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
+      this.ctx.claudeLimits?.(this.thread.id, this.queryLimits, this.queryAccount);
     })();
     await this.queryReady;
     if (this.query !== q) throw new Error("Claude query closed during initialization");
@@ -1550,7 +1555,7 @@ class ClaudeSession implements ProviderSession {
       const limits = planLimitsFromRateLimitInfo(m.rate_limit_info, Date.now(), this.queryLimits);
       if (limits) {
         this.queryLimits = { ...limits, source: "claude", availability: "available", billingSource: this.queryLimits.billingSource };
-        this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
+        this.ctx.claudeLimits?.(this.thread.id, this.queryLimits, this.queryAccount);
       }
       return;
     }
@@ -1621,7 +1626,7 @@ class ClaudeSession implements ProviderSession {
           const current = this.queryLimits;
           this.queryLimits = { ...claudePlanSnapshot(report, current.billingSource ?? {}, requestedAt, current),
             ...(current.overageAt ? { overage: current.overage, overageAt: current.overageAt } : {}) };
-          this.ctx.claudeLimits?.(this.thread.id, this.queryLimits);
+          this.ctx.claudeLimits?.(this.thread.id, this.queryLimits, this.queryAccount);
         });
         // A steer this turn took in, in case its lifecycle frame went missing.
         for (const id of Array.isArray(m.user_message_uuids) ? (m.user_message_uuids as string[]) : []) {
