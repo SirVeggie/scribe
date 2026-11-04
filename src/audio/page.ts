@@ -1,6 +1,6 @@
 import { checkPermission, type PermissionGrant } from "../pagePermissions.js";
 
-type Gate = { ok: true } | { ok: false; error: "denied" | "rate_limited"; permission?: string };
+type Gate = { ok: boolean; error?: "denied" | "rate_limited"; permission?: string };
 /** Per page: speech requests (one per sentence group) and characters read aloud. */
 export const SPEECH_LIMITS = { perMinute: 30, perHour: 300, charsPerHour: 100_000 };
 
