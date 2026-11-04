@@ -355,7 +355,13 @@ Built (#565): text-to-speech has its own list of sources in Settings → Audio (
 `audio-settings.json`: linked model source or custom URL and key, model (empty: the server's loaded
 one), voice, speed, and `stream`, which sends the non-standard `stream: true` so the server sends
 audio while it generates it). `tts.source` picks one, or `__browser__` for "This browser", whose own
-voice and speed are `tts.voice` / `tts.speed`. Both lists add and edit sources in a modal. Voices come
+voice and speed are `tts.voice` / `tts.speed`. Both lists add and edit sources in a modal that holds
+only where a source is (linked source or URL and key); the chosen source's model, voice, speed and
+streaming are rows under the list, and only the rows that source can use show (This browser: voice
+and speed; streaming only for a model the server lists with `streaming`). Model pickers read
+`GET …/models` (`POST /api/audio/models`, cached a minute): an audio server's list carries `default`,
+`loaded` and `streaming` (`sentence` or `native`, shown since native is usually more reliable), and a
+plain OpenAI list is cut down to the speech or transcription models. Voices come
 from the server's `GET …/audio/voices?model=` (`{ voices, default }`), cached for 10 minutes per URL
 and model because asking can load that model; servers without the list get OpenAI's names. An early
 build kept a `speechModel` on speech-to-text sources; `normalizeSettings` moves those once. Shell code is

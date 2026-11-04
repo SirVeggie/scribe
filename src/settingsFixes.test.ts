@@ -46,6 +46,7 @@ async function audioSettingsPage(browser: Awaited<ReturnType<typeof launchChromi
     try {
       if (path === "/test") { seen.tested = body().sourceId; return route.fulfill({ json: { ok: true, text: "Words" } }); }
       if (path === "/voices") return route.fulfill({ json: await service.voices(body()) });
+      if (path === "/models") return route.fulfill({ json: await service.models(body()) });
       const [, kind, id] = path.split("/").map(decodeURIComponent);
       let view = service.view();
       if (kind === "sources") view = method === "DELETE" ? service.removeSource(id) : service.saveSource(body(), id);
@@ -74,7 +75,10 @@ test("speech settings add, edit, select, test and remove multiple sources in a m
   const browser = await launchChromium({ headless: true, args: [], purpose: "Custom speech settings test" });
   try {
     const linked = { id: "linked", name: "Model API", baseUrl: "https://models.invalid/v1", apiKey: "model-secret", models: [] };
-    const service = new AudioService({ sources: () => [linked], store: memoryStore() });
+    // Only the linked source answers GET /models; custom URLs fall back to a text box.
+    const service = new AudioService({ sources: () => [linked], store: memoryStore(),
+      listModels: async source => source.baseUrl === linked.baseUrl ? { ok: true, flagged: true, models: [{ id: "moonshine-medium", default: true }, { id: "speech-model" }] }
+        : { ok: false, error: "engine", message: "no list" } });
     const { page, seen } = await audioSettingsPage(browser, service);
     const modal = page.locator(".audio-stt-editor");
     const add = page.getByRole("button", { name: "Add speech-to-text source" });
@@ -113,6 +117,10 @@ test("speech settings add, edit, select, test and remove multiple sources in a m
     assert.ok(!JSON.stringify(service.view()).includes("model-secret"));
     await page.evaluate(() => (window as any).scribeAudioSettings.refresh());
     await page.locator(".ml-source").filter({ hasText: "Linked" }).getByRole("button", { name: "Edit", exact: true }).click();
+    // The linked source lists its models; the saved one is chosen.
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#audio-model-pick")?.value === "speech-model"
+      && !document.querySelector("#audio-model-pick")!.closest(".ag-field")!.hasAttribute("hidden"));
+    assert.deepEqual(await page.locator("#audio-model-pick option").allTextContents(), ["moonshine-medium (default)", "speech-model"]);
     assert.equal(await page.locator("#audio-url").inputValue(), linked.baseUrl);
     assert.equal(await page.locator("#audio-url").isEditable(), false);
     assert.equal(await page.locator("#audio-key").isVisible(), false);
@@ -133,56 +141,85 @@ test("speech settings add, edit, select, test and remove multiple sources in a m
   } finally { await browser.close(); }
 });
 
-test("text-to-speech has its own source list: add with the server's voices, choose, browser voice, off, test and remove", async () => {
+test("text-to-speech: own source list, then model, voice, speed and streaming for the chosen source from the server's lists", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Text-to-speech settings test" });
   try {
     const linked = { id: "linked", name: "Model API", baseUrl: "https://models.invalid/v1", apiKey: "model-secret", models: [] };
     const asked: (string | undefined)[] = [];
-    const service = new AudioService({ sources: () => [linked], store: memoryStore(), tts: {
-      speak: async () => ({ ok: false, error: "engine", message: "unused" }),
-      voices: async ({ model }) => { asked.push(model); return { ok: true, voices: [{ id: "af_heart" }, { id: "bm_george" }], default: "af_heart", listed: true }; } } });
+    const service = new AudioService({ sources: () => [linked], store: memoryStore(),
+      listModels: async () => ({ ok: true, flagged: true, models: [{ id: "kokoro", default: true, loaded: true, streaming: "sentence" },
+        { id: "chatterbox-nano", streaming: "native" }, { id: "plain" }] }),
+      tts: { speak: async () => ({ ok: false, error: "engine", message: "unused" }),
+        voices: async ({ model }) => { asked.push(model); return { ok: true, voices: [{ id: "af_heart" }, { id: model === "chatterbox-nano" ? "narrator" : "bm_george" }], default: "af_heart", listed: true }; } } });
     service.saveSource({ name: "Transcribe only", source: linked.id, model: "whisper-1" });
     const { page, seen } = await audioSettingsPage(browser, service);
     const tts = page.locator(".audio-settings").nth(1), modal = page.locator(".audio-tts-editor");
+    const visible = (id: string) => page.locator(id).evaluate(el => !(el.closest(".setting-row") as HTMLElement).hidden);
+    const settings = async () => (await (await page.evaluate(() => fetch("/api/audio/settings").then(r => r.json()))));
     assert.equal(await tts.locator(".ml-source").count(), 2, "Off and This browser; speech-to-text sources are not listed");
     assert.ok(await tts.getByRole("radio", { name: "Turn text-to-speech off" }).isChecked());
+    assert.equal(await visible("#audio-tts-speed"), false, "Off has nothing to set");
+
+    // The editor only holds where the source is.
     await page.getByRole("button", { name: "Add text-to-speech source" }).click();
+    assert.equal(await modal.locator("#audio-tts-voice, #audio-tts-model").count(), 0);
     await page.locator("#audio-tts-name").fill("Kokoro");
     await page.locator("#audio-tts-url").fill("https://audio.invalid/tts/v1");
     await page.locator("#audio-tts-key").fill("tts-key");
-    await page.locator("#audio-tts-model").fill("kokoro");
-    await page.locator("#audio-tts-model").blur();
-    await page.waitForFunction(() => document.querySelectorAll("#audio-tts-voice option").length === 3);
-    assert.equal(asked.at(-1), "kokoro");
-    await modal.getByRole("button", { name: "Voice", exact: true }).click();
-    await page.getByRole("option", { name: "bm_george", exact: true }).click();
-    await page.locator("#audio-tts-speed").fill("1.25");
-    await page.locator("#audio-tts-stream").check();
     await modal.getByRole("button", { name: "Save", exact: true }).click();
     await tts.getByRole("radio", { name: "Read aloud with Kokoro" }).waitFor();
-    const saved = service.view().ttsSources[0];
-    assert.deepEqual({ ...saved, id: "" }, { id: "", name: "Kokoro", source: "__custom__", model: "kokoro", voice: "bm_george", speed: 1.25, stream: true,
+    const id = service.view().ttsSources[0].id;
+    assert.ok(await tts.getByRole("radio", { name: "Read aloud with Kokoro" }).isChecked(), "the first source becomes the chosen one");
+
+    // Model list with the server's flags; the empty choice is the server default.
+    await page.waitForFunction(() => document.querySelectorAll("#audio-tts-model option").length === 4);
+    const labels = await page.locator("#audio-tts-model option").allTextContents();
+    assert.deepEqual(labels, ["Server default (kokoro)", "kokoro (default, loaded)", "chatterbox-nano (native streaming)", "plain"]);
+    assert.ok(await visible("#audio-tts-stream"), "the default model streams");
+    await page.waitForFunction(() => document.querySelectorAll("#audio-tts-voice option").length === 3);
+    await tts.getByRole("button", { name: "Voice", exact: true }).click();
+    await page.getByRole("option", { name: "bm_george", exact: true }).click();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).ttsSources[0].voice === "bm_george");
+    await tts.getByRole("switch", { name: "Stream while generating" }).click();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).ttsSources[0].stream === true);
+    await page.locator("#audio-tts-speed").fill("1.25");
+    await page.locator("#audio-tts-speed").blur();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).ttsSources[0].speed === 1.25);
+
+    // A model without streaming hides the switch and turns streaming off; another model lists its own voices.
+    await tts.getByRole("button", { name: "Model", exact: true }).click();
+    await page.getByRole("option", { name: "plain", exact: true }).click();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).ttsSources[0].model === "plain");
+    assert.equal((await settings()).ttsSources[0].stream, undefined);
+    await page.waitForFunction(() => document.querySelector("#audio-tts-stream")!.closest(".setting-row")!.hasAttribute("hidden"));
+    await tts.getByRole("button", { name: "Model", exact: true }).click();
+    await page.getByRole("option", { name: "chatterbox-nano (native streaming)", exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll("#audio-tts-voice option")].some(o => o.textContent === "narrator"));
+    assert.ok(asked.includes("chatterbox-nano"));
+    assert.match(await page.locator("#audio-tts-stream-label").getAttribute("data-tooltip") ?? "", /natively/);
+    assert.deepEqual({ ...service.view().ttsSources[0], id: "" }, { id: "", name: "Kokoro", source: "__custom__", model: "chatterbox-nano", voice: "bm_george", speed: 1.25,
       custom: { baseUrl: "https://audio.invalid/tts/v1", hasKey: true } });
-    assert.equal(service.view().tts.source, saved.id, "the first source becomes the chosen one");
-    assert.ok(await tts.getByRole("radio", { name: "Read aloud with Kokoro" }).isChecked());
+
     await tts.locator(".ml-source").filter({ hasText: "Kokoro" }).getByRole("button", { name: "Test", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "Playback blocked" }).waitFor();
-    assert.equal(await page.evaluate(() => (window as any).spoken), saved.id);
+    assert.equal(await page.evaluate(() => (window as any).spoken), id);
+
+    // This browser: voice and speed only.
     await tts.getByRole("radio", { name: "Read aloud with this browser" }).check();
-    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.source === "__browser__");
-    await tts.locator(".ml-source").filter({ hasText: "This browser" }).getByRole("button", { name: "Edit", exact: true }).click();
-    const browserModal = page.locator(".audio-tts-editor");
-    await page.waitForFunction(() => document.querySelectorAll("#audio-browser-voice option").length === 2);
-    await browserModal.getByRole("button", { name: "Voice", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#audio-tts-model")!.closest(".setting-row")!.hasAttribute("hidden")
+      && document.querySelectorAll("#audio-tts-voice option").length === 2);
+    assert.equal(await visible("#audio-tts-stream"), false);
+    await tts.getByRole("button", { name: "Voice", exact: true }).click();
     await page.getByRole("option", { name: "Kate (en-GB)", exact: true }).click();
-    await page.locator("#audio-browser-speed").fill("1.5");
-    await browserModal.getByRole("button", { name: "Save", exact: true }).click();
-    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.voice === "Kate");
+    await page.locator("#audio-tts-speed").fill("1.5");
+    await page.locator("#audio-tts-speed").blur();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.speed === 1.5);
     assert.deepEqual(service.view().tts, { source: "__browser__", voice: "Kate", speed: 1.5 });
+    assert.equal(service.view().ttsSources[0].voice, "bm_george", "the source keeps its own voice");
+
     await tts.getByRole("radio", { name: "Turn text-to-speech off" }).check();
-    await page.waitForFunction(async () => !(await (await fetch("/api/audio/settings")).json()).tts.source);
+    await page.waitForFunction(() => document.querySelector("#audio-tts-speed")!.closest(".setting-row")!.hasAttribute("hidden"));
     await tts.locator(".ml-source").filter({ hasText: "Kokoro" }).getByRole("button", { name: "Edit", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#audio-tts-voice")?.value === "bm_george");
     assert.equal(await page.locator("#audio-tts-key").getAttribute("placeholder"), "Saved (type to replace)");
     await modal.getByRole("button", { name: "Clear saved key" }).click();
     assert.equal(service.view().ttsSources[0].custom?.hasKey, true, "clearing waits for Save");

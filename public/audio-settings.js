@@ -183,21 +183,40 @@
   const addActions = document.createElement("div"); addActions.className = "settings-actions"; addActions.append(add); section.append(addActions);
   function editStt(profile) {
     const name = textInput("audio-name", profile?.name, "e.g. Whisper");
-    const endpoint = endpointFields("audio", profile);
+    let loadModels = () => {};
+    const endpoint = endpointFields("audio", profile, () => loadModels());
+    // The server's model list (GET …/models) when it answers; a text box otherwise.
     const model = textInput("audio-model", profile?.model || "whisper-1", "whisper-1");
+    const modelPick = selectInput("audio-model-pick", "Model", [], "");
+    const modelField = field("Model", model), modelPickField = field("Model", modelPick);
+    modelPickField.hidden = true;
+    const currentModel = () => (modelPickField.hidden ? model.value : modelPick.value).trim();
+    let modelSeq = 0;
+    loadModels = async () => {
+      const mine = ++modelSeq, draft = { kind: "stt", ...(profile ? { id: profile.id } : {}), ...endpoint.body() }, saved = currentModel();
+      if (draft.source === "__custom__" && !draft.custom?.baseUrl) return;
+      const result = await request("models", "POST", draft).catch(() => null);
+      if (mine !== modelSeq) return;
+      if (!result?.ok || !result.models.length) { model.value = saved; modelField.hidden = false; modelPickField.hidden = true; return; }
+      const options = result.models.map(m => [m.id, modelLabel(m)]);
+      if (saved && !options.some(([v]) => v === saved)) options.push([saved, saved + " (saved)"]);
+      setOptions(modelPick, options, saved || result.models.find(m => m.default)?.id || options[0][0]);
+      modelField.hidden = true; modelPickField.hidden = false;
+    };
     const language = textInput("audio-language", profile?.language, "Auto");
     const streaming = selectInput("audio-streaming", "Live transcription (experimental)",
       [["", "Off"], ["native", "Server stream (Moonshine)"], ["window", "Sliding window"]], profile?.streaming || "");
     const path = profile ? "sources/" + encodeURIComponent(profile.id) : "sources";
     editor({ cls: "audio-stt-editor", title: profile ? `Edit ${profile.name}` : "Add a speech-to-text source",
-      fields: [field("Name", name), ...endpoint.nodes, field("Model", model), field("Language", language),
+      fields: [field("Name", name), ...endpoint.nodes, modelField, modelPickField, field("Language", language),
         field("Live transcription (experimental)", streaming, "Shows text while you speak. Server stream needs a Moonshine-style /stream WebSocket; Sliding window works with any endpoint.")],
-      selects: [...endpoint.selects, streaming],
-      save: () => request(path, profile ? "PUT" : "POST", { name: name.value, ...endpoint.body(), model: model.value, language: language.value, streaming: streaming.value }),
+      selects: [...endpoint.selects, modelPick, streaming],
+      save: () => request(path, profile ? "PUT" : "POST", { name: name.value, ...endpoint.body(), model: currentModel(), language: language.value, streaming: streaming.value }),
       remove: profile && (async () => {
         if (!await confirmRemove("Remove “" + profile.name + "”?", "Remove")) return false;
         return change(path, "DELETE");
       }) });
+    void loadModels();
   }
   function renderSources() {
     list.replaceChildren();
@@ -311,15 +330,21 @@
   const ttsList = document.createElement("div"); ttsList.className = "ml-sources"; speech.append(ttsList);
   const addTts = button("Add source", () => editTts(null)); addTts.setAttribute("aria-label", "Add text-to-speech source");
   const ttsActions = document.createElement("div"); ttsActions.className = "settings-actions"; ttsActions.append(addTts);
+  speech.append(ttsActions);
+  // The chosen source's own settings, under the list so they are one click away. Rows the source cannot use stay hidden.
+  const ttsModel = row("Model", "tts-model", "select", speech);
+  const ttsModelText = row("Model", "tts-model-text", "text", speech); ttsModelText.placeholder = "Server default";
+  const ttsVoice = row("Voice", "tts-voice", "select", speech);
+  const ttsVoiceText = row("Voice", "tts-voice-text", "text", speech); ttsVoiceText.placeholder = "alloy";
+  const ttsSpeed = row("Speed", "tts-speed", "number", speech);
+  Object.assign(ttsSpeed, { min: "0.25", max: "4", step: "0.05" });
+  const ttsStream = row("Stream while generating", "tts-stream", "switch", speech);
+  const streamLabel = document.getElementById("audio-tts-stream-label") || ttsStream.closest(".setting-row").querySelector("label");
+  const lineOf = input => input.closest(".setting-row");
   const speechStatus = document.createElement("p"); speechStatus.className = "settings-hint"; speechStatus.setAttribute("role", "status");
-  speech.append(ttsActions, speechStatus);
+  speech.append(speechStatus);
   const speedText = speed => speed && speed !== 1 ? ` · ${speed}×` : "";
   const voiceText = id => id ? window.scribeAudio.voiceName?.(id) || id : "";
-  function speedInput(id, value) {
-    const node = textInput(id, String(value ?? 1), "1", "number");
-    Object.assign(node, { min: "0.25", max: "4", step: "0.05" }); return node;
-  }
-  const speedOf = node => { const n = Number(node.value); return Number.isFinite(n) && n > 0 ? n : 1; };
   let speaking = null;
   function testButton(sourceId) {
     const node = button("Test", async () => {
@@ -332,72 +357,19 @@
     });
     return node;
   }
-  /** This browser has no source to set up: only its voice and speed. */
-  async function editBrowser() {
-    const tts = view.tts || {};
-    const voice = selectInput("audio-browser-voice", "Voice", [["", "Default voice"]], "");
-    const speed = speedInput("audio-browser-speed", tts.speed);
-    editor({ cls: "audio-tts-editor", title: "This browser", hint: "Reads text with the voices built into this browser. Free and local; quality depends on the browser and system.",
-      fields: [field("Voice", voice), field("Speed", speed)], selects: [voice],
-      save: () => request("settings", "PUT", { tts: { voice: voice.value, speed: speedOf(speed) } }) });
-    const list = await window.scribeAudio.voices({ source: "browser" }).catch(() => null);
-    const options = [["", "Default voice"], ...(list?.voices || []).map(v => [v.id, v.lang ? `${v.name} (${v.lang})` : v.name])];
-    if (tts.voice && !options.some(([v]) => v === tts.voice)) options.push([tts.voice, tts.voice + " (unavailable)"]);
-    setOptions(voice, options, tts.voice || "");
-  }
+  /** Adding or editing a source: only where it is and how to reach it. */
   function editTts(profile) {
     const name = textInput("audio-tts-name", profile?.name, "e.g. Kokoro");
-    let load = () => {};
-    const endpoint = endpointFields("audio-tts", profile, () => load());
-    const model = textInput("audio-tts-model", profile?.model, "Server default (e.g. tts-1)");
-    // The server's voice list when it has one; a text box when it cannot be read.
-    const voice = selectInput("audio-tts-voice", "Voice", [["", "Default voice"]], "");
-    const voiceTyped = textInput("audio-tts-voice-text", profile?.voice, "alloy");
-    const voiceField = field("Voice", voice), voiceTypedField = field("Voice", voiceTyped);
-    voiceTypedField.hidden = true;
-    const typedNote = document.createElement("span"); typedNote.className = "ag-field-hint ag-muted"; voiceTypedField.append(typedNote);
-    const voiceNote = document.createElement("span"); voiceNote.className = "ag-field-hint ag-muted"; voiceNote.setAttribute("role", "status");
-    voiceField.append(voiceNote);
-    const speed = speedInput("audio-tts-speed", profile?.speed);
-    const streamBox = document.createElement("input"); streamBox.type = "checkbox"; streamBox.id = "audio-tts-stream"; streamBox.checked = Boolean(profile?.stream);
-    const stream = document.createElement("label"); stream.className = "ag-check";
-    const streamText = document.createElement("span"); streamText.textContent = "Stream while generating";
-    streamText.dataset.tooltip = "Sends stream: true so speech starts before the server has finished. Not part of OpenAI's API: turn it on only for servers that support it.";
-    streamText.setAttribute("aria-description", streamText.dataset.tooltip);
-    stream.append(streamBox, streamText);
-    let saved = profile?.voice || "", seq = 0;
-    const current = () => voiceTypedField.hidden ? voice.value : voiceTyped.value.trim();
-    load = async () => {
-      const mine = ++seq, draft = { ...(profile ? { id: profile.id } : {}), ...endpoint.body(), model: model.value.trim() };
-      saved = current() || saved;
-      if (draft.source === "__custom__" && !draft.custom?.baseUrl) { voiceNote.textContent = ""; return; }
-      voiceNote.textContent = "Loading voices…";
-      const result = await window.scribeAudio.voices({ source: draft }).catch(() => null);
-      if (mine !== seq) return;
-      if (!result?.ok) {
-        voiceTyped.value = saved; voiceTypedField.hidden = false; voiceField.hidden = true; voiceNote.textContent = "";
-        typedNote.textContent = "Cannot list voices: " + (result?.message || "no answer.") + " Type a voice name.";
-        return;
-      }
-      voiceTypedField.hidden = true; voiceField.hidden = false;
-      const options = [["", result.default ? `Default (${voiceText(result.default)})` : "Default voice"], ...result.voices.map(v => [v.id, v.name || v.id])];
-      if (saved && !options.some(([v]) => v === saved)) options.push([saved, voiceText(saved) + " (saved)"]);
-      setOptions(voice, options, saved);
-      voiceNote.textContent = result.listed ? "" : "This server lists no voices; these are OpenAI's.";
-    };
-    model.addEventListener("change", () => load());
+    const endpoint = endpointFields("audio-tts", profile);
     const path = profile ? "tts-sources/" + encodeURIComponent(profile.id) : "tts-sources";
     editor({ cls: "audio-tts-editor", title: profile ? `Edit ${profile.name}` : "Add a text-to-speech source",
-      hint: "An OpenAI-compatible /audio/speech endpoint. Voices come from the server's /audio/voices list when it has one.",
-      fields: [field("Name", name), ...endpoint.nodes, field("Model", model, "Leave empty to use the model the server has loaded."),
-        voiceField, voiceTypedField, field("Speed", speed), stream],
-      selects: [...endpoint.selects, voice],
-      save: () => request(path, profile ? "PUT" : "POST", { name: name.value, ...endpoint.body(), model: model.value, voice: current(), speed: speedOf(speed), stream: streamBox.checked }),
+      hint: "An OpenAI-compatible /audio/speech endpoint. Choose its model, voice and speed under Text-to-speech once it is added.",
+      fields: [field("Name", name), ...endpoint.nodes], selects: endpoint.selects,
+      save: () => request(path, profile ? "PUT" : "POST", { name: name.value, ...endpoint.body() }),
       remove: profile && (async () => {
         if (!await confirmRemove("Remove “" + profile.name + "”?", "Remove")) return false;
         return change(path, "DELETE", undefined, speechStatus);
       }) });
-    void load();
   }
   function renderSpeech() {
     const tts = view.tts || {}, chosen = tts.source || "";
@@ -406,8 +378,7 @@
       sourceRow("audio-tts-source", { id: "", name: "Off", checked: !chosen, label: "Turn text-to-speech off", onPick: pick(""),
         detail: "Pages cannot read text aloud", buttons: [] }),
       sourceRow("audio-tts-source", { id: BROWSER, name: "This browser", checked: chosen === BROWSER, label: "Read aloud with this browser", onPick: pick(BROWSER),
-        detail: (voiceText(tts.voice) || "Default voice") + speedText(tts.speed) + " · free",
-        buttons: [testButton(BROWSER), button("Edit", () => void editBrowser())] }),
+        detail: (voiceText(tts.voice) || "Default voice") + speedText(tts.speed) + " · free", buttons: [testButton(BROWSER)] }),
       ...(view.ttsSources || []).map(profile => sourceRow("audio-tts-source", { id: profile.id, name: profile.name, checked: chosen === profile.id,
         label: "Read aloud with " + profile.name, onPick: pick(profile.id),
         detail: (profile.model || "server's model") + " · " + hostOf(profile) + (profile.voice ? " · " + voiceText(profile.voice) : "")
@@ -415,7 +386,93 @@
         buttons: [testButton(profile.id), button("Edit", () => editTts(profile))] })));
     const chars = view.usage?.chars || 0;
     if (!speaking) speechStatus.textContent = chars ? "Read aloud today: " + chars.toLocaleString() + " characters" : "";
+    void renderSpeechSettings();
   }
+  /** "kokoro (default, loaded, native streaming)": native streaming is the one worth pointing out. */
+  function modelLabel(m) {
+    const parts = [m.default && "default", m.loaded && "loaded", m.streaming === "native" && "native streaming"].filter(Boolean);
+    return parts.length ? `${m.id} (${parts.join(", ")})` : m.id;
+  }
+  /** One select or its text fallback: picks which of the two rows shows. */
+  function showPair(select, text, useSelect, visible = true) {
+    lineOf(select).hidden = !visible || !useSelect; lineOf(text).hidden = !visible || useSelect;
+  }
+  let settingsSeq = 0, ttsModels = [];
+  async function renderSpeechSettings() {
+    const mine = ++settingsSeq, tts = view.tts || {}, browser = tts.source === BROWSER;
+    const profile = (view.ttsSources || []).find(s => s.id === tts.source);
+    // Off: nothing to set. This browser: voice and speed. A source: all of them.
+    showPair(ttsModel, ttsModelText, true, Boolean(profile));
+    lineOf(ttsSpeed).hidden = !browser && !profile;
+    lineOf(ttsStream).hidden = true;
+    if (!browser && !profile) { showPair(ttsVoice, ttsVoiceText, true, false); return; }
+    if (document.activeElement !== ttsSpeed) ttsSpeed.value = String((browser ? tts.speed : profile.speed) ?? 1);
+    if (browser) {
+      showPair(ttsVoice, ttsVoiceText, true);
+      const list = await window.scribeAudio.voices({ source: "browser" }).catch(() => null);
+      if (mine !== settingsSeq) return;
+      const options = [["", "Default voice"], ...(list?.voices || []).map(v => [v.id, v.lang ? `${v.name} (${v.lang})` : v.name])];
+      if (tts.voice && !options.some(([v]) => v === tts.voice)) options.push([tts.voice, tts.voice + " (unavailable)"]);
+      setOptions(ttsVoice, options, tts.voice || "");
+      return;
+    }
+    const model = profile.model || "";
+    const [models, voices] = await Promise.all([
+      request("models", "POST", { kind: "tts", id: profile.id }).catch(err => ({ ok: false, message: err.message })),
+      window.scribeAudio.voices({ source: { id: profile.id, model } }).catch(() => null)]);
+    if (mine !== settingsSeq) return;
+    ttsModels = models.ok ? models.models : [];
+    if (ttsModels.length) {
+      const fallback = ttsModels.find(m => m.default);
+      const options = [["", "Server default" + (fallback ? ` (${fallback.id})` : "")], ...ttsModels.map(m => [m.id, modelLabel(m)])];
+      if (model && !options.some(([v]) => v === model)) options.push([model, model + " (saved)"]);
+      setOptions(ttsModel, options, model);
+      showPair(ttsModel, ttsModelText, true);
+    } else {
+      if (document.activeElement !== ttsModelText) ttsModelText.value = model;
+      showPair(ttsModel, ttsModelText, false);
+    }
+    if (voices?.ok) {
+      const options = [["", voices.default ? `Default (${voiceText(voices.default)})` : "Default voice"], ...voices.voices.map(v => [v.id, v.name || v.id])];
+      if (profile.voice && !options.some(([v]) => v === profile.voice)) options.push([profile.voice, voiceText(profile.voice) + " (saved)"]);
+      setOptions(ttsVoice, options, profile.voice || "");
+      showPair(ttsVoice, ttsVoiceText, true);
+    } else {
+      if (document.activeElement !== ttsVoiceText) ttsVoiceText.value = profile.voice || "";
+      showPair(ttsVoice, ttsVoiceText, false);
+      speechStatus.textContent = "Cannot list voices: " + (voices?.message || "no answer.");
+    }
+    // Streaming shows only for a model the server says can stream; stream: true is not OpenAI's.
+    const info = ttsModels.find(m => m.id === model) || (!model && ttsModels.find(m => m.default));
+    const streams = info?.streaming;
+    lineOf(ttsStream).hidden = !streams;
+    ttsStream.setAttribute("aria-checked", String(Boolean(streams && profile.stream)));
+    streamLabel.dataset.tooltip = streams === "native"
+      ? "This model streams natively, which is usually the most reliable: speech starts while the server is still generating."
+      : "Speech starts while the server is still generating, a sentence at a time.";
+    streamLabel.setAttribute("aria-description", streamLabel.dataset.tooltip);
+  }
+  /** Saves one setting of the chosen source, or This browser's own voice and speed. */
+  function saveSpeechSetting(changes) {
+    const tts = view.tts || {};
+    saving = saving.then(async () => {
+      if (tts.source === BROWSER) await request("settings", "PUT", { tts: changes });
+      else if (tts.source) await request("tts-sources/" + encodeURIComponent(tts.source), "PUT", changes);
+      await refresh();
+    }).catch(err => { speechStatus.textContent = err.message; });
+  }
+  const speedValue = () => { const n = Number(ttsSpeed.value); return Number.isFinite(n) && n > 0 ? n : 1; };
+  // A new model has its own voices and may not stream.
+  const modelChanged = value => {
+    const info = ttsModels.find(m => m.id === value) || (!value && ttsModels.find(m => m.default));
+    saveSpeechSetting({ model: value, ...(info?.streaming ? {} : { stream: false }) });
+  };
+  ttsModel.addEventListener("change", () => modelChanged(ttsModel.value));
+  ttsModelText.addEventListener("change", () => modelChanged(ttsModelText.value.trim()));
+  ttsVoice.addEventListener("change", () => saveSpeechSetting({ voice: ttsVoice.value }));
+  ttsVoiceText.addEventListener("change", () => saveSpeechSetting({ voice: ttsVoiceText.value.trim() }));
+  ttsSpeed.addEventListener("change", () => saveSpeechSetting({ speed: speedValue() }));
+  ttsStream.addEventListener("change", () => saveSpeechSetting({ stream: ttsStream.getAttribute("aria-checked") === "true" }));
 
   window.scribeAudioSettings = { sections: [section, speech, sounds], refresh, receiveOutput, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
 })();

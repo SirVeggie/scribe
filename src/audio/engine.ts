@@ -1,4 +1,4 @@
-import { authHeaders } from "../agent/openaiSources.js";
+import { authHeaders, type OpenAISource } from "../agent/openaiSources.js";
 import type { SttEngine, TtsEngine } from "./types.js";
 
 export const openAiEngine: SttEngine = {
@@ -70,3 +70,29 @@ export const openAiTts: TtsEngine = {
     return { ok: true, voices, listed: true, ...(typeof body?.default === "string" ? { default: body.default } : {}) };
   },
 };
+
+/** One entry of a server's GET /models, with the audio server's extra flags when it sends them. */
+export type AudioModel = { id: string; default?: boolean; loaded?: boolean; streaming?: string; aliases?: string[] };
+export type AudioModels = { ok: true; models: AudioModel[]; flagged: boolean };
+/**
+ * GET {baseUrl}/models: the OpenAI model list. Audio servers add default, loaded and streaming
+ * ("sentence" or "native") per model; flagged says the list carries them. Listing loads nothing.
+ */
+export async function listModels(source: OpenAISource, signal: AbortSignal): Promise<AudioModels | { ok: false; error: "auth" | "rate_limit" | "engine"; message: string }> {
+  const res = await fetch(`${source.baseUrl.replace(/\/+$/, "")}/models`, { headers: authHeaders(source), signal });
+  if (!res.ok) { void res.body?.cancel().catch(() => {}); return failed(res.status, "Listing models"); }
+  const body = await res.json().catch(() => null) as { data?: unknown } | null;
+  const list = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+  const yes = (v: unknown) => v === true || v === "yes" || v === "true";
+  let flagged = false;
+  const models = list.flatMap((m): AudioModel[] => {
+    const entry = (typeof m === "string" ? { id: m } : m) as Record<string, unknown> | null;
+    if (!entry || typeof entry.id !== "string" || !entry.id) return [];
+    if ("default" in entry || "loaded" in entry || "streaming" in entry) flagged = true;
+    const streaming = typeof entry.streaming === "string" && entry.streaming !== "none" ? entry.streaming : entry.streaming === true ? "sentence" : undefined;
+    return [{ id: entry.id.slice(0, 200), ...(yes(entry.default) ? { default: true } : {}), ...(yes(entry.loaded) ? { loaded: true } : {}),
+      ...(streaming ? { streaming: streaming.slice(0, 40) } : {}),
+      ...(Array.isArray(entry.aliases) ? { aliases: entry.aliases.filter((a): a is string => typeof a === "string").slice(0, 20) } : {}) }];
+  }).slice(0, 1000);
+  return { ok: true, models, flagged };
+}

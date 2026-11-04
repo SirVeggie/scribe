@@ -9,7 +9,7 @@ import { audioRouter } from "./routes.js";
 import { PageAudio, SPEECH_LIMITS } from "./page.js";
 import { AudioService } from "./service.js";
 import { memoryStore, normalizeSettings } from "./settings.js";
-import { MAX_SPEECH_CHARS, openAiTts } from "./engine.js";
+import { MAX_SPEECH_CHARS, listModels, openAiTts, type AudioModels } from "./engine.js";
 import type { TtsEngine, TtsRequest, TtsResult } from "./types.js";
 
 const source: OpenAISource = { id: "openai", name: "OpenAI", baseUrl: "https://tts.invalid/v1", apiKey: "secret-key", models: [] };
@@ -242,4 +242,38 @@ test("scribeAudio.speak plays the pieces in order through the speech channel and
     assert.equal(result.routed, 2);
     assert.equal(result.end.reason, "stopped");
   } finally { await browser.close(); }
+});
+
+test("model lists keep an audio server's flagged list, cut a plain OpenAI list to speech or transcription models, and are cached", async () => {
+  let calls = 0;
+  const lists: Record<string, AudioModels> = {
+    "https://tts.invalid/v1": { ok: true, flagged: false, models: ["gpt-4o", "tts-1", "gpt-4o-mini-tts", "whisper-1", "dall-e-3"].map(id => ({ id })) },
+    "https://audio.invalid/tts/v1": { ok: true, flagged: true, models: [{ id: "kokoro", default: true, loaded: true, streaming: "sentence" }, { id: "chatterbox-nano", streaming: "native" }] },
+  };
+  const service = new AudioService({ sources: () => [source], store: memoryStore(), listModels: async s => { calls++; return lists[s.baseUrl]; } });
+  const openai = service.saveTtsSource({ name: "OpenAI", source: "openai" }).ttsSources[0].id;
+  const tts = await service.models({ kind: "tts", id: openai });
+  assert.deepEqual(tts.ok && tts.models.map(m => m.id), ["tts-1", "gpt-4o-mini-tts"]);
+  const stt = await service.models({ kind: "stt", source: "openai" });
+  assert.deepEqual(stt.ok && stt.models.map(m => m.id), ["whisper-1"]);
+  const audio = await service.models({ kind: "tts", source: "__custom__", custom: { baseUrl: "https://audio.invalid/tts/v1" } });
+  assert.ok(audio.ok && audio.flagged && audio.models[1].streaming === "native");
+  const before = calls;
+  await service.models({ kind: "tts", id: openai });
+  assert.equal(calls, before, "cached");
+  assert.equal((await service.models({ kind: "tts", source: "__custom__", custom: { baseUrl: "nope" } })).ok, false);
+});
+
+test("listModels reads OpenAI's list and the audio server's flags", async () => {
+  const realFetch = globalThis.fetch;
+  let url = "";
+  globalThis.fetch = (async (u: string | URL) => { url = String(u); return Response.json({ object: "list", data: [
+    { id: "kokoro", object: "model", default: true, loaded: "yes", streaming: "sentence", aliases: ["k"] },
+    { id: "chatterbox-nano", default: false, loaded: false, streaming: "native" }, { id: "old", streaming: "none" }, { nope: 1 }] }); }) as typeof fetch;
+  try {
+    const result = await listModels({ ...source, baseUrl: "https://audio.invalid/tts/v1/" }, new AbortController().signal);
+    assert.equal(url, "https://audio.invalid/tts/v1/models");
+    assert.deepEqual(result, { ok: true, flagged: true, models: [{ id: "kokoro", default: true, loaded: true, streaming: "sentence", aliases: ["k"] },
+      { id: "chatterbox-nano", streaming: "native" }, { id: "old" }] });
+  } finally { globalThis.fetch = realFetch; }
 });

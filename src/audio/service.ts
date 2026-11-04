@@ -1,6 +1,6 @@
 import type { OpenAISource } from "../agent/openaiSources.js";
 import { randomUUID } from "node:crypto";
-import { MAX_SPEECH_CHARS, OPENAI_VOICES, openAiEngine, openAiTts } from "./engine.js";
+import { MAX_SPEECH_CHARS, OPENAI_VOICES, listModels, openAiEngine, openAiTts, type AudioModels } from "./engine.js";
 import { fileStore, normalizeSettings, normalizeSpeed, normalizeTtsSource, type AudioStore } from "./settings.js";
 import { BROWSER_SPEECH, type AudioResult, type SttEngine, type SttSource, type AudioSettings, type AudioOutput, type TtsEngine, type TtsFailure, type TtsResult, type TtsSource, type TtsVoices } from "./types.js";
 import type { StreamTarget } from "./stream.js";
@@ -10,6 +10,8 @@ type Endpoint = { source?: string; custom?: { baseUrl: string; apiKey?: string }
 const keyView = <T extends Endpoint>({ custom, ...rest }: T) => ({ ...rest, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) });
 /** Voice lists are cached: asking a server for one can load that model (several seconds). */
 const VOICES_TTL_MS = 10 * 60_000;
+/** Listing models loads nothing, so the list can be fresher. */
+const MODELS_TTL_MS = 60_000;
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export class AudioService {
   private store: AudioStore;
@@ -22,7 +24,10 @@ export class AudioService {
   /** Open windows get sound settings over /ws, so a change in one applies in all. */
   private onOutput?: (output: AudioOutput) => void;
   private voiceCache = new Map<string, { at: number; result: TtsVoices }>();
-  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; tts?: TtsEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void }) {
+  private modelCache = new Map<string, { at: number; result: AudioModels }>();
+  private listModels: typeof listModels;
+  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; tts?: TtsEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void; listModels?: typeof listModels }) {
+    this.listModels = options.listModels ?? listModels;
     this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine; this.tts = options.tts ?? openAiTts; this.onOutput = options.onOutput;
     this.sources = options.sources; this.timeoutMs = options.timeoutMs ?? 60_000;
   }
@@ -200,27 +205,63 @@ export class AudioService {
    */
   async voices(draft: unknown = {}): Promise<TtsVoices | TtsFailure> {
     const fail = (error: TtsFailure["error"], message: string): TtsFailure => ({ ok: false, error, message });
-    const settings = this.store.read(), body = (draft ?? {}) as Partial<TtsSource> & { id?: string };
-    const saved = settings.ttsSources.find(s => s.id === (body.id || settings.tts.source));
-    let profile: TtsSource | undefined = saved;
-    if (body.source) {
-      profile = normalizeTtsSource({ ...body, id: "draft", name: "draft",
-        custom: body.custom ? { ...body.custom, apiKey: body.custom.apiKey || saved?.custom?.apiKey } : undefined });
-      // An empty key field keeps the saved key, but only for the host it was saved for.
-      const typed = body.custom?.apiKey ? body : { ...body, custom: body.custom && { baseUrl: body.custom.baseUrl } };
-      try { this.checkEndpoint(profile, saved, typed); } catch (err) { return fail("no_source", (err as Error).message); }
-    }
-    const source = profile && this.source(profile);
-    if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
-    const key = `${source.baseUrl}\n${profile.model ?? ""}\n${source.apiKey ?? ""}`, cached = this.voiceCache.get(key);
+    const body = (draft ?? {}) as Partial<TtsSource> & { id?: string };
+    const found = this.draftEndpoint(body, "tts");
+    if (!found.ok) return fail("no_source", found.message);
+    const { source } = found;
+    // The section's model picker asks before saving: its model wins over the saved one.
+    const model = typeof body.model === "string" ? body.model.trim() : (found.profile as TtsSource).model;
+    const key = `${source.baseUrl}\n${model ?? ""}\n${source.apiKey ?? ""}`, cached = this.voiceCache.get(key);
     if (cached && Date.now() - cached.at < VOICES_TTL_MS) return cached.result;
     if (!this.tts.voices) return { ok: true, voices: OPENAI_VOICES.map(id => ({ id })), listed: false };
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 30_000));
     try {
-      const result = await this.tts.voices({ source, model: profile.model, signal: controller.signal });
+      const result = await this.tts.voices({ source, model: model || undefined, signal: controller.signal });
       if (result.ok) this.voiceCache.set(key, { at: Date.now(), result });
       return result;
     } catch { return fail(controller.signal.aborted ? "timeout" : "network", controller.signal.aborted ? "Listing voices timed out." : "Cannot reach the text-to-speech source."); }
+    finally { clearTimeout(timer); }
+  }
+  /**
+   * The source a voices or models request is about: a saved one by id (else the chosen one), or the
+   * editor's unsaved draft. An empty key field keeps the saved key, but only for the host it was saved for.
+   */
+  private draftEndpoint(body: Endpoint & { id?: string }, kind: "tts" | "stt"): { ok: true; profile: Endpoint; source: OpenAISource } | { ok: false; message: string } {
+    const settings = this.store.read();
+    const list: (Endpoint & { id: string })[] = kind === "tts" ? settings.ttsSources : this.profiles(settings);
+    const saved = list.find(s => s.id === (body.id || (kind === "tts" ? settings.tts.source : settings.defaultSource)));
+    let profile: Endpoint | undefined = saved;
+    if (body.source) {
+      profile = { source: String(body.source).slice(0, 100),
+        ...(body.custom ? { custom: { baseUrl: String(body.custom.baseUrl ?? "").trim().slice(0, 2000), apiKey: body.custom.apiKey || saved?.custom?.apiKey } } : {}) };
+      const typed = body.custom?.apiKey ? body : { ...body, custom: body.custom && { baseUrl: body.custom.baseUrl } };
+      try { this.checkEndpoint(profile, saved, typed); } catch (err) { return { ok: false, message: (err as Error).message }; }
+    }
+    const source = profile && this.source(profile);
+    return profile && source ? { ok: true, profile, source }
+      : { ok: false, message: `Choose a ${kind === "tts" ? "text-to-speech" : "speech-to-text"} source in Settings → Audio.` };
+  }
+  /**
+   * The models a source offers (GET …/models), for the model pickers. Audio servers flag each one
+   * (default, loaded, streaming); a plain OpenAI list is cut down to the speech or transcription models.
+   */
+  async models(draft: unknown = {}): Promise<AudioModels | TtsFailure> {
+    const body = (draft ?? {}) as Endpoint & { id?: string; kind?: string };
+    const kind = body.kind === "stt" ? "stt" : "tts";
+    const found = this.draftEndpoint(body, kind);
+    if (!found.ok) return { ok: false, error: "no_source", message: found.message };
+    const key = `${kind}\n${found.source.baseUrl}\n${found.source.apiKey ?? ""}`, cached = this.modelCache.get(key);
+    if (cached && Date.now() - cached.at < MODELS_TTL_MS) return cached.result;
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const result = await this.listModels(found.source, controller.signal);
+      if (!result.ok) return result;
+      const pattern = kind === "tts" ? /tts|speech|voice|kokoro|piper|chatterbox|xtts|bark/i : /whisper|transcri|stt|asr|moonshine|parakeet|canary|voxtral/i;
+      const fitting = result.flagged ? result.models : result.models.filter(m => pattern.test(m.id));
+      const out: AudioModels = { ...result, models: fitting.length ? fitting : result.models };
+      this.modelCache.set(key, { at: Date.now(), result: out });
+      return out;
+    } catch { return { ok: false, error: controller.signal.aborted ? "timeout" : "network", message: controller.signal.aborted ? "Listing models timed out." : "Cannot reach the source." }; }
     finally { clearTimeout(timer); }
   }
   async transcribe(audio: Blob, options: { language?: string; prompt?: string; sourceId?: string } = {}): Promise<AudioResult> {

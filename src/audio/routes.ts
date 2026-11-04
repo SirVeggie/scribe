@@ -32,6 +32,11 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
     try { res.json(await service.voices(req.body)); }
     catch { res.json({ ok: false, error: "engine", message: "Cannot list voices." }); }
   });
+  /** Models a source offers, for the pickers: { kind: "tts" | "stt" } plus { id } or the editor's draft. Listing loads nothing. */
+  router.post("/models", async (req, res) => {
+    try { res.json(await service.models(req.body)); }
+    catch { res.json({ ok: false, error: "engine", message: "Cannot list models." }); }
+  });
   router.post("/transcriptions", express.raw({ type: "audio/*", limit: MAX_AUDIO_BYTES }), async (req, res) => {
     const tab = req.get("x-scribe-tab");
     try {
