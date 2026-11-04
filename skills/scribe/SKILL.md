@@ -5,66 +5,64 @@ description: Build or change pages in Scribe, the user's local page viewer (page
 
 # Scribe
 
-Scribe is the user's local tabbed HTML viewer, driven by the `scribe` MCP (`page_*` tools). Put visual output there instead of writing one-off HTML files into the workspace. If your host defers MCP tools, load the `page_*` tools you need with tool search first.
+Scribe is the user's local tabbed HTML viewer, driven by the `scribe` MCP (`page_*` tools). Put visual output there, not in one-off HTML files in the workspace. If your host defers MCP tools, load the `page_*` tools with tool search first.
 
-This file has the rules for building and changing pages. Read a file beside it when the task needs it (`skill_read` with `file`, or `scribe_docs` with its name):
+This file covers building and changing pages. Read a file beside it when the task needs it (`skill_read` with `file`, or `scribe_docs` with its name):
 
 | Read | When |
 |---|---|
 | `PAGE-SCRIPTS.md` | The page has its own script: `window.scribe` state, `bind`, `onChange`, signals and `page_wait`, page assets, `scribe.preview`, `scribe.reply` in your own markup. |
 | `PAGE-AGENT.md` | The page starts or drives agent chats (`scribe.agent`): prompts, model pickers, usage limits, agent runs. |
 | `PAGE-SERVICES.md` | The page uses the microphone (`scribe.audio`), the classifier (`scribe.ml`) or files in a folder (`scribe.files`). |
-| `LARGE-PAGES.md` | A page over 24 KB: reading a window, grep, line edits, building it in parts, checking it out to a file. |
+| `LARGE-PAGES.md` | A page over 24 KB: reading a window, grep, line edits, building in parts, checking out to a file. |
 | `TESTING.md` | Screenshots of a design for the current project (`page_screenshot`), or clicking through a page in your browser (`browser_*`). |
 | `TEMPLATES.md` | Only when the user asked to create or change a Scribe template. |
 | `PLUGINS.md` | Building or editing a page plugin. |
 
 ## When to use it
 
-Use Scribe for standalone visual output: investigation results, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Skip it for code edits, short factual answers, drafts meant to be copied, or when the user asked for another artifact.
+Use Scribe for standalone visual output: investigations, analyses, design options, architecture notes, tables that should stay on screen, walkthroughs. Skip it for code edits, short answers, drafts meant to be copied, or when the user asked for another artifact.
 
-Put a page up and stop. Do not screenshot information pages to tweak their layout or type: `page_screenshot` is only for designs that belong to the current project (`TESTING.md`). After a page is up, answer small follow-ups in chat; change the page only when the user asked for it or the new material belongs there.
+Put a page up and stop. Never screenshot an information page to polish it: `page_screenshot` is only for designs that belong to the current project (`TESTING.md`). Answer small follow-ups in chat; change the page only when asked or when the new material belongs there.
 
 ## Library model
 
-The **Library** holds every page, in folders and an order the user owns: never move or reorder pages. The tab strip is the pages currently **open**; closing a tab keeps the page, only a delete removes it. A folder's **Agent instructions** (right-click the folder) reach threads scoped to that folder or a page in it.
+The **Library** holds every page, in folders and an order the user owns: never move or reorder pages. The tab strip shows the **open** pages; closing a tab keeps the page, only a delete removes it. A folder's **Agent instructions** reach threads scoped to that folder or a page in it.
 
 ## Find a page
 
-- **A pasted key** (`scribe:sprint-notes`): pass it as `key` to `page_read`, `page_patch`, `page_state`, … as is; it works for open and closed pages. A page id (`t_1a2b3c4d`) goes in `id`.
-- **By title** (the usual way: "my Jira page"): `page_list` lists the open tabs; if the page is not there and `closedCount` > 0, use `library_search`. Never guess a key.
-- **By content**: `library_search({ query })` with 1–3 distinctive words (`jira`, `clims-18595`), not the whole sentence. It searches the title, key, text and JSON state of every page. With semantic search on, `mode: "semantic"` finds by meaning (a card on some board, a section deep in a page).
-- Page through results (default 20, max 50); do not dump the Library into context.
+- **Pasted key** (`scribe:sprint-notes`): pass it as `key` to `page_read`, `page_patch`, `page_state`, … as is, open or closed. A page id (`t_1a2b3c4d`) goes in `id`.
+- **By title** ("my Jira page"): `page_list` for open tabs; if missing and `closedCount` > 0, `library_search`. Never guess a key.
+- **By content**: `library_search({ query })` with 1–3 distinctive words (`jira`, `clims-18595`), not the whole sentence. It searches title, key, text and JSON state. With semantic search on, `mode: "semantic"` finds by meaning (a card on some board, a section deep in a page).
+- Page through results (default 20, max 50); never dump the Library into context.
 
-`page_read` returns the HTML as its own unescaped text block after the metadata: copy `oldString`s from it verbatim. A page over 24 KB comes back as an outline instead (`LARGE-PAGES.md`).
+`page_read` returns the HTML as its own unescaped text block: copy `oldString`s from it verbatim. A page over 24 KB comes back as an outline (`LARGE-PAGES.md`).
 
 ## Show or update
 
-Before you write HTML or call `page_show` / `page_patch`, say in a line that Scribe is being updated, so the pause does not look like a stall.
+Before writing HTML or calling `page_show` / `page_patch`, say in a line that Scribe is being updated, so the pause does not look like a stall.
 
 **Create or rewrite** with one `page_show`:
 
-- `key`: a stable slug for this page (`clims-12345-analysis`, stored as `scribe:clims-12345-analysis`). Reuse it only for in-place edits of the same page.
-- `title`: a short tab label. A result with `titleKept: true` means the user renamed the page: keep their title.
-- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit) or a complete document with inline CSS. `htmlPath` passes a local file instead (in Code mode a temp file, not the workspace).
-- `background: true`: when the user said not to switch tabs, or for a page you will link to (a form, evidence, an investigation) rather than put in front of them. A new background page goes to the Library without a tab.
+- `key`: a stable slug (`clims-12345-analysis`, stored as `scribe:clims-12345-analysis`). Reuse it only to edit the same page in place.
+- `title`: a short tab label. `titleKept: true` in the result means the user renamed the page: keep their title.
+- `html`: a fragment (preferred: Scribe wraps it in its dark theme and page kit) or a full document with inline CSS. `htmlPath` passes a local file instead (in Code mode a temp file, not the workspace).
+- `background: true`: when the user said not to switch tabs, or for a page you will link to (a form, evidence) rather than show. A new background page goes to the Library without a tab.
 - `pin`: only for pages the user keeps using (a todo list, a tool); never for one-off reports, designs or forms.
-- `folder`: for a new page, check `library_folders` and pass an existing path when the page clearly belongs there; a new path only when the user asked for one.
-- `assets` for images (see Images); `state` seeds page state (only when the page has none yet); `base` builds on a starter page the user names (your `html` fills its `data-slot` element, else its `<main>`, else its `<body>`).
+- `folder`: for a new page, check `library_folders` and pass an existing path when it clearly fits; a new path only when the user asked.
+- `assets` for images (see Images); `state` seeds page state (only when it has none); `base` builds on a starter page the user names (your `html` fills its `data-slot` element, else `<main>`, else `<body>`).
 
 | User said | Call | Result |
 | --- | --- | --- |
 | show me / put it in Scribe | `page_show` | Focused; a closed page is opened. |
 | a form or evidence page to link to | `page_show` with `background: true` | In the Library, not on the strip. |
-| update it in the background | `page_show` / `page_patch` with `background: true` | An open tab gets an unread blip; a closed page stays closed. |
+| update it in the background | `page_show` / `page_patch` with `background: true` | Open tab gets an unread blip; a closed page stays closed. |
 | tweak a section, fix a line | `page_patch` | Changes only those snippets. |
 | a small follow-up question | nothing: answer in chat | |
 | bring it back | `page_open` | Focused. |
 | change todos, cards, notes | `page_action` if the page has actions, else `page_update` | Never focuses. |
 
-Mention the tab title in chat; when a result has `open: false`, say the unread blip is on Library. Do not paste the HTML into chat.
-
-`page_show` and HTML-changing `page_patch` check the first render: fix any `problems` they return.
+Mention the tab title in chat; if a result has `open: false`, say the blip is on Library. Never paste the HTML into chat. Fix any `problems` that `page_show` or `page_patch` return from the first render.
 
 ### Patch an existing page
 
@@ -75,24 +73,24 @@ page_patch({ key: "clims-12345-analysis", edits: [
 ] })
 ```
 
-- `oldString` is an exact substring of the stored HTML. For a fragment page, match the body you wrote, not the wrapper. It must match once: add context, or pass `replaceAll: true`.
-- Edits apply in order, all or nothing. A failed edit quotes where the stored text diverged: fix the snippet from that, do not guess again.
-- Do not `page_read` first when the markup is still in the conversation. Pass `expectedRevision` when the user may have changed the page since.
+- `oldString` is an exact substring of the stored HTML; for a fragment page, match your body, not the wrapper. It must match once: add context, or pass `replaceAll: true`.
+- Edits apply in order, all or nothing. A failure quotes where the stored text diverged: fix the snippet from that, never guess again.
+- Skip `page_read` when the markup is still in the conversation. Pass `expectedRevision` if the user may have changed the page since.
 - It does not create pages or change state: use `page_show` for a new page, new `assets` or seeded `state`.
 
 ### Updating vs replacing
 
-Edits, additions and improvements to a page are fine. Do not replace all or most of a page, or replace it with a continuation, without asking: the user loses what they may want to look back at. For a continuation, close the old tab (`page_close` keeps it in the Library) and show a new page under a new key.
+Edits and additions are fine. Never replace all or most of a page, or replace it with a continuation, without asking: the user loses what they may want to look back at. For a continuation, close the old tab (`page_close` keeps it in the Library) and show a new page under a new key.
 
 ## HTML
 
-- Self-contained, with inline CSS. Workspace paths and `file://` images do not load; use `assets`.
-- A full document starts with `<!DOCTYPE html>` or `<html`. Pages render in an iframe, so the parent's styles do not apply.
+- Self-contained, inline CSS. Workspace paths and `file://` images do not load; use `assets`.
+- A full document starts with `<!DOCTYPE html>` or `<html`. Pages render in an iframe; the parent's styles do not apply.
 - Keep pages well under 200 KB (hard limit 2 MB; assets do not count).
 
 ### Theme
 
-Fragment pages are wrapped in a **dark** theme: `color-scheme: dark`, the body already `background: var(--bg); color: var(--text)`, and these variables on `:root`:
+Fragment pages get a **dark** theme: `color-scheme: dark`, body already `background: var(--bg); color: var(--text)`, and these variables on `:root`:
 
 - `--bg`: page background
 - `--text`: body text
@@ -101,15 +99,15 @@ Fragment pages are wrapped in a **dark** theme: `color-scheme: dark`, the body a
 - `--accent`: links
 - `--code-bg`: `code` and `pre`
 
-Do not hardcode light-theme colors (`#222`, `black`) or fall back to them (`var(--fg, #222)`: `--fg` is not defined). A full document skips the wrapper: copy the same `:root` block, or set background and color so they contrast.
+Never hardcode light-theme colors (`#222`, `black`) or fall back to them (`var(--fg, #222)`: `--fg` is undefined). A full document skips the wrapper: copy the `:root` block, or set contrasting background and color yourself.
 
 ### Page kit: elements and form wiring
 
-Fragment pages get Scribe's page kit: form wiring with no script, themed fields and buttons, and elements for the parts that need behavior: `<s-question>` for questions, `<s-options>` to compare options and let the user pick one, `<s-mock>` for UI mock-ups, `<s-code>` for code with a Copy button. The kit has no boxes, cards or badges: give the page its own look with your own `<style>`. Its elements render into the page itself and every kit rule sits in `:where()`, so your CSS restyles them like your own markup; the `--kit-*` variables on `:root` retheme them all at once.
+Fragment pages get Scribe's page kit: script-free form wiring, themed fields and buttons, and elements for parts that need behavior: `<s-question>` for questions, `<s-options>` to compare options and pick one, `<s-mock>` for UI mock-ups, `<s-code>` for code with a Copy button. It has no boxes, cards or badges: style the page yourself. Kit elements render into the page and every kit rule sits in `:where()`, so your CSS restyles them; the `--kit-*` variables on `:root` retheme them all.
 
-The kit is not a way to save tokens: a page's HTML is a small share of a chat's cost, so never make a page plainer to keep it short. A design doc, investigation or comparison should be easy to scan: color-code categories and options (your own tags and toned sections, toned table cells), draw the flow or architecture (a `flow` row, or your own inline SVG), and show proposed UI as a mock-up rather than describing it.
+Never make a page plainer to save tokens: its HTML is a small share of a chat's cost. Make design docs, investigations and comparisons easy to scan: color-code categories and options (your own tags, toned sections and table cells), draw flows or architecture (a `flow` row, or inline SVG), and show proposed UI as a mock-up rather than describing it.
 
-**One-click replies.** `<button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button>` sends the optional JSON object as answers and `data-reply` as the summary through `scribe.reply`. An empty `data-reply` uses the button text. No form or script is needed. All reply buttons in the page are disabled after choosing, and the chosen button is marked; failed delivery allows retry. Invalid `data-context` shows an error without sending. Without `replyTo`, it logs `submitted` with `{ answers, summary }`, like a reply form. The wiring also works in any component host that provides `window.scribe.reply`; that host determines reply routing.
+**One-click replies.** `<button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button>` sends the optional JSON object as answers and `data-reply` as the summary through `scribe.reply`; an empty `data-reply` uses the button text. No form or script needed. After a choice all reply buttons are disabled and the chosen one marked; a failed delivery allows retry. Invalid `data-context` shows an error without sending. Without `replyTo`, it logs `submitted` with `{ answers, summary }`, like a reply form. It works in any component host that provides `window.scribe.reply`; that host decides where replies go.
 
 <!-- kit-catalog:start -->
 | Write | Gives | Example |
@@ -134,11 +132,10 @@ The kit is not a way to save tokens: a page's HTML is a small share of a chat's 
 | ` input / textarea / select ` | Themed fields, radios and check boxes. | ` <input type="text" name="title"><textarea name="notes"></textarea> ` |
 <!-- kit-catalog:end -->
 
-**Forms.** `<form data-reply>` needs no script: Scribe keeps what the user types as their draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card), check boxes as lists, empty fields left out. On a page without `replyTo` it logs a `submitted` event with `{ answers, summary }` instead. The questions inside it are `<s-question>` elements (each gives its `name` to the answers); plain inputs with a `name` work too.
+**Forms.** `<form data-reply>` needs no script: Scribe keeps the user's typing as a draft, and Submit sends the named fields with `scribe.reply` to the page's `replyTo` (see Forms for a card): check boxes as lists, empty fields left out. Without `replyTo` it logs `submitted` with `{ answers, summary }`. Questions are `<s-question>` elements (each `name` becomes an answer key); named plain inputs work too.
 
 ```html
 <form data-reply>
-  <p>…the finding the first question is about…</p>
   <s-question name="approach" label="Which approach?">
     <s-choice value="patch" checked>Patch the parser <small>an hour, low risk</small></s-choice>
     <s-choice value="rewrite">Rewrite it <small>a day</small></s-choice>
@@ -158,22 +155,22 @@ The kit is not a way to save tokens: a page's HTML is a small share of a chat's 
 
 Put each question next to the part of the page it is about; one form can wrap the whole page. In a Scribe chat, show the form and call `page_ask` on it: your turn resumes with the answers. Elsewhere, `page_wait` on `submitted`.
 
-**Full documents.** A page with its own look can still use the kit: put `<link rel="stylesheet" href="/kit.css">` and `<script src="/kit.js" defer></script>` in its `<head>`. It brings the theme variables (your own `:root` wins), the elements and classes above and the `<form data-reply>` wiring; set the body's own background, color and font.
+**Full documents** can use the kit too: add `<link rel="stylesheet" href="/kit.css">` and `<script src="/kit.js" defer></script>` to `<head>` for the theme variables (your `:root` wins), the elements and classes above and the form wiring; set the body's background, color and font yourself.
 
 ### Forms for a card
 
-A form you make for a Kanban card (questions, mockup feedback, a review) can hand its answers to the card itself, so its submit button works even after your chat has ended:
+A form for a Kanban card (questions, mockup feedback, a review) can hand its answers to the card, so its submit button works even after your chat ends:
 
 ```js
 page_show({ key: "card-320-questions", html, background: true,
             replyTo: { page: "scribe:agent-todo", card: 320 } })
 ```
 
-`<form data-reply>` does the rest. The answers become the user's comment on the card (the summary, the answers, a peek link back to the form) and go to the card's chat: into its running turn, or Continue once it has ended. So you can release the card to wait for the answers and end your turn. `page_patch` with `replyTo` (and no edits) wires an existing page; `replyTo: null` clears it. For a submit button in your own markup, see `scribe.reply` in `PAGE-SCRIPTS.md`.
+`<form data-reply>` does the rest: the answers become the user's comment on the card (summary, answers, a peek link to the form) and go to the card's chat, into its running turn or as Continue once it ended. So you can release the card and end your turn. `page_patch` with `replyTo` (no edits) wires an existing page; `replyTo: null` clears it. For a submit button in your own markup: `scribe.reply` in `PAGE-SCRIPTS.md`.
 
 ### Page components
 
-Scribe offers ready-made pieces of the app's own UI that a page loads by name with `<script src="/c/<name>.js"></script>`. Use them instead of building these by hand: a page's own dropdown or hand-drawn chart drifts from the app's look. Read a component's guide with `plugin_guide({ id: "core" })` before its first use; it also lists plugins' components (`/c/<plugin>/<name>.js`).
+Ready-made pieces of the app's UI, loaded by name with `<script src="/c/<name>.js"></script>`. Use them instead of hand-built versions, which drift from the app's look. Read a component's guide with `plugin_guide({ id: "core" })` before first use; it also lists plugins' components (`/c/<plugin>/<name>.js`).
 
 <!-- page-components:start -->
 | Load | Gives |
@@ -184,7 +181,7 @@ Scribe offers ready-made pieces of the app's own UI that a page loads by name wi
 
 ## Linking pages
 
-The user opens a link as a tab, a **peek** (a card over the page for a quick look) or a **split** (a pane beside it). Links keep related pages connected instead of one page holding everything.
+The user opens a link as a tab, a **peek** (a card over the page for a quick look) or a **split** (a pane beside it). Link related pages instead of putting everything on one.
 
 ```html
 <a data-scribe-open="scribe:clims-12345-analysis">Analysis</a>                              <!-- no mode: the user's setting -->
@@ -194,13 +191,13 @@ The user opens a link as a tab, a **peek** (a card over the page for a quick loo
 <a href="https://tauri.app/reference/config/">Tauri config</a>                              <!-- a website: opens the browser -->
 ```
 
-- Peek for evidence and references, split for pages read side by side, no mode for a page the user should go and work on.
-- Link by **key**: ones you chose in `page_show` or found with `page_list` / `library_search`. A link to a missing key is struck through and fixes itself once the page exists, so a hub page may come before its detail pages in the same turn.
-- `#anchor` scrolls to that `id`. `#name=value` opens a record instead: `scribe:board-key#card=12` opens card 12 of a Kanban board, `#item=<id>` an item of a Todo list.
+- Peek for evidence and references, split for side-by-side reading, no mode for a page the user should go and work on.
+- Link by **key**: ones you chose or found with `page_list` / `library_search`. A missing key shows struck through and fixes itself once the page exists, so a hub page may come before its detail pages in the same turn.
+- `#anchor` scrolls to that `id`. `#name=value` opens a record: `scribe:board-key#card=12` opens card 12 of a Kanban board, `#item=<id>` a Todo list item.
 - Many websites refuse to show in a peek or split (GitHub, Google, logins): use those modes for docs, not apps. No `target="_blank"` or script navigation.
-- The built-in Todo list, Kanban board and Markdown note link pages in their text with `[[scribe:key]]`, `[[scribe:key|text]]`, `[[peek:scribe:key]]`, `[[split:scribe:key]]` or `[text](scribe:key)`; write those in their state, not raw HTML. Chat replies use `[[scribe:key]]` too.
-- A file on disk links as `file:` plus its path (`<a href="file:///C:/work/out/shot.png">`, `[[file:C:\work\out\shot.png]]`): it opens as a temporary page that stays out of the Library. Use it to point at images, logs or outputs instead of making a page for each.
-- You cannot open a peek or split yourself; links are for the user to follow.
+- The built-in Todo list, Kanban board and Markdown note link in their text with `[[scribe:key]]`, `[[scribe:key|text]]`, `[[peek:scribe:key]]`, `[[split:scribe:key]]` or `[text](scribe:key)`; write those into their state, not raw HTML. Chat replies use `[[scribe:key]]` too.
+- A file on disk links as `file:` plus its path (`<a href="file:///C:/work/out/shot.png">`, `[[file:C:\work\out\shot.png]]`) and opens as a temporary page outside the Library. Use it for images, logs or outputs instead of a page each.
+- You cannot open a peek or split yourself; links are for the user.
 
 ## Images
 
@@ -211,18 +208,18 @@ page_show({ key: "mockup", title: "Mockup", html: `<img src="asset:hero.png" alt
             assets: [{ path: "C:/Users/me/Pictures/hero.png", name: "hero.png" }] })
 ```
 
-- `assets` may be plain paths; the name is then the file's basename. Use the names the result lists.
+- `assets` may be plain paths (name = basename). Use the names the result lists.
 - No `file://`, workspace paths or base64 data URIs. png, jpg, gif, webp, svg, ico, avif; 8 MB each, 16 per page, 32 MB total.
-- Re-showing without `assets` keeps the attached images; the same name replaces one.
-- To put a file into a page's data (an image on a card or todo item), use `assets` on `page_update` (`PAGE-SCRIPTS.md`, Page assets).
+- Re-showing without `assets` keeps attached images; the same name replaces one.
+- A file in a page's data (an image on a card or todo): `assets` on `page_update` (Page assets in `PAGE-SCRIPTS.md`).
 
 ## Reading and changing page state
 
-**Actions first.** Pages made from a template with actions (the built-in Kanban board and Todo list) come with an agent guide listing them. Use `page_action` there: it applies the page's own rules in one step.
+**Actions first.** Template pages with actions (the built-in Kanban board and Todo list) come with an agent guide listing them; use `page_action` there, which applies the page's rules in one step.
 
-**Reading.** `page_state` returns `state`, `stateRevision` and `eventCursor`. On a large page, read one part: `path: "cards/num=12"`, or `path: "cards"` with `where: { col: "col_ab12" }`. Do not poll it.
+**Reading.** `page_state` returns `state`, `stateRevision` and `eventCursor`. On a large page read one part: `path: "cards/num=12"`, or `path: "cards"` with `where: { col: "col_ab12" }`. Never poll it.
 
-**Writing.** `page_update` takes ops: `set`, `merge` (a `null` field removes it), `remove`, `insert`, `move` (with `before` / `after` / `at`), and `test` (fail the write unless the value matches). Paths are `/`-separated; on an array a segment picks an item by `id` (`cards/c_12ab`), `field=value` (`cards/num=12`) or `#<index>`. Ops apply in order, all or nothing, to the latest state; pass `expectedRevision` or a `test` op when your edit depends on what you read.
+**Writing.** `page_update` takes ops: `set`, `merge` (a `null` field removes it), `remove`, `insert`, `move` (with `before` / `after` / `at`) and `test` (fail unless the value matches). Paths are `/`-separated; on an array a segment picks an item by `id` (`cards/c_12ab`), `field=value` (`cards/num=12`) or `#<index>`. Ops apply in order, all or nothing, to the latest state; pass `expectedRevision` or a `test` op when your edit depends on what you read.
 
 ```
 page_update({ key: "sprint-board", ops: [
@@ -232,16 +229,16 @@ page_update({ key: "sprint-board", ops: [
 ```
 
 - Never write keys a page keeps per viewer or for in-progress typing.
-- Read state again before acting on a page the user has had time to touch.
+- Re-read state before acting on a page the user has had time to touch.
 
-**Waiting for the user.** When a page asks the user to submit, choose or finish something you continue from: in a Scribe chat, call `page_ask` on it (the chat shows it as a question and your turn resumes with the answer); elsewhere call `page_wait` next, in the same turn, with the event name the page logs. Never poll `page_state`. Designing the page's own signals: `PAGE-SCRIPTS.md`, Waiting for user input.
+**Waiting for the user.** When a page asks the user to submit, choose or finish something you continue from: in a Scribe chat call `page_ask` on it (your turn resumes with the answer); elsewhere call `page_wait` next, in the same turn, with the event the page logs. Never poll `page_state`. Designing a page's signals: Waiting for user input in `PAGE-SCRIPTS.md`.
 
 ## Inline UI in chat: widget_show
 
-For a small choice or table inside the reply itself rather than a page, `widget_show` takes page-kit `html` (`<button data-reply>` and `<form data-reply>` work) with `fallback` markdown for history.
+For a small choice or table inside the reply rather than a page, `widget_show` takes page-kit `html` (`<button data-reply>` and `<form data-reply>` work) with `fallback` markdown for history.
 
 ## Templates and plugins
 
-Do **not** create, edit or delete templates unless the user explicitly asked; then read `TEMPLATES.md` first. A page bound to a template cannot have its HTML changed (change the template); its state, title and pin still can. Pages made from a template come with an **agent guide** in the first tool result about them: follow it over general advice here.
+Never create, edit or delete templates unless the user explicitly asked; then read `TEMPLATES.md` first. A template-bound page's HTML cannot change (change the template); its state, title and pin can. Template pages come with an **agent guide** in the first tool result about them: follow it over this file.
 
-Plugins give pages local backend methods, shared state and widgets: `plugin_list`, then `plugin_guide` for one. Ordinary pages use `scribe.plugin(id)` and declare it with `page_show({ plugins: [id] })`. To build or edit a plugin, read `PLUGINS.md`.
+Plugins give pages backend methods, shared state and widgets: `plugin_list`, then `plugin_guide` for one. Pages use `scribe.plugin(id)` and declare it with `page_show({ plugins: [id] })`. Building or editing a plugin: `PLUGINS.md`.
