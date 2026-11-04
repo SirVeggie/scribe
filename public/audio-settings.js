@@ -96,6 +96,75 @@
    * Fields every source has: a model source it links to, or a custom URL with its own key.
    * The key is never shown again; leaving it empty keeps the saved one.
    */
+  /* ---------- model help: hovering a model picker shows what the server says about the chosen model ---------- */
+  const helpCard = document.createElement("div"); helpCard.className = "audio-model-help"; helpCard.id = "audio-model-help";
+  helpCard.setAttribute("role", "tooltip"); helpCard.hidden = true; document.body.append(helpCard);
+  const helpCache = new Map();
+  let helpAnchor = null, helpShowTimer = 0, helpHideTimer = 0, helpSeq = 0;
+  function hideModelHelp() {
+    clearTimeout(helpShowTimer); helpSeq++;
+    helpCard.hidden = true; helpAnchor?.removeAttribute("aria-describedby"); helpAnchor = null;
+  }
+  /** "Languages: en, ja · Voice blending · Options: temperature, top_p" from the server's features. */
+  function featureLine(features) {
+    const name = key => key.replace(/_/g, " ").replace(/^./, ch => ch.toUpperCase());
+    return Object.entries(features || {}).flatMap(([key, value]) => value === true ? [name(key)]
+      : Array.isArray(value) && value.length ? [`${name(key)}: ${value.map(v => typeof v === "string" ? v : JSON.stringify(v)).join(", ")}`]
+      : typeof value === "string" || typeof value === "number" ? [`${name(key)}: ${value}`] : []).join(" · ");
+  }
+  async function showModelHelp(anchor, request_) {
+    if (!request_ || !anchor.isConnected) return;
+    const mine = ++helpSeq, key = JSON.stringify(request_);
+    let info = helpCache.get(key);
+    if (!info) {
+      info = await request("model-info", "POST", request_).catch(() => null);
+      if (info?.ok) helpCache.set(key, info);
+    }
+    if (mine !== helpSeq || !info?.ok || !anchor.isConnected) return;
+    const model = info.model;
+    if (!model.description && !model.guide) return;
+    const title = document.createElement("strong"); title.textContent = modelLabel(model);
+    const parts = [title];
+    if (model.description) { const p = document.createElement("p"); p.textContent = model.description; parts.push(p); }
+    const features = featureLine(model.features);
+    if (features) { const p = document.createElement("p"); p.className = "audio-model-features"; p.textContent = features; parts.push(p); }
+    if (model.guide) {
+      const guide = document.createElement("div"); guide.className = "ag-md audio-model-guide";
+      if (window.AgentRender?.renderMarkdown) window.AgentRender.renderMarkdown(guide, model.guide); else guide.textContent = model.guide;
+      parts.push(guide);
+    }
+    helpCard.replaceChildren(...parts);
+    helpCard.hidden = false;
+    const box = anchor.getBoundingClientRect(), width = Math.min(440, innerWidth - 16);
+    helpCard.style.width = width + "px";
+    helpCard.style.left = Math.max(8, Math.min(box.left, innerWidth - width - 8)) + "px";
+    const below = innerHeight - box.bottom - 14, above = box.top - 14;
+    const room = Math.max(below, above);
+    helpCard.style.maxHeight = Math.max(120, room) + "px";
+    const height = Math.min(helpCard.scrollHeight, room);
+    helpCard.style.top = (below >= height || below >= above ? box.bottom + 6 : box.top - 6 - height) + "px";
+    helpAnchor = anchor; anchor.setAttribute("aria-describedby", helpCard.id);
+  }
+  /** Hover help for a model picker; describe() names the model to ask about ({ kind, id, model, …draft }) or null. */
+  function bindModelHelp(anchor, describe) {
+    if (!anchor) return;
+    anchor.addEventListener("pointerenter", event => {
+      if (event.pointerType !== "mouse" || event.buttons) return;
+      clearTimeout(helpHideTimer); clearTimeout(helpShowTimer);
+      helpShowTimer = setTimeout(() => void showModelHelp(anchor, describe()), helpCard.hidden ? 450 : 0);
+    });
+    anchor.addEventListener("pointerleave", event => {
+      clearTimeout(helpShowTimer);
+      if (!helpCard.contains(event.relatedTarget)) helpHideTimer = setTimeout(hideModelHelp, 150);
+    });
+    // Opening the dropdown puts its menu where the card is.
+    anchor.addEventListener("pointerdown", hideModelHelp);
+    anchor.addEventListener("keydown", hideModelHelp);
+  }
+  // The guide can be long: the card stays while the pointer is on it, so it can be scrolled.
+  helpCard.addEventListener("pointerenter", () => clearTimeout(helpHideTimer));
+  helpCard.addEventListener("pointerleave", () => { helpHideTimer = setTimeout(hideModelHelp, 150); });
+
   function endpointFields(prefix, profile, onChange) {
     const sourceOptions = [["__custom__", "Custom"], ...view.sources.map(s => [s.id, s.name])];
     if (profile?.source && !sourceOptions.some(([v]) => v === profile.source)) sourceOptions.push([profile.source, "Saved source (unavailable)"]);
@@ -217,6 +286,8 @@
         return change(path, "DELETE");
       }) });
     void loadModels();
+    bindModelHelp(document.getElementById("audio-model-pick-button"),
+      () => ({ kind: "stt", ...(profile ? { id: profile.id } : {}), ...endpoint.body(), model: modelPick.value }));
   }
   function renderSources() {
     list.replaceChildren();
@@ -333,6 +404,10 @@
   speech.append(ttsActions);
   // The chosen source's own settings, under the list so they are one click away. Rows the source cannot use stay hidden.
   const ttsModel = row("Model", "tts-model", "select", speech);
+  bindModelHelp(document.getElementById("audio-tts-model-button") || ttsModel.parentElement, () => {
+    const source = view?.tts?.source;
+    return source && source !== BROWSER ? { kind: "tts", id: source, model: ttsModel.value } : null;
+  });
   const ttsModelText = row("Model", "tts-model-text", "text", speech); ttsModelText.placeholder = "Server default";
   const ttsVoice = row("Voice", "tts-voice", "select", speech);
   const ttsVoiceText = row("Voice", "tts-voice-text", "text", speech); ttsVoiceText.placeholder = "alloy";

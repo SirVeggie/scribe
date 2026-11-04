@@ -47,6 +47,7 @@ async function audioSettingsPage(browser: Awaited<ReturnType<typeof launchChromi
       if (path === "/test") { seen.tested = body().sourceId; return route.fulfill({ json: { ok: true, text: "Words" } }); }
       if (path === "/voices") return route.fulfill({ json: await service.voices(body()) });
       if (path === "/models") return route.fulfill({ json: await service.models(body()) });
+      if (path === "/model-info") return route.fulfill({ json: await service.modelGuide(body()) });
       const [, kind, id] = path.split("/").map(decodeURIComponent);
       let view = service.view();
       if (kind === "sources") view = method === "DELETE" ? service.removeSource(id) : service.saveSource(body(), id);
@@ -149,6 +150,7 @@ test("text-to-speech: own source list, then model, voice, speed and streaming fo
     const service = new AudioService({ sources: () => [linked], store: memoryStore(),
       listModels: async () => ({ ok: true, flagged: true, models: [{ id: "kokoro", default: true, loaded: true, streaming: "sentence" },
         { id: "chatterbox-nano", streaming: "native" }, { id: "plain" }] }),
+      modelInfo: async (_s, id) => ({ ok: true, model: { id, description: `About ${id}.`, features: { languages: ["en"], tags: true }, guide: `${id} guide text` } }),
       tts: { speak: async () => ({ ok: false, error: "engine", message: "unused" }),
         voices: async ({ model }) => { asked.push(model); return { ok: true, voices: [{ id: "af_heart" }, { id: model === "chatterbox-nano" ? "narrator" : "bm_george" }], default: "af_heart", listed: true }; } } });
     service.saveSource({ name: "Transcribe only", source: linked.id, model: "whisper-1" });
@@ -176,6 +178,13 @@ test("text-to-speech: own source list, then model, voice, speed and streaming fo
     const labels = await page.locator("#audio-tts-model option").allTextContents();
     assert.deepEqual(labels, ["Server default (kokoro)", "kokoro (default, loaded)", "chatterbox-nano (native streaming)", "plain"]);
     assert.ok(await visible("#audio-tts-stream"), "the default model streams");
+    // Hovering the model picker shows the server's description, features and guide for the chosen model.
+    await page.locator("#audio-tts-model-button").hover();
+    const help = page.locator(".audio-model-help");
+    await help.waitFor({ state: "visible" });
+    assert.match(await help.innerText(), /About kokoro\.[\s\S]*Languages: en · Tags[\s\S]*kokoro guide text/);
+    await page.mouse.move(0, 0);
+    await help.waitFor({ state: "hidden" });
     await page.waitForFunction(() => document.querySelectorAll("#audio-tts-voice option").length === 3);
     await tts.getByRole("button", { name: "Voice", exact: true }).click();
     await page.getByRole("option", { name: "bm_george", exact: true }).click();

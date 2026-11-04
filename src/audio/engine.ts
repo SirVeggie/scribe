@@ -72,27 +72,57 @@ export const openAiTts: TtsEngine = {
 };
 
 /** One entry of a server's GET /models, with the audio server's extra flags when it sends them. */
-export type AudioModel = { id: string; default?: boolean; loaded?: boolean; streaming?: string; aliases?: string[] };
-export type AudioModels = { ok: true; models: AudioModel[]; flagged: boolean };
 /**
- * GET {baseUrl}/models: the OpenAI model list. Audio servers add default, loaded and streaming
- * ("sentence" or "native") per model; flagged says the list carries them. Listing loads nothing.
+ * One entry of a server's GET /models, with the audio server's extras when it sends them:
+ * flags (default, loaded, streaming "sentence" | "native"), a one-line description, features
+ * (languages, speed, tags, options…), the tags a model understands, and whether it has a guide.
  */
-export async function listModels(source: OpenAISource, signal: AbortSignal): Promise<AudioModels | { ok: false; error: "auth" | "rate_limit" | "engine"; message: string }> {
+export type AudioModel = { id: string; default?: boolean; loaded?: boolean; streaming?: string; aliases?: string[];
+  description?: string; features?: Record<string, unknown>; tags?: Record<string, unknown>; hasGuide?: boolean; guide?: string };
+export type AudioModels = { ok: true; models: AudioModel[]; flagged: boolean };
+type ListFailure = { ok: false; error: "auth" | "rate_limit" | "engine"; message: string };
+/** Plain JSON only, and not too much of it: server data passed on to pages and Settings. */
+function jsonValue(value: unknown, budget = 8000): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  try { const text = JSON.stringify(value); return text.length <= budget ? JSON.parse(text) : undefined; } catch { return undefined; }
+}
+function readModel(m: unknown): AudioModel | null {
+  const entry = (typeof m === "string" ? { id: m } : m) as Record<string, unknown> | null;
+  if (!entry || typeof entry.id !== "string" || !entry.id) return null;
+  const yes = (v: unknown) => v === true || v === "yes" || v === "true";
+  const streaming = typeof entry.streaming === "string" && entry.streaming !== "none" ? entry.streaming : entry.streaming === true ? "sentence" : undefined;
+  const features = jsonValue(entry.features), tags = jsonValue(entry.tags);
+  return { id: entry.id.slice(0, 200), ...(yes(entry.default) ? { default: true } : {}), ...(yes(entry.loaded) ? { loaded: true } : {}),
+    ...(streaming ? { streaming: streaming.slice(0, 40) } : {}),
+    ...(Array.isArray(entry.aliases) ? { aliases: entry.aliases.filter((a): a is string => typeof a === "string").slice(0, 20) } : {}),
+    ...(typeof entry.description === "string" && entry.description.trim() ? { description: entry.description.trim().slice(0, 2000) } : {}),
+    ...(features ? { features } : {}), ...(tags ? { tags } : {}),
+    ...(yes(entry.has_guide) ? { hasGuide: true } : {}),
+    ...(typeof entry.guide === "string" && entry.guide.trim() ? { guide: entry.guide.slice(0, 100_000) } : {}) };
+}
+/**
+ * GET {baseUrl}/models: the OpenAI model list. flagged says it carries the audio server's flags.
+ * Listing loads nothing.
+ */
+export async function listModels(source: OpenAISource, signal: AbortSignal): Promise<AudioModels | ListFailure> {
   const res = await fetch(`${source.baseUrl.replace(/\/+$/, "")}/models`, { headers: authHeaders(source), signal });
   if (!res.ok) { void res.body?.cancel().catch(() => {}); return failed(res.status, "Listing models"); }
   const body = await res.json().catch(() => null) as { data?: unknown } | null;
   const list = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
-  const yes = (v: unknown) => v === true || v === "yes" || v === "true";
   let flagged = false;
-  const models = list.flatMap((m): AudioModel[] => {
-    const entry = (typeof m === "string" ? { id: m } : m) as Record<string, unknown> | null;
-    if (!entry || typeof entry.id !== "string" || !entry.id) return [];
-    if ("default" in entry || "loaded" in entry || "streaming" in entry) flagged = true;
-    const streaming = typeof entry.streaming === "string" && entry.streaming !== "none" ? entry.streaming : entry.streaming === true ? "sentence" : undefined;
-    return [{ id: entry.id.slice(0, 200), ...(yes(entry.default) ? { default: true } : {}), ...(yes(entry.loaded) ? { loaded: true } : {}),
-      ...(streaming ? { streaming: streaming.slice(0, 40) } : {}),
-      ...(Array.isArray(entry.aliases) ? { aliases: entry.aliases.filter((a): a is string => typeof a === "string").slice(0, 20) } : {}) }];
+  const models = list.flatMap(m => {
+    const model = readModel(m);
+    if (model && m && typeof m === "object" && ["default", "loaded", "streaming", "description", "features"].some(k => k in m)) flagged = true;
+    return model ? [model] : [];
   }).slice(0, 1000);
-  return { ok: true, models, flagged };
+  // The full guide comes from GET /models/{id}; the list only says one exists.
+  return { ok: true, models: models.map(({ guide: _guide, ...m }) => m), flagged };
+}
+/** GET {baseUrl}/models/{id}: one model with its Markdown guide (what it supports and how to use it well). Loads nothing. */
+export async function modelInfo(source: OpenAISource, id: string, signal: AbortSignal): Promise<{ ok: true; model: AudioModel } | ListFailure> {
+  const res = await fetch(`${source.baseUrl.replace(/\/+$/, "")}/models/${encodeURIComponent(id)}`, { headers: authHeaders(source), signal });
+  if (res.status === 404) { void res.body?.cancel().catch(() => {}); return { ok: false, error: "engine", message: `This server does not know the model ${id}.` }; }
+  if (!res.ok) { void res.body?.cancel().catch(() => {}); return failed(res.status, "Reading the model"); }
+  const model = readModel(await res.json().catch(() => null));
+  return model ? { ok: true, model } : { ok: false, error: "engine", message: "The server sent no model details." };
 }

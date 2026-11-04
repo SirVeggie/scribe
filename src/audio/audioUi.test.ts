@@ -373,6 +373,7 @@ test("pages list speech sources, models and voices only with audio.speak, and pa
   Object.assign(win.scribeAudio, {
     speechSources: async () => ({ ok: true, default: "k", sources: [{ id: "k", name: "Kokoro", kind: "server" }] }),
     models: async (opts: any) => { asked.push(["models", opts]); return { ok: true, models: [] }; },
+    model: async (opts: any) => { asked.push(["model", opts]); return { ok: true, model: { id: "kokoro", guide: "g" } }; },
     voices: async (opts: any) => { asked.push(["voices", opts]); return { ok: true, voices: [] }; },
     speak: (_text: string, opts: any) => { asked.push(["speak", opts]); return { stop() {}, ended: new Promise(() => {}) }; } });
   assert.equal((await h.request("speech-sources")).permission, "audio.speak", "no click and no grant");
@@ -380,7 +381,8 @@ test("pages list speech sources, models and voices only with audio.speak, and pa
   grant = "allow";
   assert.equal((await h.request("speech-sources")).sources[0].name, "Kokoro");
   await h.request("models", { source: "k" });
+  assert.equal((await h.request("model", { source: "k", model: "kokoro" })).model.guide, "g");
   await h.request("voices", { source: "k", model: "kokoro" });
   await h.request("speak", { text: "Hi.", source: "k", model: "kokoro", voice: "af_heart" });
-  assert.deepEqual(asked.map(([op, o]) => [op, o.source ?? o.sourceId, o.model]), [["models", "k", undefined], ["voices", "k", "kokoro"], ["speak", "k", "kokoro"]]);
+  assert.deepEqual(asked.map(([op, o]) => [op, o.source ?? o.sourceId, o.model]), [["models", "k", undefined], ["model", "k", "kokoro"], ["voices", "k", "kokoro"], ["speak", "k", "kokoro"]]);
 });

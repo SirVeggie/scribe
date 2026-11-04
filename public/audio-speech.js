@@ -226,6 +226,19 @@
     } catch { return failure("network", "Cannot reach text-to-speech."); }
   }
 
-  Object.assign(window.scribeAudio, { speak, voices, speechSources: sources, models, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
+  /** One model with its Markdown guide (GET …/models/{id}); no model: the source's saved one, else the server's default. */
+  async function model(opts = {}) {
+    const view = window.scribeAudio.settings() || await window.scribeAudio.refresh().catch(() => null);
+    const id = typeof opts.source === "string" && opts.source ? opts.source : view?.tts?.source;
+    if (!id) return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
+    if (id === "__browser__") return failure("no_model", "This browser has no models.");
+    try {
+      const res = await fetch("/api/audio/model-info", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "tts", id, ...(typeof opts.model === "string" ? { model: opts.model } : {}) }) });
+      return await res.json();
+    } catch { return failure("network", "Cannot reach text-to-speech."); }
+  }
+
+  Object.assign(window.scribeAudio, { speak, voices, speechSources: sources, models, model, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
   window.addEventListener("pagehide", () => current?.stop());
 })();

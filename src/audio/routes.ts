@@ -37,6 +37,11 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
     try { res.json(await service.models(req.body)); }
     catch { res.json({ ok: false, error: "engine", message: "Cannot list models." }); }
   });
+  /** One model with its Markdown guide: { kind, id, model }. Loads nothing. */
+  router.post("/model-info", async (req, res) => {
+    try { res.json(await service.modelGuide(req.body)); }
+    catch { res.json({ ok: false, error: "engine", message: "Cannot read the model." }); }
+  });
   router.post("/transcriptions", express.raw({ type: "audio/*", limit: MAX_AUDIO_BYTES }), async (req, res) => {
     const tab = req.get("x-scribe-tab");
     try {

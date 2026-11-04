@@ -1,6 +1,6 @@
 import type { OpenAISource } from "../agent/openaiSources.js";
 import { randomUUID } from "node:crypto";
-import { MAX_SPEECH_CHARS, OPENAI_VOICES, listModels, openAiEngine, openAiTts, type AudioModels } from "./engine.js";
+import { MAX_SPEECH_CHARS, OPENAI_VOICES, listModels, modelInfo, openAiEngine, openAiTts, type AudioModel, type AudioModels } from "./engine.js";
 import { fileStore, normalizeSettings, normalizeSpeed, normalizeTtsSource, type AudioStore } from "./settings.js";
 import { BROWSER_SPEECH, type AudioResult, type SttEngine, type SttSource, type AudioSettings, type AudioOutput, type TtsEngine, type TtsFailure, type TtsResult, type TtsSource, type TtsVoices } from "./types.js";
 import type { StreamTarget } from "./stream.js";
@@ -26,8 +26,10 @@ export class AudioService {
   private voiceCache = new Map<string, { at: number; result: TtsVoices }>();
   private modelCache = new Map<string, { at: number; result: AudioModels }>();
   private listModels: typeof listModels;
-  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; tts?: TtsEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void; listModels?: typeof listModels }) {
-    this.listModels = options.listModels ?? listModels;
+  private modelInfo: typeof modelInfo;
+  private guideCache = new Map<string, { at: number; result: { ok: true; model: AudioModel } }>();
+  constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; tts?: TtsEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void; listModels?: typeof listModels; modelInfo?: typeof modelInfo }) {
+    this.listModels = options.listModels ?? listModels; this.modelInfo = options.modelInfo ?? modelInfo;
     this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine; this.tts = options.tts ?? openAiTts; this.onOutput = options.onOutput;
     this.sources = options.sources; this.timeoutMs = options.timeoutMs ?? 60_000;
   }
@@ -264,6 +266,31 @@ export class AudioService {
       this.modelCache.set(key, { at: Date.now(), result: out });
       return out;
     } catch { return { ok: false, error: controller.signal.aborted ? "timeout" : "network", message: controller.signal.aborted ? "Listing models timed out." : "Cannot reach the source." }; }
+    finally { clearTimeout(timer); }
+  }
+  /**
+   * One model with its guide (GET …/models/{id}): what it supports and how to write text for it.
+   * { kind, id (the source), model }; no model means the chosen one, else the server's default.
+   */
+  async modelGuide(draft: unknown = {}): Promise<{ ok: true; model: AudioModel } | TtsFailure> {
+    const body = (draft ?? {}) as Endpoint & { id?: string; kind?: string; model?: unknown };
+    const kind = body.kind === "stt" ? "stt" : "tts";
+    const found = this.draftEndpoint(body, kind);
+    if (!found.ok) return { ok: false, error: "no_source", message: found.message };
+    let id = typeof body.model === "string" ? body.model.trim().slice(0, 200) : (found.profile as { model?: string }).model ?? "";
+    if (!id) {
+      const list = await this.models({ ...body, kind });
+      id = list.ok ? list.models.find(m => m.default)?.id ?? "" : "";
+      if (!id) return { ok: false, error: "engine", message: "This source names no model to describe." };
+    }
+    const key = [kind, found.source.baseUrl, found.source.apiKey ?? "", id].join("\n"), cached = this.guideCache.get(key);
+    if (cached && Date.now() - cached.at < VOICES_TTL_MS) return cached.result;
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const result = await this.modelInfo(found.source, id, controller.signal);
+      if (result.ok) this.guideCache.set(key, { at: Date.now(), result });
+      return result;
+    } catch { return { ok: false, error: controller.signal.aborted ? "timeout" : "network", message: controller.signal.aborted ? "Reading the model timed out." : "Cannot reach the source." }; }
     finally { clearTimeout(timer); }
   }
   async transcribe(audio: Blob, options: { language?: string; prompt?: string; sourceId?: string } = {}): Promise<AudioResult> {

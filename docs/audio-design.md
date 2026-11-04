@@ -364,7 +364,9 @@ and speed; streaming only for a model the server lists with `streaming`). Model 
 plain OpenAI list is cut down to the speech or transcription models. Pages may choose too:
 `scribe.audio.speak(text, { source, model, voice, speed })` with `sources()`, `models({ source })`
 and `voices({ source, model })` to offer the choice, all behind `audio.speak`; each defaults to the
-Settings choice. Voices come
+Settings choice. A model's description, features and Markdown guide (`GET …/models/{id}`,
+`POST /api/audio/model-info`, cached 10 minutes) show in a card on hovering a model picker, and pages
+get them from `scribe.audio.model()`. Voices come
 from the server's `GET …/audio/voices?model=` (`{ voices, default }`), cached for 10 minutes per URL
 and model because asking can load that model; servers without the list get OpenAI's names. An early
 build kept a `speechModel` on speech-to-text sources; `normalizeSettings` moves those once. Shell code is

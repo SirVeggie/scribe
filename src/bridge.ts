@@ -1990,6 +1990,8 @@ ${POINTER_DRAG_JS}
     speak: speak,
     sources: function () { return askBoard({ type: "scribe-audio", op: "speech-sources" }, 30000); },
     models: function (opts) { return askBoard({ type: "scribe-audio", op: "models", source: opts && opts.source }, 30000); },
+    // One model's details and Markdown guide: what it supports and how to write text for it.
+    model: function (opts) { return askBoard({ type: "scribe-audio", op: "model", source: opts && opts.source, model: opts && opts.model }, 30000); },
     // A server may load the model to list its voices (several seconds).
     voices: function (opts) { return askBoard({ type: "scribe-audio", op: "voices", source: opts && opts.source, model: opts && opts.model }, 60000); }
   };

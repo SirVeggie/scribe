@@ -5393,12 +5393,13 @@
       };
       const sourceArg = typeof data.source === "string" ? data.source.slice(0, 100) : undefined;
       const modelArg = typeof data.model === "string" ? data.model.slice(0, 200) : undefined;
-      if (data.op === "speech-sources" || data.op === "models" || data.op === "voices") {
+      if (data.op === "speech-sources" || data.op === "models" || data.op === "model" || data.op === "voices") {
         if (!api.voices) return reply({ ok: false, error: "unavailable" });
         const denied = await speakGate();
         if (denied) return reply(denied);
         if (data.op === "speech-sources") return reply(await api.speechSources());
         if (data.op === "models") return reply(await api.models({ source: sourceArg }));
+        if (data.op === "model") return reply(await api.model({ source: sourceArg, model: modelArg }));
         return reply(await api.voices(sourceArg ? { source: sourceArg, model: modelArg } : {}));
       }
       if (data.op === "speak-stop") {

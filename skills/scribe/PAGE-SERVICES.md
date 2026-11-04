@@ -106,7 +106,10 @@ To offer a choice, list what the user has set up:
 const { sources, default: chosen } = await scribe.audio.sources();
 // sources: [{ id, name, kind: "browser" | "server", model? }]; chosen: the Settings choice, or null when off
 const { models } = await scribe.audio.models({ source: id });
-// [{ id, default?, loaded?, streaming?: "sentence" | "native" }]; empty for This browser
+// [{ id, default?, loaded?, streaming?: "sentence" | "native", aliases?, description?, features?, tags?, hasGuide? }]
+// (the extras when the server sends them); empty for This browser
+const { model: info } = await scribe.audio.model({ source: id, model });
+// the same entry plus guide: Markdown on what the model supports and how to write text for it
 const { voices, default: voice, listed } = await scribe.audio.voices({ source: id, model });
 // [{ id, name, lang? }]
 await scribe.audio.speak(text, { source: id, model, voice });
@@ -116,7 +119,10 @@ await scribe.audio.speak(text, { source: id, model, voice });
 `voice` a `voices()` id, and `speed` is 0.25 to 4. `voices()` without a source lists the chosen
 source's voices. It shows the server's own list when it has one (`listed: true`, with its `default`);
 otherwise it returns OpenAI's names, which other servers may not know. Asking a server for a model's
-voices can load that model, which takes several seconds; `models()` loads nothing.
+voices can load that model, which takes several seconds; `models()` and `model()` load nothing.
+`model()` without a model describes the source's saved one, else the server's default. Show the
+guide to the user, or put it in an agent's prompt so the text suits the model: a model with
+`features.tags` reads `[laugh]`-style tags (`tags` lists them), while others would read them out.
 Failures: `denied`, `no_source`, `hidden`, `rate_limited` (30 requests/minute, 100,000 characters/hour
 per page), `blocked` (the browser blocked playback), `network`, `auth` or `engine`.
 

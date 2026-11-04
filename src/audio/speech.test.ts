@@ -9,7 +9,7 @@ import { audioRouter } from "./routes.js";
 import { PageAudio, SPEECH_LIMITS } from "./page.js";
 import { AudioService } from "./service.js";
 import { memoryStore, normalizeSettings } from "./settings.js";
-import { MAX_SPEECH_CHARS, listModels, openAiTts, type AudioModels } from "./engine.js";
+import { MAX_SPEECH_CHARS, listModels, modelInfo, openAiTts, type AudioModels } from "./engine.js";
 import type { TtsEngine, TtsRequest, TtsResult } from "./types.js";
 
 const source: OpenAISource = { id: "openai", name: "OpenAI", baseUrl: "https://tts.invalid/v1", apiKey: "secret-key", models: [] };
@@ -294,4 +294,39 @@ test("speak takes a source and model from the caller; an empty model asks for th
   assert.equal(calls.at(-1)!.model, undefined);
   await service.speak("Hi.");
   assert.equal(calls.at(-1)!.model, "tts-1", "without a source it is the Settings choice");
+});
+
+test("model details: the list keeps description, features and tags; GET /models/{id} adds the guide; the service resolves the default and caches", async () => {
+  const realFetch = globalThis.fetch;
+  const urls: string[] = [];
+  const entry = { id: "chatterbox-nano", aliases: ["nano"], description: "Expressive, small.", default: false, loaded: false, streaming: "sentence",
+    features: { languages: ["en"], tags: true, options: ["temperature"] }, tags: { style: ["happy"], sound: ["laugh"], reset: "normal" }, has_guide: true };
+  globalThis.fetch = (async (u: string | URL) => {
+    urls.push(String(u));
+    if (String(u).endsWith("/models")) return Response.json({ data: [{ ...entry, guide: "not in lists" }] });
+    if (String(u).endsWith("/models/chatterbox-nano")) return Response.json({ ...entry, guide: "# Chatterbox\nUse [laugh]." });
+    return new Response("no", { status: 404 });
+  }) as typeof fetch;
+  try {
+    const list = await listModels({ ...source, baseUrl: "https://audio.invalid/tts/v1" }, new AbortController().signal);
+    assert.ok(list.ok);
+    assert.deepEqual(list.models[0], { id: "chatterbox-nano", streaming: "sentence", aliases: ["nano"], description: "Expressive, small.",
+      features: entry.features, tags: entry.tags, hasGuide: true });
+    const one = await modelInfo({ ...source, baseUrl: "https://audio.invalid/tts/v1" }, "chatterbox-nano", new AbortController().signal);
+    assert.ok(one.ok && one.model.guide === "# Chatterbox\nUse [laugh].");
+    assert.equal((await modelInfo({ ...source, baseUrl: "https://audio.invalid/tts/v1" }, "missing", new AbortController().signal)).ok, false);
+  } finally { globalThis.fetch = realFetch; }
+
+  const asked: string[] = [];
+  const service = new AudioService({ sources: () => [source], store: memoryStore(),
+    listModels: async () => ({ ok: true, flagged: true, models: [{ id: "kokoro", default: true }, { id: "chatterbox-nano" }] }),
+    modelInfo: async (_s, id) => { asked.push(id); return { ok: true, model: { id, guide: `Guide for ${id}` } }; } });
+  const id = service.saveTtsSource({ name: "Audio", source: "openai" }).ttsSources[0].id;
+  const fallback = await service.modelGuide({ kind: "tts", id });
+  assert.ok(fallback.ok && fallback.model.guide === "Guide for kokoro", "no saved model: the server's default");
+  service.saveTtsSource({ model: "chatterbox-nano" }, id);
+  assert.ok((await service.modelGuide({ kind: "tts", id })).ok);
+  await service.modelGuide({ kind: "tts", id, model: "chatterbox-nano" });
+  assert.deepEqual(asked, ["kokoro", "chatterbox-nano"], "cached per model");
+  assert.equal((await service.modelGuide({ kind: "tts", id: "missing" })).ok, false);
 });
