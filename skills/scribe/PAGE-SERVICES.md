@@ -96,10 +96,12 @@ if (speech.ok) {
   stopButton.onclick = () => speech.stop();
   const end = await speech.ended; // { ok: true, reason: "ended" | "stopped" } or { ok: false, error, message }
 }
-const { voices } = await scribe.audio.voices(); // [{ id, name, lang? }] for the chosen source
+const list = await scribe.audio.voices(); // { ok, voices: [{ id, name, lang? }], default?, listed } for the chosen source
 ```
 
 `voice` is a `voices()` id; leave it out to use the voice from Settings. `speed` is 0.25 to 4.
+`voices()` lists the server's own voices when it has a list (`listed: true`, with its `default`);
+otherwise it returns OpenAI's names, which other servers may not know.
 Failures: `denied`, `no_source`, `hidden`, `rate_limited` (30 requests/minute, 100,000 characters/hour
 per page), `blocked` (the browser blocked playback), `network`, `auth` or `engine`.
 

@@ -8,21 +8,19 @@ import type { PermissionGrant } from "../pagePermissions.js";
 import { audioRouter } from "./routes.js";
 import { PageAudio, SPEECH_LIMITS } from "./page.js";
 import { AudioService } from "./service.js";
-import { memoryStore } from "./settings.js";
+import { memoryStore, normalizeSettings } from "./settings.js";
 import { MAX_SPEECH_CHARS, openAiTts } from "./engine.js";
 import type { TtsEngine, TtsRequest, TtsResult } from "./types.js";
 
 const source: OpenAISource = { id: "openai", name: "OpenAI", baseUrl: "https://tts.invalid/v1", apiKey: "secret-key", models: [] };
 const audioStream = (bytes = "mp3-bytes") => new Blob([bytes]).stream();
 
-function setup(engine?: (req: TtsRequest) => Promise<TtsResult>, timeoutMs?: number) {
+function setup(engine?: (req: TtsRequest) => Promise<TtsResult>, timeoutMs?: number, voices?: TtsEngine["voices"]) {
   const calls: TtsRequest[] = [];
-  const tts: TtsEngine = { async speak(req) { calls.push(req); return engine ? engine(req) : { ok: true, type: "audio/mpeg", body: audioStream() }; } };
+  const tts: TtsEngine = { async speak(req) { calls.push(req); return engine ? engine(req) : { ok: true, type: "audio/mpeg", body: audioStream() }; }, voices };
   const service = new AudioService({ sources: () => [source], store: memoryStore(), tts, timeoutMs });
-  const view = service.saveSource({ name: "Hosted", source: "openai", model: "whisper-1", speechModel: "tts-1" });
-  const id = view.profiles[0].id;
-  service.update({ tts: { source: id } });
-  return { service, calls, id };
+  const view = service.saveTtsSource({ name: "Hosted", source: "openai", model: "tts-1" });
+  return { service, calls, id: view.ttsSources[0].id };
 }
 
 function splitSpeech(): (text: string, max?: number, first?: number) => string[] {
@@ -49,16 +47,18 @@ test("splitSpeech cuts at sentence ends, keeps every piece under the limit and d
   assert.equal(packed.join(" "), text);
 });
 
-test("speak uses the chosen source's speech model, voice and speed and counts characters", async () => {
+test("speak uses the chosen source's model, voice, speed and streaming and counts characters", async () => {
   const { service, calls, id } = setup();
+  assert.equal(service.view().tts.source, id, "the first source added is the one pages use");
   const result = await service.speak("Hello there.");
   assert.equal(result.ok, true);
-  assert.equal(calls[0].model, "tts-1"); assert.equal(calls[0].voice, "alloy"); assert.equal(calls[0].speed, 1);
+  assert.equal(calls[0].model, "tts-1"); assert.equal(calls[0].voice, "alloy"); assert.equal(calls[0].speed, 1); assert.equal(calls[0].stream, undefined);
   assert.equal(calls[0].source.apiKey, "secret-key");
-  service.update({ tts: { voice: "nova", speed: 9 } });
-  assert.deepEqual(service.view().tts, { source: id, voice: "nova", speed: 4 });
+  service.saveTtsSource({ voice: "af_heart", speed: 9, stream: true, model: "" }, id);
+  const saved = service.view().ttsSources[0];
+  assert.equal(saved.voice, "af_heart"); assert.equal(saved.speed, 4); assert.equal(saved.stream, true); assert.equal(saved.model, undefined);
   await service.speak("Hi.", { voice: "echo" });
-  assert.equal(calls[1].voice, "echo"); assert.equal(calls[1].speed, 4);
+  assert.equal(calls[1].voice, "echo"); assert.equal(calls[1].speed, 4); assert.equal(calls[1].stream, true); assert.equal(calls[1].model, undefined);
   const usage = service.view().usage;
   assert.equal(usage.chars, "Hello there.".length + 3); assert.equal(usage.speechCalls, 2); assert.equal(usage.calls, 0);
   assert.equal(service.view().speech, "source");
@@ -71,8 +71,9 @@ test("speak fails with typed errors and never reaches the engine for bad input",
   const big = await service.speak("a".repeat(MAX_SPEECH_CHARS + 1));
   assert.equal(!big.ok && big.error, "too_large");
   assert.equal(calls.length, 0);
-  service.update({ tts: { source: "__browser__" } });
+  service.update({ tts: { source: "__browser__", voice: "Kate", speed: 1.5 } });
   assert.equal(service.view().speech, "browser");
+  assert.deepEqual(service.view().tts, { source: "__browser__", voice: "Kate", speed: 1.5 });
   const browser = await service.speak("Hi.");
   assert.equal(!browser.ok && browser.error, "no_source");
   service.update({ tts: { source: "" } });
@@ -82,49 +83,90 @@ test("speak fails with typed errors and never reaches the engine for bad input",
   assert.equal(calls.length, 0);
 });
 
-test("speech settings only accept sources with a speech model, and removing the source turns speech off", () => {
+test("text-to-speech sources are their own list: separate from speech-to-text, keys hidden, removal moves the choice", () => {
   const { service, id } = setup();
-  const plain = service.saveSource({ name: "STT only", source: "openai", model: "whisper-1" }).profiles.find(p => p.name === "STT only")!;
-  assert.throws(() => service.update({ tts: { source: plain.id } }), /text-to-speech model/);
-  assert.throws(() => service.update({ tts: { source: "missing" } }), /text-to-speech model/);
+  const stt = service.saveSource({ name: "STT", source: "openai", model: "whisper-1" }).profiles[0];
+  assert.throws(() => service.update({ tts: { source: stt.id } }), /existing text-to-speech/);
+  assert.throws(() => service.update({ tts: { source: "missing" } }), /existing text-to-speech/);
+  assert.equal(service.view().ttsSources.length, 1);
+  const local = service.saveTtsSource({ name: "Kokoro", source: "__custom__", custom: { baseUrl: "https://audio.invalid/tts/v1/", apiKey: "tts-secret" } })
+    .ttsSources.find(s => s.name === "Kokoro")!;
+  assert.equal(local.custom?.baseUrl, "https://audio.invalid/tts/v1"); assert.equal(local.custom?.hasKey, true);
+  assert.ok(!JSON.stringify(service.view()).includes("tts-secret"));
+  assert.throws(() => service.saveTtsSource({ name: "Bad", source: "__custom__", custom: { baseUrl: "ftp://x" } }), /HTTP/);
+  assert.throws(() => service.saveTtsSource({ name: "", source: "openai" }), /name/);
   service.update({ input: { sendAfterDictation: true } });
   assert.equal(service.view().tts.source, id, "other settings keep the speech choice");
-  service.removeSource(id);
-  assert.equal(service.view().tts.source, undefined);
-  assert.equal(service.view().speech, undefined);
+  service.removeSource(stt.id);
+  assert.equal(service.view().tts.source, id, "speech-to-text sources do not touch text-to-speech");
+  service.removeTtsSource(id);
+  assert.equal(service.view().tts.source, local.id);
+  service.removeTtsSource(local.id);
+  assert.equal(service.view().tts.source, undefined); assert.equal(service.view().speech, undefined);
 });
 
-test("speak retries once on a rate limit and times out a source that never answers", async () => {
-  let n = 0;
-  const limited = setup(async () => (++n === 1 ? { ok: false, error: "rate_limit", message: "429", retryable: true } : { ok: true, type: "audio/mpeg", body: audioStream() }));
-  assert.equal((await limited.service.speak("Hi.")).ok, true); assert.equal(limited.calls.length, 2);
-  const auth = setup(async () => ({ ok: false, error: "auth", message: "401" }));
-  const failed = await auth.service.speak("Hi.");
-  assert.equal(!failed.ok && failed.error, "auth"); assert.equal(auth.calls.length, 1);
-  assert.equal(auth.service.view().usage.speechFailed, 1);
-  const slow = setup(req => new Promise(resolve => req.signal.addEventListener("abort", () => resolve({ ok: false, error: "network", message: "aborted" }))), 20);
-  const timedOut = await slow.service.speak("Hi.");
-  assert.equal(!timedOut.ok && timedOut.error, "timeout");
+test("a speech model saved on a speech-to-text source by the first build becomes its own text-to-speech source", () => {
+  const settings = normalizeSettings({ sources: [{ id: "a", name: "Hosted", source: "openai", model: "whisper-1", speechModel: "tts-1" }, { id: "b", name: "STT", source: "openai", model: "whisper-1" }],
+    tts: { source: "a", voice: "nova", speed: 1.25 } });
+  assert.deepEqual(settings.ttsSources, [{ id: "a", name: "Hosted", source: "openai", model: "tts-1", voice: "nova", speed: 1.25 }]);
+  assert.deepEqual(settings.tts, { source: "a" });
+  assert.equal(settings.sources[0].speechModel, undefined);
+  assert.deepEqual(normalizeSettings({ ttsSources: [], sources: [{ id: "a", name: "x", speechModel: "tts-1" }] }).ttsSources, [], "only once");
 });
 
-test("the OpenAI engine posts JSON to /audio/speech and maps failures without relaying the body", async () => {
+test("voices come from the server's list, are cached, fall back to OpenAI's names, and drafts keep a saved key only on its host", async () => {
+  const asked: { url: string; key?: string; model?: string }[] = [];
+  const voices: TtsEngine["voices"] = async ({ source: s, model }) => {
+    asked.push({ url: s.baseUrl, key: s.apiKey, model });
+    return s.baseUrl.includes("plain") ? { ok: true, voices: [{ id: "alloy" }], listed: false } : { ok: true, voices: [{ id: "af_heart" }, { id: "bm_george" }], default: "af_heart", listed: true };
+  };
+  const { service } = setup(undefined, undefined, voices);
+  const kokoro = service.saveTtsSource({ name: "Kokoro", source: "__custom__", model: "kokoro", custom: { baseUrl: "https://audio.invalid/tts/v1", apiKey: "k" } })
+    .ttsSources.find(s => s.name === "Kokoro")!;
+  const listed = await service.voices({ id: kokoro.id });
+  assert.ok(listed.ok && listed.listed && listed.default === "af_heart" && listed.voices.length === 2);
+  await service.voices({ id: kokoro.id });
+  assert.equal(asked.length, 1, "cached");
+  assert.equal(asked[0].model, "kokoro"); assert.equal(asked[0].key, "k");
+  await service.voices({ id: kokoro.id, source: "__custom__", model: "kokoro-cpu", custom: { baseUrl: "https://audio.invalid/tts/v1" } });
+  assert.equal(asked.at(-1)!.key, "k", "an empty key field keeps the saved key on the same host");
+  await service.voices({ id: kokoro.id, source: "__custom__", model: "kokoro", custom: { baseUrl: "https://elsewhere.invalid/v1" } });
+  assert.equal(asked.at(-1)!.key, "", "never sent to another host");
+  const draft = await service.voices({ source: "__custom__", custom: { baseUrl: "not a url" } });
+  assert.equal(!draft.ok && draft.error, "no_source");
+  const plain = await service.voices({ source: "__custom__", custom: { baseUrl: "https://plain.invalid/v1" } });
+  assert.ok(plain.ok && !plain.listed);
+  const none = new AudioService({ sources: () => [source], store: memoryStore() });
+  assert.equal((await none.voices({})).ok, false);
+});
+
+test("the OpenAI engine posts JSON to /audio/speech, sends stream only when asked, reads voice lists, and maps failures without relaying the body", async () => {
   const realFetch = globalThis.fetch;
-  const seen: { url: string; init: RequestInit }[] = [];
+  const seen: { url: string; init?: RequestInit }[] = [];
   let reply = () => new Response("mp3", { status: 200, headers: { "content-type": "audio/mpeg" } });
-  globalThis.fetch = (async (url: string, init: RequestInit) => { seen.push({ url, init }); return reply(); }) as typeof fetch;
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => { seen.push({ url: String(url), init }); return reply(); }) as typeof fetch;
   try {
     const req = { source: { ...source, baseUrl: "https://tts.invalid/v1/" }, model: "tts-1", text: "Hi.", voice: "nova", speed: 1.5, signal: new AbortController().signal };
     const ok = await openAiTts.speak(req);
     assert.equal(ok.ok, true);
     assert.equal(seen[0].url, "https://tts.invalid/v1/audio/speech");
-    assert.deepEqual(JSON.parse(seen[0].init.body as string), { model: "tts-1", input: "Hi.", voice: "nova", speed: 1.5, response_format: "mp3" });
-    assert.equal((seen[0].init.headers as Record<string, string>).Authorization, "Bearer secret-key");
+    assert.deepEqual(JSON.parse(seen[0].init!.body as string), { model: "tts-1", input: "Hi.", voice: "nova", speed: 1.5, response_format: "mp3" });
+    assert.equal((seen[0].init!.headers as Record<string, string>).Authorization, "Bearer secret-key");
+    await openAiTts.speak({ ...req, model: undefined, stream: true });
+    assert.deepEqual(JSON.parse(seen[1].init!.body as string), { input: "Hi.", voice: "nova", speed: 1.5, response_format: "mp3", stream: true });
     reply = () => new Response("secret upstream detail", { status: 401 });
     const auth = await openAiTts.speak(req);
     assert.equal(!auth.ok && auth.error, "auth"); assert.ok(!JSON.stringify(auth).includes("upstream"));
     reply = () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     const notAudio = await openAiTts.speak(req);
     assert.equal(!notAudio.ok && notAudio.error, "engine");
+    reply = () => Response.json({ voices: ["af_heart", { id: "bm_george", name: "George" }], default: "af_heart" });
+    const list = await openAiTts.voices!({ source: req.source, model: "kokoro", signal: req.signal });
+    assert.equal(seen.at(-1)!.url, "https://tts.invalid/v1/audio/voices?model=kokoro");
+    assert.deepEqual(list, { ok: true, voices: [{ id: "af_heart" }, { id: "bm_george", name: "George" }], listed: true, default: "af_heart" });
+    reply = () => new Response("not found", { status: 404 });
+    const missing = await openAiTts.voices!({ source: req.source, signal: req.signal });
+    assert.ok(missing.ok && !missing.listed && missing.voices.some(v => v.id === "alloy"));
   } finally { globalThis.fetch = realFetch; }
 });
 

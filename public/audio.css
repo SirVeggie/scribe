@@ -25,3 +25,14 @@ html.popout:not(.desktop).page-audio-recording .chrome { display: flex !importan
 }
 .ag-dictation-live[hidden] { display: none; }
 .audio-settings > .setting-row[hidden] { display: none; }
+/* Source editors (Settings → Audio): fields that do not apply to the chosen source. */
+.audio-source-editor .ag-field[hidden] { display: none; }
+/* The API key field's clear control sits inside the field. */
+.audio-key-box { position: relative; display: flex; }
+.audio-key-box > .ag-input { flex: 1; padding-right: 30px; }
+.audio-key-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.audio-key-clear:hover, .audio-key-clear:focus-visible { color: var(--text); background: var(--hover, rgba(255, 255, 255, 0.08)); }

@@ -1,11 +1,15 @@
 import type { OpenAISource } from "../agent/openaiSources.js";
 import { randomUUID } from "node:crypto";
-import { MAX_SPEECH_CHARS, openAiEngine, openAiTts } from "./engine.js";
-import { fileStore, normalizeSettings, normalizeTts, type AudioStore } from "./settings.js";
-import { BROWSER_SPEECH, type AudioResult, type SttEngine, type SttSource, type AudioSettings, type AudioOutput, type TtsEngine, type TtsFailure, type TtsResult } from "./types.js";
+import { MAX_SPEECH_CHARS, OPENAI_VOICES, openAiEngine, openAiTts } from "./engine.js";
+import { fileStore, normalizeSettings, normalizeSpeed, normalizeTtsSource, type AudioStore } from "./settings.js";
+import { BROWSER_SPEECH, type AudioResult, type SttEngine, type SttSource, type AudioSettings, type AudioOutput, type TtsEngine, type TtsFailure, type TtsResult, type TtsSource, type TtsVoices } from "./types.js";
 import type { StreamTarget } from "./stream.js";
 
 const wavKey = (source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
+type Endpoint = { source?: string; custom?: { baseUrl: string; apiKey?: string } };
+const keyView = <T extends Endpoint>({ custom, ...rest }: T) => ({ ...rest, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) });
+/** Voice lists are cached: asking a server for one can load that model (several seconds). */
+const VOICES_TTL_MS = 10 * 60_000;
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export class AudioService {
   private store: AudioStore;
@@ -17,6 +21,7 @@ export class AudioService {
   private wavOnly = new Set<string>();
   /** Open windows get sound settings over /ws, so a change in one applies in all. */
   private onOutput?: (output: AudioOutput) => void;
+  private voiceCache = new Map<string, { at: number; result: TtsVoices }>();
   constructor(options: { sources: () => OpenAISource[]; store?: AudioStore; engine?: SttEngine; tts?: TtsEngine; timeoutMs?: number; onOutput?: (output: AudioOutput) => void }) {
     this.store = options.store ?? fileStore(); this.engine = options.engine ?? openAiEngine; this.tts = options.tts ?? openAiTts; this.onOutput = options.onOutput;
     this.sources = options.sources; this.timeoutMs = options.timeoutMs ?? 60_000;
@@ -25,11 +30,10 @@ export class AudioService {
     const settings = this.store.read(), selected = this.selected(settings), source = this.source(selected);
     const { custom, ...stt } = settings.stt;
     const sources = this.sources().map(({ id, name, baseUrl }) => ({ id, name, baseUrl }));
-    const profiles = this.profiles(settings).map(({ custom, ...profile }) => ({ ...profile,
-      ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) }));
+    const profiles = this.profiles(settings).map(keyView);
     return { stt: { ...stt, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) },
       input: settings.input, output: settings.output, profiles, defaultSource: settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined),
-      sources, available: Boolean(source), tts: settings.tts, speech: this.speechMode(settings), streaming: source ? (selected as Partial<SttSource>).streaming : undefined, wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
+      sources, available: Boolean(source), tts: settings.tts, ttsSources: settings.ttsSources.map(keyView), speech: this.speechMode(settings), streaming: source ? (selected as Partial<SttSource>).streaming : undefined, wav: Boolean(source && this.wavOnly.has(wavKey(source, selected.model))), usage: this.usage() };
   }
   private profiles(settings: AudioSettings): SttSource[] {
     return [...(settings.stt.source ? [{ ...settings.stt, id: "__legacy__", name: "Speech-to-text" }] : []), ...settings.sources];
@@ -40,8 +44,42 @@ export class AudioService {
   /** How text is read aloud now: by the daemon's source, by the shell's speechSynthesis, or not at all. */
   private speechMode(settings: AudioSettings): "source" | "browser" | undefined {
     if (settings.tts.source === BROWSER_SPEECH) return "browser";
-    const profile = this.profiles(settings).find(s => s.id === settings.tts.source);
-    return profile?.speechModel && this.source(profile) ? "source" : undefined;
+    const profile = settings.ttsSources.find(s => s.id === settings.tts.source);
+    return profile && this.source(profile) ? "source" : undefined;
+  }
+  /** Checks a linked source or a custom URL in place; old is the saved copy whose key it may keep. */
+  private checkEndpoint(profile: Endpoint, old: Endpoint | undefined, body: Endpoint) {
+    if (profile.source === "__custom__") {
+      let url: URL;
+      try { url = new URL(profile.custom?.baseUrl || ""); } catch { throw new Error("Enter a full URL, e.g. https://api.openai.com/v1."); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Use an HTTP or HTTPS URL without credentials.");
+      profile.custom!.baseUrl = url.toString().replace(/\/+$/, "");
+      // A saved credential belongs to its original host.
+      if (old?.custom?.baseUrl && new URL(old.custom.baseUrl).origin !== url.origin && !Object.hasOwn(body.custom || {}, "apiKey")) profile.custom!.apiKey = "";
+    } else {
+      if (!this.sources().some(s => s.id === profile.source)) throw new Error("Choose an existing OpenAI source.");
+      delete profile.custom;
+    }
+  }
+  saveTtsSource(value: unknown, id?: string) {
+    const settings = this.store.read(), old = id ? settings.ttsSources.find(s => s.id === id) : undefined;
+    if (id && !old) throw new Error("Text-to-speech source not found.");
+    const body = (value ?? {}) as Partial<TtsSource>;
+    const profile = normalizeTtsSource({ ...old, ...body, id: id || randomUUID(), custom: body.custom ? { ...old?.custom, ...body.custom } : old?.custom });
+    if (!profile.name) throw new Error("Enter a source name.");
+    this.checkEndpoint(profile, old, body);
+    settings.ttsSources = old ? settings.ttsSources.map(s => s.id === profile.id ? profile : s) : [...settings.ttsSources, profile];
+    // The first source a user adds is the one pages use, unless they chose This browser.
+    settings.tts.source ||= profile.id;
+    this.store.write(settings); return this.view();
+  }
+  removeTtsSource(id: string) {
+    const settings = this.store.read();
+    if (!settings.ttsSources.some(s => s.id === id)) throw new Error("Text-to-speech source not found.");
+    settings.ttsSources = settings.ttsSources.filter(s => s.id !== id);
+    if (settings.tts.source === id) settings.tts.source = settings.ttsSources[0]?.id;
+    if (!settings.tts.source) delete settings.tts.source;
+    this.store.write(settings); return this.view();
   }
   saveSource(value: unknown, id?: string) {
     const settings = this.store.read(), profiles = this.profiles(settings);
@@ -51,17 +89,7 @@ export class AudioService {
     const profile = normalizeSettings({ sources: [{ ...old, ...body, id: id || randomUUID(),
       custom: body?.custom ? { ...old?.custom, ...body.custom } : old?.custom }] }).sources[0];
     if (!profile.name) throw new Error("Enter a source name.");
-    if (profile.source === "__custom__") {
-      let url: URL;
-      try { url = new URL(profile.custom?.baseUrl || ""); } catch { throw new Error("Enter a full speech-to-text URL."); }
-      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Use an HTTP or HTTPS URL without credentials.");
-      profile.custom!.baseUrl = url.toString().replace(/\/+$/, "");
-      // A saved credential belongs to its original host.
-      if (old?.custom?.baseUrl && new URL(old.custom.baseUrl).origin !== url.origin && !Object.hasOwn(body.custom || {}, "apiKey")) profile.custom!.apiKey = "";
-    } else {
-      if (!this.sources().some(s => s.id === profile.source)) throw new Error("Choose an existing OpenAI source.");
-      delete profile.custom;
-    }
+    this.checkEndpoint(profile, old, body);
     settings.sources = old ? profiles.map(s => s.id === profile.id ? profile : s) : [...profiles, profile];
     settings.defaultSource ||= settings.stt.source ? "__legacy__" : profile.id;
     settings.stt = { model: "whisper-1" };
@@ -73,11 +101,10 @@ export class AudioService {
     settings.sources = profiles.filter(s => s.id !== id);
     const selected = settings.defaultSource || (settings.stt.source ? "__legacy__" : undefined);
     settings.defaultSource = selected === id ? settings.sources[0]?.id : selected;
-    if (settings.tts.source === id) delete settings.tts.source;
     settings.stt = { model: "whisper-1" };
     this.store.write(settings); return this.view();
   }
-  private source(stt: ReturnType<AudioStore["read"]>["stt"]): OpenAISource | undefined {
+  private source(stt: Endpoint): OpenAISource | undefined {
     if (stt.source !== "__custom__") return this.sources().find(s => s.id === stt.source);
     if (!stt.custom?.baseUrl) return undefined;
     return { id: "custom", name: "Custom", ...stt.custom, models: [] };
@@ -89,9 +116,9 @@ export class AudioService {
       ...(body?.stt?.custom ? { custom: { ...old.stt.custom, ...body.stt.custom } } : {}) }, input: { ...old.input, ...body?.input },
       output: { ...old.output, ...body?.output, cues: { ...old.output.cues, ...body?.output?.cues } },
       sources: old.sources, defaultSource: (body as Partial<AudioSettings>)?.defaultSource ?? old.defaultSource,
-      tts: { ...old.tts, ...(body as Partial<AudioSettings>)?.tts } });
-    if (next.tts.source && next.tts.source !== BROWSER_SPEECH && !this.profiles(next).some(s => s.id === next.tts.source && s.speechModel))
-      throw new Error("Choose a source with a text-to-speech model.");
+      ttsSources: old.ttsSources, tts: { ...old.tts, ...(body as Partial<AudioSettings>)?.tts } });
+    if (next.tts.source && next.tts.source !== BROWSER_SPEECH && !next.ttsSources.some(s => s.id === next.tts.source))
+      throw new Error("Choose an existing text-to-speech source.");
     if (next.defaultSource && !this.profiles(next).some(s => s.id === next.defaultSource)) throw new Error("Choose an existing speech-to-text source.");
     if (next.stt.custom?.baseUrl) {
       let url: URL;
@@ -137,9 +164,10 @@ export class AudioService {
       const settings = this.store.read();
       const id = options.sourceId ?? settings.tts.source;
       if (id === BROWSER_SPEECH) return fail("no_source", "This browser reads text aloud in the board, not through Scribe.");
-      const profile = this.profiles(settings).find(s => s.id === id), source = profile?.speechModel ? this.source(profile) : undefined;
+      const profile = settings.ttsSources.find(s => s.id === id), source = profile && this.source(profile);
       if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
-      const tts = normalizeTts({ voice: options.voice ?? settings.tts.voice, speed: options.speed ?? settings.tts.speed });
+      const voice = (typeof options.voice === "string" && options.voice.trim().slice(0, 200)) || profile.voice || "alloy";
+      const speed = options.speed === undefined ? profile.speed ?? 1 : normalizeSpeed(options.speed) ?? 1;
       const controller = new AbortController();
       const abort = () => controller.abort();
       if (options.signal?.aborted) return fail("network", "Reading aloud was stopped.");
@@ -150,7 +178,7 @@ export class AudioService {
       }, this.timeoutMs); });
       const run = async (): Promise<TtsResult> => {
         for (let attempt = 0; ; attempt++) {
-          const result = await this.tts.speak({ source, model: profile.speechModel!, text, voice: tts.voice || "alloy", speed: tts.speed ?? 1, signal: controller.signal });
+          const result = await this.tts.speak({ source, model: profile.model, text, voice, speed, stream: profile.stream, signal: controller.signal });
           if (attempt || result.ok || controller.signal.aborted || !(result.error === "rate_limit" || result.retryable)) return result;
           await new Promise(resolve => setTimeout(resolve, 300));
           if (controller.signal.aborted) return fail("timeout", "Text-to-speech timed out.");
@@ -165,6 +193,35 @@ export class AudioService {
       this.recordSpeech(text.length, result.ok);
       return result;
     } catch { return fail("engine", "Text-to-speech is unavailable."); }
+  }
+  /**
+   * Voices for a text-to-speech source: the saved one by id, the chosen one, or a draft from the
+   * editor (which may reuse the saved key of the source it edits). Cached per URL and model.
+   */
+  async voices(draft: unknown = {}): Promise<TtsVoices | TtsFailure> {
+    const fail = (error: TtsFailure["error"], message: string): TtsFailure => ({ ok: false, error, message });
+    const settings = this.store.read(), body = (draft ?? {}) as Partial<TtsSource> & { id?: string };
+    const saved = settings.ttsSources.find(s => s.id === (body.id || settings.tts.source));
+    let profile: TtsSource | undefined = saved;
+    if (body.source) {
+      profile = normalizeTtsSource({ ...body, id: "draft", name: "draft",
+        custom: body.custom ? { ...body.custom, apiKey: body.custom.apiKey || saved?.custom?.apiKey } : undefined });
+      // An empty key field keeps the saved key, but only for the host it was saved for.
+      const typed = body.custom?.apiKey ? body : { ...body, custom: body.custom && { baseUrl: body.custom.baseUrl } };
+      try { this.checkEndpoint(profile, saved, typed); } catch (err) { return fail("no_source", (err as Error).message); }
+    }
+    const source = profile && this.source(profile);
+    if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
+    const key = `${source.baseUrl}\n${profile.model ?? ""}\n${source.apiKey ?? ""}`, cached = this.voiceCache.get(key);
+    if (cached && Date.now() - cached.at < VOICES_TTL_MS) return cached.result;
+    if (!this.tts.voices) return { ok: true, voices: OPENAI_VOICES.map(id => ({ id })), listed: false };
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 30_000));
+    try {
+      const result = await this.tts.voices({ source, model: profile.model, signal: controller.signal });
+      if (result.ok) this.voiceCache.set(key, { at: Date.now(), result });
+      return result;
+    } catch { return fail(controller.signal.aborted ? "timeout" : "network", controller.signal.aborted ? "Listing voices timed out." : "Cannot reach the text-to-speech source."); }
+    finally { clearTimeout(timer); }
   }
   async transcribe(audio: Blob, options: { language?: string; prompt?: string; sourceId?: string } = {}): Promise<AudioResult> {
     try {

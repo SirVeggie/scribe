@@ -24,6 +24,14 @@ export function audioRouter(service: AudioService, pagePermission?: PageAudio): 
   router.post("/sources", (req, res) => { try { res.json(service.saveSource(req.body)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
   router.put("/sources/:id", (req, res) => { try { res.json(service.saveSource(req.body, req.params.id)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
   router.delete("/sources/:id", (req, res) => { try { res.json(service.removeSource(req.params.id)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  router.post("/tts-sources", (req, res) => { try { res.json(service.saveTtsSource(req.body)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  router.put("/tts-sources/:id", (req, res) => { try { res.json(service.saveTtsSource(req.body, req.params.id)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  router.delete("/tts-sources/:id", (req, res) => { try { res.json(service.removeTtsSource(req.params.id)); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
+  /** Voices of a text-to-speech source: {} for the chosen one, { id } for a saved one, or the editor's draft. */
+  router.post("/voices", async (req, res) => {
+    try { res.json(await service.voices(req.body)); }
+    catch { res.json({ ok: false, error: "engine", message: "Cannot list voices." }); }
+  });
   router.post("/transcriptions", express.raw({ type: "audio/*", limit: MAX_AUDIO_BYTES }), async (req, res) => {
     const tab = req.get("x-scribe-tab");
     try {

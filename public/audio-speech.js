@@ -6,7 +6,14 @@
   const FIRST_CHARS = 300;
   // Chrome stops long utterances of network voices after about 15 s.
   const BROWSER_CHARS = 250;
-  const OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
+  const KOKORO_LANGS = { a: "US", b: "UK", e: "Spanish", f: "French", h: "Hindi", i: "Italian", j: "Japanese", p: "Portuguese", z: "Chinese" };
+  /** A readable name for a voice id: Kokoro's "af_heart" is "Heart (US, female)"; OpenAI's "nova" is "Nova". */
+  function voiceName(id) {
+    const kokoro = /^([abefhijpz])([fm])_([a-z0-9_]+)$/i.exec(id);
+    const title = word => word.replace(/_/g, " ").replace(/\b\w/g, ch => ch.toUpperCase());
+    if (kokoro) return `${title(kokoro[3])} (${KOKORO_LANGS[kokoro[1].toLowerCase()]}, ${kokoro[2].toLowerCase() === "f" ? "female" : "male"})`;
+    return title(id);
+  }
   const failure = (error, message) => ({ ok: false, error, message });
 
   /** Splits text at sentence ends into pieces of at most max characters (the first at most first); a sentence longer than max is cut at a comma or space. */
@@ -158,7 +165,8 @@
     current = session;
     session.ended = (async () => {
       const view = window.scribeAudio.settings() || await window.scribeAudio.refresh().catch(() => null);
-      const mode = opts.mode || view?.speech;
+      // sourceId: Settings tests one source before it is chosen.
+      const mode = opts.mode || (opts.sourceId ? (opts.sourceId === "__browser__" ? "browser" : "source") : view?.speech);
       const settings = view?.tts || {};
       const merged = { ...opts, voice: opts.voice ?? settings.voice, speed: opts.speed ?? settings.speed };
       if (!String(text ?? "").trim()) return failure("invalid_audio", "Give the text to read aloud.");
@@ -172,16 +180,27 @@
     return session;
   }
 
-  /** Voices for the chosen text-to-speech source: the browser's own, or the OpenAI names (other servers may accept others). */
-  async function voices() {
-    const view = await window.scribeAudio.refresh().catch(() => window.scribeAudio.settings());
-    if (view?.speech === "browser")
-      return { ok: true, source: "browser", voices: (await browserVoices()).map(v => ({ id: v.name, name: v.name, lang: v.lang })) };
-    if (view?.speech !== "source") return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
-    const names = [...new Set([...(view.tts?.voice ? [view.tts.voice] : []), ...OPENAI_VOICES])];
-    return { ok: true, source: "source", voices: names.map(id => ({ id, name: id[0].toUpperCase() + id.slice(1) })) };
+  /**
+   * Voices for the chosen text-to-speech source: the browser's own, or the server's list
+   * (GET …/audio/voices, through the daemon). Servers without a list get the OpenAI names (listed: false).
+   * opts.source: "browser", or a source to ask about: { id } for a saved one, or the editor's draft.
+   */
+  async function voices(opts = {}) {
+    let mode = opts.source === "browser" ? "browser" : opts.source ? "source" : undefined;
+    if (!mode) mode = (await window.scribeAudio.refresh().catch(() => window.scribeAudio.settings()))?.speech;
+    if (mode === "browser")
+      return { ok: true, source: "browser", listed: true, voices: (await browserVoices()).map(v => ({ id: v.name, name: v.name, lang: v.lang })) };
+    if (mode !== "source") return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
+    try {
+      const res = await fetch("/api/audio/voices", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(typeof opts.source === "object" ? opts.source : {}) });
+      const result = await res.json();
+      if (!result.ok) return result;
+      return { ok: true, source: "source", listed: result.listed, ...(result.default ? { default: result.default } : {}),
+        voices: result.voices.map(v => ({ id: v.id, name: v.name || voiceName(v.id) })) };
+    } catch { return failure("network", "Cannot reach text-to-speech."); }
   }
 
-  Object.assign(window.scribeAudio, { speak, voices, splitSpeech, stopSpeech: () => current?.stop() });
+  Object.assign(window.scribeAudio, { speak, voices, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
   window.addEventListener("pagehide", () => current?.stop());
 })();

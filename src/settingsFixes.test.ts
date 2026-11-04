@@ -35,131 +35,164 @@ test("background picker renders real previews, toggles choices, and disposes eff
   } finally { await browser.close(); }
 });
 
-test("speech settings add, edit, select, test and remove multiple sources", async () => {
+/** Settings → Audio in a page, its /api/audio calls answered by a real AudioService. */
+async function audioSettingsPage(browser: Awaited<ReturnType<typeof launchChromium>>, service: AudioService, extra = "") {
+  const page = await browser.newPage();
+  const seen = { tested: "", errors: [] as string[] };
+  page.on("pageerror", err => seen.errors.push(err.message));
+  await page.route("http://audio.test/**", async route => {
+    const req = route.request(), path = new URL(req.url()).pathname.replace("/api/audio", ""), method = req.method();
+    const body = () => req.postDataJSON();
+    try {
+      if (path === "/test") { seen.tested = body().sourceId; return route.fulfill({ json: { ok: true, text: "Words" } }); }
+      if (path === "/voices") return route.fulfill({ json: await service.voices(body()) });
+      const [, kind, id] = path.split("/").map(decodeURIComponent);
+      let view = service.view();
+      if (kind === "sources") view = method === "DELETE" ? service.removeSource(id) : service.saveSource(body(), id);
+      else if (kind === "tts-sources") view = method === "DELETE" ? service.removeTtsSource(id) : service.saveTtsSource(body(), id);
+      else if (method === "PUT") view = service.update(body());
+      return route.fulfill({ json: view });
+    } catch (err) { return route.fulfill({ status: 400, json: { error: (err as Error).message } }); }
+  });
+  await page.goto("http://audio.test/");
+  for (const name of ["app.css", "agent.css", "audio.css"]) await page.addStyleTag({ content: source(name) });
+  await page.addScriptTag({ content: `window.scribeAudio = { refresh: async () => (await fetch("/api/audio/settings")).json(), device: () => "",
+    voiceName: id => id, voices: async opts => opts.source === "browser" ? { ok: true, voices: [{ id: "Kate", name: "Kate", lang: "en-GB" }] }
+      : (await fetch("/api/audio/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts.source) })).json(),
+    speak: (text, opts) => { window.spoken = opts?.sourceId; return { stop() {}, ended: Promise.resolve({ ok: false, error: "blocked", message: "Playback blocked" }) }; } };
+    window.scribeChat = { openModelSources: () => document.body.dataset.sources = "open" }; ${extra}` });
+  await page.addScriptTag({ content: source("select.js") });
+  await page.addScriptTag({ content: source("audio-settings.js") });
+  await page.evaluate(async () => {
+    const settings = (window as any).scribeAudioSettings;
+    document.body.append(...settings.sections); await settings.refresh();
+  });
+  return { page, seen };
+}
+
+test("speech settings add, edit, select, test and remove multiple sources in a modal", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Custom speech settings test" });
   try {
-    const page = await browser.newPage();
     const linked = { id: "linked", name: "Model API", baseUrl: "https://models.invalid/v1", apiKey: "model-secret", models: [] };
     const service = new AudioService({ sources: () => [linked], store: memoryStore() });
-    let tested = "";
-    await page.route("http://audio.test/**", route => {
-      const req = route.request(), path = new URL(req.url()).pathname;
-      if (path.endsWith("/test")) { tested = req.postDataJSON().sourceId; return route.fulfill({ json: { ok: true, text: "Words" } }); }
-      let view = service.view();
-      if (path === "/api/audio/sources") view = service.saveSource(req.postDataJSON());
-      else if (path.startsWith("/api/audio/sources/")) {
-        const id = decodeURIComponent(path.split("/").at(-1)!);
-        view = req.method() === "DELETE" ? service.removeSource(id) : service.saveSource(req.postDataJSON(), id);
-      } else if (req.method() === "PUT") view = service.update(req.postDataJSON());
-      return route.fulfill({ json: view });
-    });
-    await page.goto("http://audio.test/");
-    await page.addStyleTag({ content: source("app.css") });
-    await page.addScriptTag({ content: `window.scribeAudio = { refresh: async () => (await fetch("/api/audio/settings")).json(), device: () => "" }; window.scribeChat = { openModelSources: () => document.body.dataset.sources = "open" };` });
-    await page.addScriptTag({ content: source("select.js") });
-    await page.addScriptTag({ content: source("audio-settings.js") });
-    await page.evaluate(async () => {
-      const settings = (window as any).scribeAudioSettings;
-      document.body.append(...settings.sections); await settings.refresh();
-    });
-    assert.equal(await page.locator("#audio-url").isVisible(), false);
-    await page.getByRole("button", { name: "Add source", exact: true }).click();
+    const { page, seen } = await audioSettingsPage(browser, service);
+    const modal = page.locator(".audio-stt-editor");
+    const add = page.getByRole("button", { name: "Add speech-to-text source" });
+    await add.click();
     await page.locator("#audio-name").fill("Local");
     await page.locator("#audio-url").fill("http://localhost:9000/v1");
     await page.locator("#audio-key").fill("custom-key");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await modal.getByRole("button", { name: "Save", exact: true }).click();
     await page.getByRole("radio", { name: "Use Local by default" }).waitFor();
+    assert.equal(await modal.count(), 0, "the modal closes on save");
     const local = service.view().defaultSource!;
-    await page.getByRole("button", { name: "Add source", exact: true }).click();
+    await add.click();
     await page.locator("#audio-name").fill("Hosted");
     await page.locator("#audio-url").fill("https://speech.invalid/v1");
     await page.locator("#audio-model").fill("speech-model");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.locator("#audio-model").press("Enter");
     await page.getByRole("radio", { name: "Use Hosted by default" }).check();
-    await page.waitForFunction(() => document.querySelectorAll(".ml-source").length === 2);
+    await page.waitForFunction(() => document.querySelectorAll(".audio-settings:first-of-type .ml-source").length === 2);
     const hosted = service.view().profiles.find(s => s.name === "Hosted")!.id;
     const hostedRow = page.locator(".ml-source").filter({ hasText: "Hosted" });
     await hostedRow.getByRole("button", { name: "Test", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "Transcript: Words" }).waitFor();
-    assert.equal(tested, hosted); assert.equal(service.view().defaultSource, hosted);
+    assert.equal(seen.tested, hosted); assert.equal(service.view().defaultSource, hosted);
     await page.locator(".ml-source").filter({ hasText: "Local" }).getByRole("button", { name: "Edit", exact: true }).click();
     assert.equal(await page.locator("#audio-url").inputValue(), "http://localhost:9000/v1");
     assert.equal(await page.locator("#audio-url").isEditable(), true);
     await page.locator("#audio-name").fill("Renamed");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await modal.getByRole("button", { name: "Save", exact: true }).click();
     await page.getByRole("radio", { name: "Use Renamed by default" }).waitFor();
     assert.equal(service.view().profiles.find(s => s.id === local)!.custom?.hasKey, true);
-    await hostedRow.getByRole("button", { name: "Remove", exact: true }).click();
-    await page.waitForFunction(() => document.querySelectorAll(".ml-source").length === 1);
+    await hostedRow.getByRole("button", { name: "Edit", exact: true }).click();
+    await modal.getByRole("button", { name: "Remove", exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".audio-settings:first-of-type .ml-source").length === 1);
     assert.equal(service.view().defaultSource, local);
     service.saveSource({ name: "Linked", source: linked.id, model: "speech-model" });
     assert.ok(!JSON.stringify(service.view()).includes("model-secret"));
     await page.evaluate(() => (window as any).scribeAudioSettings.refresh());
     await page.locator(".ml-source").filter({ hasText: "Linked" }).getByRole("button", { name: "Edit", exact: true }).click();
-    assert.equal(await page.locator("#audio-url").isVisible(), true);
     assert.equal(await page.locator("#audio-url").inputValue(), linked.baseUrl);
     assert.equal(await page.locator("#audio-url").isEditable(), false);
-    await page.getByRole("button", { name: "Source", exact: true }).click();
+    assert.equal(await page.locator("#audio-key").isVisible(), false);
+    await modal.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("option", { name: "Custom", exact: true }).click();
     await page.locator("#audio-url").fill("https://custom.invalid/v1");
-    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await modal.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("option", { name: linked.name, exact: true }).click();
     assert.equal(await page.locator("#audio-url").inputValue(), linked.baseUrl);
-    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await modal.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("option", { name: "Custom", exact: true }).click();
     assert.equal(await page.locator("#audio-url").inputValue(), "https://custom.invalid/v1");
+    await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal(await modal.count(), 0);
     await page.getByRole("button", { name: "Model sources →" }).click();
     assert.equal(await page.locator("body").getAttribute("data-sources"), "open");
+    assert.deepEqual(seen.errors, []);
   } finally { await browser.close(); }
 });
 
-test("text-to-speech settings choose a source with a speech model or this browser, save voice and speed, and test", async () => {
+test("text-to-speech has its own source list: add with the server's voices, choose, browser voice, off, test and remove", async () => {
   const browser = await launchChromium({ headless: true, args: [], purpose: "Text-to-speech settings test" });
   try {
-    const page = await browser.newPage();
     const linked = { id: "linked", name: "Model API", baseUrl: "https://models.invalid/v1", apiKey: "model-secret", models: [] };
-    const service = new AudioService({ sources: () => [linked], store: memoryStore() });
+    const asked: (string | undefined)[] = [];
+    const service = new AudioService({ sources: () => [linked], store: memoryStore(), tts: {
+      speak: async () => ({ ok: false, error: "engine", message: "unused" }),
+      voices: async ({ model }) => { asked.push(model); return { ok: true, voices: [{ id: "af_heart" }, { id: "bm_george" }], default: "af_heart", listed: true }; } } });
     service.saveSource({ name: "Transcribe only", source: linked.id, model: "whisper-1" });
-    const voiced = service.saveSource({ name: "Voiced", source: linked.id, model: "whisper-1", speechModel: "tts-1" }).profiles.find(p => p.name === "Voiced")!.id;
-    await page.route("http://audio.test/**", route => {
-      const req = route.request();
-      return route.fulfill({ json: req.method() === "PUT" ? service.update(req.postDataJSON()) : service.view() });
-    });
-    await page.goto("http://audio.test/");
-    await page.addStyleTag({ content: source("app.css") });
-    await page.addStyleTag({ content: source("audio.css") });
-    await page.addScriptTag({ content: `window.scribeAudio = { refresh: async () => (await fetch("/api/audio/settings")).json(), device: () => "",
-      voices: async () => ({ ok: true, voices: [{ id: "Kate", name: "Kate", lang: "en-GB" }] }),
-      speak: text => { window.spoken = text; return { stop() {}, ended: Promise.resolve({ ok: false, error: "blocked", message: "Playback blocked" }) }; } };` });
-    await page.addScriptTag({ content: source("select.js") });
-    await page.addScriptTag({ content: source("audio-settings.js") });
-    await page.evaluate(async () => {
-      const settings = (window as any).scribeAudioSettings;
-      document.body.append(...settings.sections); await settings.refresh();
-    });
-    assert.equal(await page.locator("#audio-tts-speed").isVisible(), false);
-    await page.getByRole("button", { name: "Read aloud with", exact: true }).click();
-    assert.equal(await page.getByRole("option", { name: "Transcribe only", exact: true }).count(), 0);
-    await page.getByRole("option", { name: "Voiced", exact: true }).click();
-    await page.locator("#audio-tts-voice-name").waitFor();
-    assert.equal(service.view().tts.source, voiced);
-    await page.locator("#audio-tts-voice-name").fill("nova");
-    await page.locator("#audio-tts-speed").fill("1.5");
-    await page.locator("#audio-tts-speed").blur();
-    await page.waitForFunction(() => document.querySelector<HTMLInputElement>("#audio-tts-speed")!.value === "1.5");
-    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.speed === 1.5);
-    assert.deepEqual(service.view().tts, { source: voiced, voice: "nova", speed: 1.5 });
-    await page.getByRole("button", { name: "Read aloud with", exact: true }).click();
-    await page.getByRole("option", { name: "This browser", exact: true }).click();
-    await page.locator("#audio-tts-voice").waitFor({ state: "attached" });
-    await page.waitForFunction(() => !document.querySelector("#audio-tts-voice")!.closest(".setting-row")!.hasAttribute("hidden"));
-    assert.equal(await page.locator("#audio-tts-voice-name").isVisible(), false);
-    assert.deepEqual(service.view().tts, { source: "__browser__", speed: 1.5 });
-    await page.getByRole("button", { name: "Voice", exact: true }).click();
-    await page.getByRole("option", { name: "Kate (en-GB)", exact: true }).click();
-    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.voice === "Kate");
-    await page.locator(".audio-settings").nth(1).getByRole("button", { name: "Test", exact: true }).click();
+    const { page, seen } = await audioSettingsPage(browser, service);
+    const tts = page.locator(".audio-settings").nth(1), modal = page.locator(".audio-tts-editor");
+    assert.equal(await tts.locator(".ml-source").count(), 2, "Off and This browser; speech-to-text sources are not listed");
+    assert.ok(await tts.getByRole("radio", { name: "Turn text-to-speech off" }).isChecked());
+    await page.getByRole("button", { name: "Add text-to-speech source" }).click();
+    await page.locator("#audio-tts-name").fill("Kokoro");
+    await page.locator("#audio-tts-url").fill("https://audio.invalid/tts/v1");
+    await page.locator("#audio-tts-key").fill("tts-key");
+    await page.locator("#audio-tts-model").fill("kokoro");
+    await page.locator("#audio-tts-model").blur();
+    await page.waitForFunction(() => document.querySelectorAll("#audio-tts-voice option").length === 3);
+    assert.equal(asked.at(-1), "kokoro");
+    await modal.getByRole("button", { name: "Voice", exact: true }).click();
+    await page.getByRole("option", { name: "bm_george", exact: true }).click();
+    await page.locator("#audio-tts-speed").fill("1.25");
+    await page.locator("#audio-tts-stream").check();
+    await modal.getByRole("button", { name: "Save", exact: true }).click();
+    await tts.getByRole("radio", { name: "Read aloud with Kokoro" }).waitFor();
+    const saved = service.view().ttsSources[0];
+    assert.deepEqual({ ...saved, id: "" }, { id: "", name: "Kokoro", source: "__custom__", model: "kokoro", voice: "bm_george", speed: 1.25, stream: true,
+      custom: { baseUrl: "https://audio.invalid/tts/v1", hasKey: true } });
+    assert.equal(service.view().tts.source, saved.id, "the first source becomes the chosen one");
+    assert.ok(await tts.getByRole("radio", { name: "Read aloud with Kokoro" }).isChecked());
+    await tts.locator(".ml-source").filter({ hasText: "Kokoro" }).getByRole("button", { name: "Test", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "Playback blocked" }).waitFor();
-    assert.ok(await page.evaluate(() => (window as any).spoken));
+    assert.equal(await page.evaluate(() => (window as any).spoken), saved.id);
+    await tts.getByRole("radio", { name: "Read aloud with this browser" }).check();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.source === "__browser__");
+    await tts.locator(".ml-source").filter({ hasText: "This browser" }).getByRole("button", { name: "Edit", exact: true }).click();
+    const browserModal = page.locator(".audio-tts-editor");
+    await page.waitForFunction(() => document.querySelectorAll("#audio-browser-voice option").length === 2);
+    await browserModal.getByRole("button", { name: "Voice", exact: true }).click();
+    await page.getByRole("option", { name: "Kate (en-GB)", exact: true }).click();
+    await page.locator("#audio-browser-speed").fill("1.5");
+    await browserModal.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.voice === "Kate");
+    assert.deepEqual(service.view().tts, { source: "__browser__", voice: "Kate", speed: 1.5 });
+    await tts.getByRole("radio", { name: "Turn text-to-speech off" }).check();
+    await page.waitForFunction(async () => !(await (await fetch("/api/audio/settings")).json()).tts.source);
+    await tts.locator(".ml-source").filter({ hasText: "Kokoro" }).getByRole("button", { name: "Edit", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#audio-tts-voice")?.value === "bm_george");
+    assert.equal(await page.locator("#audio-tts-key").getAttribute("placeholder"), "Saved (type to replace)");
+    await modal.getByRole("button", { name: "Clear saved key" }).click();
+    assert.equal(service.view().ttsSources[0].custom?.hasKey, true, "clearing waits for Save");
+    await modal.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForFunction(async () => !(await (await fetch("/api/audio/settings")).json()).ttsSources[0].custom.hasKey);
+    await tts.locator(".ml-source").filter({ hasText: "Kokoro" }).getByRole("button", { name: "Edit", exact: true }).click();
+    assert.equal(await modal.getByRole("button", { name: "Clear saved key" }).count(), 0);
+    await modal.getByRole("button", { name: "Remove", exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".audio-settings:nth-of-type(2) .ml-source").length === 2);
+    assert.equal(service.view().ttsSources.length, 0);
+    assert.deepEqual(seen.errors, []);
   } finally { await browser.close(); }
 });

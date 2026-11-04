@@ -351,9 +351,14 @@ Original plan:
 
 ## Phase D: text-to-speech
 
-Built (#565): sources in Settings → Audio take an optional text-to-speech model, so speech uses the
-same source list and editor as transcription, with its own choice under "Text-to-speech" (`tts` in
-`audio-settings.json`: source, voice, speed; source `__browser__` is "This browser"). Shell code is
+Built (#565): text-to-speech has its own list of sources in Settings → Audio (`ttsSources` in
+`audio-settings.json`: linked model source or custom URL and key, model (empty: the server's loaded
+one), voice, speed, and `stream`, which sends the non-standard `stream: true` so the server sends
+audio while it generates it). `tts.source` picks one, or `__browser__` for "This browser", whose own
+voice and speed are `tts.voice` / `tts.speed`. Both lists add and edit sources in a modal. Voices come
+from the server's `GET …/audio/voices?model=` (`{ voices, default }`), cached for 10 minutes per URL
+and model because asking can load that model; servers without the list get OpenAI's names. An early
+build kept a `speechModel` on speech-to-text sources; `normalizeSettings` moves those once. Shell code is
 `public/audio-speech.js` (`scribeAudio.speak`, `voices`, `splitSpeech`); it plays through an
 `<audio>` element routed into the mixer's `speech` channel (`scribeAudio.route`), or on its own while
 the context cannot start yet. Daily usage counts
