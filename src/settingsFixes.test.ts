@@ -112,3 +112,54 @@ test("speech settings add, edit, select, test and remove multiple sources", asyn
     assert.equal(await page.locator("body").getAttribute("data-sources"), "open");
   } finally { await browser.close(); }
 });
+
+test("text-to-speech settings choose a source with a speech model or this browser, save voice and speed, and test", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Text-to-speech settings test" });
+  try {
+    const page = await browser.newPage();
+    const linked = { id: "linked", name: "Model API", baseUrl: "https://models.invalid/v1", apiKey: "model-secret", models: [] };
+    const service = new AudioService({ sources: () => [linked], store: memoryStore() });
+    service.saveSource({ name: "Transcribe only", source: linked.id, model: "whisper-1" });
+    const voiced = service.saveSource({ name: "Voiced", source: linked.id, model: "whisper-1", speechModel: "tts-1" }).profiles.find(p => p.name === "Voiced")!.id;
+    await page.route("http://audio.test/**", route => {
+      const req = route.request();
+      return route.fulfill({ json: req.method() === "PUT" ? service.update(req.postDataJSON()) : service.view() });
+    });
+    await page.goto("http://audio.test/");
+    await page.addStyleTag({ content: source("app.css") });
+    await page.addStyleTag({ content: source("audio.css") });
+    await page.addScriptTag({ content: `window.scribeAudio = { refresh: async () => (await fetch("/api/audio/settings")).json(), device: () => "",
+      voices: async () => ({ ok: true, voices: [{ id: "Kate", name: "Kate", lang: "en-GB" }] }),
+      speak: text => { window.spoken = text; return { stop() {}, ended: Promise.resolve({ ok: false, error: "blocked", message: "Playback blocked" }) }; } };` });
+    await page.addScriptTag({ content: source("select.js") });
+    await page.addScriptTag({ content: source("audio-settings.js") });
+    await page.evaluate(async () => {
+      const settings = (window as any).scribeAudioSettings;
+      document.body.append(...settings.sections); await settings.refresh();
+    });
+    assert.equal(await page.locator("#audio-tts-speed").isVisible(), false);
+    await page.getByRole("button", { name: "Read aloud with", exact: true }).click();
+    assert.equal(await page.getByRole("option", { name: "Transcribe only", exact: true }).count(), 0);
+    await page.getByRole("option", { name: "Voiced", exact: true }).click();
+    await page.locator("#audio-tts-voice-name").waitFor();
+    assert.equal(service.view().tts.source, voiced);
+    await page.locator("#audio-tts-voice-name").fill("nova");
+    await page.locator("#audio-tts-speed").fill("1.5");
+    await page.locator("#audio-tts-speed").blur();
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>("#audio-tts-speed")!.value === "1.5");
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.speed === 1.5);
+    assert.deepEqual(service.view().tts, { source: voiced, voice: "nova", speed: 1.5 });
+    await page.getByRole("button", { name: "Read aloud with", exact: true }).click();
+    await page.getByRole("option", { name: "This browser", exact: true }).click();
+    await page.locator("#audio-tts-voice").waitFor({ state: "attached" });
+    await page.waitForFunction(() => !document.querySelector("#audio-tts-voice")!.closest(".setting-row")!.hasAttribute("hidden"));
+    assert.equal(await page.locator("#audio-tts-voice-name").isVisible(), false);
+    assert.deepEqual(service.view().tts, { source: "__browser__", speed: 1.5 });
+    await page.getByRole("button", { name: "Voice", exact: true }).click();
+    await page.getByRole("option", { name: "Kate (en-GB)", exact: true }).click();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.voice === "Kate");
+    await page.locator(".audio-settings").nth(1).getByRole("button", { name: "Test", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "Playback blocked" }).waitFor();
+    assert.ok(await page.evaluate(() => (window as any).spoken));
+  } finally { await browser.close(); }
+});

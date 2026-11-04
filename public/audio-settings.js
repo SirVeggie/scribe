@@ -245,14 +245,15 @@
     ttsVoice.closest(".setting-row").hidden = !browser;
     ttsVoiceName.closest(".setting-row").hidden = browser || !tts.source;
     ttsSpeed.closest(".setting-row").hidden = !tts.source; testSpeech.hidden = !tts.source;
-    ttsSpeed.value = String(tts.speed ?? 1);
+    // A save re-renders; leave the field being typed in alone.
+    if (document.activeElement !== ttsSpeed) ttsSpeed.value = String(tts.speed ?? 1);
     if (browser) {
       ttsVoice.replaceChildren(); option(ttsVoice, "", "Default voice");
       const list = await window.scribeAudio.voices().catch(() => null);
       (list?.voices || []).forEach(v => option(ttsVoice, v.id, v.lang ? v.name + " (" + v.lang + ")" : v.name));
       if (tts.voice && ![...ttsVoice.options].some(o => o.value === tts.voice)) option(ttsVoice, tts.voice, tts.voice + " (unavailable)");
       ttsVoice.value = tts.voice || ""; ttsVoice.parentElement.syncSelect();
-    } else ttsVoiceName.value = tts.voice || "";
+    } else if (document.activeElement !== ttsVoiceName) ttsVoiceName.value = tts.voice || "";
     const chars = view.usage?.chars || 0;
     if (!speaking) speechStatus.textContent = chars && !browser ? "Read aloud today: " + chars.toLocaleString() + " characters" : "";
   }
