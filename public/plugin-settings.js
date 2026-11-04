@@ -53,13 +53,15 @@
     const render=window.AgentRender,files=preview.diff&&render?render.parsePatch(preview.diff):[];
     const sources=Object.entries(preview.source??{"plugin.json":JSON.stringify(m,null,2)});
     const fileHead=(path,extra)=>{const line=el("div","plugin-code-file");line.append(el("span","plugin-code-path",path));if(extra)line.append(extra);return line;};
+    // Each file in its own box, so its sticky header leaves with it when the next file arrives.
+    const section=(...parts)=>{const box=el("div","plugin-code-section");box.append(...parts);return box;};
     const tabs={
       changes:()=>{
         if(!files.length){view.append(preview.diff?el("pre","plugin-source",preview.diff):el("p","plugin-code-empty","No file changes."));return;}
-        for(const file of files){const sum=el("span","plugin-code-sum");sum.append(el("span","plugin-code-add",`+${file.added}`),el("span","plugin-code-del",`−${file.removed}`));view.append(fileHead(file.path,sum),render.renderDiffFile(file,{collapsedAfter:300}));}
+        for(const file of files){const sum=el("span","plugin-code-sum");sum.append(el("span","plugin-code-add",`+${file.added}`),el("span","plugin-code-del",`−${file.removed}`));view.append(section(fileHead(file.path,sum),render.renderDiffFile(file,{collapsedAfter:300})));}
       },
       source:()=>{
-        for(const [path,text] of sources)view.append(fileHead(path),el("pre","plugin-code-text",text));
+        for(const [path,text] of sources)view.append(section(fileHead(path),el("pre","plugin-code-text",text)));
         if(preview.sourceTruncated)view.append(el("p","plugin-code-empty","Source preview is limited; inspect the original archive for the complete source."));
       },
     };
