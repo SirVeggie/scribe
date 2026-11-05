@@ -449,6 +449,7 @@
     discardFrame,
     selectTab: (id) => selectTab(id, { fromUser: true }),
     openPage,
+    closeTab: (id) => closeTab(id),
     showNotice,
     linkMode,
     markSeen,

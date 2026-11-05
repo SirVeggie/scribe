@@ -377,6 +377,8 @@ window.createViews = function createViews(host) {
   /** Temporary pages this window just made, so the sweep leaves them until a view shows them. */
   const freshTemps = new Map();
   const TEMP_GRACE_MS = 5000;
+  /** Temporary pages a split gave a tab (ensureTab): its pane's close button closes the tab too. */
+  const splitMade = new Set();
 
   /** The page meta once the board has it (it arrives over the socket after the request returns). */
   async function arrived(id) {
@@ -939,7 +941,7 @@ window.createViews = function createViews(host) {
       parts.push(iconButton(ICONS.peek, "Show as peek", () => paneToPeek(pane)));
     }
     if (closable) {
-      parts.push(iconButton(ICONS.close, "Close pane", () => closePane(pane), false));
+      parts.push(iconButton(ICONS.close, "Close pane", () => closePane(pane, { dismiss: true }), false));
     }
     head.replaceChildren(...parts);
     renderBody(body, target);
@@ -1099,6 +1101,9 @@ window.createViews = function createViews(host) {
     if (target.kind !== "page" || showable(target.id)) {
       return;
     }
+    if (host.findAnyTab(target.id)?.temp) {
+      splitMade.add(target.id);
+    }
     opening.add(target.id);
     Promise.resolve(host.openPage(target.id, { activate: false })).finally(() => {
       // The tab arrives over the socket; give it a moment before the split may be pruned without it.
@@ -1153,10 +1158,18 @@ window.createViews = function createViews(host) {
     return target;
   }
 
-  /** Close a pane. Closing the focused pane moves focus to the nearest page beside it. */
-  function closePane(pane) {
-    if (!takePane(pane)) {
+  /**
+   * Close a pane. Closing the focused pane moves focus to the nearest page beside it. `dismiss`
+   * (the pane's close button) also closes a temporary page the split opened (#1009): the browser
+   * view, a site or a file link opened in Split mode.
+   */
+  function closePane(pane, { dismiss = false } = {}) {
+    const target = takePane(pane);
+    if (!target) {
       return false;
+    }
+    if (target.kind === "page" && splitMade.delete(target.id) && dismiss && host.findAnyTab(target.id)?.temp) {
+      void host.closeTab(target.id);
     }
     host.render();
     focusActiveFrame();

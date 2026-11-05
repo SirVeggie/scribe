@@ -223,6 +223,25 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       await views.dropPage({ id: "c" }, { edge: "bottom" });
       observations.dragOnlyTab = [shown(), mainEl.classList.contains("split-col")];
       observations.overlayCleaned = [(mainEl.querySelector(".pane-drop-overlay") as HTMLElement).hidden, document.body.classList.contains("dragging-pane")];
+      // A temporary page the split opened closes with its pane's close button (#1009); one that
+      // already had a tab, or one dragged to the strip, stays a tab.
+      const unopened = new Set(["t", "v"]), closedTabs: string[] = [];
+      for (const id of ["t", "u", "v"]) pages.set(id, { id, title: id, temp: true } as any);
+      Object.assign(host, {
+        tabs: () => [...pages.values()].filter(tab => !unopened.has(tab.id)),
+        openPage: (id: string) => { unopened.delete(id); },
+        closeTab: (id: string) => { closedTabs.push(id); },
+      });
+      spaceIds = ["temp"]; space = "temp"; views.prune();
+      select("c");
+      for (const id of ["t", "u"]) {
+        await views.open(id, "split");
+        // The live views' header: earlier createViews calls left theirs in mainEl first.
+        ([...mainEl.querySelectorAll('.pane-head[data-pane="b"] [aria-label="Close pane"]')].at(-1) as HTMLButtonElement).click();
+      }
+      await views.open("v", "split");
+      await views.dropPage({ pane: "b" }, { strip: true });
+      observations.tempPanes = [closedTabs, shown()];
       return observations;
     });
     assert.deepEqual(result, {
@@ -244,6 +263,7 @@ test("peeks stay with their tab; split panes can be focused, arranged and replac
       dragReplace: ["db", "b"], dragRight: ["bd", false], noDropOutside: null,
       cancelKeepsLayout: "bd", dragToStrip: ["b", true, true], dragTabToSplit: ["cb", "b"],
       dragOnlyTab: ["c,new", true], overlayCleaned: [true, false],
+      tempPanes: [["t"], "c"],
     });
     // Exercise the actual app.js controller with mouse input, including crossing live iframes.
     await page.setContent('<div id="strip" class="tabs-wrap"><div id="tabs"></div></div><main></main>');
