@@ -323,6 +323,14 @@ function workspaceNote(cwd: string): string {
 const HELPER_RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (an approval, a background command) is gone. Check where you left off (files, git status, the pages you were working on) and go on from there to finish the brief you were given. You work for another agent, which gets your final reply as your report: do not ask the user about the task. If you cannot finish without an answer, say what you need in that reply.";
 
+/** The earlier conversation a new session (after a rewind or a move) gets ahead of its first message. */
+function recapBlock(thread: Thread): string {
+  if (!thread.rewind?.recap) return "";
+  return thread.rewind.migrated
+    ? `<earlier_conversation>\nThis conversation moved to a new session, so you don't have its history. This is what was said so far, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
+    : `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`;
+}
+
 /** What the model reads for a message: where it came from, its context chips, the guides of the pages it brings up, its files, then the text. */
 function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdits = ""): string {
   const origin = msg.card
@@ -342,12 +350,7 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
             : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" || pagesReadsFiles(thread) });
-  const recap = !thread.rewind?.recap
-    ? ""
-    : thread.rewind.migrated
-      ? `<earlier_conversation>\nThis conversation moved to a new session, so you don't have its history. This is what was said so far, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`
-      : `<earlier_conversation>\nThe user rewound this conversation and started a new session. This is what was said before the point they went back to, for context:\n\n${thread.rewind.recap}\n</earlier_conversation>\n\n`;
-  return recap + origin + pageEdits + contextBlock(msg.context) + guides + files + text;
+  return recapBlock(thread) + origin + pageEdits + contextBlock(msg.context) + guides + files + text;
 }
 
 function editsInsideWorkspace(t: Thread, paths: string[] | undefined): boolean {
@@ -2464,7 +2467,7 @@ export class AgentHost {
    * Null for any other message.
    */
   private commandText(thread: Thread, msg: QueuedMessage): string | null {
-    if (msg.from || msg.card || thread.rewind?.recap) return null;
+    if (msg.from || msg.card) return null;
     const name = /^\/([\w:.-]+)(?=\s|$)/.exec(msg.text)?.[1];
     if (!name || !this.providerCommands(thread.provider).some((cmd) => cmd.name === name)) return null;
     return msg.text;
@@ -4985,22 +4988,27 @@ export class AgentHost {
           session.update(live);
           const pageEdits = this.pageEditPrefix(thread, turn.id);
           const planNote = msg?.plan ? planTurnNote(live) : "";
-          // A note the agent must read comes before the text, so the message is then not sent as a command.
-          // The reopened worktree's note waits for the next message instead, so /compact still runs after a merge (#996).
-          const command = msg && !earlier && !planNote ? this.commandText(thread, msg) : null;
+          // The provider only runs a command that starts the message (#996). The notes that would go before
+          // it (a fork's or rewind's earlier conversation, a reopened worktree, page edits) wait for the next
+          // message instead; a plan-mode note is for that turn only, so a command goes without it.
+          const command = msg ? this.commandText(thread, msg) : null;
           const held = this.requireThread(threadId);
-          const note = (held.heldNote ?? "") + reopened;
-          if (command && reopened) {
-            held.heldNote = note;
-            this.db.saveThread(held);
-          } else if (!command && held.heldNote) {
+          const kept = held.heldNote ?? "";
+          if (command) {
+            const hold = kept + earlier + reopened + recapBlock(thread) + pageEdits;
+            if (hold !== kept) {
+              held.heldNote = hold;
+              this.db.saveThread(held);
+            }
+          } else if (kept) {
             delete held.heldNote;
             this.db.saveThread(held);
           }
+          const note = (command ? "" : kept) + earlier + reopened;
           (run.clock ??= { waits: [] }).sentAt = Date.now();
           result = await session.run(
             {
-              text: command ?? (msg ? earlier + note + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : note + pageEdits),
+              text: command ?? (msg ? note + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : note + pageEdits),
               images: msg?.images ?? [],
               documents: msg ? pdfs(msg) : [],
               instructions: threadInstructions(live, this.scopeInfo(thread)),

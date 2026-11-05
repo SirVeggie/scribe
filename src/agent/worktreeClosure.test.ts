@@ -164,9 +164,9 @@ test("a slash command after a Merge goes as typed; the new worktree's note waits
   await commitAll(first, "compact work");
   await host.finishWorktree(thread.id, "merge");
 
-  host.send(thread.id, { text: "/compact" });
+  host.send(thread.id, { text: "/compact", plan: true });
   await idle(thread.id);
-  assert.equal(turns.at(-1)!.text, "/compact", "the command starts the message");
+  assert.equal(turns.at(-1)!.text, "/compact", "the command starts the message, without the plan-mode note");
   assert.match(internals().threads.get(thread.id)!.heldNote ?? "", /was merged into main/);
 
   host.send(thread.id, { text: "go on" });
