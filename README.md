@@ -13,9 +13,9 @@ Scribe runs the agents you already use (Claude, Codex, Cursor) and any OpenAI-co
 - **Answers as pages.** Agents make pages: comparison tables, charts, reports, design mockups. They open as tabs, stay in your Library, and the agent can update them later instead of starting over.
 - **Work on the same page.** Pages keep their own data. When you tick items, fill in a form or move a card, the agent can read it, and you see its changes as it makes them.
 - **One chat for every agent.** Claude, Codex, Cursor and your own models share one chat, with plan usage and costs shown as you go. The chat follows the page in front, so "make this shorter" means this page.
-- **Hand work to agent workers.** Assign cards on a Kanban board to an agent worker. It takes them one by one, and in a code project it works on its own git branch and merges the finished work back.
+- **Hand work to agent workers.** Assign cards on a Kanban board to an agent worker. It takes them one by one, and in a code project it can work on its own git branch and merge the finished work back.
 - **Stay in control.** Every chat has an access level, from read-only to full access, and asks before it does anything you have not allowed. You can review each turn's changes and undo them.
-- **Keep it local.** Your pages, chats and settings live in one data folder on your PC. There is no Scribe account and no Scribe cloud; only the model providers you choose see your prompts.
+- **Keep it local.** Your pages, chats and settings live in one data folder on your computer. There is no Scribe account and no Scribe cloud; only the model providers you choose see your prompts.
 - **Use it on all your devices.** Pair your PCs over your network or Tailscale, or reach Scribe from any browser through a server.
 
 ![An interactive launch checklist an agent made, with the chat that asked for it](docs/images/checklist-and-chat.png)
@@ -36,14 +36,14 @@ Scribe doesn't come with a model of its own. Connect at least one of these in Ag
 
 | Agent | What you need |
 |---|---|
-| **Claude** | A Claude plan (**Log in** in Agent settings), or an `ANTHROPIC_API_KEY` |
+| **Claude** | A Claude plan (**Log in** in Agent settings), or an Anthropic API key |
 | **Codex** | A ChatGPT account (**Log in** in Agent settings) |
 | **Cursor** | A Cursor account (**Log in** in Agent settings) |
 | **Other models** | Any OpenAI-compatible endpoint, such as OpenRouter, LM Studio, Ollama or llama.cpp, or an API key for OpenAI, Anthropic, Gemini and others. Scribe calls these **Native**. |
 
 ### Linux and macOS
 
-There is no desktop app for Linux or macOS yet. On Linux (x86_64) and macOS you can run Scribe as a background service and use it in your browser:
+There is no desktop app for Linux or macOS yet. On Linux (x86_64, with systemd) and macOS you can run Scribe as a background service and use it in your browser:
 
 ```sh
 curl -fsSL https://github.com/SirVeggie/scribe/releases/latest/download/install.sh | sh
@@ -117,10 +117,10 @@ A Linux (x86_64) or macOS machine that stays on, such as a home server or a VPS,
 
 To set it up:
 
-1. Run the install script above on the server. It starts Scribe as a background service: a systemd user service on Linux, which starts at boot, or a launchd agent on macOS, which starts at login. It puts the `scribe` command in `~/.local/bin`.
+1. Run the install script above on the server. It starts Scribe as a background service: a systemd user service on Linux, or a launchd agent on macOS that starts at login. If it prints a command to make Scribe start at boot, run that too. It puts the `scribe` command in `~/.local/bin`; if your shell can't find `scribe`, use `~/.local/bin/scribe` below.
 2. Make sure your PC can reach the server: on the same network, or with Tailscale on both.
 3. On the server, run `scribe add-device` and enter the code it shows on your PC (Settings → Devices → **Enter code**).
-4. Optional, for devices that are not on your network or tailnet: give the server a public address with `scribe public-address scribe.example.com` and open its peer port (`4748` by default) in the firewall.
+4. Optional, for devices that are not on your network or tailnet: point a host name you control at the server's public IP, run `scribe public-address <host name>` on the server, and allow incoming TCP on its peer port (`4748` by default). If the server is behind a router, forward that port to it.
 5. To keep a mirror of your PC on the server, choose the server under Settings → Devices → **Offline mirror** on the PC, and mark folders as Mirrored from their menu.
 
 ### Browser access from anywhere

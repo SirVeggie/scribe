@@ -31,7 +31,7 @@ You need:
    }
    ```
 
-4. **Scribe.** On your PC, open Settings → Devices → **Web access**, choose the server under **On**, and enter the web address (`scribe.example.com`), the Google client id and the accounts that may sign in.
+4. **Scribe.** On your PC, open Settings → Devices → **Web access**, choose the server under **On** (it must be online), and enter the web address (`scribe.example.com`), the Google client id and the accounts that may sign in.
 
 Then open `https://scribe.example.com` and sign in with one of those accounts. A page you open for the first time may take a few seconds while Caddy gets its certificate.
 
