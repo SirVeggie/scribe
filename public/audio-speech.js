@@ -15,6 +15,13 @@
     return title(id);
   }
   const failure = (error, message) => ({ ok: false, error, message });
+  /** Master volume times speech volume (#1011), for audio the mixer cannot route: browser voices, or before a gesture. */
+  const speechLevel = () => { const out = window.scribeAudio?.output?.() || {}; return (out.volume ?? 1) * (out.speechVolume ?? 1); };
+  const routeSpeech = async el => {
+    const unroute = await Promise.resolve(window.scribeAudio.route?.(el, "speech")).catch(() => null);
+    if (!unroute) el.volume = Math.min(1, Math.max(0, speechLevel()));
+    return unroute;
+  };
 
   /** Splits text at sentence ends into pieces of at most max characters (the first at most first); a sentence longer than max is cut at a comma or space. */
   function splitSpeech(text, max = MAX_CHARS, first = max) {
@@ -146,8 +153,8 @@
   async function speakSource(queue, opts, signal) {
     const el = new Audio();
     el.preload = "auto";
-    // The mixer's speech channel (#564), so the master volume applies.
-    const unroute = await Promise.resolve(window.scribeAudio.route?.(el, "speech")).catch(() => null);
+    // The mixer's speech channel (#564), so the master and speech volumes apply.
+    const unroute = await routeSpeech(el);
     try { return await playPieces(queue, opts, signal, el); } finally { unroute?.(); }
   }
   /** What was read: spoken is the pieces played to the end; partial the one a stop cut off. */
@@ -230,7 +237,7 @@
   async function speakStream(ws, input, opts, signal) {
     const el = new Audio();
     el.preload = "auto";
-    const unroute = await Promise.resolve(window.scribeAudio.route?.(el, "speech")).catch(() => null);
+    const unroute = await routeSpeech(el);
     try { return await playStream(ws, input, opts, signal, el); } finally { unroute?.(); try { ws.close(); } catch { /* closed */ } }
   }
   const STREAM_TYPES = { mp3: "audio/mpeg", opus: "audio/ogg", aac: "audio/aac", flac: "audio/flac", wav: "audio/wav" };
@@ -285,6 +292,7 @@
       const utterance = new SpeechSynthesisUtterance(text);
       if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
       utterance.rate = Math.min(4, Math.max(0.25, Number(opts.speed) || 1));
+      utterance.volume = Math.min(1, Math.max(0, speechLevel()));
       utterance.onstart = () => opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text, spoken: spoken.join(" ") });
       const result = await new Promise(resolve => {
         utterance.onend = () => resolve("ended");

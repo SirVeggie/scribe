@@ -356,13 +356,19 @@
   const sounds = document.createElement("section"); sounds.className = "settings-section audio-settings";
   const soundsHeading = document.createElement("h3"); soundsHeading.textContent = "Notification sounds"; sounds.append(soundsHeading);
   const soundsOn = row("Play sounds", "sounds", "switch", sounds);
-  const volumeRow = document.createElement("div"); volumeRow.className = "setting-row";
-  const volumeLabel = document.createElement("label"); volumeLabel.textContent = "Volume"; volumeLabel.htmlFor = "audio-volume";
-  const volumeBox = document.createElement("div"); volumeBox.className = "orb-settings-size";
-  const volume = document.createElement("input"); volume.type = "range"; volume.className = "orb-range"; volume.id = "audio-volume";
-  volume.min = "0"; volume.max = "100"; volume.step = "5";
-  const volumeText = document.createElement("output"); volumeText.htmlFor = volume.id;
-  volumeBox.append(volume, volumeText); volumeRow.append(volumeLabel, volumeBox); sounds.append(volumeRow);
+  /** A 0–100% slider row; paint() shows its value. */
+  function volumeSlider(label, id, parent) {
+    const line = document.createElement("div"); line.className = "setting-row";
+    const name = document.createElement("label"); name.textContent = label; name.htmlFor = id;
+    const box = document.createElement("div"); box.className = "orb-settings-size";
+    const input = document.createElement("input"); input.type = "range"; input.className = "orb-range"; input.id = id;
+    input.min = "0"; input.max = "100"; input.step = "5";
+    const text = document.createElement("output"); text.htmlFor = id;
+    box.append(input, text); line.append(name, box); parent.append(line);
+    input.paint = () => { text.value = input.value + "%"; input.style.setProperty("--fill", input.value + "%"); };
+    return input;
+  }
+  const volume = volumeSlider("Volume", "audio-volume", sounds);
   const CUES = [["thread-finish", "When a chat finishes"], ["thread-ask", "When a chat needs you"]];
   const cueSwitches = CUES.map(([name, label]) => {
     const input = row(label, "cue-" + name, "switch", sounds);
@@ -371,17 +377,19 @@
   });
   const soundsStatus = document.createElement("p"); soundsStatus.className = "settings-hint"; soundsStatus.setAttribute("role", "status");
   sounds.append(soundsStatus);
-  const paintVolume = () => { volumeText.value = volume.value + "%"; volume.style.setProperty("--fill", volume.value + "%"); };
+  let speechVolume = null; // the Text-to-speech section's slider, made below
   function receiveOutput(output) {
     if (!output) return;
     soundsOn.setAttribute("aria-checked", String(output.sounds));
-    volume.value = String(Math.round(output.volume * 100)); paintVolume();
+    volume.value = String(Math.round(output.volume * 100)); volume.paint();
+    if (speechVolume) { speechVolume.value = String(Math.round((output.speechVolume ?? 1) * 100)); speechVolume.paint(); }
     for (const [name, input] of cueSwitches) input.setAttribute("aria-checked", String(output.cues?.[name] !== false));
     // Volume is the master: it also sets page sounds and speech, so it stays visible.
     for (const line of [...cueSwitches.map(([, input]) => input.closest(".setting-row"))]) line.hidden = !output.sounds;
   }
   function saveOutput() {
     const output = { sounds: soundsOn.getAttribute("aria-checked") === "true", volume: Number(volume.value) / 100,
+      speechVolume: Number(speechVolume.value) / 100,
       cues: Object.fromEntries(cueSwitches.map(([name, input]) => [name, input.getAttribute("aria-checked") === "true"])) };
     receiveOutput(output); window.scribeAudio.setOutput(output);
     saving = saving.then(async () => {
@@ -391,7 +399,7 @@
     }).catch(err => { soundsStatus.textContent = err.message; });
   }
   [soundsOn, ...cueSwitches.map(([, input]) => input)].forEach(input => input.addEventListener("change", saveOutput));
-  volume.addEventListener("input", () => { paintVolume(); window.scribeAudio.setOutput({ ...window.scribeAudio.output(), volume: Number(volume.value) / 100 }); });
+  volume.addEventListener("input", () => { volume.paint(); window.scribeAudio.setOutput({ ...window.scribeAudio.output(), volume: Number(volume.value) / 100 }); });
   volume.addEventListener("change", saveOutput);
 
   /* ---------- text-to-speech sources (Phase D): their own list, with This browser as a free fallback ---------- */
@@ -413,6 +421,11 @@
   const ttsVoiceText = row("Voice", "tts-voice-text", "text", speech); ttsVoiceText.placeholder = "alloy";
   const ttsSpeed = row("Speed", "tts-speed", "number", speech);
   Object.assign(ttsSpeed, { min: "0.25", max: "4", step: "0.05" });
+  // Speech volume (#1011): under the master Volume, for every source. Saved with the output settings.
+  speechVolume = volumeSlider("Volume", "audio-tts-volume", speech);
+  speechVolume.value = String(Math.round((window.scribeAudio.output?.().speechVolume ?? 1) * 100)); speechVolume.paint();
+  speechVolume.addEventListener("input", () => { speechVolume.paint(); window.scribeAudio.setOutput({ ...window.scribeAudio.output(), speechVolume: Number(speechVolume.value) / 100 }); });
+  speechVolume.addEventListener("change", saveOutput);
   const ttsStream = row("Stream while generating", "tts-stream", "switch", speech);
   const streamLabel = document.getElementById("audio-tts-stream-label") || ttsStream.closest(".setting-row").querySelector("label");
   const lineOf = input => input.closest(".setting-row");
@@ -478,7 +491,7 @@
     const profile = (view.ttsSources || []).find(s => s.id === tts.source);
     // Off: nothing to set. This browser: voice and speed. A source: all of them.
     showPair(ttsModel, ttsModelText, true, Boolean(profile));
-    lineOf(ttsSpeed).hidden = !browser && !profile;
+    lineOf(ttsSpeed).hidden = lineOf(speechVolume).hidden = !browser && !profile;
     lineOf(ttsStream).hidden = true;
     if (!browser && !profile) { showPair(ttsVoice, ttsVoiceText, true, false); return; }
     if (document.activeElement !== ttsSpeed) ttsSpeed.value = String((browser ? tts.speed : profile.speed) ?? 1);

@@ -49,12 +49,13 @@ test("one window plays: the focused one, else the one open longest", () => {
 test("sounds are off by default; each cue has its own switch", () => {
   const { cueEnabled } = rules();
   const output = normalizeOutput(undefined);
-  assert.deepEqual(output, { sounds: false, volume: 0.6, cues: { "thread-finish": true, "thread-ask": true } });
+  assert.deepEqual(output, { sounds: false, volume: 0.6, speechVolume: 1, cues: { "thread-finish": true, "thread-ask": true } });
   assert.equal(cueEnabled(output, "thread-finish"), false);
   assert.equal(cueEnabled({ ...output, sounds: true }, "thread-finish"), true);
   assert.equal(cueEnabled({ ...output, sounds: true, volume: 0 }, "thread-finish"), false);
   assert.equal(cueEnabled({ ...output, sounds: true, cues: { "thread-finish": false } }, "thread-finish"), false);
   assert.equal(normalizeOutput({ volume: 7 }).volume, 1);
+  assert.equal(normalizeOutput({ speechVolume: -1 }).speechVolume, 0);
 });
 
 test("saving sound settings keeps the rest and tells open windows", () => {
@@ -63,7 +64,7 @@ test("saving sound settings keeps the rest and tells open windows", () => {
   service.update({ output: { sounds: true } });
   service.update({ output: { cues: { "thread-ask": false } } });
   const view = service.view();
-  assert.deepEqual(view.output, { sounds: true, volume: 0.6, cues: { "thread-finish": true, "thread-ask": false } });
+  assert.deepEqual(view.output, { sounds: true, volume: 0.6, speechVolume: 1, cues: { "thread-finish": true, "thread-ask": false } });
   assert.equal(view.input.sendAfterDictation, true);
   assert.equal(pushed.length, 2);
   service.update({ input: { pushToTalk: false } });

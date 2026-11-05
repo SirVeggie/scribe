@@ -5,8 +5,8 @@ import { AUDIO_CUES, type AudioSettings, type AudioDayUsage, type AudioOutput, t
 
 export function normalizeOutput(value: unknown): AudioOutput {
   const body = value as Partial<AudioOutput> | null;
-  const volume = Number(body?.volume);
-  return { sounds: body?.sounds === true, volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0.6,
+  const level = (v: unknown, fallback: number) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback; };
+  return { sounds: body?.sounds === true, volume: level(body?.volume, 0.6), speechVolume: level(body?.speechVolume, 1),
     cues: Object.fromEntries(AUDIO_CUES.map(cue => [cue, body?.cues?.[cue] !== false])) as AudioOutput["cues"] };
 }
 

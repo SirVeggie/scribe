@@ -256,7 +256,8 @@
   // audio-cues.js loads first in the shell; cues stay silent without it.
   const rules = () => window.scribeAudioCues;
   const CHANNELS = ["cue", "page", "speech"];
-  let output = { sounds: false, volume: 0.6, cues: {} };
+  let output = { sounds: false, volume: 0.6, speechVolume: 1, cues: {} };
+  const level = (v, fallback) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback;
   let ctx = null, master = null;
   const channels = {}, decoded = new Map();
   function context() {
@@ -266,7 +267,7 @@
     try {
       ctx = new Context(); master = ctx.createGain(); master.connect(ctx.destination);
       for (const name of CHANNELS) { channels[name] = ctx.createGain(); channels[name].connect(master); }
-      master.gain.value = output.volume;
+      master.gain.value = output.volume; channels.speech.gain.value = output.speechVolume;
     } catch { ctx = null; }
     return ctx;
   }
@@ -292,8 +293,8 @@
   GESTURES.forEach(type => window.addEventListener(type, unlock, true));
   function setOutput(next) {
     if (!next || typeof next !== "object") return;
-    output = { sounds: next.sounds === true, volume: Number.isFinite(next.volume) ? Math.min(1, Math.max(0, next.volume)) : 0.6, cues: { ...next.cues } };
-    if (master) master.gain.value = output.volume;
+    output = { sounds: next.sounds === true, volume: level(next.volume, 0.6), speechVolume: level(next.speechVolume, 1), cues: { ...next.cues } };
+    if (master) { master.gain.value = output.volume; channels.speech.gain.value = output.speechVolume; }
   }
   async function bufferFor(src) {
     if (typeof src === "string" && decoded.has(src)) return decoded.get(src);

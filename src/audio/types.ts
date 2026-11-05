@@ -24,7 +24,8 @@ export type AudioSettings = {
 };
 export const AUDIO_CUES = ["thread-finish", "thread-ask"] as const;
 export type AudioCue = typeof AUDIO_CUES[number];
-export type AudioOutput = { sounds: boolean; volume: number; cues: Record<AudioCue, boolean> };
+/** volume is the master; speechVolume scales text-to-speech under it (#1011). */
+export type AudioOutput = { sounds: boolean; volume: number; speechVolume: number; cues: Record<AudioCue, boolean> };
 export type AudioErrorKind = "no_source" | "invalid_audio" | "too_large" | "timeout" | "network" | "auth" | "rate_limit" | "engine" | "permission" | "format";
 export type AudioResult = { ok: true; text: string } | { ok: false; error: AudioErrorKind; message: string; retryable?: boolean };
 export type SttRequest = { source: OpenAISource; model: string; audio: Blob; language?: string; prompt?: string; signal: AbortSignal };
