@@ -322,6 +322,13 @@ Desktop: every window passes `--autoplay-policy=no-user-gesture-required` to Web
 the first click. It applies to the whole WebView2 process, so page iframes can autoplay too; the
 user chose that because pages are almost always theirs.
 
+Volume mixer (#1013): WebView2 plays sound from its own processes (msedgewebview2.exe under
+scribe.exe), which Windows lists as "Microsoft Edge WebView2". `desktop/src/audio_sessions.rs`
+renames the output sessions of Scribe's descendant processes to "Scribe" with Scribe's icon and one
+grouping id, at start and whenever a session or output device appears. The session's process is
+still WebView2's, so tools that pick a session by the focused window's process id must match the
+"Scribe" display name (or walk up the process tree) instead.
+
 Original plan:
 
 

@@ -2,6 +2,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(windows)]
+mod audio_sessions;
 mod board;
 mod docking;
 mod downloads;
@@ -273,6 +275,8 @@ fn main() {
         ])
         .on_window_event(layout::on_window_event)
         .setup(move |app| {
+            #[cfg(windows)]
+            audio_sessions::start();
             let daemon_error = board::ensure_daemon().err();
             let daemon_up = daemon_error.is_none();
             app.manage(DaemonError(Mutex::new(daemon_error)));
