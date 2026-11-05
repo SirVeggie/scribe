@@ -7,7 +7,7 @@ import type { OpenAISource } from "../agent/openaiSources.js";
 import { shellOrigins } from "../config.js";
 import { AudioService } from "./service.js";
 import { memoryStore } from "./settings.js";
-import { NativeStream, STREAM_PATH, WindowStream, audioStreamServer, pcmToWav } from "./stream.js";
+import { NativeStream, STREAM_PATH, SpeechDetector, WindowStream, audioStreamServer, pcmToWav, type SpeechEvent } from "./stream.js";
 import type { AudioResult } from "./types.js";
 
 const RATE = 16000;
@@ -208,4 +208,89 @@ test("listen({ live: true }) streams over a window with live transcription off, 
     assert.ok(calls >= 3, `the window sent ${calls} pieces`);
     assert.equal(gated, 2, "one gate check per session, not per piece");
   } finally { streams.close(); server.closeAllConnections(); server.close(); }
+});
+
+test("speech detector reports start and end from the level, quickly after silence", () => {
+  const events: SpeechEvent[] = [];
+  const detector = new SpeechDetector(e => events.push(e), 250);
+  feed(detector, quiet(500), tone(1000), quiet(200));
+  assert.deepEqual(events, [{ speaking: true, at: 500 }], "a 200 ms gap is not the end");
+  feed(detector, tone(500), quiet(400));
+  assert.deepEqual(events.slice(1), [{ speaking: false, at: 2200 }]);
+  // Fed in 20 ms steps: the end comes as soon as 250 ms of silence are in.
+  const exact: number[] = [];
+  const fine = new SpeechDetector(e => { if (!e.speaking) exact.push(fed); }, 250);
+  let fed = 0;
+  for (const part of [tone(600), quiet(600)]) for (let i = 0; i < part.length; i += 320) { fed += 20; fine.push(part.slice(i, i + 320)); }
+  assert.deepEqual(exact, [860], "13 silent frames after 600 ms of speech");
+});
+
+test("sliding window settles the open piece at the end of speech", async () => {
+  const sent: number[] = [];
+  const stream = new WindowStream(async wav => { const s = await seconds(wav); sent.push(s); return { ok: true, text: `said ${s.toFixed(1)}` }; }, () => {}, { preview: false });
+  feed(stream, tone(800), quiet(300));
+  assert.equal(await stream.settle(), "said 1.1", "a short piece is previewed, not cut");
+  feed(stream, tone(1500), quiet(300));
+  assert.equal(await stream.settle(), "said 2.8", "the open piece, now long, is cut at the pause and transcribed once");
+  assert.equal(sent.length, 2);
+  feed(stream, quiet(300));
+  assert.equal(await stream.settle(), "said 2.8", "nothing new: settled at once");
+  assert.deepEqual(await stream.finish(), { ok: true, text: "said 2.8" });
+});
+
+test("the stream socket sends speech events with a settled final in window mode", async () => {
+  const service = new AudioService({ sources: () => [], store: memoryStore(),
+    engine: { async transcribe() { return { ok: true, text: "hello there" }; } } });
+  service.saveSource({ name: "Qwen", source: "__custom__", custom: { baseUrl: "http://127.0.0.1:9/v1" }, model: "q", streaming: "window" });
+  const streams = audioStreamServer(() => service.streamTarget(), () => {});
+  const server = http.createServer();
+  server.on("upgrade", (req, socket, head) => { if (!streams.handle(req, socket, head)) socket.destroy(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}${STREAM_PATH}?speech=1&pause=200`, { origin: shellOrigins()[0] });
+    const speech: any[] = [];
+    const final = new Promise<void>(resolve => ws.on("message", raw => {
+      const m = JSON.parse(String(raw));
+      if (m.type === "speech") { speech.push(m); if (m.final) resolve(); }
+    }));
+    await new Promise(resolve => ws.on("open", resolve));
+    for (const part of [tone(1000), quiet(300)]) for (let i = 0; i < part.length; i += 1600) ws.send(Buffer.from(part.slice(i, i + 1600).buffer));
+    await final;
+    assert.deepEqual(speech.map(m => [m.speaking, m.final ?? null]), [[true, null], [false, false], [false, true]]);
+    assert.equal(speech[1].at, 1000); assert.equal(speech[2].text, "hello there");
+    ws.close();
+  } finally { streams.close(); server.closeAllConnections(); server.close(); }
+});
+
+test("native stream settles when Moonshine finishes the line, or after a grace when it heard nothing", async () => {
+  const server = http.createServer();
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => wss.handleUpgrade(req, socket, head, ws => {
+    ws.send(JSON.stringify({ type: "ready" }));
+    let n = 0;
+    ws.on("message", (_raw, binary) => {
+      if (!binary) return;
+      n++;
+      if (n === 1) ws.send(`{"type":"partial","id":7,"text":"good"}`);
+      if (n === 3) ws.send(`{"type":"final","id":7,"text":"Good morning."}`);
+    });
+  }));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const source: OpenAISource = { id: "m", name: "M", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, models: [] };
+    const stream = new NativeStream(source, () => {});
+    stream.heard();
+    stream.push(tone(100)); await new Promise(resolve => setTimeout(resolve, 50));
+    let settled: string | undefined;
+    void stream.settle(5000).then(t => { settled = t; });
+    stream.push(tone(100)); await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(settled, undefined, "the line is still open");
+    stream.push(quiet(100)); await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(settled, "Good morning.");
+    stream.heard();
+    const started = Date.now();
+    assert.equal(await stream.settle(100), "Good morning.", "no new line: the grace settles it");
+    assert.ok(Date.now() - started >= 90);
+    stream.cancel();
+  } finally { wss.close(); server.closeAllConnections(); server.close(); }
 });

@@ -36,6 +36,22 @@ streams with the setting off too, over the source's own stream or a sliding wind
 uploads. If it cannot stream, the session has `live: false` and `reason`, and `stop()` still
 returns the text. A live session counts as one transcription toward the page's limits.
 
+A live session also says when the user starts and stops talking, from the input level:
+
+```js
+const session = await scribe.audio.listen({ live: true, pauseMs: 250 }); // silence that ends speech, 100..3000 ms
+session.onspeech = ({ speaking, at, text, final }) => {
+  if (speaking) return;            // started talking: at = ms into the recording
+  if (!final) showDraft(text);     // stopped (at = where the silence began); text may still change
+  else reply(text);                // the whole text so far, with this utterance settled
+};
+```
+
+Each end comes twice: first at once (`final: false`, about `pauseMs` after the silence began),
+then with `final: true` once the transcription has caught up with it. If the user talks again
+before that, the final for it is skipped and the next end brings one. `text` is the whole
+transcript so far, as `ontext` gives it. Without `session.live` there are no speech events.
+
 For visualisers or your own processing, `scribe.audio.stream` returns a real mono `MediaStream`
 inside the page at `live.sampleRate`, relayed from the shell with about 60 ms of buffering:
 

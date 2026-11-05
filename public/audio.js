@@ -200,12 +200,13 @@
       ws.send(joined.buffer); pending = []; pendingLength = 0;
     };
     try {
-      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/audio/stream?preview=${preview ? 1 : 0}${opts.force ? "&live=1" : ""}${opts.tabId ? `&tab=${encodeURIComponent(opts.tabId)}` : ""}`);
+      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/audio/stream?preview=${preview ? 1 : 0}${opts.force ? "&live=1" : ""}${opts.onSpeech ? `&speech=1&pause=${opts.pauseMs || 250}` : ""}${opts.tabId ? `&tab=${encodeURIComponent(opts.tabId)}` : ""}`);
       ws.binaryType = "arraybuffer";
       ws.onopen = sendPending;
       ws.onmessage = event => {
         let msg; try { msg = JSON.parse(event.data); } catch { return; }
         if (msg.type === "text" && !cancelled) opts.onText?.(msg.text);
+        else if (msg.type === "speech" && !cancelled) opts.onSpeech?.({ speaking: msg.speaking, at: msg.at, text: msg.text, final: msg.final });
         else if (msg.type === "done") wsDone(msg);
       };
       ws.onerror = ws.onclose = () => wsDone(failure("network", "The live transcription stream closed."));
@@ -218,7 +219,8 @@
         opts.onLevel?.(Math.min(1, Math.sqrt(sum / floats.length) * 3));
         const pcm = (resample ||= resampler(floats.length * 50))(floats); // frames are 20 ms
         chunks.push(pcm); pending.push(pcm); pendingLength += pcm.length;
-        if (pendingLength >= 1600) sendPending(); // 100 ms per message
+        // 100 ms per message; 40 ms with speech events, so the end of speech is heard sooner (#1001).
+        if (pendingLength >= (opts.onSpeech ? 640 : 1600)) sendPending();
       } });
     } catch (err) { ws?.close(); throw err; }
     const ended = session.ended.then(async () => {

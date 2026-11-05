@@ -15,6 +15,58 @@ export interface SttStream {
   /** Transcribes what is left and resolves with the whole transcript. */
   finish(): Promise<AudioResult>;
   cancel(): void;
+  /** Speech started (#1001): what follows belongs to a new utterance. */
+  heard?(): void;
+  /** Speech ended: resolves with the whole text once everything said so far is transcribed. */
+  settle?(): Promise<string>;
+}
+
+/** Speech or not for one 20 ms frame, against a noise floor that follows the quietest frames. */
+class Voice {
+  private floor = 0.002;
+  speech(rms: number): boolean {
+    // The floor creeps up slowly (about 2x in 25 s), for a noisy room.
+    this.floor = rms < this.floor ? Math.max(rms, 1e-4) : this.floor * 1.0005;
+    return rms > Math.max(0.006, this.floor * 3);
+  }
+}
+
+export type SpeechEvent = { speaking: boolean; at: number };
+
+/**
+ * Speech start and end from the input level (#1001), the same test the sliding window cuts with.
+ * Start needs `startMs` of speech; end needs `endMs` of silence. `at` is where in the recording
+ * (ms) the speech started or the silence began.
+ */
+export class SpeechDetector {
+  private static FRAME = STREAM_RATE / 50;
+  private voice = new Voice();
+  private carry = new Int16Array(0);
+  private frame = 0;
+  private speechRun = 0;
+  private silentRun = 0;
+  speaking = false;
+
+  constructor(private on: (event: SpeechEvent) => void, private endMs = 250, private startMs = 100) {}
+
+  push(chunk: Int16Array) {
+    const F = SpeechDetector.FRAME;
+    let pcm = chunk;
+    if (this.carry.length) { pcm = new Int16Array(this.carry.length + chunk.length); pcm.set(this.carry); pcm.set(chunk, this.carry.length); }
+    let at = 0;
+    for (; at + F <= pcm.length; at += F) {
+      let sum = 0;
+      for (let i = at; i < at + F; i++) sum += (pcm[i] / 32768) ** 2;
+      this.frame++;
+      if (this.voice.speech(Math.sqrt(sum / F))) { this.speechRun++; this.silentRun = 0; } else { this.silentRun++; this.speechRun = 0; }
+      if (!this.speaking && this.speechRun * 20 >= this.startMs) {
+        this.speaking = true; this.on({ speaking: true, at: (this.frame - this.speechRun) * 20 });
+      } else if (this.speaking && this.silentRun * 20 >= this.endMs) {
+        this.speaking = false; this.on({ speaking: false, at: (this.frame - this.silentRun) * 20 });
+      }
+    }
+    this.carry = pcm.slice(at);
+  }
 }
 
 export function pcmToWav(pcm: Int16Array, rate = STREAM_RATE): Blob {
@@ -51,7 +103,7 @@ export class WindowStream implements SttStream {
   private pcm = new Int16Array(STREAM_RATE * 30);
   private length = 0;
   private levels: number[] = [];
-  private floor = 0.002;
+  private voice = new Voice();
   private segStart = 0; // in frames
   private segSpeech = 0;
   private silentRun = 0;
@@ -59,6 +111,9 @@ export class WindowStream implements SttStream {
   private finals: string[] = [];
   private pending: { index: number; from: number; to: number }[] = [];
   private partial = "";
+  /** How far (in frames) the open piece was last previewed, whether or not that worked. */
+  private previewedTo = -1;
+  private settling: { to: number; resolve: (text: string) => void }[] = [];
   private busy = false;
   private failed: AudioResult | undefined;
   private cancelled = false;
@@ -85,9 +140,7 @@ export class WindowStream implements SttStream {
       for (let i = at; i < at + F; i++) sum += (this.pcm[i] / 32768) ** 2;
       const rms = Math.sqrt(sum / F);
       this.levels.push(rms);
-      // Noise floor follows the quietest frames and creeps up slowly (about 2x in 25 s), for a noisy room.
-      this.floor = rms < this.floor ? Math.max(rms, 1e-4) : this.floor * 1.0005;
-      if (rms > Math.max(0.006, this.floor * 3)) { this.segSpeech++; this.silentRun = 0; } else this.silentRun++;
+      if (this.voice.speech(rms)) { this.segSpeech++; this.silentRun = 0; } else this.silentRun++;
       this.step();
     }
   }
@@ -119,7 +172,7 @@ export class WindowStream implements SttStream {
     }
     this.segStart = at; this.segSpeech = 0; this.lastPreview = this.levels.length;
     this.silentRun = Math.min(this.silentRun, this.levels.length - at);
-    this.partial = "";
+    this.partial = ""; this.previewedTo = -1;
     this.pump();
   }
 
@@ -127,7 +180,27 @@ export class WindowStream implements SttStream {
     if (this.busy || this.cancelled) return;
     const job = this.pending.shift();
     if (job) { void this.run(job); return; }
-    this.idle.splice(0).forEach(resolve => resolve());
+    this.trySettle();
+    if (!this.busy) this.idle.splice(0).forEach(resolve => resolve());
+  }
+
+  settle(): Promise<string> {
+    return new Promise(resolve => { this.settling.push({ to: this.levels.length, resolve }); this.trySettle(); });
+  }
+
+  /** Answers settle() once the pieces and the open piece up to its point are transcribed. */
+  private trySettle() {
+    if (!this.settling.length || this.busy || this.pending.length || this.cancelled) return;
+    const spoken = this.segSpeech >= this.frames(200), text = join([...this.finals, this.partial]);
+    this.settling = this.settling.filter(s => {
+      if (spoken && this.previewedTo < s.to) return true;
+      s.resolve(text); return false;
+    });
+    if (!this.settling.length) return;
+    const now = this.levels.length;
+    // A piece long enough is cut at the pause now rather than transcribed twice; a short one is previewed.
+    if (this.silentRun >= this.frames(200) && now - this.segStart >= this.frames(this.opts.minMs)) this.cut(now - Math.floor(this.silentRun / 2));
+    else { this.lastPreview = now; void this.run({ index: -1, from: this.segStart, to: now }); }
   }
 
   private async run(job: { index: number; from: number; to: number }) {
@@ -139,7 +212,10 @@ export class WindowStream implements SttStream {
     if (job.index >= 0) {
       if (result.ok) this.finals[job.index] = result.text;
       else this.failed ??= result;
-    } else if (result.ok && start === this.segStart) this.partial = result.text;
+    } else if (start === this.segStart) {
+      if (result.ok) this.partial = result.text;
+      this.previewedTo = job.to;
+    }
     if (!this.failed) this.onText(join([...this.finals, this.partial]));
     this.pump();
   }
@@ -152,7 +228,11 @@ export class WindowStream implements SttStream {
     return this.failed ?? { ok: true, text: join(this.finals) };
   }
 
-  cancel() { this.cancelled = true; this.pending = []; this.idle.splice(0).forEach(resolve => resolve()); }
+  cancel() {
+    this.cancelled = true; this.pending = [];
+    this.settling.splice(0).forEach(s => s.resolve(join([...this.finals, this.partial])));
+    this.idle.splice(0).forEach(resolve => resolve());
+  }
 }
 
 /** The server's own stream: Moonshine's `/v1/stream` WebSocket (lines with partial and final text). */
@@ -190,9 +270,40 @@ export class NativeStream implements SttStream {
         if (this.stopping) this.socket.send("stop");
       } else if ((msg.type === "partial" || msg.type === "final") && id) {
         this.lines.set(BigInt(id), typeof msg.text === "string" ? msg.text : "");
+        if (msg.type === "partial") this.open.add(id); else { this.open.delete(id); this.finalSinceHeard = true; }
         this.onText(this.text());
+        this.trySettle();
       } else if (msg.type === "done") this.end();
     });
+  }
+
+  // Settling (#1001): Moonshine marks a line final when its own voice detection ends it.
+  private open = new Set<string>();
+  private finalSinceHeard = false;
+  private settling: { resolve: (text: string) => void; timer: ReturnType<typeof setTimeout> }[] = [];
+
+  heard() { this.finalSinceHeard = false; }
+
+  /**
+   * Settled once no line is open and a line was finished since speech started. When Moonshine
+   * heard nothing (a cough, noise), no line comes: then it settles after `graceMs` without one.
+   */
+  settle(graceMs = 800): Promise<string> {
+    return new Promise(resolve => {
+      const entry = { resolve, timer: setTimeout(() => { if (!this.open.size) this.resolveSettled(entry); }, graceMs) };
+      this.settling.push(entry);
+      this.trySettle();
+    });
+  }
+
+  private trySettle() {
+    if (this.settling.length && !this.open.size && this.finalSinceHeard) this.settling.slice().forEach(s => this.resolveSettled(s));
+  }
+
+  private resolveSettled(entry: { resolve: (text: string) => void; timer: ReturnType<typeof setTimeout> }) {
+    const at = this.settling.indexOf(entry);
+    if (at < 0) return;
+    this.settling.splice(at, 1); clearTimeout(entry.timer); entry.resolve(this.text());
   }
 
   private text() { return join([...this.lines.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(e => e[1])); }
@@ -219,6 +330,7 @@ export class NativeStream implements SttStream {
 
   cancel() {
     this.fail({ ok: false, error: "network", message: "Stream closed." });
+    this.settling.slice().forEach(s => this.resolveSettled(s));
     this.socket.removeAllListeners("message");
     try { this.socket.close(); } catch { /* not open yet */ }
   }
@@ -243,6 +355,18 @@ export function audioStreamServer(target: (force: boolean) => StreamTarget | Aud
     let latest = "", bytes = 0, stopped = false;
     const onText = (text: string) => { if (text !== latest && !stopped) { latest = text; send({ type: "text", text }); } };
     const session: SttStream = chosen.mode === "native" ? new NativeStream(chosen.source, onText) : new WindowStream(chosen.transcribe, onText, { preview });
+    // Speech events (#1001): start and end from the level, then the same end again with final once its text is settled.
+    let utterance = 0;
+    const endMs = Math.min(3000, Math.max(100, Number(params.get("pause")) || 250));
+    const detector = params.get("speech") === "1" ? new SpeechDetector(({ speaking, at }) => {
+      if (stopped) return;
+      const n = ++utterance;
+      if (speaking) { session.heard?.(); send({ type: "speech", speaking, at }); return; }
+      send({ type: "speech", speaking, at, text: latest, final: false });
+      void session.settle?.().then(text => {
+        if (n === utterance && !stopped) send({ type: "speech", speaking: false, at, text, final: true });
+      });
+    }, endMs) : null;
     send({ type: "ready", mode: chosen.mode, rate: STREAM_RATE });
     client.on("message", async (raw: RawData, binary: boolean) => {
       if (stopped) return;
@@ -251,7 +375,8 @@ export function audioStreamServer(target: (force: boolean) => StreamTarget | Aud
         if (bytes + buf.length > MAX_STREAM_BYTES || buf.length % 2) return;
         bytes += buf.length;
         // Copy into an aligned buffer: a Buffer's offset into its pool can be odd.
-        session.push(new Int16Array(new Uint8Array(buf).buffer));
+        const pcm = new Int16Array(new Uint8Array(buf).buffer);
+        session.push(pcm); detector?.push(pcm);
         return;
       }
       if (String(raw) !== "stop") return;

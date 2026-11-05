@@ -5476,6 +5476,7 @@
         }, Math.max(1, deadline - Date.now()));
         try {
           session.capture = streaming ? await api.stream({ ...opts, owner: session.owner, preview: true, maxMs, force: forceLive,
+            pauseMs: Number.isFinite(data.pauseMs) ? data.pauseMs : undefined, onSpeech: speech => emit({ speech }),
             onText: text => emit({ text }), onLevel: level => emit({ level }), onState: state => emit({ state }) })
             : await api.capture({ owner: session.owner,
             live: data.op === "stream", onFrame: buffer => session.port?.postMessage({ frame: buffer }, [buffer]), maxMs,
