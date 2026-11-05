@@ -684,7 +684,7 @@
       if (!S.threads.has(id)) S.details.delete(id);
     }
     // A reconnect may have missed events: refresh the details we show.
-    const shown = new Set([...views().map((view) => view.threadId).filter(Boolean), ...pageStepWatch.keys()]);
+    const shown = new Set([...views().map((view) => view.threadId).filter(Boolean), ...pageStepWatch.keys(), ...pageTextWatch.keys()]);
     for (const id of shown) S.details.delete(id);
     requestRender();
     for (const id of shown) {
@@ -822,6 +822,8 @@
         forgetDockThread(msg.id);
         clearTimeout(pageStepWatch.get(msg.id));
         pageStepWatch.delete(msg.id);
+        clearTimeout(pageTextWatch.get(msg.id)?.timer);
+        pageTextWatch.delete(msg.id);
         renderLists();
         renderBadge();
         return;
@@ -13063,8 +13065,42 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return steps.slice(-PAGE_STEPS);
   }
 
+  /** Page threads whose reply text a page streams (scribe.agent.onText): { timer, turnId, sent, done }. */
+  const pageTextWatch = new Map();
+  const PAGE_TEXT_MS = 80;
+
+  /** The reply text of the thread's running turn (else its latest): its own text items, as lastReply joins them. */
+  function pageReplyText(id) {
+    const detail = S.details.get(id);
+    if (!detail) return null;
+    const turns = [...detail.turns.values()].sort((a, b) => b.seq - a.seq);
+    const turn = turns.find((x) => x.status === "running") || turns[0];
+    if (!turn) return null;
+    const text = detail.items.filter((it) => it.turnId === turn.id && !it.parentToolId && it.kind === "text").map((it) => it.text || "").join("\n\n");
+    return { turnId: turn.id, text, done: turn.status !== "running" };
+  }
+
+  function pageTextChanged(id) {
+    const watch = pageTextWatch.get(id);
+    if (!watch || watch.timer) return;
+    watch.timer = setTimeout(() => {
+      watch.timer = null;
+      if (pageTextWatch.get(id) !== watch) return;
+      const t = S.threads.get(id);
+      const now = pageReplyText(id);
+      if (!now || t?.scope.kind !== "page") return;
+      if (now.turnId !== watch.turnId) Object.assign(watch, { turnId: now.turnId, sent: "", done: false });
+      if (now.text === watch.sent && now.done === watch.done) return;
+      const reset = !now.text.startsWith(watch.sent);
+      const delta = reset ? now.text : now.text.slice(watch.sent.length);
+      Object.assign(watch, { sent: now.text, done: now.done });
+      app()?.postToPage?.(t.scope.ref, { type: "scribe-agent-text", threadId: id, turnId: now.turnId, text: now.text, delta, done: now.done, ...(reset ? { reset } : {}) });
+    }, PAGE_TEXT_MS);
+  }
+
   /** Push a watched thread's steps to its page, at most a few times a second while text streams in. */
   function pageStepsChanged(id) {
+    pageTextChanged(id);
     if (!pageStepWatch.has(id) || pageStepWatch.get(id)) return;
     pageStepWatch.set(
       id,
@@ -13569,6 +13605,19 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         await ensureDetail(thread.id);
         if (!pageStepWatch.has(thread.id)) pageStepWatch.set(thread.id, null);
         return { ok: true, steps: pageSteps(thread.id) };
+      case "text": {
+        // From now on the page gets the thread's reply text as it grows (scribe-agent-text). A turn
+        // already running starts from nothing, so its first push carries all of its text so far.
+        if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
+        await ensureDetail(thread.id);
+        if (!pageTextWatch.has(thread.id)) {
+          const now = pageReplyText(thread.id);
+          const done = !now || now.done;
+          pageTextWatch.set(thread.id, { timer: null, turnId: now?.turnId || null, sent: done ? now?.text || "" : "", done });
+        }
+        pageTextChanged(thread.id);
+        return { ok: true };
+      }
       case "wait": {
         if (!ownedBy(tab, thread)) return { ok: false, error: "not_found" };
         await ensureDetail(thread.id);

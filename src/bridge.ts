@@ -1130,6 +1130,17 @@ ${POINTER_DRAG_JS}
           console.error(err);
         }
       });
+    } else if (data.type === "scribe-agent-text") {
+      var textEvent = { id: data.threadId, turnId: data.turnId, text: String(data.text || ""), delta: String(data.delta || ""), done: Boolean(data.done) };
+      if (data.reset) textEvent.reset = true;
+      agentTextListeners.slice().forEach(function (entry) {
+        if (entry.id !== data.threadId) return;
+        try {
+          entry.fn(textEvent);
+        } catch (err) {
+          console.error(err);
+        }
+      });
     } else if (data.type === "scribe-agent-steps") {
       agentStepListeners.slice().forEach(function (fn) {
         try {
@@ -1287,6 +1298,7 @@ ${POINTER_DRAG_JS}
   // so those calls may take as long as the user does.
   var agentListeners = [];
   var agentStepListeners = [];
+  var agentTextListeners = [];
   var agentLimitListeners = [];
   var agentOptionsListeners = [];
   var AGENT_ASK_MS = 10 * 60 * 1000;
@@ -1538,6 +1550,26 @@ ${POINTER_DRAG_JS}
       return function () {
         agentStepListeners = agentStepListeners.filter(function (item) {
           return item !== fn;
+        });
+      };
+    },
+    /**
+     * Stream the reply text of one of this page's threads as the agent writes it (not reasoning or
+     * tools): fn({ id, turnId, text, delta, done, reset? }) at most every ~80 ms while it grows. text
+     * is the turn's whole reply so far, delta what is new since the last call (the whole text on the
+     * first call of a turn, also of one already running when the page first subscribes); each turn ends with
+     * one call with done: true. reset: true when earlier text changed (delta is then the whole text).
+     * Returns an unsubscribe function.
+     */
+    onText: function (threadId, fn) {
+      var entry = { id: agentText(threadId), fn: fn };
+      agentTextListeners.push(entry);
+      agentCall({ op: "text", threadId: entry.id }).then(function (res) {
+        if (res && res.ok === false) console.warn("[scribe] scribe.agent.onText: " + res.error);
+      });
+      return function () {
+        agentTextListeners = agentTextListeners.filter(function (item) {
+          return item !== entry;
         });
       };
     },
