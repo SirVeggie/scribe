@@ -122,13 +122,17 @@ if (speech.ok) {
 
 `onstate` gets `"speaking"` as each piece starts: `text` is that piece, and `spoken` the pieces
 already played to the end. `ended` has `spoken` too, and after a stop, `partial`: the piece that was
-cut off. Pieces have their whitespace collapsed, so compare words, not exact characters.
+cut off. Pieces have their whitespace collapsed, so compare words, not exact characters. A server
+with its own speech stream reads everything as one piece (`pieces: 1`): it cuts the text itself, so
+Scribe only knows the whole text, and after a stop `partial` is all of it.
 
-Text that arrives bit by bit (an agent's reply) goes into one session with `stream: true`. Each
-sentence is read once it ends (at `. ! ? …` and a space, or a new line), and the next piece is
-fetched while the one before plays, so there is no gap between them. `end()` says no more text
-comes; the rest is read and `ended` resolves. Without `end()` the session waits for more.
-`stop()` drops anything not yet fetched.
+Text that arrives bit by bit (an agent's reply) goes into one session with `stream: true`. Append
+tokens as they are, spaces and new lines included; do not split sentences yourself. A server with
+its own stream gets the text as it arrives and starts speaking when it decides to. On a plain
+OpenAI-compatible server, Scribe reads each sentence once it ends (at `. ! ? …` and a space, or a
+new line) and fetches the next while one plays. `end()` says no more text comes; the rest is read
+and `ended` resolves. Without `end()` the session waits for more. `stop()` drops anything not yet
+read. Markdown is read literally, so strip it first if the text has any.
 
 ```js
 const speech = await scribe.audio.speak({ stream: true, voice });
@@ -142,7 +146,7 @@ if (speech.ok) {
 ```
 
 A session takes up to 100 000 characters in all (`too_large` stops it). Rate limits count each
-fetched piece, so text dropped by `stop()` costs nothing.
+fetched piece, or a whole streamed session once with its characters as they are sent.
 
 To offer a choice, list what the user has set up:
 

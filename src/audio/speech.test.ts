@@ -244,7 +244,7 @@ test("scribeAudio.speak plays the pieces in order through the speech channel and
     assert.equal(result.done.spoken, `${texts[0]} ${texts[1]}`, "spoken is every piece played");
     assert.deepEqual(result.states, [0, 1]);
     assert.ok(texts[0].length <= 300 && texts[0].startsWith("First sentence here."));
-    assert.equal(result.routed, 2);
+    assert.equal(result.routed, 1, "a speech stopped while it connects never reaches the speech channel");
     assert.equal(result.end.reason, "stopped");
 
     texts.length = 0;
@@ -272,6 +272,58 @@ test("scribeAudio.speak plays the pieces in order through the speech channel and
     assert.equal(streamed.done.reason, "ended"); assert.equal(streamed.done.spoken, "Hello there, friend. Second one. Third without an end");
     assert.equal(streamed.appendAfterEnd, false); assert.equal(streamed.afterStop, false);
     assert.equal(streamed.stopped.reason, "stopped"); assert.equal(streamed.stopped.spoken, ""); assert.equal(streamed.stopped.partial, "Only this.");
+  } finally { await browser.close(); }
+});
+
+test("scribeAudio.speak sends text as it arrives to a source with its own stream, and plays its audio", async () => {
+  const { launchChromium } = await import("../chromium.js");
+  const browser = await launchChromium({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"], purpose: "Speech stream test" });
+  try {
+    const page = await browser.newPage();
+    const wav = fs.readFileSync(new URL("../../public/audio-test.wav", import.meta.url));
+    const posted: string[] = [], sockets: { url: string; messages: any[] }[] = [];
+    await page.route("http://audio.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/audio/speech") { posted.push(route.request().postDataJSON().text); return route.fulfill({ body: wav, headers: { "content-type": "audio/wav" } }); }
+      if (path === "/api/audio/settings") return route.fulfill({ json: { speech: "source", tts: {}, output: { sounds: false, volume: 0.6, cues: {} } } });
+      return route.fulfill({ body: "<!doctype html><title>t</title>", headers: { "content-type": "text/html" } });
+    });
+    let plain = false;
+    await page.routeWebSocket(/\/api\/audio\/speech-stream/, ws => {
+      const conn = { url: ws.url(), messages: [] as any[] };
+      sockets.push(conn);
+      if (plain) { ws.send(JSON.stringify({ type: "fallback" })); ws.close(); return; }
+      ws.send(JSON.stringify({ type: "ready" }));
+      ws.onMessage(raw => {
+        const msg = JSON.parse(String(raw));
+        conn.messages.push(msg);
+        if (msg.type === "end") {
+          ws.send(JSON.stringify({ type: "start", format: "wav" }));
+          ws.send(wav);
+          ws.send(JSON.stringify({ type: "done", ok: true }));
+        }
+      });
+    });
+    await page.goto("http://audio.test/");
+    for (const name of ["audio.js", "audio-speech.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    const run = `(async () => {
+      const audio = window.scribeAudio, states = [];
+      await audio.refresh();
+      const s = audio.speak(null, { stream: true, voice: "af_heart", onState: st => states.push(st.text) });
+      s.append("Hel"); s.append("lo th");
+      await new Promise(r => setTimeout(r, 50));
+      s.append("ere"); s.end();
+      return { done: await s.ended, states };
+    })()`;
+    const streamed = await page.evaluate(run) as any;
+    assert.equal(streamed.done.ok, true); assert.equal(streamed.done.reason, "ended"); assert.equal(streamed.done.spoken, "Hello there");
+    assert.deepEqual(sockets[0].messages.map(m => m.text ?? m.type), ["Hel", "lo th", "ere", "end"], "the text goes unsplit, as it arrived");
+    assert.match(sockets[0].url, /voice=af_heart/);
+    assert.deepEqual(posted, [], "nothing went over POST /speech");
+
+    plain = true;
+    const fallback = await page.evaluate(run) as any;
+    assert.equal(fallback.done.reason, "ended"); assert.deepEqual(posted, ["Hello there"], "a plain server gets sentence pieces");
   } finally { await browser.close(); }
 });
 

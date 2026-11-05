@@ -72,6 +72,7 @@ import { audioRouter } from "./audio/routes.js";
 import { PageAudio } from "./audio/page.js";
 import { AudioService } from "./audio/service.js";
 import { audioStreamServer } from "./audio/stream.js";
+import { speechStreamServer } from "./audio/speechStream.js";
 import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
@@ -481,6 +482,8 @@ export async function startHttp(): Promise<http.Server> {
   const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [], onOutput: output => broadcast({ type: "audio_output", output }) });
   const pageAudio = new PageAudio(id => store.pagePermissions(id));
   const audioStream = audioStreamServer(force => audioService.streamTarget(force), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
+  const speechStream = speechStreamServer({ target: options => audioService.speechTarget(options), record: (chars, ok) => audioService.recordStreamSpeech(chars, ok),
+    pageGate: tab => pageAudio.openSpeechStream(tab) });
   app.use("/api/audio", audioRouter(audioService, pageAudio));
   app.use(noteAgentSession);
   app.use(componentFiles);
@@ -2860,6 +2863,7 @@ export async function startHttp(): Promise<http.Server> {
   const upgradeBoard = (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     if (gateway.upgrade(req, socket, head)) return;
     if (audioStream.handle(req, socket, head)) return;
+    if (speechStream.handle(req, socket, head)) return;
     if (new URL(req.url || "/", "http://x").pathname !== "/ws") { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
     // Sockets that cross a network (a peer link, the web) are compressed.
     (peerDeviceOf(req.socket) || onWebPort(req.socket) ? linkWss : wss).handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));

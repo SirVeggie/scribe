@@ -32,4 +32,16 @@ export class PageAudio {
     recent.push({ at: now, chars }); this.speech.set(id, recent);
     return { ok: true };
   }
+  /** A streamed speech counts as one request when it opens; charge() takes its text from the hourly budget as it arrives. */
+  openSpeechStream(id: string): Gate & { charge?: (chars: number) => boolean } {
+    const gate = this.checkSpeech(id, 0);
+    if (!gate.ok) return gate;
+    const entry = this.speech.get(id)!.at(-1)!;
+    return { ...gate, charge: chars => {
+      const now = this.now();
+      const used = (this.speech.get(id) ?? []).filter(c => now - c.at < 3600000).reduce((sum, c) => sum + c.chars, 0);
+      if (used + chars > SPEECH_LIMITS.charsPerHour) return false;
+      entry.chars += chars; return true;
+    } };
+  }
 }

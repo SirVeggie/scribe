@@ -5,7 +5,8 @@ import { fileStore, normalizeSettings, normalizeSpeed, normalizeTtsSource, type 
 import { BROWSER_SPEECH, type AudioResult, type SttEngine, type SttSource, type AudioSettings, type AudioOutput, type TtsEngine, type TtsFailure, type TtsResult, type TtsSource, type TtsVoices } from "./types.js";
 import type { StreamTarget } from "./stream.js";
 
-const wavKey = (source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
+export type SpeechTarget = { ok: true; source: OpenAISource; profile: TtsSource; model?: string; voice: string; speed: number };
+const wavKey =(source: OpenAISource, model: string) => `${source.baseUrl} ${model}`;
 type Endpoint = { source?: string; custom?: { baseUrl: string; apiKey?: string } };
 const keyView = <T extends Endpoint>({ custom, ...rest }: T) => ({ ...rest, ...(custom ? { custom: { baseUrl: custom.baseUrl, hasKey: Boolean(custom.apiKey) } } : {}) });
 /** Voice lists are cached: asking a server for one can load that model (several seconds). */
@@ -166,20 +167,30 @@ export class AudioService {
    * MAX_SPEECH_CHARS; the shell splits longer text. The timeout covers the wait for the response;
    * signal (the client going away) aborts the request and the stream.
    */
+  /** The source, model, voice and speed a speech request uses: the caller's choice over the saved one. */
+  speechTarget(options: { voice?: unknown; speed?: unknown; model?: unknown; sourceId?: string } = {}): SpeechTarget | TtsFailure {
+    const fail = (error: TtsFailure["error"], message: string): TtsFailure => ({ ok: false, error, message });
+    const settings = this.store.read();
+    const id = options.sourceId ?? settings.tts.source;
+    if (id === BROWSER_SPEECH) return fail("no_source", "This browser reads text aloud in the board, not through Scribe.");
+    const profile = settings.ttsSources.find(s => s.id === id), source = profile && this.source(profile);
+    if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
+    const voice = (typeof options.voice === "string" && options.voice.trim().slice(0, 200)) || profile.voice || "alloy";
+    const speed = options.speed === undefined ? profile.speed ?? 1 : normalizeSpeed(options.speed) ?? 1;
+    // A model given by the caller wins; "" asks for the server's loaded model.
+    const model = typeof options.model === "string" ? options.model.trim().slice(0, 200) || undefined : profile.model;
+    return { ok: true, source, profile, model, voice, speed };
+  }
+  /** Characters read through a speech stream, counted like requests. */
+  recordStreamSpeech(chars: number, ok: boolean) { if (chars) this.recordSpeech(chars, ok); }
   async speak(text: unknown, options: { voice?: unknown; speed?: unknown; model?: unknown; sourceId?: string; signal?: AbortSignal } = {}): Promise<TtsResult> {
     const fail = (error: TtsFailure["error"], message: string): TtsFailure => ({ ok: false, error, message });
     try {
       if (typeof text !== "string" || !text.trim()) return fail("invalid_audio", "Give the text to read aloud.");
       if (text.length > MAX_SPEECH_CHARS) return fail("too_large", `Text to read aloud must be at most ${MAX_SPEECH_CHARS} characters per request.`);
-      const settings = this.store.read();
-      const id = options.sourceId ?? settings.tts.source;
-      if (id === BROWSER_SPEECH) return fail("no_source", "This browser reads text aloud in the board, not through Scribe.");
-      const profile = settings.ttsSources.find(s => s.id === id), source = profile && this.source(profile);
-      if (!profile || !source) return fail("no_source", "Choose a text-to-speech source in Settings → Audio.");
-      const voice = (typeof options.voice === "string" && options.voice.trim().slice(0, 200)) || profile.voice || "alloy";
-      const speed = options.speed === undefined ? profile.speed ?? 1 : normalizeSpeed(options.speed) ?? 1;
-      // A model given by the caller wins; "" asks for the server's loaded model.
-      const model = typeof options.model === "string" ? options.model.trim().slice(0, 200) || undefined : profile.model;
+      const target = this.speechTarget(options);
+      if (!target.ok) return target;
+      const { source, profile, model, voice, speed } = target;
       const controller = new AbortController();
       const abort = () => controller.abort();
       if (options.signal?.aborted) return fail("network", "Reading aloud was stopped.");

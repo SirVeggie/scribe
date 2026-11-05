@@ -169,6 +169,93 @@
     }
   }
 
+  /** Text a speech was given, held until it knows where it goes (pipe): the source's stream as it is, or the sentence queue. */
+  function textInput() {
+    let parts = [], closed = false, target = null;
+    return {
+      append(text) {
+        if (closed) return false;
+        text = String(text ?? "");
+        if (text) target ? target.append(text) : parts.push(text);
+        return true;
+      },
+      close() { if (closed) return; closed = true; target?.close(); },
+      pipe(next) { target = next; parts.splice(0).forEach(part => next.append(part)); if (closed) next.close(); },
+    };
+  }
+
+  /**
+   * The daemon's speech stream (/api/audio/speech-stream). Resolves { ws } once the source's own stream is ready,
+   * { fallback: true } for a server without one (plain OpenAI-compatible), { stopped: true }, or a failure.
+   */
+  function openStream(opts, signal) {
+    return new Promise(resolve => {
+      let ws;
+      try {
+        const url = new URL("/api/audio/speech-stream", location.href);
+        url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+        const params = { tab: opts.tabId, source: opts.sourceId, voice: opts.voice, speed: opts.speed, model: typeof opts.model === "string" ? opts.model : undefined };
+        for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+      } catch { resolve({ fallback: true }); return; }
+      const settle = result => {
+        ws.onmessage = ws.onclose = ws.onerror = null;
+        signal.removeEventListener("abort", abort);
+        if (!result.ws) try { ws.close(); } catch { /* closed */ }
+        resolve(result);
+      };
+      const abort = () => settle({ stopped: true });
+      signal.addEventListener("abort", abort, { once: true });
+      ws.onmessage = event => {
+        if (typeof event.data !== "string") return;
+        let msg; try { msg = JSON.parse(event.data); } catch { return; }
+        if (msg.type === "ready") settle({ ws });
+        else if (msg.type === "fallback") settle({ fallback: true });
+        else if (msg.type === "done") { const { type: _, ...result } = msg; settle(result.ok === false ? result : { fallback: true }); }
+      };
+      // An older daemon without the socket: read in pieces.
+      ws.onerror = ws.onclose = () => settle({ fallback: true });
+    });
+  }
+
+  /** Reads text through the source's own stream: text goes out as it arrives, the server cuts it and sends one audio stream back. */
+  async function speakStream(ws, input, opts, signal) {
+    const el = new Audio();
+    el.preload = "auto";
+    const unroute = await Promise.resolve(window.scribeAudio.route?.(el, "speech")).catch(() => null);
+    try { return await playStream(ws, input, opts, signal, el); } finally { unroute?.(); try { ws.close(); } catch { /* closed */ } }
+  }
+  const STREAM_TYPES = { mp3: "audio/mpeg", opus: "audio/ogg", aac: "audio/aac", flac: "audio/flac", wav: "audio/wav" };
+  async function playStream(ws, input, opts, signal, el) {
+    let sent = "", audio = null, gotStart, gotDone;
+    const send = msg => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); };
+    const started = new Promise(resolve => { gotStart = resolve; });
+    const done = new Promise(resolve => { gotDone = resolve; });
+    const close = () => { try { audio?.close(); } catch { /* closed or cancelled */ } };
+    ws.onmessage = event => {
+      if (typeof event.data !== "string") { try { audio?.enqueue(new Uint8Array(event.data)); } catch { /* cancelled */ } return; }
+      let msg; try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === "start" && !audio) {
+        const body = new ReadableStream({ start(controller) { audio = controller; } });
+        gotStart(new Response(body, { headers: { "content-type": STREAM_TYPES[msg.format] || "audio/mpeg" } }));
+      } else if (msg.type === "done") { close(); const { type: _, ...result } = msg; gotDone(result); gotStart(null); }
+    };
+    ws.onclose = () => { close(); gotDone(failure("network", "The text-to-speech stream closed early.")); gotStart(null); };
+    signal.addEventListener("abort", () => { send({ type: "cancel" }); gotStart(null); }, { once: true });
+    input.pipe({ append(text) { sent += text; send({ type: "text", text }); return true; }, close() { send({ type: "end" }); } });
+    const res = await started;
+    const text = () => sent.replace(/\s+/g, " ").trim();
+    if (signal.aborted) return heard({ ok: true, reason: "stopped" }, [], text());
+    if (!res) { const result = await done; return result.ok === false ? result : heard({ ok: true, reason: "ended" }, []); }
+    opts.onState?.({ state: "speaking", piece: 0, pieces: 1, text: text(), spoken: "" });
+    const played = await playResponse(res, el, signal);
+    // Only the whole text is known: a stop reports what was sent as partial.
+    if (!played.ok || played.reason === "stopped") { send({ type: "cancel" }); return heard(played, [], text()); }
+    const result = await done;
+    return result.ok === false ? result : heard({ ok: true, reason: "ended" }, [text()]);
+  }
+
   async function browserVoices() {
     const synth = window.speechSynthesis;
     if (!synth) return [];
@@ -210,15 +297,16 @@
    * one speech at a time, so a new one stops the one before. Returns { stop(), ended } at once;
    * ended resolves to { ok: true, reason: "ended" | "stopped", spoken, partial? } or a failure { ok: false, error, message }.
    * opts.stream: no text up front; session.append(text) adds text as it arrives and session.end() says
-   * there is no more. Each piece is read once its sentence ends; stopping drops what was not fetched yet.
+   * there is no more. A source with its own stream (/stream WebSocket) gets the text as it arrives and cuts it
+   * itself; others read each piece once its sentence ends, and stopping drops what was not fetched yet.
    */
   function speak(text, opts = {}) {
     current?.stop();
-    const controller = new AbortController(), queue = speechQueue();
-    const session = { stop() { queue.close(); controller.abort(); window.speechSynthesis?.cancel(); return session.ended; } };
-    if (opts.stream) Object.assign(session, { append: more => queue.append(more), end: () => queue.close() });
+    const controller = new AbortController(), input = textInput(), queue = speechQueue();
+    const session = { stop() { input.close(); queue.close(); controller.abort(); window.speechSynthesis?.cancel(); return session.ended; } };
+    if (opts.stream) Object.assign(session, { append: more => input.append(more), end: () => input.close() });
     else if (!splitSpeech(text).length) { session.ended = Promise.resolve(failure("invalid_audio", "Give the text to read aloud.")); return session; }
-    else { queue.append(text); queue.close(); }
+    else { input.append(text); input.close(); }
     current = session;
     session.ended = (async () => {
       const view = window.scribeAudio.settings() || await window.scribeAudio.refresh().catch(() => null);
@@ -226,12 +314,16 @@
       const mode = opts.mode || (opts.sourceId ? (opts.sourceId === "__browser__" ? "browser" : "source") : view?.speech);
       const settings = view?.tts || {};
       const merged = { ...opts, voice: opts.voice ?? settings.voice, speed: opts.speed ?? settings.speed };
-      if (mode === "browser") { queue.max = queue.first = BROWSER_CHARS; return speakBrowser(queue, merged, controller.signal); }
+      if (mode === "browser") { queue.max = queue.first = BROWSER_CHARS; input.pipe(queue); return speakBrowser(queue, merged, controller.signal); }
       if (mode !== "source") return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
-      queue.first = FIRST_CHARS;
-      // The daemon fills in the saved voice and speed.
+      // The daemon fills in the saved voice and speed. A server with its own stream takes the text as it is.
+      const stream = await openStream(opts, controller.signal);
+      if (stream.stopped) return heard({ ok: true, reason: "stopped" }, []);
+      if (stream.ws) return speakStream(stream.ws, input, opts, controller.signal);
+      if (!stream.fallback) return stream;
+      queue.first = FIRST_CHARS; input.pipe(queue);
       return speakSource(queue, opts, controller.signal);
-    })().catch(() => failure("engine", "Text-to-speech is unavailable.")).finally(() => { queue.close(); if (current === session) current = null; });
+    })().catch(() => failure("engine", "Text-to-speech is unavailable.")).finally(() => { input.close(); queue.close(); if (current === session) current = null; });
     return session;
   }
 

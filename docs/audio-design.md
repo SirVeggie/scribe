@@ -371,9 +371,17 @@ from the server's `GET …/audio/voices?model=` (`{ voices, default }`), cached 
 and model because asking can load that model; servers without the list get OpenAI's names. An early
 build kept a `speechModel` on speech-to-text sources; `normalizeSettings` moves those once. Shell code is
 `public/audio-speech.js` (`scribeAudio.speak`, `voices`, `splitSpeech`). Both whole text and a
-`stream: true` session (`append`, `end`, op `speak-append`) go through one `speechQueue`: appended
-text is ready at sentence ends, and the player takes a piece, fetches it, and fetches the next while
-it plays, reporting `spoken` / `partial` text. It plays through an
+`stream: true` session (`append`, `end`, op `speak-append`) first try the daemon's speech stream
+(`/api/audio/speech-stream`, `src/audio/speechStream.ts`): it opens the source's own `/stream`
+WebSocket next to `/audio/speech` (the audio gateway's input streaming: `config`, `text`, `end`,
+`cancel` in; `start`, mp3 frames, `done` out), passes the text on as it arrives and relays the audio,
+which the shell plays as one MediaSource stream. The server cuts the text, so nothing is split in
+Scribe. A server that answers that socket with an HTTP status (a plain OpenAI-compatible one) gets
+`fallback`, remembered per URL until a restart, and the text goes through one `speechQueue`:
+appended text is ready at sentence ends, and the player takes a piece, fetches it over POST /speech,
+and fetches the next while it plays, reporting `spoken` / `partial` text. 401/403 is an auth failure,
+not a fallback. A page's streamed session passes `audio.speak` once when it opens and charges its
+characters to the hourly budget as they arrive. It plays through an
 `<audio>` element routed into the mixer's `speech` channel (`scribeAudio.route`), or on its own while
 the context cannot start yet. Daily usage counts
 characters (`chars`, `speechCalls` in `audio-usage.json`).
