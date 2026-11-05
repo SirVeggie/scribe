@@ -127,6 +127,12 @@ To set it up:
 
 With a domain of your own and a TLS proxy such as [Caddy](https://caddyserver.com) on the server, you can open Scribe in any browser, including on your phone, after signing in with a Google account you allowed. See [docs/web-access.md](docs/web-access.md) for the setup.
 
+## Learn more
+
+- [Permissions](docs/permissions.md): what agents, pages, plugins and other devices may do, and where you decide. Start here if a chat or page asks for something and you're not sure what it means.
+- [Kanban agent workers](docs/kanban-workers.md): how workers take cards, work in their own branches and merge, and why one might be waiting.
+- [Browser access from anywhere](docs/web-access.md): reach Scribe from a phone through your own server.
+
 ## Build from source
 
 You need [Node.js](https://nodejs.org) 22.19 or newer, and a [Rust toolchain](https://rustup.rs) for the desktop app.
