@@ -84,10 +84,16 @@
   let current = null;
   const once = (target, name) => new Promise(resolve => target.addEventListener(name, resolve, { once: true }));
 
-  /** Plays one /api/audio/speech response; with MediaSource it starts before the download ends. */
-  async function playResponse(res, el, signal) {
+  /**
+   * Plays one /api/audio/speech response; with MediaSource it starts before the download ends.
+   * onPlaying runs when sound actually starts, not when the response does: a streaming server
+   * answers (and the gateway sends start) before it has generated any audio.
+   */
+  async function playResponse(res, el, signal, onPlaying) {
     const type = (res.headers.get("content-type") || "audio/mpeg").split(";")[0];
     let url;
+    const playing = () => onPlaying?.();
+    el.addEventListener("playing", playing, { once: true });
     try {
       if (window.MediaSource?.isTypeSupported?.(type) && res.body) {
         const media = new MediaSource(); url = URL.createObjectURL(media); el.src = url;
@@ -119,6 +125,7 @@
       return err?.name === "NotAllowedError" ? failure("blocked", "The browser blocked audio playback. Click in Scribe and try again.")
         : failure("format", "Cannot play the speech audio.");
     } finally {
+      el.removeEventListener("playing", playing);
       el.pause(); el.removeAttribute("src"); el.load?.();
       if (url) URL.revokeObjectURL(url);
     }
@@ -159,8 +166,8 @@
       if (!item.got.ok) return heard(item.got, spoken);
       // The next piece downloads while this one plays; text appended meanwhile waits for the one after.
       next = fetchNext();
-      opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text: item.text, spoken: spoken.join(" ") });
-      const played = await playResponse(item.got.res, el, signal);
+      const played = await playResponse(item.got.res, el, signal,
+        () => opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text: item.text, spoken: spoken.join(" ") }));
       if (!played.ok || played.reason === "stopped") {
         void next.then(rest => rest?.got.res?.body?.cancel().catch(() => {}));
         return heard(played, spoken, item.text);
@@ -248,8 +255,7 @@
     const text = () => sent.replace(/\s+/g, " ").trim();
     if (signal.aborted) return heard({ ok: true, reason: "stopped" }, [], text());
     if (!res) { const result = await done; return result.ok === false ? result : heard({ ok: true, reason: "ended" }, []); }
-    opts.onState?.({ state: "speaking", piece: 0, pieces: 1, text: text(), spoken: "" });
-    const played = await playResponse(res, el, signal);
+    const played = await playResponse(res, el, signal, () => opts.onState?.({ state: "speaking", piece: 0, pieces: 1, text: text(), spoken: "" }));
     // Only the whole text is known: a stop reports what was sent as partial.
     if (!played.ok || played.reason === "stopped") { send({ type: "cancel" }); return heard(played, [], text()); }
     const result = await done;
@@ -279,7 +285,7 @@
       const utterance = new SpeechSynthesisUtterance(text);
       if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
       utterance.rate = Math.min(4, Math.max(0.25, Number(opts.speed) || 1));
-      opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text, spoken: spoken.join(" ") });
+      utterance.onstart = () => opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text, spoken: spoken.join(" ") });
       const result = await new Promise(resolve => {
         utterance.onend = () => resolve("ended");
         utterance.onerror = event => resolve(event.error === "interrupted" || event.error === "canceled" ? "stopped" : "error");

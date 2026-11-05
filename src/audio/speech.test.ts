@@ -298,9 +298,9 @@ test("scribeAudio.speak sends text as it arrives to a source with its own stream
         const msg = JSON.parse(String(raw));
         conn.messages.push(msg);
         if (msg.type === "end") {
+          // start comes at once; the audio only once the model has made some, as with a slow model.
           ws.send(JSON.stringify({ type: "start", format: "wav" }));
-          ws.send(wav);
-          ws.send(JSON.stringify({ type: "done", ok: true }));
+          setTimeout(() => { ws.send(wav); ws.send(JSON.stringify({ type: "done", ok: true })); }, 600);
         }
       });
     });
@@ -309,14 +309,16 @@ test("scribeAudio.speak sends text as it arrives to a source with its own stream
     const run = `(async () => {
       const audio = window.scribeAudio, states = [];
       await audio.refresh();
-      const s = audio.speak(null, { stream: true, voice: "af_heart", onState: st => states.push(st.text) });
+      let endAt = 0, heardAt = 0;
+      const s = audio.speak(null, { stream: true, voice: "af_heart", onState: st => { states.push(st.text); heardAt ||= performance.now(); } });
       s.append("Hel"); s.append("lo th");
       await new Promise(r => setTimeout(r, 50));
-      s.append("ere"); s.end();
-      return { done: await s.ended, states };
+      s.append("ere"); s.end(); endAt = performance.now();
+      return { done: await s.ended, states, wait: heardAt - endAt };
     })()`;
     const streamed = await page.evaluate(run) as any;
     assert.equal(streamed.done.ok, true); assert.equal(streamed.done.reason, "ended"); assert.equal(streamed.done.spoken, "Hello there");
+    assert.ok(streamed.wait >= 550, `speaking is reported when sound starts, not at start (${streamed.wait} ms)`);
     assert.deepEqual(sockets[0].messages.map(m => m.text ?? m.type), ["Hel", "lo th", "ere", "end"], "the text goes unsplit, as it arrived");
     assert.match(sockets[0].url, /voice=af_heart/);
     assert.deepEqual(posted, [], "nothing went over POST /speech");
