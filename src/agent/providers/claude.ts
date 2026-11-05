@@ -138,6 +138,16 @@ function accountEnv(dir: string): NodeJS.ProcessEnv {
   return { ...process.env, CLAUDE_CONFIG_DIR: dir };
 }
 
+/**
+ * The environment for an Agent SDK query. Claude Code sends CLAUDE_CODE_ENTRYPOINT with every request,
+ * and the SDK fills in "sdk-ts" when it is unset, which Anthropic's 5h meter charges about 1.7–3x more
+ * per token than the interactive CLI (anthropics/claude-code#97074, #1018). Label the traffic as Scribe's
+ * own, replacing a value inherited from a host Claude Code session.
+ */
+export function sdkEnv(dir?: string): NodeJS.ProcessEnv {
+  return { ...(dir ? accountEnv(dir) : process.env), CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1", CLAUDE_CODE_ENTRYPOINT: "scribe" };
+}
+
 /** `claude auth status --json`: the login the SDK will use (claude.ai, API key, or a cloud provider). */
 function claudeAuthStatus(binary: string, dir?: string): Promise<ClaudeAuth | null> {
   return new Promise((resolve) => {
@@ -404,7 +414,7 @@ export class ClaudeProvider implements AgentProvider {
     const sdk = await loadSdk();
     const input = new InputQueue();
     const abortController = new AbortController();
-    const q = sdk.query({ prompt: input, options: { settingSources: [], tools: [], persistSession: false, abortController } });
+    const q = sdk.query({ prompt: input, options: { settingSources: [], tools: [], persistSession: false, abortController, env: sdkEnv() } });
     try {
       const infos = await q.supportedModels();
       const models: ModelOption[] = infos.map((info) => ({
@@ -453,7 +463,7 @@ export class ClaudeProvider implements AgentProvider {
           tools: { type: "preset", preset: "claude_code" },
         }
       : scribe;
-    const q = sdk.query({ prompt: input, options: { ...options, persistSession: false, abortController } });
+    const q = sdk.query({ prompt: input, options: { ...options, persistSession: false, abortController, env: sdkEnv() } });
     try {
       // MCP servers connect after the process starts; a count taken before that misses their tools.
       for (let i = 0; i < 60; i += 1) {
@@ -500,7 +510,7 @@ export class ClaudeProvider implements AgentProvider {
         cwd, model: "haiku", systemPrompt: "Reply only with hi.", settingSources: [], tools: [],
         mcpServers: {}, persistSession: false, maxTurns: 1, abortController,
         thinking: { type: "disabled" },
-        ...(dir ? { env: { ...accountEnv(dir), CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" } } : {}),
+        env: sdkEnv(dir),
       } });
       const { windowStartBlocked, isSubscriptionPlan } = await import("../usageWindowStarts.js");
       const account = await q.accountInfo();
@@ -539,7 +549,7 @@ export class ClaudeProvider implements AgentProvider {
     signal?.addEventListener("abort", abort, { once: true });
     const q = sdk.query({
       prompt,
-      options: { ...(model && model !== "default" ? { model } : {}), settingSources: [], tools: [], persistSession: false, maxTurns: 1, abortController },
+      options: { ...(model && model !== "default" ? { model } : {}), settingSources: [], tools: [], persistSession: false, maxTurns: 1, abortController, env: sdkEnv() },
     });
     try {
       for await (const msg of q) {
@@ -612,7 +622,7 @@ export class ClaudeProvider implements AgentProvider {
     const abortController = new AbortController();
     const timer = setTimeout(() => abortController.abort(), 45_000);
     const q = sdk.query({ prompt: input, options: { settingSources: ["user"], tools: [], persistSession: false, abortController,
-      ...(dir ? { env: { ...accountEnv(dir), CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1" } } : {}) } });
+      env: sdkEnv(dir) } });
     try {
       const source = await q.accountInfo().then(claudeBillingSource, () => ({}));
       return { report: await queryPlanUsage(q), billingSource: source };
@@ -990,7 +1000,7 @@ class ClaudeSession implements ProviderSession {
           },
         ],
       },
-      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: "scribe/1", ...this.ctx.claudeEnv?.(this.thread) },
+      env: { ...sdkEnv(), ...this.ctx.claudeEnv?.(this.thread) },
       stderr: (data) => {
         this.stderrTail = (this.stderrTail + data).slice(-4000);
       },
