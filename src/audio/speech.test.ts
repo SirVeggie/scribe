@@ -240,11 +240,38 @@ test("scribeAudio.speak plays the pieces in order through the speech channel and
       const end = await audio.speak("One more sentence.").stop();
       return { done, states, routed, end };
     })()`) as any;
-    assert.deepEqual(result.done, { ok: true, reason: "ended" });
+    assert.equal(result.done.ok, true); assert.equal(result.done.reason, "ended");
+    assert.equal(result.done.spoken, `${texts[0]} ${texts[1]}`, "spoken is every piece played");
     assert.deepEqual(result.states, [0, 1]);
     assert.ok(texts[0].length <= 300 && texts[0].startsWith("First sentence here."));
     assert.equal(result.routed, 2);
     assert.equal(result.end.reason, "stopped");
+
+    texts.length = 0;
+    const streamed = await page.evaluate(`(async () => {
+      const audio = window.scribeAudio, states = [];
+      const s = audio.speak(null, { stream: true, onState: st => states.push({ piece: st.piece, text: st.text, spoken: st.spoken }) });
+      s.append("Hello th"); s.append("ere, friend. Sec");
+      await new Promise(r => setTimeout(r, 50));
+      s.append("ond one.\\nThird without an end");
+      s.end();
+      const appendAfterEnd = s.append("Too late.");
+      const done = await s.ended;
+      // A stop while the first piece plays drops text that was never fetched.
+      const t = audio.speak(null, { stream: true });
+      t.append("Only this. ");
+      await new Promise(r => setTimeout(r, 30));
+      const stopped = await t.stop();
+      const afterStop = t.append("Never read. ");
+      return { states, done, appendAfterEnd, stopped, afterStop };
+    })()`) as any;
+    // Text that is ready together goes in one piece.
+    assert.deepEqual(texts, ["Hello there, friend.", "Second one. Third without an end", "Only this."]);
+    assert.deepEqual(streamed.states.map((s: any) => s.text), texts.slice(0, 2));
+    assert.equal(streamed.states[1].spoken, "Hello there, friend.");
+    assert.equal(streamed.done.reason, "ended"); assert.equal(streamed.done.spoken, "Hello there, friend. Second one. Third without an end");
+    assert.equal(streamed.appendAfterEnd, false); assert.equal(streamed.afterStop, false);
+    assert.equal(streamed.stopped.reason, "stopped"); assert.equal(streamed.stopped.spoken, ""); assert.equal(streamed.stopped.partial, "Only this.");
   } finally { await browser.close(); }
 });
 

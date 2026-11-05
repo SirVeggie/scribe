@@ -5406,10 +5406,22 @@
         if (pageSpeech.get(id)?.id === data.sessionId) stopPageSpeech(id);
         return reply({ ok: true });
       }
+      if (data.op === "speak-append") {
+        // A streamed speech's text, in the order the page sent it: no await before this.
+        const speech = pageSpeech.get(id);
+        if (speech?.id !== data.sessionId || speech.source !== event.source) return reply({ ok: false, error: "ended" });
+        if (typeof data.text === "string" && data.text) {
+          if ((speech.chars += data.text.length) > 100000) { stopPageSpeech(id); return reply({ ok: false, error: "too_large" }); }
+          if (!speech.session.append(data.text)) return reply({ ok: false, error: "ended" });
+        }
+        if (data.end) speech.session.end();
+        return reply({ ok: true });
+      }
       if (data.op === "speak") {
         if (!api.speak) return reply({ ok: false, error: "unavailable" });
-        if (typeof data.text !== "string" || !data.text.trim()) return reply({ ok: false, error: "invalid_audio" });
-        if (data.text.length > 100000) return reply({ ok: false, error: "too_large" });
+        const stream = data.stream === true;
+        if (!stream && (typeof data.text !== "string" || !data.text.trim())) return reply({ ok: false, error: "invalid_audio" });
+        if (!stream && data.text.length > 100000) return reply({ ok: false, error: "too_large" });
         if (!pageAudioVisible(id)) return reply({ ok: false, error: "hidden" });
         const entry = frames.get(id), revision = entry.revision, generation = entry.el.dataset?.audioGeneration;
         const denied = await speakGate();
@@ -5417,11 +5429,12 @@
         if (frames.get(id) !== entry || entry.revision !== revision || entry.el.dataset?.audioGeneration !== generation) return reply({ ok: false, error: "cancelled" });
         stopPageSpeech(id);
         const sessionId = crypto.randomUUID(), source = event.source;
-        const session = api.speak(data.text, { tabId: id, sourceId: sourceArg, model: modelArg,
+        const session = api.speak(stream ? null : data.text, { tabId: id, sourceId: sourceArg, model: modelArg, stream,
           voice: typeof data.voice === "string" ? data.voice.slice(0, 200) : undefined,
           speed: Number.isFinite(data.speed) ? data.speed : undefined,
-          onState: state => source?.postMessage({ type: "scribe-audio-event", sessionId, state: state.state, piece: state.piece, pieces: state.pieces }, event.origin) });
-        pageSpeech.set(id, { id: sessionId, session });
+          onState: state => source?.postMessage({ type: "scribe-audio-event", sessionId, state: state.state, piece: state.piece, pieces: state.pieces,
+            text: state.text, spoken: state.spoken }, event.origin) });
+        pageSpeech.set(id, { id: sessionId, session, source, chars: 0 });
         void session.ended.then(result => {
           if (pageSpeech.get(id)?.id === sessionId) pageSpeech.delete(id);
           source?.postMessage({ type: "scribe-audio-event", sessionId, ended: result }, event.origin);

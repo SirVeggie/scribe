@@ -114,11 +114,35 @@ and stops when the page closes or reloads.
 ```js
 const speech = await scribe.audio.speak(text, { voice: "nova", speed: 1.1 });
 if (speech.ok) {
-  speech.onstate = (state, { piece, pieces }) => { status.textContent = `${piece + 1}/${pieces}`; };
+  speech.onstate = (state, { piece, pieces, text, spoken }) => { status.textContent = `${piece + 1}/${pieces}`; };
   stopButton.onclick = () => speech.stop();
-  const end = await speech.ended; // { ok: true, reason: "ended" | "stopped" } or { ok: false, error, message }
+  const end = await speech.ended; // { ok: true, reason: "ended" | "stopped", spoken, partial? } or { ok: false, error, message, spoken }
 }
 ```
+
+`onstate` gets `"speaking"` as each piece starts: `text` is that piece, and `spoken` the pieces
+already played to the end. `ended` has `spoken` too, and after a stop, `partial`: the piece that was
+cut off. Pieces have their whitespace collapsed, so compare words, not exact characters.
+
+Text that arrives bit by bit (an agent's reply) goes into one session with `stream: true`. Each
+sentence is read once it ends (at `. ! ? …` and a space, or a new line), and the next piece is
+fetched while the one before plays, so there is no gap between them. `end()` says no more text
+comes; the rest is read and `ended` resolves. Without `end()` the session waits for more.
+`stop()` drops anything not yet fetched.
+
+```js
+const speech = await scribe.audio.speak({ stream: true, voice });
+if (speech.ok) {
+  // An agent reply as it is written (scribe.agent.onText); append → { ok }, { ok: false, error: "ended" } once stopped
+  scribe.agent.onText(threadId, ({ delta, done, reset }) => {
+    if (!reset) speech.append(delta); // reset: earlier text changed; it was already read
+    if (done) speech.end();
+  });
+}
+```
+
+A session takes up to 100 000 characters in all (`too_large` stops it). Rate limits count each
+fetched piece, so text dropped by `stop()` costs nothing.
 
 To offer a choice, list what the user has set up:
 

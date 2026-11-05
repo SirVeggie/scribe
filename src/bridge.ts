@@ -1860,9 +1860,12 @@ ${POINTER_DRAG_JS}
   // ---------- audio ----------
   var audioSessions = {}, speechSessions = {};
   function speak(text, opts) {
+    // speak({ stream: true, ... }): text comes later through append().
+    if (text && typeof text === "object") { opts = text; text = undefined; }
     opts = opts || {};
-    if (typeof text !== "string" || !text.trim()) return Promise.resolve({ ok: false, error: "invalid_audio" });
-    return askBoard({ type: "scribe-audio", op: "speak", text: text, source: opts.source, model: opts.model, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
+    var stream = opts.stream === true;
+    if (!stream && (typeof text !== "string" || !text.trim())) return Promise.resolve({ ok: false, error: "invalid_audio" });
+    return askBoard({ type: "scribe-audio", op: "speak", text: text, stream: stream, source: opts.source, model: opts.model, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
       if (!result || !result.ok) return result || { ok: false, error: "unavailable" };
       var finish, done = false;
       var session = { ok: true, onstate: null,
@@ -1872,6 +1875,14 @@ ${POINTER_DRAG_JS}
           return session.ended;
         }
       };
+      if (stream) {
+        var send = function (more, end) {
+          if (done) return Promise.resolve({ ok: false, error: "ended" });
+          return askBoard({ type: "scribe-audio", op: "speak-append", sessionId: result.sessionId, text: more, end: end }, 30000);
+        };
+        session.append = function (more) { return typeof more === "string" ? send(more, false) : Promise.resolve({ ok: false, error: "invalid_audio" }); };
+        session.end = function () { return send("", true); };
+      }
       speechSessions[result.sessionId] = { session: session, finish: function (value) { done = true; finish(value); } };
       return session;
     });
@@ -1882,7 +1893,7 @@ ${POINTER_DRAG_JS}
     if (speech) {
       if (event.data.ended) { delete speechSessions[event.data.sessionId]; speech.finish(event.data.ended); }
       else if (event.data.state && typeof speech.session.onstate === "function") {
-        try { speech.session.onstate(event.data.state, { piece: event.data.piece, pieces: event.data.pieces }); } catch (_) {}
+        try { speech.session.onstate(event.data.state, { piece: event.data.piece, pieces: event.data.pieces, text: event.data.text, spoken: event.data.spoken }); } catch (_) {}
       }
       return;
     }

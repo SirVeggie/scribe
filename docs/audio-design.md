@@ -370,7 +370,10 @@ get them from `scribe.audio.model()`. Voices come
 from the server's `GET …/audio/voices?model=` (`{ voices, default }`), cached for 10 minutes per URL
 and model because asking can load that model; servers without the list get OpenAI's names. An early
 build kept a `speechModel` on speech-to-text sources; `normalizeSettings` moves those once. Shell code is
-`public/audio-speech.js` (`scribeAudio.speak`, `voices`, `splitSpeech`); it plays through an
+`public/audio-speech.js` (`scribeAudio.speak`, `voices`, `splitSpeech`). Both whole text and a
+`stream: true` session (`append`, `end`, op `speak-append`) go through one `speechQueue`: appended
+text is ready at sentence ends, and the player takes a piece, fetches it, and fetches the next while
+it plays, reporting `spoken` / `partial` text. It plays through an
 `<audio>` element routed into the mixer's `speech` channel (`scribeAudio.route`), or on its own while
 the context cannot start yet. Daily usage counts
 characters (`chars`, `speechCalls` in `audio-usage.json`).

@@ -40,6 +40,47 @@
     return pieces.filter(piece => /[\p{L}\p{N}]/u.test(piece));
   }
 
+  // Where appended text may be read: after . ! ? … and a space, after 。！？, or at a newline.
+  const SENTENCE_END = /[.!?…]+["'”’)\]]*\s+|[。！？]+["'”’)\]]*\s*|\n+/g;
+  /**
+   * Text waiting to be read aloud, a piece at a time (max characters, the first at most first).
+   * Appended text is ready once its sentence ends, all of it once closed; take() waits for the
+   * next piece and gives null when everything is read or the signal aborts.
+   */
+  function speechQueue() {
+    let pending = "", ready = "", closed = false, taken = 0, wake = null;
+    const settle = () => { const w = wake; wake = null; w?.(); };
+    const add = text => { if (text) ready = ready ? `${ready} ${text}` : text; };
+    const split = () => splitSpeech(ready, queue.max, taken ? queue.max : queue.first);
+    const queue = {
+      max: MAX_CHARS, first: MAX_CHARS,
+      append(text) {
+        if (closed) return false;
+        pending += String(text ?? "");
+        let end = 0;
+        for (const m of pending.matchAll(SENTENCE_END)) end = m.index + m[0].length;
+        // A long run without a sentence end goes at a space.
+        while (pending.length - end > queue.max) { const cut = pending.lastIndexOf(" ", end + queue.max); end = cut > end ? cut + 1 : end + queue.max; }
+        if (end) { add(pending.slice(0, end)); pending = pending.slice(end); settle(); }
+        return true;
+      },
+      close() { if (closed) return; closed = true; add(pending); pending = ""; settle(); },
+      /** Pieces taken or ready so far (all of them once closed). */
+      count: () => taken + split().length,
+      async take(signal) {
+        for (;;) {
+          if (signal.aborted) return null;
+          const pieces = split();
+          if (pieces.length) { ready = pieces.slice(1).join(" "); taken++; return pieces[0]; }
+          ready = "";
+          if (closed) return null;
+          await new Promise(resolve => { wake = resolve; signal.addEventListener("abort", resolve, { once: true }); });
+        }
+      },
+    };
+    return queue;
+  }
+
   let current = null;
   const once = (target, name) => new Promise(resolve => target.addEventListener(name, resolve, { once: true }));
 
@@ -95,29 +136,37 @@
     } catch { return signal.aborted ? { ok: true, stopped: true } : failure("network", "Cannot reach text-to-speech."); }
   }
 
-  async function speakSource(pieces, opts, signal) {
+  async function speakSource(queue, opts, signal) {
     const el = new Audio();
     el.preload = "auto";
     // The mixer's speech channel (#564), so the master volume applies.
     const unroute = await Promise.resolve(window.scribeAudio.route?.(el, "speech")).catch(() => null);
-    try { return await playPieces(pieces, opts, signal, el); } finally { unroute?.(); }
+    try { return await playPieces(queue, opts, signal, el); } finally { unroute?.(); }
   }
-  async function playPieces(pieces, opts, signal, el) {
-    let next = fetchPiece(pieces[0], opts, signal);
-    for (let i = 0; i < pieces.length; i++) {
-      const got = await next;
-      if (signal.aborted || got.stopped) return { ok: true, reason: "stopped" };
-      if (!got.ok) return got;
-      // The next piece downloads while this one plays.
-      next = i + 1 < pieces.length ? fetchPiece(pieces[i + 1], opts, signal) : null;
-      opts.onState?.({ state: "speaking", piece: i, pieces: pieces.length });
-      const played = await playResponse(got.res, el, signal);
+  /** What was read: spoken is the pieces played to the end; partial the one a stop cut off. */
+  const heard = (result, spoken, partial) => ({ ...result, spoken: spoken.join(" "), ...(partial && result.reason === "stopped" ? { partial } : {}) });
+  async function playPieces(queue, opts, signal, el) {
+    const spoken = [];
+    const fetchNext = async () => {
+      const text = await queue.take(signal);
+      return text === null ? null : { text, got: await fetchPiece(text, opts, signal) };
+    };
+    let next = fetchNext();
+    for (let i = 0; ; i++) {
+      const item = await next;
+      if (signal.aborted || item?.got.stopped) return heard({ ok: true, reason: "stopped" }, spoken);
+      if (!item) return heard({ ok: true, reason: "ended" }, spoken);
+      if (!item.got.ok) return heard(item.got, spoken);
+      // The next piece downloads while this one plays; text appended meanwhile waits for the one after.
+      next = fetchNext();
+      opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text: item.text, spoken: spoken.join(" ") });
+      const played = await playResponse(item.got.res, el, signal);
       if (!played.ok || played.reason === "stopped") {
-        void next?.then(rest => rest.res?.body?.cancel().catch(() => {}));
-        return played;
+        void next.then(rest => rest?.got.res?.body?.cancel().catch(() => {}));
+        return heard(played, spoken, item.text);
       }
+      spoken.push(item.text);
     }
-    return { ok: true, reason: "ended" };
   }
 
   async function browserVoices() {
@@ -131,38 +180,45 @@
     return list;
   }
 
-  async function speakBrowser(text, opts, signal) {
+  async function speakBrowser(queue, opts, signal) {
     const synth = window.speechSynthesis;
     if (!synth || !window.SpeechSynthesisUtterance) return failure("no_source", "This browser cannot read text aloud.");
     const voice = opts.voice ? (await browserVoices()).find(v => v.name === opts.voice || v.voiceURI === opts.voice) : undefined;
-    const pieces = splitSpeech(text, BROWSER_CHARS);
-    for (let i = 0; i < pieces.length; i++) {
-      if (signal.aborted) return { ok: true, reason: "stopped" };
-      const utterance = new SpeechSynthesisUtterance(pieces[i]);
+    const spoken = [];
+    for (let i = 0; ; i++) {
+      const text = await queue.take(signal);
+      if (signal.aborted) return heard({ ok: true, reason: "stopped" }, spoken);
+      if (text === null) return heard({ ok: true, reason: "ended" }, spoken);
+      const utterance = new SpeechSynthesisUtterance(text);
       if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
       utterance.rate = Math.min(4, Math.max(0.25, Number(opts.speed) || 1));
-      opts.onState?.({ state: "speaking", piece: i, pieces: pieces.length });
+      opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text, spoken: spoken.join(" ") });
       const result = await new Promise(resolve => {
         utterance.onend = () => resolve("ended");
         utterance.onerror = event => resolve(event.error === "interrupted" || event.error === "canceled" ? "stopped" : "error");
         signal.addEventListener("abort", () => resolve("stopped"), { once: true });
         synth.speak(utterance);
       });
-      if (result === "stopped") return { ok: true, reason: "stopped" };
-      if (result === "error") return failure("engine", "This browser could not read the text aloud.");
+      if (result === "stopped") return heard({ ok: true, reason: "stopped" }, spoken, text);
+      if (result === "error") return heard(failure("engine", "This browser could not read the text aloud."), spoken);
+      spoken.push(text);
     }
-    return { ok: true, reason: "ended" };
   }
 
   /**
    * Reads text aloud through the text-to-speech source in Settings → Audio, on the speech channel:
    * one speech at a time, so a new one stops the one before. Returns { stop(), ended } at once;
-   * ended resolves to { ok: true, reason: "ended" | "stopped" } or a failure { ok: false, error, message }.
+   * ended resolves to { ok: true, reason: "ended" | "stopped", spoken, partial? } or a failure { ok: false, error, message }.
+   * opts.stream: no text up front; session.append(text) adds text as it arrives and session.end() says
+   * there is no more. Each piece is read once its sentence ends; stopping drops what was not fetched yet.
    */
   function speak(text, opts = {}) {
     current?.stop();
-    const controller = new AbortController();
-    const session = { stop() { controller.abort(); window.speechSynthesis?.cancel(); return session.ended; } };
+    const controller = new AbortController(), queue = speechQueue();
+    const session = { stop() { queue.close(); controller.abort(); window.speechSynthesis?.cancel(); return session.ended; } };
+    if (opts.stream) Object.assign(session, { append: more => queue.append(more), end: () => queue.close() });
+    else if (!splitSpeech(text).length) { session.ended = Promise.resolve(failure("invalid_audio", "Give the text to read aloud.")); return session; }
+    else { queue.append(text); queue.close(); }
     current = session;
     session.ended = (async () => {
       const view = window.scribeAudio.settings() || await window.scribeAudio.refresh().catch(() => null);
@@ -170,14 +226,12 @@
       const mode = opts.mode || (opts.sourceId ? (opts.sourceId === "__browser__" ? "browser" : "source") : view?.speech);
       const settings = view?.tts || {};
       const merged = { ...opts, voice: opts.voice ?? settings.voice, speed: opts.speed ?? settings.speed };
-      if (!String(text ?? "").trim()) return failure("invalid_audio", "Give the text to read aloud.");
-      if (mode === "browser") return speakBrowser(text, merged, controller.signal);
+      if (mode === "browser") { queue.max = queue.first = BROWSER_CHARS; return speakBrowser(queue, merged, controller.signal); }
       if (mode !== "source") return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
-      const pieces = splitSpeech(text, MAX_CHARS, FIRST_CHARS);
-      if (!pieces.length) return failure("invalid_audio", "Give the text to read aloud.");
+      queue.first = FIRST_CHARS;
       // The daemon fills in the saved voice and speed.
-      return speakSource(pieces, opts, controller.signal);
-    })().catch(() => failure("engine", "Text-to-speech is unavailable.")).finally(() => { if (current === session) current = null; });
+      return speakSource(queue, opts, controller.signal);
+    })().catch(() => failure("engine", "Text-to-speech is unavailable.")).finally(() => { queue.close(); if (current === session) current = null; });
     return session;
   }
 

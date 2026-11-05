@@ -386,3 +386,26 @@ test("pages list speech sources, models and voices only with audio.speak, and pa
   await h.request("speak", { text: "Hi.", source: "k", model: "kokoro", voice: "af_heart" });
   assert.deepEqual(asked.map(([op, o]) => [op, o.source ?? o.sourceId, o.model]), [["models", "k", undefined], ["model", "k", "kokoro"], ["voices", "k", "kokoro"], ["speak", "k", "kokoro"]]);
 });
+
+test("a streamed page speech takes appended text in order, ends on request and stops past 100 000 characters", async () => {
+  const h = pageAudioHarness(), win = h.context.window;
+  win.scribePermissions.query = async () => ({ permissions: [{ id: "audio.speak", value: "allow" }] });
+  const got: string[] = [];
+  let stopped = 0;
+  win.scribeAudio.speak = (text: unknown, opts: any) => {
+    assert.equal(text, null); assert.equal(opts.stream, true);
+    return { stop() { stopped++; }, append: (t: string) => { got.push(t); return true; }, end: () => { got.push("<end>"); }, ended: new Promise(() => {}) };
+  };
+  assert.equal((await h.request("speak", { text: "ignored", stream: true })).sessionId, "session");
+  // Sent back to back, as a page's append calls are.
+  const sent = ["Hello ", "there. ", "More."].map(text => h.context.onPageAudio({ source: { postMessage: () => {} }, origin: "x", data: { op: "speak-append", id: "page", sessionId: "session", text } }));
+  await Promise.all(sent);
+  assert.deepEqual(got, [], "only the page that started it may append");
+  for (const text of ["Hello ", "there. ", "More."]) void h.request("speak-append", { sessionId: "session", text });
+  assert.equal((await h.request("speak-append", { sessionId: "session", text: "", end: true })).ok, true);
+  assert.deepEqual(got, ["Hello ", "there. ", "More.", "<end>"]);
+  assert.equal((await h.request("speak-append", { sessionId: "other", text: "x" })).error, "ended");
+  assert.equal((await h.request("speak-append", { sessionId: "session", text: "a".repeat(100000) })).error, "too_large");
+  assert.equal(stopped, 1);
+  assert.equal((await h.request("speak-append", { sessionId: "session", text: "x" })).error, "ended");
+});
