@@ -1542,7 +1542,8 @@
   function onMenuOutside(event) {
     if (!openMenuEl || openMenuEl.contains(event.target)) return;
     // A left press on the menu's own button is left to its click, which toggles the menu shut.
-    if (event.button === 0 && openMenuAnchor?.contains(event.target)) return;
+    // Point anchors (a right-click spot) are plain objects without contains().
+    if (event.button === 0 && openMenuAnchor?.contains?.(event.target)) return;
     if (event.button === 0 && !openMenuAnchor?.isConnected && openMenuAnchor?.className && event.target.closest?.("button")?.className === openMenuAnchor.className) return;
     closeMenu();
   }
