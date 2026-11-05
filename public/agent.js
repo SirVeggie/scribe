@@ -232,6 +232,9 @@
     { name: "workspace", description: "Set the workspace folder" },
     { name: "global", description: "Not tied to a page or folder" },
     { name: "plan", description: "Plan this message first, without changing files", hint: "<task>" },
+    { name: "web_full", description: "Set Web to Full", web: "on" },
+    { name: "web_limited", description: "Set Web to Limited", web: "limited" },
+    { name: "web_off", description: "Set Web to Off", web: "off" },
   ];
   const PROVIDER_LABEL = { claude: "Claude", cursor: "Cursor", codex: "Codex", pi: "Native" };
   // The same symbols used by the floating chat orb, drawn as crisp static marks.
@@ -3866,6 +3869,11 @@
         newThread(this, true);
         return;
       }
+      const webCommand = LOCAL_SLASH.find((c) => c.name === name && c.web);
+      if (webCommand) {
+        await this.updateSettings({ web: webCommand.web });
+        return;
+      }
       const tab = activeTab();
       if (name === "here") {
         if (!tab) {
@@ -7179,8 +7187,8 @@
     async send(how = runningSend()) {
       if (this.withdrawing || this.sending) return;
       const text = this.input.value.trim();
-      const localCmd = /^\/(clear|here|folder|workspace|global)$/i.exec(text);
-      if (localCmd && (localCmd[1].toLowerCase() === "clear" || !this.attachments.length)) {
+      const localCmd = /^\/(clear|here|folder|workspace|global|web_full|web_limited|web_off)$/i.exec(text);
+      if (localCmd && (localCmd[1].toLowerCase() === "clear" || localCmd[1].toLowerCase().startsWith("web_") || !this.attachments.length)) {
         this.input.value = "";
         this.hidePicker();
         this.autosize();

@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../../public/agent.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const between = (start: string, end: string) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+const localSlash = vm.runInNewContext(`${between("  const LOCAL_SLASH = [", "  const PROVIDER_LABEL")}\nLOCAL_SLASH`);
 
 const slashAt = vm.runInNewContext(`${between("  function slashAt(", "  function chipKey(")}\nslashAt`);
 
@@ -28,7 +29,7 @@ function slashView(text: string, cursor = text.length, commands: any[] = []) {
   const rows: any[] = [];
   const view = vm.runInNewContext(`${between("  function slashAt(", "  function chipKey(")}\nnew (class {${between("    async updatePicker()", "    showMentions(")}})()`, {
     S: { commands: new Map([["test", commands]]) },
-    LOCAL_SLASH: [{ name: "here" }, { name: "clear" }],
+    LOCAL_SLASH: localSlash,
     loadScribeSkills: async () => [],
     activeTab: () => null, pageActions: () => [{ id: "summarise", label: "Summarise" }],
     mentionAt: () => null,
@@ -54,6 +55,58 @@ test("picking an inline local command removes only its token and preserves the c
   assert.equal(applied, "here");
   assert.equal(view.input.value, "draft  next");
   assert.equal(view.input.selectionStart, 6);
+});
+
+test("web commands appear in the picker and preserve the surrounding draft", async () => {
+  for (const name of ["web_full", "web_limited", "web_off"]) {
+    const { view, rows } = slashView(`draft /${name} next`, 7 + name.length, [{ name }]);
+    let applied = "";
+    view.applyLocalSlash = async (command: string) => { applied = command; };
+    await view.updatePicker();
+    assert.equal(rows.length, 1, "local command takes precedence over a provider command");
+    await rows[0].click();
+    assert.equal(applied, name);
+    assert.equal(view.input.value, "draft  next");
+    assert.equal(view.input.selectionStart, 6);
+  }
+});
+
+test("web commands use the chat settings path with the matching mode", async () => {
+  const view = vm.runInNewContext(`({${between("    async applyLocalSlash(name)", "    /** The thread's workspace folder")}})`, { LOCAL_SLASH: localSlash });
+  for (const [name, web] of [["web_full", "on"], ["web_limited", "limited"], ["web_off", "off"]]) {
+    let applied = false;
+    view.updateSettings = async (patch: any) => {
+      assert.deepEqual(Object.keys(patch), ["web"]);
+      assert.equal(patch.web, web);
+      await Promise.resolve();
+      applied = true;
+    };
+    await view.applyLocalSlash(name);
+    assert.equal(applied, true);
+  }
+});
+
+test("sending a web command consumes it locally and retains attachments and mentions", async () => {
+  for (const name of ["web_full", "web_limited", "web_off"]) {
+    for (const withAttachments of [false, true]) {
+      const view = vm.runInNewContext(`({${between("    async send(how =", "\n  }\n\n  /** Markdown to one plain line")}})`, { runningSend: () => "queue" });
+      view.input = { value: ` /${name.toUpperCase()} \n` };
+      const attachments = withAttachments ? [{ name: "notes.txt" }] : [];
+      const mentions = [{ kind: "page", id: "page" }];
+      view.attachments = attachments;
+      view.mentions = mentions;
+      const calls: string[] = [];
+      view.hidePicker = () => calls.push("hide");
+      view.autosize = () => {};
+      view.applyLocalSlash = async (command: string) => calls.push(command);
+      view.syncComposerDraft = () => calls.push("sync");
+      await view.send();
+      assert.equal(view.input.value, "");
+      assert.equal(view.attachments, attachments);
+      assert.equal(view.mentions, mentions);
+      assert.deepEqual(calls, ["hide", name, "sync"]);
+    }
+  }
 });
 
 test("inline /clear carries draft text, files and mentions into the new thread", async () => {
@@ -184,7 +237,7 @@ test("a reset page draft resolves workspace, mode and model from defaults", () =
 
 test("sending /clear consumes the command locally, including with attachments", async () => {
   for (const text of ["/clear", " /CLEAR \n"]) {
-    const view = vm.runInNewContext(`({${between("    async send() {", "\n  }\n\n  /** Markdown to one plain line")}})`, {});
+    const view = vm.runInNewContext(`({${between("    async send(how =", "\n  }\n\n  /** Markdown to one plain line")}})`, { runningSend: () => "queue" });
     const calls: string[] = [];
     view.input = { value: text };
     view.attachments = [{ name: "notes.txt" }];
