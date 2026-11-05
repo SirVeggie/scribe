@@ -138,12 +138,15 @@ export class AudioService {
     if (body?.output) this.onOutput?.(next.output);
     return this.view();
   }
-  /** Where a live recording goes (#832): the default source's own stream, or a sliding window over its upload endpoint. */
-  streamTarget(): StreamTarget | AudioResult {
+  /**
+   * Where a live recording goes (#832): the default source's own stream, or a sliding window over its upload endpoint.
+   * force (a page's listen({ live: true }), #1002) streams with live transcription off too: any upload endpoint takes the window.
+   */
+  streamTarget(force = false): StreamTarget | AudioResult {
     const settings = this.store.read(), selected = this.selected(settings) as SttSource, source = this.source(selected);
     if (!source) return { ok: false, error: "no_source", message: "Choose a speech-to-text source in Settings → Audio." };
     if (selected.streaming === "native") return { mode: "native", source };
-    if (selected.streaming === "window") return { mode: "window", transcribe: wav => this.transcribe(wav, { sourceId: selected.id }) };
+    if (selected.streaming === "window" || force) return { mode: "window", transcribe: wav => this.transcribe(wav, { sourceId: selected.id }) };
     return { ok: false, error: "engine", message: "Live transcription is off for this source." };
   }
   recordUsage(bytes: number, ok: boolean) {

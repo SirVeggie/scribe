@@ -1869,7 +1869,7 @@ ${POINTER_DRAG_JS}
     opts = opts || {};
     return askBoard({ type: "scribe-audio", op: op, language: opts.language, prompt: opts.prompt, maxMs: opts.maxMs, live: opts.live }, 120000).then(function (result) {
       if (!result.ok) return result;
-      var session = { ok: true, live: !!result.live, onlevel: null, onstate: null, ontext: null,
+      var session = { ok: true, live: !!result.live, reason: result.reason, onlevel: null, onstate: null, ontext: null,
         stop: function () { return askBoard({ type: "scribe-audio", op: "stop", sessionId: result.sessionId }, 90000).then(audioResult); },
         cancel: function () { return askBoard({ type: "scribe-audio", op: "cancel", sessionId: result.sessionId }, 30000); }
       };

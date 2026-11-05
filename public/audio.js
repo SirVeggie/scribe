@@ -187,6 +187,7 @@
   /**
    * Live dictation (#832, experimental): 16 kHz PCM goes to the daemon while the user speaks, and
    * onText gets the text so far. If the stream fails, the recording is sent as one clip instead.
+   * force streams even with the source's live transcription off (a sliding window over its uploads).
    */
   async function stream(opts = {}) {
     const chunks = [], preview = opts.preview !== false;
@@ -199,7 +200,7 @@
       ws.send(joined.buffer); pending = []; pendingLength = 0;
     };
     try {
-      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/audio/stream?preview=${preview ? 1 : 0}${opts.tabId ? `&tab=${encodeURIComponent(opts.tabId)}` : ""}`);
+      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/audio/stream?preview=${preview ? 1 : 0}${opts.force ? "&live=1" : ""}${opts.tabId ? `&tab=${encodeURIComponent(opts.tabId)}` : ""}`);
       ws.binaryType = "arraybuffer";
       ws.onopen = sendPending;
       ws.onmessage = event => {

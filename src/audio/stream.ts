@@ -227,8 +227,8 @@ export class NativeStream implements SttStream {
 export type StreamTarget = { mode: "native"; source: OpenAISource } | { mode: "window"; transcribe: (wav: Blob) => Promise<AudioResult> };
 
 /** Shell-only WebSocket that proxies a recording to the chosen stream mode; keys never reach the shell. */
-export function audioStreamServer(target: () => StreamTarget | AudioResult, usage: (bytes: number, ok: boolean) => void,
-  /** A page's live listen (#841) passes the same permission and rate-limit gate as its uploads. */
+export function audioStreamServer(target: (force: boolean) => StreamTarget | AudioResult, usage: (bytes: number, ok: boolean) => void,
+  /** A page's live listen (#841) passes the same permission and rate-limit gate as its uploads, once per session (window pieces are not counted). */
   pageGate?: (tab: string) => { ok: boolean; error?: string; permission?: string }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
   wss.on("connection", (client: WebSocket, req: http.IncomingMessage) => {
@@ -237,7 +237,8 @@ export function audioStreamServer(target: () => StreamTarget | AudioResult, usag
     const preview = params.get("preview") !== "0", tab = params.get("tab");
     const gate = tab ? pageGate?.(tab) ?? { ok: false, error: "denied", permission: "audio.transcribe" } : { ok: true };
     if (!gate.ok) { send({ type: "done", ...gate }); client.close(); return; }
-    const chosen = target();
+    // live=1: the caller asked to stream even with the source's live transcription off (#1002).
+    const chosen = target(params.get("live") === "1");
     if ("ok" in chosen) { send({ type: "done", ...chosen }); client.close(); return; }
     let latest = "", bytes = 0, stopped = false;
     const onText = (text: string) => { if (text !== latest && !stopped) { latest = text; send({ type: "text", text }); } };

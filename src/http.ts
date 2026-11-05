@@ -480,7 +480,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use(devicesApi);
   const audioService = new AudioService({ sources: () => agentHost?.modelSources() ?? [], onOutput: output => broadcast({ type: "audio_output", output }) });
   const pageAudio = new PageAudio(id => store.pagePermissions(id));
-  const audioStream = audioStreamServer(() => audioService.streamTarget(), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
+  const audioStream = audioStreamServer(force => audioService.streamTarget(force), (bytes, ok) => audioService.recordUsage(bytes, ok), tab => pageAudio.check(tab));
   app.use("/api/audio", audioRouter(audioService, pageAudio));
   app.use(noteAgentSession);
   app.use(componentFiles);

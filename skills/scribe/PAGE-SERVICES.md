@@ -31,6 +31,10 @@ const caps = await scribe.audio.available(); // { mic, stt, reason? }
 When the user's speech source has **Live transcription** on, `listen` streams like dictation:
 `session.live` is `true`, `ontext` gets the whole text so far while the user speaks, and `stop()`
 resolves with the final text sooner. Pass `live: false` to always send one clip at the end.
+A page that needs text while the user speaks (a voice conversation) passes `live: true`: it
+streams with the setting off too, over the source's own stream or a sliding window over its
+uploads. If it cannot stream, the session has `live: false` and `reason`, and `stop()` still
+returns the text. A live session counts as one transcription toward the page's limits.
 
 For visualisers or your own processing, `scribe.audio.stream` returns a real mono `MediaStream`
 inside the page at `live.sampleRate`, relayed from the shell with about 60 ms of buffering:

@@ -172,3 +172,40 @@ test("a page's live listen passes the page gate before the stream opens", async 
     ungated.close();
   } finally { streams.close(); server.closeAllConnections(); server.close(); }
 });
+
+test("listen({ live: true }) streams over a window with live transcription off, and the page gate counts the session once", async () => {
+  let calls = 0;
+  const service = new AudioService({ sources: () => [], store: memoryStore(),
+    engine: { async transcribe() { return { ok: true, text: `p${++calls}` }; } } });
+  service.saveSource({ name: "Whisper", source: "__custom__", custom: { baseUrl: "http://127.0.0.1:9/v1" }, model: "w" });
+  assert.equal(service.view().streaming, undefined);
+  assert.equal((service.streamTarget() as Extract<AudioResult, { ok: false }>).error, "engine");
+  assert.equal((service.streamTarget(true) as { mode: string }).mode, "window");
+  let gated = 0;
+  const streams = audioStreamServer(force => service.streamTarget(force), () => {}, () => { gated++; return { ok: true }; });
+  const server = http.createServer();
+  server.on("upgrade", (req, socket, head) => { if (!streams.handle(req, socket, head)) socket.destroy(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const base = `ws://127.0.0.1:${(server.address() as AddressInfo).port}${STREAM_PATH}`;
+  const run = (query: string) => new Promise<any[]>(resolve => {
+    const ws = new WebSocket(base + query, { origin: shellOrigins()[0] }), messages: any[] = [];
+    ws.on("message", raw => {
+      const m = JSON.parse(String(raw)); messages.push(m);
+      if (m.type === "ready") {
+        for (const part of [tone(2000), quiet(800), tone(2000), quiet(800), tone(1500)]) for (let i = 0; i < part.length; i += 1600) ws.send(Buffer.from(part.slice(i, i + 1600).buffer));
+        ws.send("stop");
+      }
+      if (m.type === "done") { ws.close(); resolve(messages); }
+    });
+  });
+  try {
+    const off = await run("?tab=t_page");
+    assert.equal(off.at(-1).error, "engine");
+    const live = await run("?tab=t_page&live=1&preview=0");
+    assert.equal(live[0].mode, "window");
+    assert.ok(live.some(m => m.type === "text"), "text arrives while the user speaks");
+    assert.equal(live.at(-1).ok, true);
+    assert.ok(calls >= 3, `the window sent ${calls} pieces`);
+    assert.equal(gated, 2, "one gate check per session, not per piece");
+  } finally { streams.close(); server.closeAllConnections(); server.close(); }
+});
