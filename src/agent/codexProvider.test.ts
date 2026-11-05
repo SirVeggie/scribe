@@ -163,7 +163,11 @@ test("mapCodexModels keeps the live Plus catalog and drops hidden rows", () => {
       hidden: false,
       isDefault: false,
       description: "Older Sol",
-      supportedReasoningEfforts: ["low", "medium", "high"],
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low", description: "Fast" },
+        { reasoningEffort: "medium", description: "Balanced" },
+        { reasoningEffort: "max", description: "Deepest" },
+      ],
       defaultReasoningEffort: "low",
     },
     {
@@ -185,6 +189,11 @@ test("mapCodexModels keeps the live Plus catalog and drops hidden rows", () => {
   assert.equal(models[0]?.defaultEffort, "low");
   assert.ok(models[0]?.efforts.some((e) => e.id === "ultra" && e.label === "Ultra"));
   assert.equal(models[1]?.description, "Older Sol");
+  // app-server's object rows (#997): not the fallback list that starts with "minimal".
+  assert.deepEqual(
+    models[1]?.efforts.map((e) => e.id),
+    ["low", "medium", "max"]
+  );
 });
 
 test("threadOptions passes a live catalog id such as gpt-6.1-sol", () => {

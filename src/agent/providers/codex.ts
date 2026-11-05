@@ -364,8 +364,11 @@ export function mapCodexModels(rows: unknown[]): ModelOption[] {
     const id = String(row.model || row.id || "").trim();
     if (!id || seen.has(id)) continue;
     seen.add(id);
+    // app-server sends { reasoningEffort, description } rows; plain strings are kept for older builds.
     const rawEfforts = Array.isArray(row.supportedReasoningEfforts)
-      ? row.supportedReasoningEfforts.filter((value): value is string => typeof value === "string" && value.length > 0)
+      ? row.supportedReasoningEfforts
+          .map((value) => (isPlainRecord(value) ? value.reasoningEffort : value))
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
       : [];
     const option: ModelOption = {
       id,
