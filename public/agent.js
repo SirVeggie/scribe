@@ -641,7 +641,7 @@
       sources.get(source).models.push(model);
     }
     return [...sources].flatMap(([source, group]) => [
-      { header, provider, sourceName: group.name, suffix },
+      { header, provider, nativeSource: source, sourceName: group.name, suffix },
       ...group.models.map((model) => ({ ...row(model), nativeSource: source })),
     ]);
   }
@@ -1627,7 +1627,7 @@
       });
       let count = 0;
       const visible = matches.filter((item) => item.header || item.separator || item.fixed || ++count <= visibleLimit);
-      const nativeSources = new Set(visible.map((item) => item.nativeSource).filter(Boolean));
+      const nativeSources = new Set(visible.filter((item) => !item.header).map((item) => item.nativeSource).filter(Boolean));
       if (count > visibleLimit) visible.push({
         label: "Show more",
         more: true,
@@ -10534,13 +10534,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const favs = new Set(favoriteModels());
     const showAll = all || !favs.size;
     const items = [];
-    // The full list: a provider rail on the left, and hovering one lists its models.
+    // The full list: each provider or Native source has its own rail entry.
     const rail = showAll ? [] : null;
     for (const provider of PROVIDERS) {
       const status = S.config.providers.find((p) => p.id === provider);
       const models = modelsOf(provider).filter((m) => showAll || favs.has(modelKey(provider, m.id)) || (current.provider === provider && current.model === m.id));
       if (!showAll && !models.length) continue;
-      rail?.push({ id: provider, provider, label: PROVIDER_LABEL[provider], dim: !status?.available });
       const at = items.length;
       if (!models.length) {
         items.push({ header: `${PROVIDER_LABEL[provider]}${status && !status.available ? " — unavailable" : ""}`, provider });
@@ -10554,12 +10553,19 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         star: { on: favs.has(modelKey(provider, m.id)), toggle: (on) => setFavorite(provider, m.id, on) },
         run: () => pick(provider, m.id),
       }), status && !status.available ? " — unavailable" : ""));
-      for (const item of items.slice(at)) item.rail = provider;
+      for (const item of items.slice(at)) {
+        item.rail = item.nativeSource ? `${provider}:${item.nativeSource}` : provider;
+        if (item.header) rail?.push({
+          id: item.rail, provider, label: item.sourceName || PROVIDER_LABEL[provider], dim: !status?.available,
+        });
+      }
     }
     if (!showAll) {
       items.push({ separator: true }, { label: "Show all models", icon: "more", run: () => openModelMenu(anchor, current, pick, { all: true, onClose }) });
     }
-    const railActive = rail?.some((group) => group.id === current.provider) ? current.provider : rail?.find((group) => !group.dim)?.id;
+    const railActive = items.find((item) => item.checked)?.rail
+      || rail?.find((group) => group.provider === current.provider)?.id
+      || rail?.find((group) => !group.dim)?.id;
     return openMenu(anchor, items, { search: showAll, width: 300, placeholder: "Search models · ☆ to favourite", onClose, rail, railActive });
   }
 
