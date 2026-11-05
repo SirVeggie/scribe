@@ -9236,6 +9236,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (!(node instanceof Node)) return false;
       if (this.root?.contains(node)) return true;
       const el = node.nodeType === 1 ? node : node.parentElement;
+      const scrollOwner = el?.closest?.(".overlay-scrollbar")?.scrollOwner;
+      if (scrollOwner) return this.owns(scrollOwner);
       return Boolean(el?.closest?.(".ag-menu, .ag-fly, .ag-fly-peek, .ag-usage-tip, .ag-modal, .ag-settings-dialog, .ag-perm-dialog, .ag-toasts, .pv, .select-menu"));
     },
     /** Collapse the conversation when the pointer leaves the dock; keep the compact composer. */

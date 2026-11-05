@@ -37,6 +37,8 @@
     const thumb = document.createElement('div');
     thumb.className = 'overlay-scrollbar-thumb';
     bar.append(thumb);
+    // The bar sits on body: outside-click checks map it back to the element it scrolls (#1003).
+    bar.scrollOwner = el;
     document.body.append(bar);
     const data = { bar, thumb, axis, barCss: '', thumbCss: '' };
     state.bars[axis] = data;
