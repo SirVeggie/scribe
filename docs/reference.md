@@ -181,7 +181,7 @@ Interactive pages should use this instead of `localStorage` — all tab pages sh
 Pages can open other Scribe pages and websites as a tab, a **peek** (a fixed card over the page area), or a **split** (two to four panes side by side, each a tab in the strip; the strip and the floating chat follow the pane with focus):
 
 ```html
-<a data-scribe-open="release-notes">Release notes</a>                      <!-- Settings default (Navigate) -->
+<a data-scribe-open="release-notes">Release notes</a>                      <!-- Settings default (Peek) -->
 <a data-scribe-open="release-notes#risks" data-scribe-mode="peek">Risks</a> <!-- key#anchor scrolls the target -->
 <a data-scribe-open="roadmap#card=12">Card 12</a>                          <!-- key#name=value opens a record: the page gets it in scribe.onOpen -->
 <a href="https://docs.rs/tauri" data-scribe-mode="split">Tauri docs</a>    <!-- a plain href opens the browser -->

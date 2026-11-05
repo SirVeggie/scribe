@@ -3417,7 +3417,7 @@
 
   function linkMode() {
     const mode = localStorage.getItem(LINK_MODE_KEY);
-    return LINK_MODES.some((item) => item.id === mode) ? mode : "tab";
+    return LINK_MODES.some((item) => item.id === mode) ? mode : "peek";
   }
 
   function renderLinkModes() {
