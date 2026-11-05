@@ -19,12 +19,14 @@ const USAGE = `Usage:
   scribe unpair <name | id>   Revoke a paired device (on both sides)
   scribe leave                Leave the pairing: drop every paired device; they stay paired with each other
   scribe rename <name>        Rename this device
+  scribe public-address <host | off>
+                              The address other devices reach this one on from anywhere (Settings → Devices → Public address)
   scribe service install | uninstall | status
                               Run the daemon at boot (systemd) or logon (Windows, macOS launchd), without the desktop app`;
 
 type DevicesView = {
   error?: string;
-  self: { name: string; id: string; fingerprint: string; hosts: string[]; port: number };
+  self: { name: string; id: string; fingerprint: string; hosts: string[]; port: number; public?: { host: string } | null };
   peers: { name: string; id: string; online: boolean; rtt?: number; lastSeen?: number }[];
   offer: { code: string; expiresAt: number } | null;
 };
@@ -97,6 +99,15 @@ async function devicesCommand(): Promise<void> {
     process.stdout.write(`This device is now ${view.self.name}.\n`);
     return;
   }
+  if (argv[0] === "public-address") {
+    if (!rest) throw new Error("Usage: scribe public-address <host | off>   (a host name or IP other devices can reach, e.g. scribe.example.com)");
+    const host = rest === "off" ? null : rest;
+    const view = await change("PUT", "/api/devices/public", { host }, "Could not set the public address");
+    process.stdout.write(view.self.public
+      ? `Other devices now reach this one at ${view.self.public.host}:${view.self.port}. Open that port in the firewall.\n`
+      : "This device has no public address; it listens on LAN and tailnet addresses only.\n");
+    return;
+  }
   const view = await devicesView();
   const lines = [`This device: ${view.self.name} (${view.self.id})`, `  Fingerprint ${view.self.fingerprint}`];
   if (view.self.hosts.length) lines.push(`  Listening on ${view.self.hosts.map((h) => `${h.includes(":") ? `[${h}]` : h}:${view.self.port}`).join(", ")}`);
@@ -121,6 +132,7 @@ const COMMANDS: Record<string, () => Promise<void>> = {
   unpair: devicesCommand,
   leave: devicesCommand,
   rename: devicesCommand,
+  "public-address": devicesCommand,
   service: serviceCommand,
   help: async () => void process.stdout.write(`${USAGE}\n`),
 };

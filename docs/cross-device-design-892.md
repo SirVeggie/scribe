@@ -250,7 +250,7 @@ The access model is the same as for chats on one device: a chat on A reaches not
   `"bin": { "scribe": "dist/index.js" }`, so `npm link` (or `npm i -g .`) gives a `scribe` command.
 - CLI (`src/index.ts`, all as the user through the local token, which reaches only `/api/devices*` as the user (#916), refused inside an agent's chat):
   `scribe pair <code>`, `scribe add-device` (makes a code on this device and waits until another device
-  uses it), `scribe devices`, `scribe unpair <name | id>` (revokes on both sides), `scribe rename <name>`,
+  uses it), `scribe devices`, `scribe unpair <name | id>` (revokes on both sides), `scribe rename <name>`, `scribe public-address <host | off>` (#1004: a headless device sets its own public address, which another device's UI cannot),
   `scribe service install | uninstall | status`, `scribe help`.
 - `src/service.ts`: runs as the installing user, never root or SYSTEM, because the data folder, provider
   logins and worktrees are that user's.
