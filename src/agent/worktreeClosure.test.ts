@@ -153,3 +153,26 @@ test("a turn waiting on a failed removal goes on in the worktree that stayed ope
   assert.equal(open(thread.id).closed, undefined);
   await discardWorktree(open(thread.id));
 });
+
+test("a slash command after a Merge goes as typed; the new worktree's note waits for the next message (#996)", async () => {
+  (host as unknown as { commandCache: Map<string, unknown[]> }).commandCache.set("codex", [{ name: "compact" }]);
+  const thread = host.createThread({ provider: "codex", mode: "code", approval: "full", cwd: repo, useWorktree: true, scope: { kind: "global", ref: null } });
+  host.send(thread.id, { text: "first" });
+  await idle(thread.id);
+  const first = open(thread.id);
+  fs.writeFileSync(path.join(first.path, "compact.txt"), "done\n");
+  await commitAll(first, "compact work");
+  await host.finishWorktree(thread.id, "merge");
+
+  host.send(thread.id, { text: "/compact" });
+  await idle(thread.id);
+  assert.equal(turns.at(-1)!.text, "/compact", "the command starts the message");
+  assert.match(internals().threads.get(thread.id)!.heldNote ?? "", /was merged into main/);
+
+  host.send(thread.id, { text: "go on" });
+  await idle(thread.id);
+  assert.match(turns.at(-1)!.text, /was merged into main[\s\S]*go on/, "the next message carries the note");
+  assert.equal(internals().threads.get(thread.id)!.heldNote, undefined);
+  // The ended turn still refreshes its worktree in the background; let it settle before the database closes.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+});

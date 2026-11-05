@@ -4986,11 +4986,21 @@ export class AgentHost {
           const pageEdits = this.pageEditPrefix(thread, turn.id);
           const planNote = msg?.plan ? planTurnNote(live) : "";
           // A note the agent must read comes before the text, so the message is then not sent as a command.
-          const command = msg && !earlier && !reopened && !planNote ? this.commandText(thread, msg) : null;
+          // The reopened worktree's note waits for the next message instead, so /compact still runs after a merge (#996).
+          const command = msg && !earlier && !planNote ? this.commandText(thread, msg) : null;
+          const held = this.requireThread(threadId);
+          const note = (held.heldNote ?? "") + reopened;
+          if (command && reopened) {
+            held.heldNote = note;
+            this.db.saveThread(held);
+          } else if (!command && held.heldNote) {
+            delete held.heldNote;
+            this.db.saveThread(held);
+          }
           (run.clock ??= { waits: [] }).sentAt = Date.now();
           result = await session.run(
             {
-              text: command ?? (msg ? earlier + reopened + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : reopened + pageEdits),
+              text: command ?? (msg ? earlier + note + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : note + pageEdits),
               images: msg?.images ?? [],
               documents: msg ? pdfs(msg) : [],
               instructions: threadInstructions(live, this.scopeInfo(thread)),

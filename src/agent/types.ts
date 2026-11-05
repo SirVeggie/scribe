@@ -234,6 +234,8 @@ export type Thread = {
   worktree?: ThreadWorktree | null;
   /** A replacement board worker's first turn reuses this earlier chat's open worktree (#702). */
   retryWorktreeFrom?: string;
+  /** A note for the agent that a turn sent as a slash command (/compact) could not carry (#996); it goes before the next message. */
+  heldNote?: string;
   /** Provider session id used to resume. */
   nativeId: string | null;
   /** Claude with several accounts (#452): the account its sessions run on ("default" or an added one). Missing: the default. */
