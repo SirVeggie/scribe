@@ -1872,7 +1872,8 @@
     el.dataset.id = tab.id;
     el.className =
       "tab" +
-      (tab.id === state.activeId ? " active" : "") +
+      // Help over the active tab stands in for it (#1014): no tab shows as active then.
+      (tab.id === state.activeId && !window.scribeChat?.help.covers(tab.id) ? " active" : "") +
       ((tab.id !== state.activeId && views.paneOf(tab.id)) || popout.has(tab.id) ? " beside" : "") +
       (popout.has(tab.id) ? " popped" : "") +
       (tab.pinned ? " pinned" : "") +
@@ -2009,6 +2010,8 @@
         copyTabKey(current.id);
         return;
       }
+      // A tab clicked while Help is in front closes Help and shows that tab where Help was (#1014).
+      if (window.scribeChat?.help.covers(state.activeId)) window.scribeChat.help.close();
       selectTab(current.id, { fromUser: true });
     });
     el.addEventListener("auxclick", (event) => {
@@ -6572,6 +6575,11 @@
     activeTab,
     findAnyTab: (id) => findAnyTab(id) || (state.draft?.id === id ? state.draft : null),
     tabs: () => state.tabs,
+    activeId: () => state.activeId,
+    selectTab: (id) => activatePage(id),
+    /** The split pane ("a" to "d") a page is in, or "" outside a split. */
+    paneOf: (id) => views.paneOf(id),
+    rerender: () => render(),
     /** Ids of the pages on screen in this window: the focused one, split panes and the peek. */
     shownIds: () => [...views.shownIds()],
     closed: () => state.closed,

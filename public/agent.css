@@ -7012,13 +7012,23 @@ span.ag-usage {
 
 /* ---------- Help panel (#962): a question field over the page area, the latest answer under it ---------- */
 
+/* Over its tab's frame and under peeks, so a page link it offers opens in front of it (#1014). */
 .help-panel {
   position: absolute;
   inset: 0;
-  z-index: calc(var(--z-peek-frame) + 1);
+  z-index: var(--z-address);
   overflow-y: auto;
   background: var(--bg);
   background-image: var(--bg-image);
+}
+
+/* In a split, Help covers the pane of the tab it was opened over, under that pane's header. */
+main.has-split .help-panel[data-pane] {
+  inset: auto;
+  top: calc(var(--pane-y) + var(--view-head));
+  left: var(--pane-x);
+  width: var(--pane-w);
+  height: calc(var(--pane-h) - var(--view-head));
 }
 
 .help-inner {
@@ -7050,7 +7060,7 @@ span.ag-usage {
 
 .help-ask {
   position: sticky;
-  top: 0;
+  top: 10px;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -7060,6 +7070,35 @@ span.ag-usage {
   border-radius: 12px;
   background: var(--panel);
   box-shadow: var(--ag-well);
+}
+
+/* Once stuck to the top, the answer scrolling under the field fades out (#1014). */
+.help-ask::before,
+.help-ask::after {
+  content: "";
+  position: absolute;
+  left: -30px;
+  right: -30px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.help-ask::before {
+  bottom: calc(100% + 1px);
+  height: 11px;
+  background: var(--bg);
+}
+
+.help-ask::after {
+  top: calc(100% + 1px);
+  height: 64px;
+  background: linear-gradient(var(--bg) 15%, transparent);
+}
+
+.help-panel.scrolled .help-ask::before,
+.help-panel.scrolled .help-ask::after {
+  opacity: 1;
 }
 
 .help-ask:focus-within {
@@ -7110,22 +7149,68 @@ span.ag-usage {
   display: none;
 }
 
+/* Phrases stack in one cell, so a new one crossfades over the old. */
+.help-status-words {
+  display: grid;
+  min-width: 0;
+}
+
 .help-status-text {
+  grid-area: 1 / 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--muted);
+  background: linear-gradient(100deg, var(--muted) 40%, var(--text) 50%, var(--muted) 60%) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: help-glint 2.4s linear infinite;
+}
+
+.help-status-text.in {
+  animation: help-glint 2.4s linear infinite, help-status-in 320ms var(--ease) both;
+}
+
+.help-status-text.out {
+  animation: help-status-out 260ms var(--ease) both;
+}
+
+@keyframes help-glint {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+
+@keyframes help-status-in {
+  from { opacity: 0; filter: blur(3px); }
+}
+
+@keyframes help-status-out {
+  to { opacity: 0; filter: blur(3px); }
 }
 
 .help-dots {
-  width: 22px;
-  height: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 10px;
   flex: none;
-  background: radial-gradient(circle, var(--ag-live) 2.4px, transparent 2.6px) 0 50% / 8px 6px repeat-x;
-  animation: help-dots var(--dur-pulse) ease-in-out infinite;
 }
 
-@keyframes help-dots {
-  50% { opacity: 0.35; }
+.help-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text);
+  animation: help-dot 1.1s ease-in-out infinite;
+}
+
+.help-dots i:nth-child(2) { animation-delay: 0.14s; }
+.help-dots i:nth-child(3) { animation-delay: 0.28s; }
+
+@keyframes help-dot {
+  0%, 55%, 100% { transform: translateY(1.5px); opacity: 0.55; }
+  25% { transform: translateY(-2.5px); opacity: 1; }
 }
 
 .help-examples-head {
@@ -7214,6 +7299,28 @@ span.ag-usage {
   margin-left: auto;
 }
 
+.help-result {
+  display: grid;
+}
+
+/* An answer on its way out keeps its place while the next one comes in over it. */
+.help-result > * {
+  grid-column: 1;
+}
+
+.help-result > .help-answer {
+  grid-row: 2;
+}
+
+.help-answer.out {
+  animation: help-answer-out 280ms var(--ease) both;
+  pointer-events: none;
+}
+
+@keyframes help-answer-out {
+  to { opacity: 0; filter: blur(4px); }
+}
+
 .help-answer {
   display: flex;
   flex-direction: column;
@@ -7235,6 +7342,22 @@ span.ag-usage {
 .help-answer .help-in {
   animation: help-block 420ms var(--ease) both;
   animation-delay: var(--d);
+}
+
+/* Inline code, keys and page links: one word, without the lift an inline box can't take. */
+.help-answer .help-u {
+  animation: help-word 520ms var(--ease) both;
+  animation-delay: var(--d);
+}
+
+/* List items and quotes: their bullet or bar fades in with their first word. */
+.help-answer .help-box {
+  animation: help-box 360ms var(--ease) both;
+  animation-delay: var(--d);
+}
+
+@keyframes help-box {
+  from { opacity: 0; }
 }
 
 @keyframes help-word {

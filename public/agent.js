@@ -14179,7 +14179,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return true;
     }
     const where = focusedChat();
-    if (!where && window.scribeChat?.help.close()) return true;
+    if (!where && help.escape()) return true;
     const view = where === "full" ? full.view : where === "dock" ? dock.view : where === "side" ? sidebar.view : null;
     const helperOwner = view?.helperView?.visible() ? view : null;
     if (helperOwner) {
@@ -14418,6 +14418,44 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   ];
   /** Answer items the panel shows; tool steps and reasoning stay out of a help result. */
   const HELP_KINDS = new Set(["text", "settings", "component", "images", "notice"]);
+  /** The status line names what the agent is doing in plain words, never a tool name or its thinking (#1014). */
+  const HELP_STEPS = [
+    [/library_search|library_folders|page_list/, "Rummaging through pages"],
+    [/page_read|page_grep|page_state/, "Reading pages"],
+    [/scribe_docs|skill_read|harness_docs|plugin_guide|plugin_list|template_/, "Reading up on it"],
+    [/settings_/, "Finding the setting"],
+    [/thread_list|thread_read/, "Looking through chats"],
+    [/web|fetch/i, "Searching the web"],
+  ];
+
+  function helpStep(item) {
+    if (item.kind === "reasoning") return "Thinking it over";
+    if (item.kind === "text") return "Writing it up";
+    if (item.kind !== "tool") return null;
+    const name = `${item.name || ""} ${item.title || ""}`;
+    const hit = HELP_STEPS.find(([re]) => re.test(name));
+    if (hit) return hit[1];
+    if (item.tool === "read" || item.tool === "search") return "Looking through files";
+    return "Checking things";
+  }
+
+  /**
+   * The answer to show from a turn's items: the cards and images it showed, and the text it wrote after
+   * its last tool call. Text before a tool call ("Searching your Library…") was narration, shown only
+   * while the turn ran.
+   */
+  function helpAnswer(items) {
+    const top = items.filter((it) => !it.parentToolId);
+    let lastTool = -1;
+    top.forEach((it, i) => {
+      if (it.kind === "tool") lastTool = i;
+    });
+    const answer = top.filter((it, i) => HELP_KINDS.has(it.kind) && (it.kind !== "text" || i > lastTool));
+    // A turn that ended on a tool call: its last words are the answer.
+    const last = top.filter((it) => it.kind === "text" && it.text?.trim()).pop();
+    if (last && !answer.some((it) => it.kind === "text" && it.text?.trim())) answer.push(last);
+    return answer;
+  }
 
   const help = {
     root: null,
@@ -14433,6 +14471,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     open: false,
     gen: 0,
     historyBtn: null,
+    /** The tab Help was opened over (#1014): Help covers that tab's pane and is in front while it is the active tab. */
+    host: null,
+    /** The last question asked, shown as the empty field's placeholder; Ctrl+Z puts it back. */
+    lastQuery: "",
+    typed: false,
 
     history() {
       try {
@@ -14472,7 +14515,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     /** Show a saved result in place of an answer; the help thread, if any, stays as it is. */
     showSaved(h) {
       if (this.pending) return;
-      this.input.value = h.q;
+      this.clearInput(h.q);
       this.status.replaceChildren();
       const meta = el("div", "help-saved");
       meta.append(icon("clock"), el("span", null, `Saved result · ${R.timeAgo(h.at)} ago`));
@@ -14523,6 +14566,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (this.pending) void this.stop();
         else void this.ask(this.input.value);
       });
+      this.input.addEventListener("input", () => {
+        this.typed = true;
+      });
+      // Ctrl+Z in the field emptied by a question puts that question back; once typed in, undo is the field's own.
+      this.input.addEventListener("keydown", (event) => {
+        const undo = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z";
+        if (!undo || this.typed || this.input.value || !this.lastQuery) return;
+        event.preventDefault();
+        this.input.value = this.lastQuery;
+        this.input.select();
+        this.typed = true;
+      });
       this.status = el("div", "help-status");
       this.status.setAttribute("role", "status");
       this.result = el("div", "help-result");
@@ -14532,11 +14587,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       root.addEventListener("click", (event) => onLinkClick(event));
       root.addEventListener("auxclick", (event) => onLinkClick(event));
       root.addEventListener("mousedown", preventLinkAutoscroll);
+      // Help beside the focused pane comes to the front when clicked, like a pane does.
+      root.addEventListener("pointerdown", () => this.focusHost(), true);
+      root.addEventListener("focusin", () => this.focusHost());
+      // Once the field sticks to the top, the answer fades out under it.
+      root.addEventListener("scroll", () => root.classList.toggle("scrolled", root.scrollTop > head.offsetTop + head.offsetHeight), { passive: true });
       root.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !event.defaultPrevented && !openMenuEl) {
+        if (event.key === "Escape" && !event.defaultPrevented && !openMenuEl && this.escape()) {
           event.preventDefault();
           event.stopPropagation();
-          this.close();
         }
       });
       this.root = root;
@@ -14549,9 +14608,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (!this.root) document.querySelector("main")?.append(this.build());
       if (!this.root.isConnected) return;
       if (this.threadId && Date.now() - this.askedAt > HELP_IDLE_MS) this.reset();
+      this.host = window.scribeApp?.activeId() || null;
       this.root.hidden = false;
       this.open = true;
       this.renderModel();
+      this.sync();
+      window.scribeApp?.rerender();
       window.scribeMotion?.reveal(this.root, true, { translate: "translateY(8px)" });
       this.input.focus();
       this.input.select();
@@ -14561,16 +14623,62 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (!this.root || this.root.hidden) return false;
       this.root.hidden = true;
       this.open = false;
+      this.host = null;
       // A closed Help starts over: the next question gets a fresh thread.
       this.reset();
-      this.input.value = "";
+      this.clearInput("");
       this.renderExamples();
+      window.scribeApp?.rerender();
       return true;
     },
 
     toggle() {
-      if (this.open) this.close();
+      if (this.open && !this.covers(window.scribeApp?.activeId())) this.focusHost();
+      else if (this.open) this.close();
       else this.show();
+    },
+
+    /** Esc: a peek over Help closes first. */
+    escape() {
+      if (!this.open || document.querySelector("main.has-peek")) return false;
+      return this.close();
+    },
+
+    /** Whether Help is in front of this tab: it was opened over it and the tab is the active one. */
+    covers(id) {
+      return this.open && id != null && id === this.host;
+    },
+
+    /** Help clicked while another pane has focus: its tab becomes the active one again. */
+    focusHost() {
+      if (!this.open || !this.host || this.host === window.scribeApp?.activeId()) return;
+      window.scribeApp?.selectTab(this.host);
+    },
+
+    /**
+     * After every render: Help follows the tab it was opened over, covering only that tab's pane in a
+     * split, and closes once that tab is no longer on screen (another tab was picked in its place).
+     */
+    sync() {
+      if (!this.open || !this.root) return;
+      const app = window.scribeApp;
+      const active = app?.activeId() || null;
+      const gone = this.host ? !app?.shownIds().includes(this.host) : active != null;
+      if (gone) {
+        this.close();
+        return;
+      }
+      const pane = this.host ? app.paneOf(this.host) : "";
+      if (pane) this.root.dataset.pane = pane;
+      else delete this.root.dataset.pane;
+    },
+
+    /** Empty the field, keeping the question as its placeholder. */
+    clearInput(query) {
+      this.lastQuery = query;
+      this.typed = false;
+      this.input.value = "";
+      this.input.placeholder = query || "Ask how to do something in Scribe";
     },
 
     /** Drop the thread: it was only ever this panel's. */
@@ -14603,10 +14711,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const wrap = el("div", "help-examples");
       wrap.append(el("div", "help-examples-head", "Try"));
       const list = el("div", "help-example-list");
-      for (const text of HELP_EXAMPLES) list.append(button(text, "ag-chip help-example", () => {
-        this.input.value = text;
-        void this.ask(text);
-      }));
+      for (const text of HELP_EXAMPLES) list.append(button(text, "ag-chip help-example", () => void this.ask(text)));
       wrap.append(list);
       const recent = this.history().slice(0, 5);
       if (recent.length) {
@@ -14636,10 +14741,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (this.threadId && Date.now() - this.askedAt > HELP_IDLE_MS) this.reset();
       const gen = ++this.gen;
       this.askedAt = Date.now();
-      this.pending = { text, since: Date.now() };
+      this.pending = { text, since: Date.now(), items: new Map(), shown: null };
+      this.clearInput(text);
       this.renderBusy(true);
-      this.result.replaceChildren();
-      this.paintStatus("Looking it up…");
+      this.swapResult([]);
+      this.paintStatus("Looking it up");
       try {
         if (!this.threadId) {
           const choice = this.model();
@@ -14670,8 +14776,25 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       }
     },
 
+    /** The status line: three dots and a glinting phrase that crossfades when it changes. */
     paintStatus(text) {
-      this.status.replaceChildren(el("span", "help-dots"), el("span", "help-status-text", text));
+      let words = this.status.querySelector(".help-status-words");
+      if (!words) {
+        const dots = el("span", "help-dots");
+        dots.append(el("i"), el("i"), el("i"));
+        words = el("span", "help-status-words");
+        this.status.replaceChildren(dots, words);
+      }
+      const current = words.querySelector(".help-status-text:not(.out)");
+      if (current?.textContent === text) return;
+      const next = el("span", "help-status-text", text);
+      if (current) {
+        current.classList.add("out");
+        current.setAttribute("aria-hidden", "true");
+        fadeAway(current);
+        if (window.scribeMotion?.enabled()) next.classList.add("in");
+      }
+      words.append(next);
     },
 
     /** Events for help threads stop here: the chat's thread lists never see them. */
@@ -14684,7 +14807,51 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const id = msg.type === "agent_item" ? msg.item?.threadId : msg.type === "agent_thread_deleted" ? msg.id : msg.threadId;
       if (!id || !(id === this.threadId || S.helpThreads.has(id))) return false;
       if (msg.type === "agent_thread_deleted") S.helpThreads.delete(id);
+      if (id === this.threadId && this.pending) {
+        if (msg.type === "agent_item") this.onItem(msg.item);
+        else if (msg.type === "agent_delta") {
+          const item = this.pending.items.get(msg.itemId);
+          if (item && msg.append) item.text = (item.text || "") + msg.append;
+        }
+      }
       return true;
+    },
+
+    /** A step of the running turn: name it on the status line, and show text the agent finished before a tool call. */
+    onItem(item) {
+      const p = this.pending;
+      if (item.kind === "user") {
+        p.items.clear();
+        return;
+      }
+      if (item.parentToolId) return;
+      p.items.set(item.id, { ...item });
+      const step = helpStep(item);
+      if (step && this.status.childNodes.length) this.paintStatus(step);
+      // Text is complete once a later step starts: show the latest finished block, in place of the one before.
+      const list = [...p.items.values()];
+      const at = list.findIndex((it) => it.id === item.id);
+      const done = list.slice(0, at).filter((it) => it.kind === "text" && it.text?.trim()).pop();
+      if (done && done.id !== p.shown) {
+        p.shown = done.id;
+        const out = el("article", "help-answer help-partial");
+        const node = this.renderItem(done);
+        if (node) out.append(node);
+        this.swapResult([out]);
+        animateAnswer(out);
+      }
+    },
+
+    /** Put new content in the result area; an answer already there fades out as the new one comes in. */
+    swapResult(nodes) {
+      for (const child of [...this.result.childNodes]) {
+        if (child.matches?.(".help-answer:not(.out)") && window.scribeMotion?.enabled()) {
+          child.classList.add("out");
+          child.setAttribute("aria-hidden", "true");
+          fadeAway(child);
+        } else if (!child.classList?.contains("out")) child.remove();
+      }
+      this.result.append(...nodes);
     },
 
     onThread(t) {
@@ -14692,8 +14859,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (!this.pending) return;
       if (t.status === "running" || t.status === "waiting") {
         this.pending.started = true;
-        const line = t.status === "waiting" ? "Waiting for an answer the Help panel can't show. Stop and ask another way." : t.activity?.line;
-        if (line) this.paintStatus(line);
+        if (t.status === "waiting") this.paintStatus("Waiting for an answer the Help panel can't show. Stop and ask another way.");
         return;
       }
       // Idle again after running: the turn this question started has ended.
@@ -14717,7 +14883,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       items.forEach((it, i) => {
         if (it.kind === "user") from = i;
       });
-      const answer = items.slice(from + 1).filter((it) => HELP_KINDS.has(it.kind) && !it.parentId);
+      const answer = helpAnswer(items.slice(from + 1));
       if (question && !detail.error) this.remember(question, answer);
       this.render(answer, detail.error);
     },
@@ -14729,7 +14895,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (node) out.append(node);
       }
       if (!out.childNodes.length) out.append(el("p", "ag-muted", error || "No answer came back. Try asking again."));
-      this.result.replaceChildren(...(meta ? [meta] : []), out);
+      this.swapResult([...(meta ? [meta] : []), out]);
       animateAnswer(out);
     },
 
@@ -14777,32 +14943,53 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
   };
 
+  addEventListener("scribe:render", () => help.sync());
+
+  /** Fade a node out where it is, then drop it. */
+  function fadeAway(node) {
+    if (!window.scribeMotion?.enabled()) {
+      node.remove();
+      return;
+    }
+    node.addEventListener("animationend", () => node.remove(), { once: true });
+    setTimeout(() => node.remove(), 600);
+  }
+
   /**
    * Bring an answer in word by word: each word fades up from a blur, in reading order, and blocks
-   * (code, tables, settings cards) fade in at their place in that order. The whole answer takes at most
-   * about 1.6 s. Reduced motion shows it at once.
+   * (code, tables, settings cards) fade in at their place in that order. Inline code, keys and page links
+   * come in as one word, and list items and quotes (their bullets and bars) fade in with their first word.
+   * The whole answer takes at most about 1.6 s. Reduced motion shows it at once.
    */
   function animateAnswer(root) {
     if (!window.scribeMotion?.enabled()) return;
-    const BLOCK = "pre, table, .help-block, img, svg, iframe, .katex";
+    const BLOCK = ".ag-code, .ag-table-wrap, pre, table, hr, .help-block, img, svg, iframe, .katex";
+    const UNIT = "code, kbd, .ag-board-link";
+    const BOX = "li, blockquote";
     const steps = [];
     const walk = (node) => {
       for (const child of [...node.childNodes]) {
         if (child.nodeType === 1) {
           if (child.matches(BLOCK)) steps.push({ block: child });
-          else walk(child);
+          else if (child.matches(UNIT)) steps.push({ unit: child });
+          else {
+            if (child.matches(BOX)) steps.push({ box: child });
+            walk(child);
+          }
         } else if (child.nodeType === 3 && child.textContent.trim()) steps.push({ text: child });
       }
     };
     walk(root);
-    const words = steps.reduce((n, s) => n + (s.text ? s.text.textContent.split(/\s+/).filter(Boolean).length : 4), 0);
+    const words = steps.reduce((n, s) => n + (s.text ? s.text.textContent.split(/\s+/).filter(Boolean).length : s.block ? 4 : s.unit ? 1 : 0), 0);
     const step = Math.max(4, Math.min(28, 1600 / Math.max(1, words)));
     let at = 0;
     for (const s of steps) {
-      if (s.block) {
-        s.block.classList.add("help-in");
-        s.block.style.setProperty("--d", `${Math.round(at)}ms`);
-        at += step * 4;
+      const node = s.block || s.unit || s.box;
+      if (node) {
+        node.classList.add(s.block ? "help-in" : s.unit ? "help-u" : "help-box");
+        node.style.setProperty("--d", `${Math.round(at)}ms`);
+        if (s.block) at += step * 4;
+        else if (s.unit) at += step;
         continue;
       }
       const parts = s.text.textContent.split(/(\s+)/);
@@ -14822,7 +15009,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     }
   }
 
-  window.scribeChat = { renderProviders: () => agentSettings.renderStatus(), help: { open: () => help.show(), close: () => help.close(), toggle: () => help.toggle(), isOpen: () => help.open }, customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), leaveForSpace, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
+  window.scribeChat = { renderProviders: () => agentSettings.renderStatus(), help: { open: () => help.show(), close: () => help.close(), toggle: () => help.toggle(), isOpen: () => help.open, covers: (id) => help.covers(id) }, customModes, customDetail, editCustomMode: (mode, changed) => void editCustomMode(mode, changed), openSettings: () => agentSettings.open(), openModelSources: () => { agentSettings.open(); agentSettings.categories.select(0); agentSettings.sources.scrollIntoView({ block: "center" }); }, closeSettings: () => agentSettings.close(), mcp: { load: () => mcpServers.load(), findImports: (dirs) => mcpServers.findImports(dirs), importOne: (candidate) => mcpServers.importOne(candidate), edit: (scope, name, changed) => void mcpServers.editFrom(scope, name, changed), editJson: (scope, changed) => void mcpServers.jsonFrom(scope, changed), importDialog: (dirs, changed) => void mcpServers.importFrom(dirs, changed), permissions: () => void mcpServers.permissionsDialog() }, hooks: { mount: (node) => hookSettings.mount(node), render: () => hookSettings.render() }, openAllowlists: () => allowlists.open(), modal, shortcut, escape, pageStatus, pageThreads, blankPageTitle, pageRequest, pickWorkspace, ask, askInChat, openWorkspace, recentWorkspaces: () => recentWorkspaceDirs(null, 6), openThread, openAsk, pendingAsks, spaceChanged: () => renderLists(), leaveForSpace, searchThreads, searchThreadMessages: searchMessages, threadTitle, pageActions, runAction, dockProvider: () => dock.view.settings().provider, pickModel, closeMenu: () => { const open = Boolean(openMenuEl); closeMenu(); return open; }, followThread: (threadId, tabId) => dock.followThread(threadId, tabId) };
 
   /* ---------- boot ---------- */
 
