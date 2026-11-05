@@ -70,6 +70,19 @@ test("send takes images, and a page deletes only its own threads", async () => {
   assert.deepEqual([calls[1].method, calls[1].url], ["DELETE", "/threads/mine"]);
 });
 
+test("send with steer says whether it went into the running turn (#1000)", async () => {
+  const own = { id: "mine", scope: { kind: "page", ref: "voice" } };
+  const { context, calls } = pageContext([["mine", own]]);
+  context.api = async (_m: string, url: string, body: any) => (calls.push({ url, body }), { queued: true, steered: true });
+  const steered = await vm.runInContext("pageRequest({ id: 'voice' }, { op: 'send', threadId: 'mine', prompt: 'Wait', steer: true })", context);
+  assert.equal(calls[0].body.steer, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(steered)), { ok: true, queued: false, steered: true });
+  context.api = async () => ({ queued: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(await vm.runInContext("pageRequest({ id: 'voice' }, { op: 'send', threadId: 'mine', prompt: 'Wait', steer: true })", context))), { ok: true, queued: true, steered: false });
+  // Without steer the result keeps its old shape.
+  assert.deepEqual(JSON.parse(JSON.stringify(await vm.runInContext("pageRequest({ id: 'voice' }, { op: 'send', threadId: 'mine', prompt: 'Wait' })", context))), { ok: true, queued: true });
+});
+
 test("a page asking for its saved thread as Scribe starts waits for the thread list (#883)", async () => {
   const own = { id: "mine", scope: { kind: "page", ref: "lab" }, status: "idle" };
   const { context } = pageContext();

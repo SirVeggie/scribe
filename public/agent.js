@@ -13680,10 +13680,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const target = switched.thread || thread;
         await ensureDetail(target.id);
         pageSentAt.set(target.id, Date.now());
-        const sent = await api("POST", `/threads/${encodeURIComponent(target.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images) });
+        // steer: into the running turn when the provider can take it, as card comments go (#1000).
+        const steer = data.steer === true;
+        const sent = await api("POST", `/threads/${encodeURIComponent(target.id)}/messages`, { text: prompt, from: "page", images: pageImages(data.images), ...(steer ? { steer: true } : {}) });
         if (sent.at) pageSentAt.set(target.id, sent.at);
         showPageThread(target.id, data.show, { reveal: activated });
-        return { ok: true, queued: Boolean(sent.queued), ...(target.id !== thread.id ? { threadId: target.id, forked: true } : {}) };
+        const steered = Boolean(sent.steered);
+        return { ok: true, queued: Boolean(sent.queued) && !steered, ...(steer ? { steered } : {}), ...(target.id !== thread.id ? { threadId: target.id, forked: true } : {}) };
       }
       case "card": {
         // A card comment for the thread working on the card (steered into its turn, or queued), or

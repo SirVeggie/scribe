@@ -1433,11 +1433,14 @@ ${POINTER_DRAG_JS}
      * show, images (as in start), provider, model, effort }. A model or effort on the thread's
      * provider switches the thread in place. Another provider goes on in a fork that keeps the
      * history and the open worktree: { ok, queued, threadId, forked: true }; keep that id from
-     * then on. error "busy" while the thread is still running a turn.
+     * then on. error "busy" while the thread is still running a turn. steer: true puts the message
+     * into the running turn when the provider can take it: { ok, steered: true, queued: false };
+     * else it queues as usual (steered: false).
      */
     send: function (threadId, prompt, opts) {
       opts = opts || {};
       var message = { op: "send", threadId: agentText(threadId), prompt: agentText(prompt), show: agentText(opts.show) };
+      if (opts.steer === true) message.steer = true;
       if (opts.provider) message.provider = agentText(opts.provider);
       if (opts.model) message.model = agentText(opts.model);
       if (opts.effort) message.effort = agentText(opts.effort);

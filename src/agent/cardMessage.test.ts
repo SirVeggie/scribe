@@ -72,6 +72,25 @@ test("a card comment queues when the provider cannot steer, or something else is
   assert.equal(busy.steered.length, 0);
 });
 
+test("a page's send with steer goes into the running turn at once (#1000)", () => {
+  const { id, steered } = runningThread(true);
+  const sent = host.send(id, { text: "actually, shorter", from: "page", steer: true });
+  assert.equal(sent.steered, true);
+  assert.equal(steered.length, 1, "no grace hold for a page's steer");
+  assert.match(steered[0].text, /actually, shorter/);
+  assert.equal(userItems(id)[0].kind === "user" && userItems(id)[0].steer, "waiting");
+});
+
+test("a page's steer queues in order when the provider cannot steer or something is queued first", () => {
+  const plain = runningThread(false);
+  assert.equal(host.send(plain.id, { text: "one", from: "page", steer: true }).steered, undefined);
+  const busy = runningThread(true);
+  host.send(busy.id, { text: "typed first" });
+  assert.equal(host.send(busy.id, { text: "two", from: "page", steer: true }).steered, undefined);
+  assert.equal(busy.steered.length, 0);
+  assert.deepEqual(userItems(busy.id).map((it) => it.kind === "user" && it.text), ["typed first", "two"]);
+});
+
 test("Continue sends the host's own note, never steered", () => {
   const { id, steered } = runningThread(true);
   assert.deepEqual(host.cardMessage(id, { ...card, resume: true }, "ignored"), { delivered: "queued" });

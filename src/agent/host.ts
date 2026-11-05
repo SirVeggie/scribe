@@ -2870,7 +2870,7 @@ export class AgentHost {
     return already;
   }
 
-  send(threadId: string, input: SendInput): { queued: boolean; item: Item } {
+  send(threadId: string, input: SendInput): { queued: boolean; item: Item; steered?: boolean } {
     const thread = this.requireThread(threadId);
     // Also protects existing boards whose saved HTML predates the worker recovery check.
     if ((input.from === "page" || input.from === "component") && !input.card?.resume && thread.provider === "codex" && !this.runs.has(threadId)) {
@@ -2962,19 +2962,22 @@ export class AgentHost {
       // steer: the composer's Steer (#963) skips the queue: steered into the turn when the provider
       // can take it now, else first in line, ahead of messages queued before it.
       // now: Send now stops the turn at once and runs it next; a steer already waiting still goes first.
-      if (input.steer || input.now) queue.unshift(msg);
+      // A page's steer (scribe.agent.send, #1000) keeps its place: steered in when it is the one
+      // queued message (steering takes the queue's first), else queued behind the others as usual.
+      const front = input.now || (input.steer && !input.from);
+      if (front) queue.unshift(msg);
       else queue.push(msg);
       this.queues.set(threadId, queue);
       const item = this.addItem(threadId, null, userBody(msg));
       msg.itemId = item.id;
-      if (input.steer) this.steerFirst(threadId);
+      const steered = Boolean(input.steer) && (front || queue.length === 1) && this.steerFirst(threadId);
       this.emitThread(threadId);
       this.drainQueue(threadId);
       if (input.now) {
         const waiting = this.runs.get(threadId)?.steer?.itemId;
         this.sendNow(threadId, waiting ?? item.id).catch((err) => log(`${threadId}: send now failed: ${(err as Error).message}`));
       }
-      return { queued: true, item };
+      return { queued: true, item, ...(steered ? { steered: true } : {}) };
     }
     const item = this.addItem(threadId, null, userBody(msg));
     void this.runTurn(threadId, msg, item);

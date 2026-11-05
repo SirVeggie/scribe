@@ -7,6 +7,7 @@ A page can start Scribe's own agent chat and read its replies with `scribe.agent
 ```js
 const { ok, threadId, error } = await scribe.agent.start(prompt, { title: "Card #12", approval: "board", show: "dock" });
 await scribe.agent.send(threadId, "Shorter, please.");     // queued if the thread is still working
+await scribe.agent.send(threadId, "No, the other one.", { steer: true }); // into the running turn when the provider can: { ok, steered, queued }
 const { reply, images } = await scribe.agent.wait(threadId); // when the thread is idle (default 10 min); images: its generated images as page assets
 const { threads } = await scribe.agent.threads();          // this page's threads, newest first
 const { thread, reply: last } = await scribe.agent.get(threadId);
@@ -56,6 +57,7 @@ To let the user choose a model, don't build a picker: open the app's own. `scrib
 - Agents can't read or change these grants, and an agent changing a page's HTML (or its template) resets the risky ones to Ask: tell the user to re-approve after you edit such a page.
 - Messages are marked as sent by the page, and the agent is told that the page's code sent them, not the user. Put page data in the prompt, never instructions from untrusted content.
 - Keep the thread id in state if the page should continue the same conversation later.
+- `send(threadId, text, { steer: true })` puts the message into the turn the thread is running, as a Kanban card comment goes, instead of after it (a voice page passing on what the user says while the agent answers). The result says which happened: `steered: true, queued: false` when the provider took it in (Claude, Codex, Cursor and Pi threads, with or without tools; the agent reads it at its next step, which for a thread without tools is right after the reply it is writing), else `steered: false` and it queued behind the turn and any earlier queued messages. An idle thread just starts a turn (`steered: false, queued: false`). It needs the same permissions as any `send`.
 - A page that lets the user change the model of a thread it keeps passes the choice on each `send(threadId, text, { provider, model, effort })`. The same provider switches the thread in place. Another provider goes on in a fork that keeps the history and the open worktree: the result has `threadId` (the fork's) and `forked: true`, so store that id from then on. While the old thread still runs a turn, a provider switch returns `error: "busy"`.
 
 ## One-off chats: images in, text out, no tools
