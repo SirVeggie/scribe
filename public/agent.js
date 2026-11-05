@@ -14582,7 +14582,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.status.setAttribute("role", "status");
       this.result = el("div", "help-result");
       this.result.setAttribute("aria-live", "polite");
-      inner.append(head, form, this.status, this.result);
+      // The wrapper sticks, so its backdrop covers the whole field, round corners included.
+      const ask = el("div", "help-ask-wrap");
+      ask.append(form);
+      inner.append(head, ask, this.status, this.result);
       root.append(inner);
       root.addEventListener("click", (event) => onLinkClick(event));
       root.addEventListener("auxclick", (event) => onLinkClick(event));

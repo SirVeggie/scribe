@@ -7058,10 +7058,39 @@ main.has-split .help-panel[data-pane] {
   opacity: 0.7;
 }
 
-.help-ask {
+/* Sticky with its field. Once stuck to the top it gets a solid backdrop behind the field, and the
+ * answer scrolling under it fades out (#1014). */
+.help-ask-wrap {
   position: sticky;
-  top: 10px;
+  top: 0;
   z-index: 1;
+  margin: -10px -30px 0;
+  padding: 10px 30px 0;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.help-ask-wrap::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 64px;
+  background: linear-gradient(var(--bg) 15%, transparent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.help-panel.scrolled .help-ask-wrap {
+  background-color: var(--bg);
+}
+
+.help-panel.scrolled .help-ask-wrap::after {
+  opacity: 1;
+}
+
+.help-ask {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -7070,35 +7099,6 @@ main.has-split .help-panel[data-pane] {
   border-radius: 12px;
   background: var(--panel);
   box-shadow: var(--ag-well);
-}
-
-/* Once stuck to the top, the answer scrolling under the field fades out (#1014). */
-.help-ask::before,
-.help-ask::after {
-  content: "";
-  position: absolute;
-  left: -30px;
-  right: -30px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease);
-}
-
-.help-ask::before {
-  bottom: calc(100% + 1px);
-  height: 11px;
-  background: var(--bg);
-}
-
-.help-ask::after {
-  top: calc(100% + 1px);
-  height: 64px;
-  background: linear-gradient(var(--bg) 15%, transparent);
-}
-
-.help-panel.scrolled .help-ask::before,
-.help-panel.scrolled .help-ask::after {
-  opacity: 1;
 }
 
 .help-ask:focus-within {
