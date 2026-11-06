@@ -15,6 +15,8 @@ Scribe is a local hub for notes, pages and coding work. A daemon on this machine
 
 ## Keyboard shortcuts
 
+These are the defaults. Change them in Settings → Shortcuts: click a key, then press the new one.
+
 | Keys | Action |
 |---|---|
 | Ctrl+D | Search palette: pages, Library content and saved page data. Prefixes: `=` threads, `?` Ask AI, `~` meaning search (editable in Settings → Search) |

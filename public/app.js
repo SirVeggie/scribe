@@ -1692,6 +1692,7 @@
   const settingsCategories = window.scribeSettingsUI.mount(document.getElementById("settings-panel"), [
     { label: "Appearance", sections: [settingsSections[0], settingsSections[5], flairSection] },
     { label: "Navigation", sections: [settingsSections[1], settingsSections[2]] },
+    { label: "Shortcuts", sections: window.scribeShortcutSettings.sections },
     { label: "Search", sections: [settingsSections[3], settingsSections[4]] },
     { label: "Classifier", sections: window.scribeMlSettings.sections },
     { label: "Audio", sections: window.scribeAudioSettings.sections },
@@ -4838,29 +4839,40 @@
     }
   }
 
+  const keymap = window.scribeKeymap;
+  const BOARD_KEY_ACTIONS = keymap.actions().map((a) => a.id).filter((id) => !id.startsWith("agent-") || id === "agent-settings");
+  // Pages already open get remapped keys at once; new ones are served with them.
+  keymap.onChange(() => {
+    for (const [id, frame] of frames) {
+      frame.el.contentWindow?.postMessage({ type: "scribe-keymap", overrides: keymap.overrides() }, pageOrigin(id));
+    }
+  });
+
   function onBoardShortcut(event) {
     // Escape is handled in the bubble phase (onBoardEscape).
-    if (event.key === "Escape") {
+    if (event.key === "Escape" || keymap.isRecording()) {
       return;
     }
     // Ordinary typing has no board action. Only scan for dialogs when a shortcut
     // could run; the spaces overview also handles unmodified navigation keys.
-    if (!event.ctrlKey && !event.metaKey && !isFindKey(event) && !spaces.isOpen()) {
+    if (!keymap.maybe(event) && !isFindKey(event) && !spaces.isOpen()) {
       return;
     }
     if (document.querySelector("dialog[open]")) {
       return;
     }
+    // Remapped keys (#1022); the agent chat's own actions are matched in agent.js.
+    const action = keymap.match(event, BOARD_KEY_ACTIONS);
     if (childId) {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+      if (action === "download") {
         event.preventDefault();
         downloadActive();
       }
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && ((event.altKey && event.key.toLowerCase() === "s") || (!event.altKey && (event.code === "Comma" || event.key === "," || event.key === "<")))) {
+    if (action === "settings" || action === "agent-settings") {
       event.preventDefault();
-      runShortcut(event.shiftKey ? "agent-settings" : "settings");
+      runShortcut(action);
       return;
     }
     if (spaces.onKey(event)) {
@@ -4872,53 +4884,20 @@
       // The board is out of sight: its own shortcuts wait until the overview closes.
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-      const spaceAction =
-        event.key.toLowerCase() === "e" && !event.shiftKey
-          ? "spaces"
-          : event.shiftKey && event.key === "PageUp"
-            ? "prev-space"
-            : event.shiftKey && event.key === "PageDown"
-              ? "next-space"
-              : "";
-      if (spaceAction) {
-        event.preventDefault();
-        runShortcut(spaceAction);
-        return;
-      }
+    if (action === "spaces" || action === "prev-space" || action === "next-space") {
+      event.preventDefault();
+      runShortcut(action);
+      return;
     }
     if (isFindKey(event) && libraryShown() && !isTypingTarget(event.target)) {
       event.preventDefault();
       library.focusSearch();
       return;
     }
-    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
-      return;
-    }
-    const key = event.key.toLowerCase();
-    if (key === "b" && !event.shiftKey) {
+    // Tab keys a browser keeps never get here; the desktop app catches them natively.
+    if (action) {
       event.preventDefault();
-      runShortcut("library");
-      return;
-    }
-    if (key === "d" && !event.shiftKey) {
-      event.preventDefault();
-      togglePalette();
-      return;
-    }
-    if (key === "s" && !event.shiftKey) {
-      event.preventDefault();
-      downloadActive();
-      return;
-    }
-    if (key === "h" && !event.shiftKey) {
-      event.preventDefault();
-      openHelp();
-      return;
-    }
-    if ((key === "t" || key === "n") && !event.shiftKey) {
-      event.preventDefault();
-      runShortcut("new-page");
+      runShortcut(action);
     }
   }
 
@@ -6636,7 +6615,7 @@
     } else if (event.data?.type === "scribe-palette") {
       togglePalette();
     } else if (event.data?.type === "scribe-shortcut") {
-      if (["spaces", "next-space", "prev-space", "library", "new-page", "settings", "agent-settings"].includes(event.data.action)) {
+      if (BOARD_KEY_ACTIONS.includes(event.data.action)) {
         runShortcut(event.data.action);
       }
     } else if (event.data?.type === "scribe-activity") {

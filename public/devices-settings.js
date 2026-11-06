@@ -121,7 +121,7 @@
   syncSection.append(syncChoose, syncList, syncStatus);
   const SYNC_CATEGORIES = {
     appearance: { label: "Appearance", hint: "Theme, effects and backgrounds, the floating chat's look, Reduce motion and title bar buttons" },
-    layout: { label: "Layout and navigation", hint: "Pane sides, page links, the tab strip, Clear, the space switch offer and search prefixes" },
+    layout: { label: "Layout and navigation", hint: "Pane sides, page links, the tab strip, Clear, the space switch offer, search prefixes and keyboard shortcuts" },
     chat: { label: "Chat preferences", hint: "Send key, Queue or Steer, empty Enter, reasoning, compact thread lists, presets, suggestions and the agent button" },
     memories: { label: "Memories", hint: "Memories set to This device stay here. Workspace memories go only to devices with a clone of the same git repository." },
     sources: { label: "Sources", hint: "Model, classifier and speech sources, without their API keys. Sources on this computer (127.0.0.1, localhost) stay here. Provider logins never sync: log in on each device." },
@@ -137,7 +137,7 @@
     "scribe.desktop.reducedMotion": "Reduce motion", "scribe.desktop.hiddenButtons": "Title bar buttons",
     "scribe.agentSide": "Agent pane side", "scribe.librarySide": "Library side", "scribe.linkMode": "Page links open as",
     "scribe.smoothScroll": "Smooth scrolling tab strip", "scribe.showClear": "Clear button", "scribe.spaceSuggest": "Space switch offer",
-    "scribe.palettePrefixes": "Search prefixes", "scribe.agent.sendKey": "Send with", "scribe.agent.runningSend": "Sending while a turn runs",
+    "scribe.palettePrefixes": "Search prefixes", "scribe.shortcuts": "Keyboard shortcuts", "scribe.agent.sendKey": "Send with", "scribe.agent.runningSend": "Sending while a turn runs",
     "scribe.agent.emptyEnter": "Enter on an empty composer", "scribe.agent.reasoningOpen": "Reasoning expanded",
     "scribe.agent.compactThreads": "Compact thread list", "scribe.agent.dockCompactThreads": "Compact floating chat list",
     "scribe.agent.showPresets": "Presets", "scribe.agent.showTips": "Suggestions", "scribe.agent.showButton": "Agent button",

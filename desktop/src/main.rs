@@ -84,6 +84,25 @@ async fn window_action(window: WebviewWindow, action: String) -> Result<(), Stri
     result.map_err(|err| err.to_string())
 }
 
+/// The board's shortcut table with the user's remapping (#1022), for the keys caught natively.
+#[derive(serde::Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct KeyBinding {
+    pub action: String,
+    /// Windows virtual key.
+    pub key: u32,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+#[tauri::command]
+fn key_map(bindings: Vec<KeyBinding>) {
+    #[cfg(windows)]
+    keys::set_key_map(bindings);
+    #[cfg(not(windows))]
+    let _ = bindings;
+}
+
 /// The shell reports whether focus is in an embedded site, which gets the board's shortcuts natively.
 #[tauri::command]
 fn key_focus(window: WebviewWindow, embed: bool) {
@@ -271,7 +290,8 @@ fn main() {
             set_desktop_setting,
             daemon_status,
             child_window,
-            key_focus
+            key_focus,
+            key_map
         ])
         .on_window_event(layout::on_window_event)
         .setup(move |app| {

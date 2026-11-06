@@ -15,7 +15,7 @@ export const PREF_CATEGORIES = {
   ],
   layout: [
     "scribe.agentSide", "scribe.librarySide", "scribe.linkMode", "scribe.smoothScroll", "scribe.showClear",
-    "scribe.spaceSuggest", "scribe.palettePrefixes",
+    "scribe.spaceSuggest", "scribe.palettePrefixes", "scribe.shortcuts",
   ],
   chat: [
     "scribe.agent.sendKey", "scribe.agent.runningSend", "scribe.agent.emptyEnter", "scribe.agent.reasoningOpen",
@@ -50,7 +50,7 @@ const CHOICES: Record<string, string[]> = {
   "scribe.agent.runningSend": ["queue", "steer"],
   "scribe.agent.emptyEnter": ["steer", "send"],
 };
-const JSON_OBJECTS = new Set(["scribe.dock-appearance.v1", "scribe.palettePrefixes"]);
+const JSON_OBJECTS = new Set(["scribe.dock-appearance.v1", "scribe.palettePrefixes", "scribe.shortcuts"]);
 
 /** Only known preferences cross browser profiles and devices. Never accept arbitrary localStorage keys. */
 export function parseAppearance(value: unknown): Appearance {

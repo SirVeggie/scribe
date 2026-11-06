@@ -3351,6 +3351,11 @@ function listen(server: http.Server, port: number, host: string): Promise<void> 
   });
 }
 
+/** The shortcut table every page's key script shares with the board (#1022). */
+const KEYMAP_JS = fs.readFileSync(path.join(publicDir, "keymap.js"), "utf8");
+/** Filled with the user's saved shortcut changes when the page is served. */
+const KEYMAP_TOKEN = "__SCRIBE_KEYMAP_OVERRIDES__";
+
 const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</style>
 <script data-scribe-keys>
 (function () {
@@ -3360,68 +3365,52 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
     if (tag === "input" || tag === "textarea" || tag === "select") return true;
     return Boolean(el.isContentEditable);
   }
+  // The board's shortcut table (public/keymap.js) with the user's remapping (#1022). It lives on its
+  // own object, not the page's window; the board sends changes made while the page is open.
+  var keys = (function (window) {
+${KEYMAP_JS}
+    return window.scribeKeymap;
+  })({});
+  keys.setOverrides(keys.parse(${KEYMAP_TOKEN}));
+  window.addEventListener("message", function (event) {
+    if (event.source === parent && event.data && event.data.type === "scribe-keymap") keys.setOverrides(event.data.overrides);
+  });
+  function post(action) {
+    if (action === "download") parent.postMessage({ type: "scribe-download" }, "*");
+    else if (action === "help") parent.postMessage({ type: "scribe-help" }, "*");
+    else if (action === "palette") parent.postMessage({ type: "scribe-palette" }, "*");
+    else parent.postMessage({ type: "scribe-shortcut", action: action }, "*");
+  }
+  // New page, Download, Help and Search are the board's even when the page has a use for the key.
+  var FIRST = ["new-page", "download", "help", "palette"];
   window.addEventListener("keydown", function (event) {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-    var key = event.key.toLowerCase();
-    if ((key === "t" || key === "n") && !event.shiftKey) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-shortcut", action: "new-page" }, "*");
-      return;
-    }
-    if (key === "s" && !event.shiftKey) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-download" }, "*");
-      return;
-    }
-    if (key === "h" && !event.shiftKey) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-help" }, "*");
-      return;
-    }
-    if (key === "d" && !event.shiftKey) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-palette" }, "*");
-    }
+    if (!keys.maybe(event)) return;
+    var action = keys.match(event, FIRST);
+    if (!action) return;
+    event.preventDefault();
+    post(action);
   }, true);
-  // Bubble phase: a page that handles Esc itself (closing its own menu) keeps it.
+  // Only shortcuts that open chat belong to a page; thread actions require chat focus.
+  var CHAT = { "agent-dock": "dock", "agent-side": "side", "agent-full": "full" };
+  var LATER = ["settings", "agent-settings", "spaces", "library", "prev-space", "next-space", "close-tab", "reopen", "next-tab", "prev-tab", "agent-dock", "agent-side", "agent-full"];
+  // Bubble phase: a page that handles a key itself (Esc closing its own menu, a shortcut of its own) keeps it.
   window.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && !event.defaultPrevented) {
       parent.postMessage({ type: "scribe-escape" }, "*");
       return;
     }
-    // Agent chat: Ctrl+K floating chat, Ctrl+Shift+K new thread, Ctrl+L sidebar, Ctrl+Shift+L full window,
-    // Ctrl+J threads, Ctrl+' next favourite model, Ctrl+Alt+' next reasoning level, Ctrl+Shift+' next mode,
-    // Ctrl+. next workspace then none, Ctrl+Shift+. next Scribe access.
-    // Pages that use them keep them.
-    if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) return;
-    if ((event.altKey && event.key.toLowerCase() === "s") || (!event.altKey && (event.code === "Comma" || event.key === "," || event.key === "<"))) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-shortcut", action: event.shiftKey ? "agent-settings" : "settings" }, "*");
+    if (event.defaultPrevented || !keys.maybe(event)) return;
+    var action = keys.match(event, LATER);
+    if (!action) return;
+    event.preventDefault();
+    var chat = CHAT[action];
+    if (!chat) {
+      post(action);
       return;
     }
-    // Spaces: Ctrl+E shows them, Ctrl+Shift+PageUp / PageDown switches to the previous / next one.
-    // Library: Ctrl+B shows or hides the sidebar.
-    var boardAction = event.altKey ? ""
-      : event.key.toLowerCase() === "e" && !event.shiftKey ? "spaces"
-      : event.key.toLowerCase() === "b" && !event.shiftKey ? "library"
-      : event.shiftKey && event.key === "PageUp" ? "prev-space"
-      : event.shiftKey && event.key === "PageDown" ? "next-space" : "";
-    if (boardAction) {
-      event.preventDefault();
-      parent.postMessage({ type: "scribe-shortcut", action: boardAction }, "*");
-      return;
-    }
-    var chatKey = event.key.toLowerCase();
-    // Only shortcuts that open chat belong to a page; thread actions require chat focus.
-    var action = event.altKey ? ""
-      : chatKey === "k" && !event.shiftKey ? "dock"
-      : chatKey === "l" ? (event.shiftKey ? "full" : "side") : "";
-    if (action) {
-      event.preventDefault();
-      // With text selected, Ctrl+K and Ctrl+L open the chat with the selection attached.
-      var picked = action === "dock" || action === "side" ? selectedText() : "";
-      parent.postMessage(picked ? { type: "scribe-chat-key", action: action, selection: picked } : { type: "scribe-chat-key", action: action }, "*");
-    }
+    // With text selected, the floating chat and the sidebar open with the selection attached.
+    var picked = chat === "dock" || chat === "side" ? selectedText() : "";
+    parent.postMessage(picked ? { type: "scribe-chat-key", action: chat, selection: picked } : { type: "scribe-chat-key", action: chat }, "*");
   });
   var SELECTION_MAX = 20000;
   function selectedText() {
@@ -3585,11 +3574,13 @@ function injectBoardKeys(html: string): string {
   if (html.includes("data-scribe-keys")) {
     return html;
   }
+  const saved = store.readAppearance()["scribe.shortcuts"] ?? "";
+  const inject = BOARD_CHROME_INJECT.replace(KEYMAP_TOKEN, () => jsonForScript(saved));
   const idx = html.toLowerCase().lastIndexOf("</body>");
   if (idx === -1) {
-    return html + BOARD_CHROME_INJECT;
+    return html + inject;
   }
-  return html.slice(0, idx) + BOARD_CHROME_INJECT + html.slice(idx);
+  return html.slice(0, idx) + inject + html.slice(idx);
 }
 
 /** The bridge has to exist before any page script runs, so it goes as early as the document allows. */

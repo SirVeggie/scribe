@@ -502,6 +502,11 @@
   // Focus going into a frame blurs this window before activeElement names the frame.
   addEventListener("blur", () => setTimeout(reportFocus, 0));
   reportFocus();
+  // Remapped shortcuts (#1022): the shell catches the board's keys natively, so it needs the same table.
+  // Shells older than key_map keep their built-in keys.
+  const sendKeymap = () => invoke("key_map", { bindings: window.scribeKeymap.isRecording() ? [] : window.scribeKeymap.nativeBindings() }).catch(() => {});
+  window.scribeKeymap?.onChange(sendKeymap);
+  if (window.scribeKeymap) sendKeymap();
 
   // Lost the daemon for more than a moment (it restarts for a new build in about that long):
   // the app swaps in its offline page, which brings the board back once the daemon answers.

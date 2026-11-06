@@ -14284,31 +14284,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return false;
   }
 
+  const CHAT_KEY_ACTIONS = window.scribeKeymap.actions().map((a) => a.id).filter((id) => id.startsWith("agent-") && id !== "agent-settings");
   window.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || event.isComposing || !(event.ctrlKey || event.metaKey)) return;
+    if (event.defaultPrevented || event.isComposing || !window.scribeKeymap.maybe(event)) return;
     const run = (action) => { if (shortcut(action)) event.preventDefault(); };
-    // The apostrophe key by character, or by position on Nordic layouts (the '* key next to Enter).
-    // With Shift the US key types ", the Nordic one *.
-    const quote = event.key === "'" || event.key === '"' || (event.code === "Backslash" && event.key !== "\\" && event.key !== "|");
-    if (quote) {
-      if (event.shiftKey && event.altKey) return;
-      run(event.shiftKey ? "mode" : event.altKey ? "effort" : "model");
+    // Remappable chat keys (#1022); the arrows stay fixed for moving between chat panes.
+    const action = window.scribeKeymap.match(event, CHAT_KEY_ACTIONS);
+    if (action) {
+      run(action.slice("agent-".length));
       return;
     }
-    if (event.altKey) return;
-    // Period key by position so Ctrl+Shift+. stays on that key when Shift types > or :.
-    if (event.code === "Period") {
-      run(event.shiftKey ? "scope" : "workspace");
-      return;
-    }
-    const key = event.key.toLowerCase();
-    if (key === "k") {
-      run(event.shiftKey ? "new" : "dock");
-    } else if (key === "l") {
-      run(event.shiftKey ? "full" : "side");
-    } else if (key === "j" && !event.shiftKey) {
-      run("threads");
-    } else if (event.key === "ArrowUp" && !event.shiftKey && (dockFocused() || sideFocused())) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    if (event.key === "ArrowUp" && !event.shiftKey && (dockFocused() || sideFocused())) {
       run("up");
     } else if (event.key === "ArrowDown" && !event.shiftKey && (S.fullOpen || dockFocused())) {
       run("down");

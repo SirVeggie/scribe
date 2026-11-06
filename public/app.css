@@ -2292,6 +2292,65 @@ kbd {
   box-shadow: 0 0 0 1px var(--accent-ring);
 }
 
+.shortcut-keys {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-key {
+  min-width: 40px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.shortcut-key:hover {
+  background-color: rgba(var(--lift-rgb), 0.08);
+}
+
+.shortcut-key.shortcut-add {
+  color: var(--muted);
+}
+
+.shortcut-key.recording {
+  box-shadow: 0 0 0 1px var(--accent-ring);
+  color: var(--muted);
+  font-family: inherit;
+}
+
+.shortcut-reset {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.shortcut-reset:hover {
+  color: var(--text);
+  background-color: rgba(var(--lift-rgb), 0.08);
+}
+
+.shortcut-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
 .palette-prefix-input.dup {
   box-shadow: 0 0 0 1px rgba(255, 143, 143, 0.7);
 }

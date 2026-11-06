@@ -23,14 +23,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CONTROL, VK_F5, VK_MENU, VK_SHIFT,
 };
 
-use crate::layout;
+use crate::{layout, KeyBinding};
 
 enum Shortcut {
     /// Ctrl+Shift+M
     Compact,
     /// Board actions the page runs through `window.scribeShortcut`. Ctrl+Shift+T reopens the
     /// last closed tab; Ctrl+Z stays with the page for text undo.
-    Board(&'static str),
+    Board(String),
     /// F5 / Ctrl+R: drop WebView2's HTTP cache, then reload, so embedded sites are not stale.
     /// In an embed only that frame reloads.
     Reload,
@@ -54,12 +54,30 @@ fn embed_focused(label: &str) -> bool {
 /// Keys a browser keeps from pages (tabs, windows, reload), and the app's own window key.
 /// Everything else reaches the focused frame first unless that frame is an embed.
 fn reserved(shortcut: &Shortcut) -> bool {
-    matches!(
-        shortcut,
-        Shortcut::Compact
-            | Shortcut::Reload
-            | Shortcut::Board("next-tab" | "prev-tab" | "close-tab" | "new-page" | "reopen" | "prev-space" | "next-space")
-    )
+    match shortcut {
+        Shortcut::Compact | Shortcut::Reload => true,
+        Shortcut::Board(action) => matches!(
+            action.as_str(),
+            "next-tab" | "prev-tab" | "close-tab" | "new-page" | "reopen" | "prev-space" | "next-space"
+        ),
+    }
+}
+
+/// Board actions the shell may run natively. Anything else in a key map is ignored.
+const NATIVE_ACTIONS: &[&str] = &[
+    "new-page", "close-tab", "reopen", "next-tab", "prev-tab", "download", "palette", "library", "spaces",
+    "prev-space", "next-space", "help", "settings", "agent-settings", "agent-dock", "agent-side", "agent-full",
+];
+
+/// The user's shortcut table from the board (#1022); None until it is sent, which keeps the built-in keys.
+static KEY_MAP: Mutex<Option<Vec<KeyBinding>>> = Mutex::new(None);
+
+pub fn set_key_map(bindings: Vec<KeyBinding>) {
+    *KEY_MAP.lock().unwrap() = Some(known_bindings(bindings));
+}
+
+fn known_bindings(bindings: Vec<KeyBinding>) -> Vec<KeyBinding> {
+    bindings.into_iter().filter(|b| NATIVE_ACTIONS.contains(&b.action.as_str())).collect()
 }
 
 const VK_TAB: u32 = 0x09;
@@ -68,46 +86,63 @@ const VK_NEXT: u32 = 0x22;
 const VK_OEM_COMMA: u32 = 0xBC;
 
 fn shortcut_for(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
+    shortcut_in(KEY_MAP.lock().unwrap().as_deref(), key, ctrl, shift, alt)
+}
+
+fn shortcut_in(map: Option<&[KeyBinding]>, key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
+    // Reload and Compact are the shell's own and can't be remapped (public/keymap.js keeps them free).
+    if !alt && (key == u32::from(VK_F5.0) || (ctrl && key == u32::from(b'R'))) {
+        return Some(Shortcut::Reload);
+    }
+    if ctrl && shift && !alt && key == u32::from(b'M') {
+        return Some(Shortcut::Compact);
+    }
+    if let Some(map) = map {
+        return map
+            .iter()
+            .find(|b| b.key == key && b.ctrl == ctrl && b.shift == shift && b.alt == alt)
+            .map(|b| Shortcut::Board(b.action.clone()));
+    }
+    builtin_shortcut(key, ctrl, shift, alt).map(|action| Shortcut::Board(action.to_owned()))
+}
+
+/// The default keys, for a board that hasn't sent its table (older UI, or before it loads).
+fn builtin_shortcut(key: u32, ctrl: bool, shift: bool, alt: bool) -> Option<&'static str> {
     if ctrl && ((alt && key == u32::from(b'S')) || (!alt && key == VK_OEM_COMMA)) {
-        return Some(Shortcut::Board(if shift { "agent-settings" } else { "settings" }));
+        return Some(if shift { "agent-settings" } else { "settings" });
     }
     // Thread settings and actions are handled in chat, where focus can be checked.
     if alt {
         return None;
     }
-    if key == u32::from(VK_F5.0) {
-        return Some(Shortcut::Reload);
-    }
     if !ctrl {
         return None;
     }
     if key == VK_TAB {
-        return Some(Shortcut::Board(if shift { "prev-tab" } else { "next-tab" }));
+        return Some(if shift { "prev-tab" } else { "next-tab" });
     }
     if shift && (key == VK_PRIOR || key == VK_NEXT) {
-        return Some(Shortcut::Board(if key == VK_PRIOR { "prev-space" } else { "next-space" }));
+        return Some(if key == VK_PRIOR { "prev-space" } else { "next-space" });
     }
     match (u8::try_from(key).ok()?, shift) {
-        (b'M', true) => Some(Shortcut::Compact),
-        (b'T', true) => Some(Shortcut::Board("reopen")),
-        (b'T' | b'N', false) => Some(Shortcut::Board("new-page")),
-        (b'D', false) => Some(Shortcut::Board("palette")),
-        (b'S', false) => Some(Shortcut::Board("download")),
-        (b'H', false) => Some(Shortcut::Board("help")),
-        (b'E', false) => Some(Shortcut::Board("spaces")),
-        (b'B', false) => Some(Shortcut::Board("library")),
-        (b'W', false) => Some(Shortcut::Board("close-tab")),
-        (b'K', false) => Some(Shortcut::Board("agent-dock")),
-        (b'L', false) => Some(Shortcut::Board("agent-side")),
-        (b'L', true) => Some(Shortcut::Board("agent-full")),
-        (b'R', false | true) => Some(Shortcut::Reload),
+        (b'T', true) => Some("reopen"),
+        (b'T' | b'N', false) => Some("new-page"),
+        (b'D', false) => Some("palette"),
+        (b'S', false) => Some("download"),
+        (b'H', false) => Some("help"),
+        (b'E', false) => Some("spaces"),
+        (b'B', false) => Some("library"),
+        (b'W', false) => Some("close-tab"),
+        (b'K', false) => Some("agent-dock"),
+        (b'L', false) => Some("agent-side"),
+        (b'L', true) => Some("agent-full"),
         _ => None,
     }
 }
 
 /// Holding Ctrl+Tab keeps cycling, like a browser. Everything else fires once per press.
 fn repeats(shortcut: &Shortcut) -> bool {
-    matches!(shortcut, Shortcut::Board("next-tab" | "prev-tab"))
+    matches!(shortcut, Shortcut::Board(action) if action == "next-tab" || action == "prev-tab")
 }
 
 fn pressed(key: u16) -> bool {
@@ -219,7 +254,7 @@ pub fn install(window: &WebviewWindow) {
                     // Leave the WebView2 callback before touching the window.
                     std::thread::spawn(move || layout::toggle_compact(&window));
                 }
-                Shortcut::Board(action) => run_board_action(&target, action),
+                Shortcut::Board(action) => run_board_action(&target, &action),
             }
             Ok(())
         }));
@@ -254,6 +289,19 @@ mod tests {
         for (key, shift) in [(0xBE, false), (0xBE, true), (0xDE, false), (u32::from(b'J'), false), (u32::from(b'K'), true)] {
             assert!(shortcut_for(key, true, shift, false).is_none());
         }
+    }
+
+    #[test]
+    fn a_key_map_replaces_the_built_in_keys() {
+        let bind = |action: &str, key: u8, shift: bool| KeyBinding { action: action.into(), key: u32::from(key), ctrl: true, shift, alt: false };
+        let map = known_bindings(vec![bind("close-tab", b'Q', false), bind("not-an-action", b'P', false)]);
+        let at = |key: u8, shift: bool| shortcut_in(Some(&map), u32::from(key), true, shift, false);
+        assert!(matches!(at(b'Q', false), Some(Shortcut::Board(a)) if a == "close-tab"));
+        assert!(at(b'W', false).is_none());
+        assert!(at(b'P', false).is_none());
+        // Reload and Compact stay.
+        assert!(matches!(at(b'R', false), Some(Shortcut::Reload)));
+        assert!(matches!(at(b'M', true), Some(Shortcut::Compact)));
     }
 
     #[test]
