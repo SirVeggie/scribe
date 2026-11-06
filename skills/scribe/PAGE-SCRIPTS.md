@@ -157,6 +157,7 @@ A form for a Kanban card (`replyTo` on `page_show`; Forms for a card in `SKILL.m
 ```
 
 - `scribe.reply` needs a click and saves pending edits first. It goes only where `replyTo` points, which is kept with the page, not its HTML, so page code cannot send anywhere else. Resolves `{ ok, target, delivered }` or `{ ok: false, error }`: show the result on the form.
+- `{ summary, quiet: true }` confirms instead of sending: the answers are saved on the card (Continue on offer) and no agent turn starts.
 - On a Kanban board the reply becomes the user's comment on the card (summary, answers: short ones as a list, long ones quoted, and a peek link to the form) and goes to the card's chat: into its running turn, or Continue when it is idle (the board claims the card for it and moves it to working). The agent gets the answers with the card, without reading the form's state.
 - On any other page it logs a `reply` event (`data`: `{ from, card?, summary, data }`) for `page_wait`.
 - Each click sends again and adds a comment. Name fields to read well as labels (`approach`, `notes`); empty values are skipped.

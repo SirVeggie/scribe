@@ -77,6 +77,8 @@ export type InboundReply = {
   summary: string;
   /** The page's answers: field name to value. */
   data: Record<string, unknown>;
+  /** Confirm, not send: record the answers without starting or steering an agent turn. */
+  quiet?: true;
 };
 
 /**

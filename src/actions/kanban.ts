@@ -595,7 +595,8 @@ function replyValue(value: unknown): string {
  */
 export function replyComment(reply: InboundReply): string {
   const link = `[[peek:${reply.from.key}]]`;
-  const head = reply.summary ? `**Reply from ${link}:** ${reply.summary}` : `**Reply from ${link}**`;
+  const verb = reply.quiet ? "Confirmed on" : "Reply from";
+  const head = reply.summary ? `**${verb} ${link}:** ${reply.summary}` : `**${verb} ${link}**`;
   const short: string[] = [];
   const long: string[] = [];
   for (const [name, raw] of Object.entries(reply.data)) {
@@ -1088,7 +1089,12 @@ export const kanbanActions: ActionSet = {
     const id = newId("cm");
     const comment = { id, by: "user", at: ctx.now, text };
     const ops: unknown[] = [{ op: "insert", path: `${cardPath(card)}/comments`, value: comment }];
-    const events = [{ name: "comment", data: { ...cardEvent(state, card), reply: reply.from.key } }];
+    const events = [{ name: "comment", data: { ...cardEvent(state, card), reply: reply.from.key, ...(reply.quiet ? { quiet: true } : {}) } }];
+    // Confirmed, not sent: the answers wait on the card for the next turn, with Continue on offer.
+    if (reply.quiet) {
+      ops[0] = { op: "insert", path: `${cardPath(card)}/comments`, value: { ...comment, followUp: "offer" } };
+      return { ops, result: { num: card.num, quiet: true }, events };
+    }
     const title = str(card.title).slice(0, 200);
     const holder = card.claim && !card.claim.stale ? str(card.claim.thread) : "";
     const holderInfo = holder ? ctx.thread?.(holder) : undefined;

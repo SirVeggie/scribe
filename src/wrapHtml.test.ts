@@ -113,6 +113,14 @@ test("kit reply buttons use the host bridge, lock once, signal without a target,
     await page.waitForFunction(() => (window as any).calls.length === 3);
     assert.deepEqual(await page.evaluate(() => (window as any).calls.map((c: any) => c.options.summary)), ["Create card: Strands", "Faces and icons · scope: api", "notes: hi"]);
 
+    // form[data-confirm] adds a Confirm button that sends the answers as quiet.
+    await setup("ok", `<form data-reply="Plan" data-confirm><input name="pick" value="a"><button type="submit">Send</button></form>`);
+    assert.equal(await page.locator("button[data-quiet]").innerText(), "Confirm");
+    await page.locator("button[data-quiet]").click();
+    await page.getByRole("status").filter({ hasText: /^Confirmed$/ }).waitFor();
+    assert.deepEqual(await page.evaluate(() => (window as any).calls), [{ data: { pick: "a" }, options: { summary: "Plan", quiet: true } }]);
+    assert.equal(await page.locator("form button:disabled").count(), 2);
+
     for (const context of ["bad", "null", "[]", "42"]) {
       await setup("ok", `<button data-reply data-context='${context}'>A</button>`);
       await page.locator("button").click();

@@ -424,8 +424,25 @@
     });
   });
 
+  function submitButtons(form) {
+    return Array.prototype.slice.call(form.querySelectorAll('button[type="submit"], button:not([type])'));
+  }
+
+  /** form[data-confirm] gets a Confirm button beside Send: it records the answers without asking the agent for a turn. */
+  function addConfirm(form) {
+    if (!form.hasAttribute("data-confirm") || form.querySelector("button[data-quiet]")) return;
+    var send = submitButtons(form)[0];
+    var confirm = document.createElement("button");
+    confirm.type = "submit";
+    confirm.setAttribute("data-quiet", "");
+    confirm.textContent = form.getAttribute("data-confirm").trim() || "Confirm";
+    if (send) send.after(confirm);
+    else form.append(confirm);
+  }
+
   forms.forEach(function (form, i) {
     var key = formKey(form, i);
+    addConfirm(form);
     restoreDraft(form, key);
     // In flight, and after a send until the answers change, so a double click or Enter
     // doesn't post the same answers twice.
@@ -435,8 +452,7 @@
       saveDraft(form, key);
       if (!sent || pending || replyClosed()) return;
       sent = false;
-      var submit = form.querySelector('button[type="submit"], button:not([type])');
-      if (submit) submit.disabled = false;
+      submitButtons(form).forEach(function (button) { button.disabled = false; });
     }
     form.addEventListener("input", edited);
     form.addEventListener("change", edited);
@@ -449,21 +465,23 @@
       // Unlabelled, it is named by its section's heading when it has one.
       var section = sectionOf(form);
       var summary = form.getAttribute("data-reply").trim() || (section ? section + " · " : "") + summaryOf(answers);
-      var submit = event.submitter || form.querySelector('button[type="submit"], button:not([type])');
-      if (submit) submit.disabled = true;
-      show(form, "Sending…");
-      scribe.reply(answers, { summary: summary }).then(function (result) {
+      // A data-quiet submit button confirms: the answers are kept, and no agent turn starts.
+      var quiet = Boolean(event.submitter && event.submitter.hasAttribute("data-quiet"));
+      var buttons = submitButtons(form);
+      buttons.forEach(function (button) { button.disabled = true; });
+      show(form, quiet ? "Saving…" : "Sending…");
+      scribe.reply(answers, quiet ? { summary: summary, quiet: true } : { summary: summary }).then(function (result) {
         if (result && result.ok) {
           var target = result.target && result.target.title;
-          show(form, target ? "Sent to " + target : "Sent", "ok");
+          show(form, quiet ? (target ? "Confirmed on " + target : "Confirmed") : target ? "Sent to " + target : "Sent", "ok");
           sent = true;
           return;
         }
         var error = (result && result.error) || "unknown error";
         if (/no reply target/i.test(error)) {
           // A page without replyTo: the agent waits on this signal instead.
-          scribe.signal("submitted", { form: key, answers: answers, summary: summary });
-          show(form, "Sent", "ok");
+          scribe.signal("submitted", quiet ? { form: key, answers: answers, summary: summary, quiet: true } : { form: key, answers: answers, summary: summary });
+          show(form, quiet ? "Confirmed" : "Sent", "ok");
           sent = true;
           return;
         }
@@ -472,7 +490,7 @@
         show(form, "Not sent: " + ((err && err.message) || err), "error");
       }).then(function () {
         pending = false;
-        if (submit && !replyClosed() && !sent) submit.disabled = false;
+        if (!replyClosed() && !sent) buttons.forEach(function (button) { button.disabled = false; });
       });
     });
   });

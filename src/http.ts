@@ -1099,10 +1099,12 @@ export async function startHttp(): Promise<http.Server> {
     try {
       const threadInfo = (id: string) => (agentHost ? agentHost.runInfo(id) : ({ exists: false } as const));
       const source=store.get(req.params.id);
-      const pluginReply=source?await pluginActions?.reply(source,req.body?.data,req.body?.summary,threadInfo):null;
-      const { target, result, deliver } = pluginReply ?? store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data }, threadInfo);
+      // Confirm (quiet): the answers are recorded, but no agent turn is started or steered.
+      const quiet=req.body?.quiet===true;
+      const pluginReply=source?await pluginActions?.reply(source,req.body?.data,req.body?.summary,threadInfo,quiet):null;
+      const { target, result, deliver } = pluginReply ?? store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data, quiet }, threadInfo);
       let delivered: "steered" | "queued" | "started" | null = null;
-      if (deliver && agentHost) {
+      if (deliver && agentHost && !quiet) {
         const source = store.get(req.params.id);
         try {
           delivered = agentHost.cardMessage(deliver.thread, {

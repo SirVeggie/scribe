@@ -399,6 +399,9 @@ s-code > pre { margin: 0; padding: 10px 14px; overflow: auto; background: none; 
   box-shadow: none;
 }
 :where(button.primary, .button.primary, form[data-reply] button[type="submit"]):hover { background: var(--accent); filter: brightness(1.12); }
+/* Confirm sits beside Send as the quieter choice: it saves the answers without asking for a reply. */
+:where(form[data-reply] button[data-quiet]) { background: var(--kit-btn-bg); color: var(--text); box-shadow: var(--kit-btn-shadow); margin-left: 8px; }
+:where(form[data-reply] button[data-quiet]):hover { background: var(--kit-btn-bg-hover); filter: none; }
 :where(button):disabled { opacity: 0.55; cursor: default; filter: none; }
 :where(button.kit-reply-chosen):disabled { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
 

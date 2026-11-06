@@ -15,7 +15,8 @@ const PROTECTED_MARK_JS = readFileSync(new URL("../public/protected-mark.js", im
  * - `scribe.title`, `scribe.setTitle(title)`, `scribe.onTitle(fn)`: the page's name in the tab and Library.
  * - `scribe.signal(name, data)` and `data-scribe-signal`: events agents wait on.
  * - `scribe.action(name, args)`: the page template's actions.
- * - `scribe.reply(data, { summary })`: a form's answers to the page its agent wired it to (replyTo).
+ * - `scribe.reply(data, { summary, quiet })`: a form's answers to the page its agent wired it to (replyTo);
+ *   quiet records them without starting or steering an agent turn.
  * - `scribe.file`: a file page's file (read, image, save, saveAs), through the board.
  * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
  *   `scribe.onOpen` for a link that names a record in the page (`key#card=12`),
@@ -2135,7 +2136,7 @@ ${POINTER_DRAG_JS}
     } catch (err) {
       return Promise.resolve({ ok: false, error: "data must be JSON" });
     }
-    return askBoard({ type: "scribe-reply", data: payload, summary: summary }, AGENT_ASK_MS);
+    return askBoard({ type: "scribe-reply", data: payload, summary: summary, quiet: Boolean(opts && opts.quiet === true) }, AGENT_ASK_MS);
   }
 
   // ---------- shared browser view ----------

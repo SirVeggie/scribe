@@ -1035,6 +1035,24 @@ test("a reply goes into the running turn of the card's holder, and records how",
   assert.equal(card(done, 2).col, "ready");
 });
 
+test("a confirmed (quiet) reply is recorded with Continue on offer, and never steers, continues or moves the card", () => {
+  const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
+  card(start, 2).col = "rev";
+  card(start, 2).assignee = "Opus";
+  card(start, 2).claim = { holder: "Opus", thread: "th1", at: 1 };
+  card(start, 2).thread = "th1";
+  const outcome = kanbanActions.reply!(start, reply({ quiet: true }), userCtx(threads({ th1: running })));
+  assert.equal(outcome.deliver, undefined);
+  assert.equal((outcome.events![0].data as { quiet?: boolean }).quiet, true);
+  const state = applyStateOps(start, outcome.ops);
+  const c = card(state, 2);
+  const comments = c.comments as Array<{ text: string; followUp?: string }>;
+  assert.match(comments[0].text, /^\*\*Confirmed on \[\[peek:scribe:card-2-form\]\]:\*\* Picked A/);
+  assert.equal(comments[0].followUp, "offer");
+  assert.equal(c.continuation, undefined);
+  assert.equal(c.col, "rev");
+});
+
 test("a reply immediately moves its pending continuation to ready without starting or claiming", () => {
   const start = { ...board(), settings: { workers: { opus: { name: "Opus" } } } };
   card(start, 2).col = "rev";

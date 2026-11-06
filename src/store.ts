@@ -750,7 +750,7 @@ export class BoardStore extends EventEmitter {
    */
   receiveReply(
     idOrKey: string,
-    input: { summary?: unknown; data?: unknown },
+    input: { summary?: unknown; data?: unknown; quiet?: unknown },
     thread?: ActionContext["thread"]
   ): { target: Tab; result: unknown; deliver?: ReplyDelivery } {
     const source = this.requireAny(idOrKey);
@@ -774,6 +774,7 @@ export class BoardStore extends EventEmitter {
       ...(source.replyTo.card !== undefined ? { card: source.replyTo.card } : {}),
       summary,
       data,
+      ...(input.quiet === true ? { quiet: true as const } : {}),
     };
     const set = this.actionsFor(target);
     if (!set?.reply) {

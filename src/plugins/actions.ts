@@ -34,14 +34,14 @@ export class PluginActions {
     if(!this.service.enabled(binding.id))throw new Error("Plugin was disabled during seed");
     return state;
   }
-  async reply(source: Tab, data: unknown, summary: unknown, thread?:ActionContext["thread"]) {
+  async reply(source: Tab, data: unknown, summary: unknown, thread?:ActionContext["thread"], quiet=false) {
     if(!source.replyTo)throw new Error("This page has no reply target");
     const target=this.store.get(source.replyTo.page); if(!target)throw new Error("Reply target was removed");
     const binding=this.binding(target);
     if(!binding?.t.hooks?.includes("reply"))return null;
     if(data!==undefined && !isPlainObject(data))throw new Error("Reply data must be an object");
     if(JSON.stringify(data??{}).length>64_000)throw new Error("Reply data too large");
-    const reply={from:{id:source.id,key:source.key,title:source.title},card:source.replyTo.card,summary:typeof summary==="string"?summary.trim().replace(/\s+/g," ").slice(0,300):"",data:data??{}};
+    const reply={from:{id:source.id,key:source.key,title:source.title},card:source.replyTo.card,summary:typeof summary==="string"?summary.trim().replace(/\s+/g," ").slice(0,300):"",data:data??{},...(quiet?{quiet:true}:{})};
     const outcome=await this.invoke(target,"reply",t=>[t.state,reply,{caller:{by:"user"},now:Date.now(),values:t.templateValues??{},thread}]) as ActionOutcome&{deliver?:ReplyDelivery};
     return {target,result:outcome.result,deliver:outcome.deliver};
   }

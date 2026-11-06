@@ -5024,7 +5024,7 @@
     fetch(`/api/tabs/${encodeURIComponent(tab.id)}/reply`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: data.data, summary: data.summary }),
+      body: JSON.stringify({ data: data.data, summary: data.summary, ...(data.quiet === true ? { quiet: true } : {}) }),
     })
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
