@@ -104,6 +104,22 @@ exist but are off until the user turns them on.
   Patterns must compile, can't match empty text or nest quantifiers (`(a+)+`; JavaScript regexes
   can't be stopped), and a proposed one matching over 200 values in the pages is refused.
 
+## The user's views (#1046)
+
+- Settings → Protected data (public/protected.js): every value with its hint, kind, source, who added
+  it and when, and the pages that hold it; masked until Show. Edit changes hint, kind or value
+  (PATCH /api/vault/:id); Delete removes it. Both only change what agents read from then on.
+  GET /api/vault/values and PATCH answer the board window on this device only (`ownWindow`), like
+  #1049's reveal.
+- Blurred spans (public/protected-mark.js): the board window marks text matching a value (chat
+  transcripts, the strip, the Library) and a click reveals it; [data-scribe-protect-skip] opts out.
+  Built-in pages (Kanban, Todo, file pages) call `scribe.protect.watch(root)` from the bridge, which
+  fetches GET /api/tabs/:id/protected: only the values in that page's own text, so a page learns
+  nothing it doesn't hold. The board sends `vault` events; pages refetch on them and on state changes.
+- Right-click: a span gets Edit hint and Unprotect; selected text (in a chat or any page) gets
+  Protect selection, which asks for a hint and kind. Pages send the span id with their
+  scribe-context-menu message; the board shows the menu and does the call.
+
 ## Not covered yet
 
 - Values written differently: HTML entities (`&amp;`), JSON escapes, other casing.
@@ -111,4 +127,5 @@ exist but are off until the user turns them on.
 - Thread counts in vault_list; provider transcripts on disk (#1041).
 - An agent with filesystem access reading `scribe.sqlite` directly (pages keep values in plain
   text there; see src/callers.ts).
-- The user's UI for reviewing and removing fragments (the routes are there).
+- Blurring in custom HTML pages (only built-in views call `scribe.protect.watch`), and values split
+  across elements (a match must sit in one text node).
