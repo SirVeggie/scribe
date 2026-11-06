@@ -428,7 +428,8 @@
       if (replyClosed() || pending || sent) return;
       pending = true;
       var answers = answersOf(form);
-      var summary = summaryOf(answers);
+      // A labelled form (data-reply="Create card: Search") names its action; the answers follow it.
+      var summary = form.getAttribute("data-reply").trim() || summaryOf(answers);
       var submit = event.submitter || form.querySelector('button[type="submit"], button:not([type])');
       if (submit) submit.disabled = true;
       show(form, "Sending…");

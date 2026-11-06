@@ -11,8 +11,8 @@
           "text": "form[data-reply]"
         }
       ],
-      "write": "form[data-reply]",
-      "gives": "Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo.",
+      "write": "form[data-reply=\"label\"?]",
+      "gives": "Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo. A page can have several, each sent on its own; a data-reply value becomes the reply's summary.",
       "example": "<form data-reply><textarea name=\"notes\"></textarea><button type=\"submit\">Send answers</button></form>"
     },
     {
