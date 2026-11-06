@@ -108,6 +108,142 @@
   actions.append(addButton, enterButton, leaveButton);
   pairedSection.append(list, status, panel, actions);
 
+  // Settings sync (#1023): one switch per category for the group, and "keeps its own" for this device.
+  const syncSection = section(
+    "Sync",
+    "Each category switched on is the same on all your paired devices; switching one off stops it on all of them. A headless device only passes settings on."
+  );
+  const syncChoose = el("div", "device-panel sync-choose");
+  syncChoose.hidden = true;
+  const syncList = el("div", "sync-categories");
+  const syncStatus = el("p", "settings-hint");
+  syncStatus.setAttribute("role", "status");
+  syncSection.append(syncChoose, syncList, syncStatus);
+  const SYNC_CATEGORIES = {
+    appearance: { label: "Appearance", hint: "Theme, effects and backgrounds, the floating chat's look, Reduce motion and title bar buttons" },
+    layout: { label: "Layout and navigation", hint: "Pane sides, page links, the tab strip, Clear, the space switch offer and search prefixes" },
+    chat: { label: "Chat preferences", hint: "Send key, Queue or Steer, empty Enter, reasoning, compact thread lists, presets, suggestions and the agent button" },
+    memories: { label: "Memories", hint: "Memories set to This device stay here. Workspace memories go only to devices with a clone of the same git repository." },
+  };
+  const PREF_LABELS = {
+    "scribe.theme": "Theme", "scribe.tightSmall": "Tighter small text", "scribe.uiEffects": "Interface effects",
+    "scribe.auroraEdge": "Title bar edge", "scribe.newPageBackgrounds": "New page backgrounds",
+    "scribe.newPageProviderColors": "Provider colours on New page", "scribe.chromeFx": "Title bar background",
+    "scribe.chromeFxWhen": "Title bar motion", "scribe.dock-appearance.v1": "Floating chat look", "scribe.workingFx": "Working thread look",
+    "scribe.desktop.reducedMotion": "Reduce motion", "scribe.desktop.hiddenButtons": "Title bar buttons",
+    "scribe.agentSide": "Agent pane side", "scribe.librarySide": "Library side", "scribe.linkMode": "Page links open as",
+    "scribe.smoothScroll": "Smooth scrolling tab strip", "scribe.showClear": "Clear button", "scribe.spaceSuggest": "Space switch offer",
+    "scribe.palettePrefixes": "Search prefixes", "scribe.agent.sendKey": "Send with", "scribe.agent.runningSend": "Sending while a turn runs",
+    "scribe.agent.emptyEnter": "Enter on an empty composer", "scribe.agent.reasoningOpen": "Reasoning expanded",
+    "scribe.agent.compactThreads": "Compact thread list", "scribe.agent.dockCompactThreads": "Compact floating chat list",
+    "scribe.agent.showPresets": "Presets", "scribe.agent.showTips": "Suggestions", "scribe.agent.showButton": "Agent button",
+  };
+  const VALUE_LABELS = { "0": "Off", "1": "On", mod: "Ctrl+Enter", enter: "Enter", tab: "Navigate", peek: "Peek", split: "Split", queue: "Queue", steer: "Steer", send: "Send now", left: "Left", right: "Right" };
+  const prefValue = (value) => {
+    if (VALUE_LABELS[value]) return VALUE_LABELS[value];
+    if (/^[[{]/.test(value)) return "Custom";
+    return value.replace(/,/g, ", ").replace(/^./, (c) => c.toUpperCase());
+  };
+  let sync = null;
+  /** Choose setup answers by key: "mine" or "theirs". */
+  let choices = {};
+
+  async function syncRequest(method, path, body) {
+    const response = await fetch(`/api/settings-sync${path}`, method === "GET" ? {} : {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}),
+    });
+    let result = null;
+    try { result = await response.json(); } catch { /* an older daemon */ }
+    if (!result || (response.status === 404 && !result.error)) throw new Error("Restart Scribe to sync settings.");
+    if (!response.ok) throw new Error(result.error || "Could not update sync");
+    return result;
+  }
+
+  function renderSync(next) {
+    sync = next;
+    syncSection.hidden = !sync;
+    if (!sync) return;
+    syncList.replaceChildren();
+    for (const category of sync.categories) {
+      const info = SYNC_CATEGORIES[category.id];
+      if (!info) continue;
+      const row = el("div", "setting-row");
+      const name = tip(el("span", "setting-hinted", info.label), info.hint);
+      name.id = `sync-${category.id}-label`;
+      const toggle = el("button", "pill-toggle");
+      toggle.type = "button";
+      toggle.setAttribute("role", "switch");
+      toggle.setAttribute("aria-checked", String(category.on));
+      toggle.setAttribute("aria-labelledby", name.id);
+      toggle.addEventListener("click", () => changeSync({ category: category.id, on: !category.on }));
+      row.append(name, toggle);
+      syncList.append(row);
+      if (sync.relay) continue;
+      const own = el("label", "ag-check sync-own");
+      const box = el("input");
+      box.type = "checkbox";
+      box.checked = category.keepOwn;
+      box.disabled = !category.on;
+      box.addEventListener("change", () => changeSync({ category: category.id, keepOwn: box.checked }));
+      own.append(box, el("span", null, "This device keeps its own"));
+      syncList.append(own);
+    }
+    syncStatus.textContent = sync.relay ? "This device is headless: it keeps the shared settings for the others and uses none of them." : "";
+    renderChoose();
+  }
+
+  async function changeSync(body) {
+    try { renderSync(await syncRequest("PUT", "/category", body)); } catch (err) { syncStatus.textContent = err.message; }
+  }
+
+  /** First join: the settings both devices set differently, to keep one device's for all or pick per row. */
+  function renderChoose() {
+    const pending = sync?.pending;
+    syncChoose.hidden = !pending;
+    if (!pending) {
+      choices = {};
+      syncChoose.replaceChildren();
+      return;
+    }
+    const other = pending.from.name;
+    for (const key of Object.keys(choices)) if (!pending.rows.some((row) => row.key === key)) delete choices[key];
+    const title = el("h4", null, "Choose setup");
+    const intro = el("p", "settings-hint", `These settings differ between ${other} and this device. Everything else was merged.`);
+    const all = el("div", "settings-actions");
+    const pickAll = (choice) => {
+      for (const row of pending.rows) choices[row.key] = choice;
+      renderChoose();
+    };
+    all.append(button("Use this device's for all", () => pickAll("mine")), button(`Use ${other}'s for all`, () => pickAll("theirs")));
+    const rows = el("div", "sync-choose-rows");
+    for (const row of pending.rows) {
+      const line = el("div", "setting-row");
+      const label = el("span", null, PREF_LABELS[row.key] || row.key);
+      label.id = `sync-row-${row.key.replace(/[^\w-]/g, "-")}`;
+      const track = el("div", "button-track text-track");
+      track.setAttribute("role", "group");
+      track.setAttribute("aria-labelledby", label.id);
+      for (const [choice, text] of [["mine", `Here: ${prefValue(row.mine)}`], ["theirs", `${other}: ${prefValue(row.theirs)}`]]) {
+        const pick = button(text, () => {
+          choices[row.key] = choice;
+          renderChoose();
+        });
+        pick.setAttribute("aria-pressed", String(choices[row.key] === choice));
+        track.append(pick);
+      }
+      line.append(label, track);
+      rows.append(line);
+    }
+    const done = el("div", "settings-actions");
+    const apply = button("Apply", async () => {
+      apply.disabled = true;
+      try { renderSync(await syncRequest("POST", "/resolve", { choices })); } catch (err) { syncStatus.textContent = err.message; apply.disabled = false; }
+    }, "primary");
+    apply.disabled = pending.rows.some((row) => !choices[row.key]);
+    done.append(el("span", "ml-grow"), apply);
+    syncChoose.replaceChildren(title, intro, all, rows, done);
+  }
+
   let view = null;
   let confirmRevoke = async () => true;
   let countdown = 0;
@@ -445,12 +581,15 @@
 
   function refresh() {
     request("GET", "").then(render).catch((err) => say(err.message));
+    syncRequest("GET", "/status").then(renderSync).catch(() => renderSync(null));
     refreshMirror();
     void refreshWeb();
   }
 
   window.scribeDevicesSettings = {
-    sections: [selfSection, pairedSection, mirrorSection, webSection],
+    sections: [selfSection, pairedSection, syncSection, mirrorSection, webSection],
+    /** The daemon's settings_sync event: a switch flipped, or a Choose setup waits. */
+    syncChanged: renderSync,
     /** `confirm(message, label)` resolves true when the user agrees to revoke a device. */
     init({ confirm }) {
       if (confirm) confirmRevoke = confirm;

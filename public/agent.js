@@ -4,6 +4,8 @@
   const { el, icon, button } = R;
   const app = () => window.scribeApp;
 
+  /** Chat preferences the daemon keeps and settings sync shares (#1023); the rest stays in localStorage. */
+  const sharedPrefs = () => window.scribeAppearance || localStorage;
   const LS = {
     side: "scribe.agent.sideOpen",
     width: "scribe.agent.width",
@@ -46,12 +48,12 @@
 
   /** The thread list shows each thread on one line: status, provider, title and changes (Agent settings). */
   function compactThreads() {
-    return localStorage.getItem(LS.compact) === "1";
+    return sharedPrefs().getItem(LS.compact) === "1";
   }
 
   /** The floating chat's thread picker has its own Compact switch. */
   function dockCompact() {
-    return localStorage.getItem(LS.dockCompact) === "1";
+    return sharedPrefs().getItem(LS.dockCompact) === "1";
   }
 
   const LIST_FILTERS = ["here", "workspaces", "all", "archived"];
@@ -99,7 +101,7 @@
   }
 
   function emptyEnter() {
-    return localStorage.getItem(LS.emptyEnter) === "send" ? "send" : "steer";
+    return sharedPrefs().getItem(LS.emptyEnter) === "send" ? "send" : "steer";
   }
 
   /** Empty Enter acts on the waiting steered message, else the first queued one. */
@@ -124,11 +126,11 @@
   }
 
   function runningSend() {
-    return localStorage.getItem(LS.runningSend) === "steer" ? "steer" : "queue";
+    return sharedPrefs().getItem(LS.runningSend) === "steer" ? "steer" : "queue";
   }
 
   function sendKey() {
-    return localStorage.getItem(LS.sendKey) === "mod" ? "mod" : "enter";
+    return sharedPrefs().getItem(LS.sendKey) === "mod" ? "mod" : "enter";
   }
 
   function composerSendHint() {
@@ -4152,8 +4154,8 @@
       const meta = el("div", "ag-empty-meta");
       fillScopeDisplay(meta, s.scope, this.thread() ? workspaceDir(this.thread()) : s.cwd);
       box.append(meta);
-      if (this.variant !== "dock" && !this.thread() && localStorage.getItem(LS.presets) !== "0") box.append(this.presetList(s));
-      if (localStorage.getItem(LS.tips) === "0") return box;
+      if (this.variant !== "dock" && !this.thread() && sharedPrefs().getItem(LS.presets) !== "0") box.append(this.presetList(s));
+      if (sharedPrefs().getItem(LS.tips) === "0") return box;
       const tips =
         s.mode === "board"
           ? ["Summarize this page", "Add a table of the key points", "Find related pages in the Library"]
@@ -4657,7 +4659,7 @@
 
     renderReasoning(it) {
       const running = !it.endedAt;
-      const openDefault = localStorage.getItem(LS.reasoning) === "1";
+      const openDefault = sharedPrefs().getItem(LS.reasoning) === "1";
       const key = `r:${it.id}`;
       const isOpen = this.expanded.has(key) !== openDefault;
       const node = el("div", `ag-reason${isOpen ? " open" : ""}${running ? " live" : ""}`);
@@ -8527,7 +8529,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       }, "Only threads started in this space, here and in the floating chat"));
     }
     const compact = listSwitch("Compact", compactThreads(), () => {
-      localStorage.setItem(LS.compact, compactThreads() ? "0" : "1");
+      sharedPrefs().setItem(LS.compact, compactThreads() ? "0" : "1");
       renderLists();
       return compactThreads();
     }, "Each thread shows only its title, provider, status and changes, in a smaller font with less spacing");
@@ -9493,7 +9495,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         // Its own Compact switch: titles and provider marks only. A search still matches the hidden details.
         const compact = listSwitch("Compact", dockCompact(), () => {
           const on = !dockCompact();
-          localStorage.setItem(LS.dockCompact, on ? "1" : "0");
+          sharedPrefs().setItem(LS.dockCompact, on ? "1" : "0");
           compact.closest(".ag-menu")?.classList.toggle("compact", on);
           return on;
         }, "Each thread shows only its title and provider");
@@ -10746,7 +10748,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   function applyButton() {
     const btn = document.getElementById("agent-toggle");
-    if (btn) btn.hidden = localStorage.getItem(LS.button) === "0";
+    if (btn) btn.hidden = sharedPrefs().getItem(LS.button) === "0";
   }
 
   /* ---------- plan usage ---------- */
@@ -12535,22 +12537,6 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
             });
         }
       );
-      const memorySyncOn = switchControl(
-        () => prefs().memorySync !== false,
-        () => {
-          const on = prefs().memorySync === false;
-          S.config.prefs = { ...prefs(), memorySync: on };
-          api("PUT", "/prefs", { memorySync: on })
-            .then((next) => {
-              S.config.prefs = next;
-            })
-            .catch((err) => {
-              S.config.prefs = { ...prefs(), memorySync: !on };
-              memorySyncOn.setAttribute("aria-checked", String(!on));
-              notice(err.message);
-            });
-        }
-      );
       // The list itself (#840), loaded again each time settings open.
       const memoryList = window.scribeMemories?.browser({ keep: true, workspaces: memoryWorkspaces, off: () => prefs().memory === false }) || el("div");
       memory.append(
@@ -12558,10 +12544,6 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow("Agents share memories", memoryOn, {
           id: "ag-memory-label",
           hint: "Chats on every provider get the saved memories in their instructions and can save new ones: corrections you gave, mistakes to avoid, facts about a project. Each save shows as a note in that chat. Off, chats get none and cannot save any; the saved ones are kept. Applies from a thread's next message.",
-        }),
-        settingRow("Sync with paired devices", memorySyncOn, {
-          id: "ag-memory-sync-label",
-          hint: "Memories go to your other devices, except those set to This device. Workspace memories go only to devices with a clone of the same git repository.",
         }),
         memoryList
       );
@@ -12638,9 +12620,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Agent button in the top bar",
           switchControl(
-            () => localStorage.getItem(LS.button) !== "0",
+            () => sharedPrefs().getItem(LS.button) !== "0",
             () => {
-              localStorage.setItem(LS.button, localStorage.getItem(LS.button) === "0" ? "1" : "0");
+              sharedPrefs().setItem(LS.button, sharedPrefs().getItem(LS.button) === "0" ? "1" : "0");
               applyButton();
             }
           ),
@@ -12649,9 +12631,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Suggestions in a new thread",
           switchControl(
-            () => localStorage.getItem(LS.tips) !== "0",
+            () => sharedPrefs().getItem(LS.tips) !== "0",
             () => {
-              localStorage.setItem(LS.tips, localStorage.getItem(LS.tips) === "0" ? "1" : "0");
+              sharedPrefs().setItem(LS.tips, sharedPrefs().getItem(LS.tips) === "0" ? "1" : "0");
               for (const view of views()) if (!view.thread() || !S.details.get(view.threadId)?.items.length) view.renderTranscript();
             }
           ),
@@ -12660,9 +12642,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Presets in a new thread",
           switchControl(
-            () => localStorage.getItem(LS.presets) !== "0",
+            () => sharedPrefs().getItem(LS.presets) !== "0",
             () => {
-              localStorage.setItem(LS.presets, localStorage.getItem(LS.presets) === "0" ? "1" : "0");
+              sharedPrefs().setItem(LS.presets, sharedPrefs().getItem(LS.presets) === "0" ? "1" : "0");
               for (const view of views()) if (!view.thread()) view.renderTranscript();
             }
           ),
@@ -12676,7 +12658,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
           switchControl(
             () => compactThreads(),
             () => {
-              localStorage.setItem(LS.compact, compactThreads() ? "0" : "1");
+              sharedPrefs().setItem(LS.compact, compactThreads() ? "0" : "1");
               renderLists();
             }
           ),
@@ -12685,9 +12667,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Show reasoning expanded",
           switchControl(
-            () => localStorage.getItem(LS.reasoning) === "1",
+            () => sharedPrefs().getItem(LS.reasoning) === "1",
             () => {
-              localStorage.setItem(LS.reasoning, localStorage.getItem(LS.reasoning) === "1" ? "0" : "1");
+              sharedPrefs().setItem(LS.reasoning, sharedPrefs().getItem(LS.reasoning) === "1" ? "0" : "1");
               requestRender();
             }
           ),
@@ -12696,7 +12678,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Send messages with",
           choiceTrack(SEND_KEY, sendKey, (id) => {
-            localStorage.setItem(LS.sendKey, id);
+            sharedPrefs().setItem(LS.sendKey, id);
             for (const view of views()) view.renderComposerBar();
           }),
           {
@@ -12707,7 +12689,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Sending while the agent works",
           choiceTrack(RUNNING_SEND, runningSend, (id) => {
-            localStorage.setItem(LS.runningSend, id);
+            sharedPrefs().setItem(LS.runningSend, id);
             for (const view of views()) view.renderComposerBar();
           }),
           {
@@ -12718,7 +12700,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         settingRow(
           "Enter on an empty box sends a queued message",
           choiceTrack(EMPTY_ENTER, emptyEnter, (id) => {
-            localStorage.setItem(LS.emptyEnter, id);
+            sharedPrefs().setItem(LS.emptyEnter, id);
             for (const view of views()) view.renderTranscript();
           }),
           {
@@ -15240,6 +15222,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     agentSettings.mount();
     allowlists.mount();
     applyButton();
+    // Chat preferences changed in another window or on a paired device (#1023).
+    let compactSeen = compactThreads();
+    window.addEventListener("scribe:appearance", () => {
+      applyButton();
+      if (compactThreads() !== compactSeen) {
+        compactSeen = compactThreads();
+        renderLists();
+      }
+    });
     toasts.mount();
     staleWorktrees.start();
     const toggleBtn = document.getElementById("agent-toggle");

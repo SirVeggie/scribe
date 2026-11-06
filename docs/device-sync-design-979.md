@@ -39,3 +39,26 @@ This file records what was decided, for the cards that implement it. It builds o
 - Headless devices store and pass on the synced keys but apply none of them.
 - A category switched off on the Sync page stops for the whole group; "this device keeps its own" makes one
   device ignore incoming changes for that category and stop sending its own.
+
+## Implemented in #1023
+
+- **Step 0.** `src/appearance.ts` holds every synced preference key, by category (`PREF_CATEGORIES`):
+  appearance (with `scribe.desktop.reducedMotion` and `scribe.desktop.hiddenButtons`), layout (pane sides, link
+  mode, smooth tab scrolling, Clear, space switch offer, palette prefixes) and chat (send key, Queue/Steer, empty
+  Enter, reasoning, compact lists, presets, suggestions, agent button). `/api/appearance` serves them;
+  `public/appearance.js` migrates saved localStorage values once and keeps localStorage only as a cache.
+  The desktop app's Reduce motion follows the shared value (`followMotion` in `public/desktop.js`).
+- **Core.** `src/devices/settingsSync.ts`, kept in the meta table as `settingsSync`. Records are
+  `{ v, n, d }` (value, Lamport counter, device id); a key without a record is a default. Exchanges go over
+  `POST /api/settings-sync` (peer link only), like memory sync: send, merge, answer, merge the answer.
+  Category switches are records named `sync:<category>` and always flow. A headless device (Linux without
+  `DISPLAY`/`WAYLAND_DISPLAY`, or `SCRIBE_HEADLESS=1`; `SCRIBE_HEADLESS=0` turns it off) stores and passes on.
+- **First join.** A device that has not joined holds back the keys both sides set differently (`pending`) and
+  doesn't send them, so only one side asks. Choosing "this device" stamps the value newer than anything seen;
+  choosing the other takes its record. The device then joins and names the other in `settled`, so an unjoined
+  peer that asked too takes its values.
+- **Sync page.** Settings → Devices → Sync: a switch per category (group) and "This device keeps its own"
+  (`keepOwn`, local). The Memories category replaces Agent settings' *Sync with paired devices*; that old
+  `memorySync` pref is now only its default.
+- **Not yet.** Search by meaning switch (it is a daemon setting, not a browser preference), and the opt-in and
+  offer categories for card (2).

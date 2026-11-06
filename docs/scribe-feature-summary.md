@@ -355,10 +355,18 @@ Saved guidance can follow all chats, a workspace or one provider/source. Browse,
 #### Memories sync with paired devices
 
 - Discoverability: Easy to miss. Happens in the background once devices are paired.
-- Find it: Agent settings → Memory → Sync with paired devices · the memory popup's Devices field
+- Find it: Settings → Devices → Sync → Memories · the memory popup's Devices field
 - Sources: `src/devices/memorySync.ts`, `src/agent/memory.ts` (`mergeMemories`)
 
 Memories go to every paired device unless set to This device. Edits merge per memory (the later edit wins) and deletions carry over. Workspace memories go only to devices with a clone of the same git repository (same root commit and origin), under that device's own path; folders outside git stay on their device. Agents can keep a machine-specific memory local with memory_save's thisDevice.
+
+#### Preferences sync with paired devices
+
+- Discoverability: Easy to miss. Happens in the background once devices are paired.
+- Find it: Settings → Devices → Sync
+- Sources: `src/appearance.ts` (`PREF_CATEGORIES`), `src/devices/settingsSync.ts`, `public/devices-settings.js`
+
+Appearance, layout and navigation, and chat preferences live in the daemon, so the desktop app, every browser and the gateway view of the device agree. Each category switched on is the same on all paired devices; a switch off stops it for the group, and "This device keeps its own" stops it on one device. At the first pairing, settings changed on one device flow to the other; settings both changed differently wait on a Choose setup panel in the Sync section. A headless device only passes settings on.
 
 #### Provider/project instructions still apply
 

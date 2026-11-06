@@ -37,7 +37,7 @@ test("appearance API persists across restarts, merges profiles, and excludes fun
     const bootstrap = await fetch(base + "/bootstrap.js");
     assert.equal(bootstrap.headers.get("cache-control"), "no-store");
     assert.match(await bootstrap.text(), /scribeAppearanceSeed=.*dusk/);
-    const invalidSettings: Appearance[] = [{ "scribe.agent.sendKey": "mod" }, { "scribe.theme": "wrong" }, { "scribe.uiEffects": "true" }, { "scribe.dock-appearance.v1": "null" }];
+    const invalidSettings: Appearance[] = [{ "scribe.viewerId": "v1" }, { "scribe.agent.sendKey": "shift" }, { "scribe.theme": "wrong" }, { "scribe.uiEffects": "true" }, { "scribe.dock-appearance.v1": "null" }];
     for (const settings of invalidSettings) {
       assert.equal((await put(settings)).status, 400);
     }
@@ -78,7 +78,7 @@ test("client migrates only saved styling and fresh profiles read shared choices"
     vm.runInContext(fs.readFileSync(new URL("../public/appearance.js", import.meta.url), "utf8"), context);
     return { window, cache };
   }
-  const desktop = profile({ "scribe.theme": "garnet", "scribe.chromeFx": "rise", "scribe.agent.sendKey": "mod" });
+  const desktop = profile({ "scribe.theme": "garnet", "scribe.chromeFx": "rise", "scribe.viewerId": "v1" });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(writes.length, 1);
   assert.equal(writes[0].migrate, true);
@@ -92,8 +92,8 @@ test("client migrates only saved styling and fresh profiles read shared choices"
   await new Promise(resolve => setImmediate(resolve));
   desktop.window.scribeAppearance.receive(shared);
   assert.equal(desktop.window.scribeAppearance.getItem("scribe.uiEffects"), "0");
-  assert.equal(desktop.cache.get("scribe.agent.sendKey"), "mod");
-  browser.window.scribeAppearance.setItem("scribe.agent.sendKey", "enter");
+  assert.equal(desktop.cache.get("scribe.viewerId"), "v1");
+  browser.window.scribeAppearance.setItem("scribe.viewerId", "v2");
   assert.equal(writes.length, 2, "functional setting stays local");
   assert.equal(profile({}).window.scribeAppearance.getItem("scribe.uiEffects"), "0");
   desktop.window.scribeAppearance.receive({ ...shared, "scribe.theme": "dusk" }, 9);

@@ -12,6 +12,9 @@
   const chrome = document.querySelector(".chrome");
   const actions = chrome.querySelector(".actions");
   const HIDDEN_KEY = "scribe.desktop.hiddenButtons";
+  /** Reduce motion and the title bar buttons go with Appearance: the daemon keeps them and settings sync shares them (#1023). */
+  const MOTION_KEY = "scribe.desktop.reducedMotion";
+  const prefs = () => window.scribeAppearance || localStorage;
   /** A page in a window of its own (popout.js): a title bar with the window buttons, and none of the main window's settings. */
   const child = Boolean(window.scribePopout?.childId);
   root.classList.add("desktop");
@@ -81,7 +84,7 @@
 
   function loadHidden() {
     try {
-      const ids = JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]");
+      const ids = JSON.parse(prefs().getItem(HIDDEN_KEY) || "[]");
       return new Set(Array.isArray(ids) ? ids.filter((id) => BUTTONS.some((button) => button.id === id)) : []);
     } catch {
       return new Set();
@@ -90,7 +93,7 @@
 
   function saveHidden() {
     try {
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden]));
+      prefs().setItem(HIDDEN_KEY, JSON.stringify([...hidden]));
     } catch {
       /* the choice just won't survive a reload */
     }
@@ -263,9 +266,10 @@
   const hint = document.createElement("p");
   hint.className = "settings-hint settings-hint-after";
   hint.innerHTML = "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> switches between the normal and compact window.";
-  const motionRow = settingRow("desktop-reduced-motion", "Reduce motion", desktop.reducedMotion, (on) =>
-    saveSetting("reducedMotion", on)
-  );
+  const motionRow = settingRow("desktop-reduced-motion", "Reduce motion", desktop.reducedMotion, (on) => {
+    try { prefs().setItem(MOTION_KEY, on ? "1" : "0"); } catch { /* still set in the app */ }
+    saveSetting("reducedMotion", on);
+  });
   const motionHint = "Reduces animations, moving effects, and smooth scrolling in Scribe and pages that support reduced motion. When off, your system’s motion preference applies.";
   const motionLabel = motionRow.row.querySelector("span");
   motionLabel.dataset.tooltip = motionHint;
@@ -440,6 +444,7 @@
     }
     desktop = state;
     stateReceived = true;
+    followMotion();
     root.classList.toggle("compact", state.compact && !child);
     render();
   }
@@ -529,6 +534,29 @@
       }
     });
   }
+  /** The shared Reduce motion choice wins over the app's own; a choice made before it was shared becomes the shared one. */
+  function followMotion() {
+    if (child || typeof desktop.reducedMotion !== "boolean") return;
+    let shared = null;
+    try {
+      shared = prefs().getItem(MOTION_KEY);
+      if (shared === null && desktop.reducedMotion) prefs().setItem(MOTION_KEY, "1");
+    } catch {
+      return; // no shared settings in this window
+    }
+    if (shared === null) return;
+    if ((shared === "1") !== desktop.reducedMotion && motionTried !== shared) {
+      // Once per value, so an app that can't take it doesn't loop.
+      motionTried = shared;
+      void saveSetting("reducedMotion", shared === "1");
+    }
+  }
+  let motionTried = null;
+  addEventListener("scribe:appearance", () => {
+    hidden = loadHidden();
+    render();
+    if (stateReceived) followMotion();
+  });
   render();
   invoke("desktop_state").then(setState).catch((err) => {
     console.error(err);

@@ -91,6 +91,7 @@ import { peerDeviceOf } from "./devices/link.js";
 import { copyRouter } from "./devices/copy.js";
 import type { Described } from "./devices/references.js";
 import { MemorySync } from "./devices/memorySync.js";
+import { SettingsSync, cleanState } from "./devices/settingsSync.js";
 import { MirrorPusher, MirrorStore, mirrorDescribe, mirrorRouter, mirrorSpaces, mirrorView, type MirrorSource } from "./devices/mirror.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
@@ -425,8 +426,21 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/mirror", mirrorRouter(peers, mirrorPusher, mirrorStore));
   // Memories follow the user to their paired devices (#978).
   const memoryHost = agentHost;
+  // Preferences follow the user too (#1023); the Sync page's Memories switch replaces #978's.
+  let appearanceApply: (patch: Record<string, string>, keys: string[]) => void = () => {};
+  const settingsSync = new SettingsSync(peers, {
+    self: () => ({ id: peers.identity.id, name: peers.identity.name }),
+    relay: () => process.env.SCRIBE_HEADLESS === "1" || (process.env.SCRIBE_HEADLESS !== "0" && process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY),
+    read: () => cleanState(store.readMetaJson("settingsSync")),
+    write: (state) => store.writeMetaJson("settingsSync", state),
+    settings: () => store.readAppearance(),
+    apply: (patch, keys) => appearanceApply(patch, keys),
+    memoryDefault: () => memoryHost.prefs().memorySync,
+    changed: (view) => broadcast({ type: "settings_sync", view }),
+  }, log);
+  app.use("/api/settings-sync", settingsSync.router());
   const memorySync = new MemorySync(peers, {
-    enabled: () => memoryHost.prefs().memorySync,
+    enabled: () => settingsSync.enabled("memories"),
     memories: () => memoryHost.memories(),
     tombstones: () => memoryHost.memoryTombstones(),
     replace: (memories, tombstones) => memoryHost.replaceMemories(memories, tombstones),
@@ -452,7 +466,12 @@ export async function startHttp(): Promise<http.Server> {
   app.use("/api/remote-agent", remoteAgentRouter(peers, () => agentDevices));
   app.use(agentForwarder(peers, () => agentDevices));
   app.use("/api/plugins",pluginRouter(pluginService,store,agentHost));
-  app.use("/api/appearance", appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision) => broadcast({ type: "appearance", settings, revision })));
+  const appearance = appearanceRouter({ read: () => store.readAppearance(), write: settings => store.writeAppearance(settings) }, (settings, revision, keys) => {
+    broadcast({ type: "appearance", settings, revision });
+    settingsSync.localChange(keys);
+  });
+  appearanceApply = appearance.applyRemote;
+  app.use("/api/appearance", appearance);
   app.use("/api/search", searchRouter(undefined, reachable));
   let restartForUpdate = async () => {};
   const updates = new UpdateService({
@@ -2998,7 +3017,8 @@ export async function startHttp(): Promise<http.Server> {
   await peers.start().catch((err) => log(`Peer link could not start: ${(err as Error).message}`));
   mirrorPusher.start();
   memorySync.start();
-  server.once("close", () => memorySync.stop());
+  settingsSync.start();
+  server.once("close", () => { memorySync.stop(); settingsSync.stop(); });
   void prebuildEditorBundle();
 
   log(`Scribe listening on ${baseUrl()} (tab pages on their own *${PAGE_HOST_SUFFIX} origins)`);

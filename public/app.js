@@ -537,6 +537,16 @@
     document.documentElement.classList.toggle("fx-off", !flagOn(uiFxToggle));
     renderChromeFx();
     renderNewPageBgs();
+    // Layout and navigation come from the daemon too, and from paired devices (#1023).
+    applyFlag(smoothScrollToggle, SMOOTH_SCROLL_KEY, true);
+    applyFlag(spaceSuggestToggle, SPACE_SUGGEST_KEY, false);
+    applyFlag(showClearToggle, SHOW_CLEAR_KEY, true);
+    document.documentElement.classList.toggle("hide-clear", !flagOn(showClearToggle));
+    applyPaneSideAttr("agentSide", paneSide(AGENT_SIDE_KEY));
+    applyPaneSideAttr("librarySide", paneSide(LIBRARY_SIDE_KEY));
+    renderPaneSides();
+    renderLinkModes();
+    if (!palettePrefixListEl?.contains(document.activeElement)) renderPalettePrefixSettings();
     for (const event of ["scribe:ui-fx", "scribe:aurora", "scribe:chrome-fx", "scribe:newpage-bg"]) window.dispatchEvent(new Event(event));
   });
   bindSettingHint(agentSideLabel, "When both panes are on the same side, this one sits next to the page.");
@@ -762,6 +772,14 @@
       if (!document.getElementById("settings").hidden) window.scribeDevicesSettings.refresh();
       void refreshCopyTargets();
       void refreshMirrorSettings();
+      return;
+    }
+    if (msg.type === "settings_sync") {
+      window.scribeDevicesSettings.syncChanged(msg.view);
+      // First join with a device whose settings differ (#1023): the choice waits in Settings → Devices.
+      if (msg.view.pending && document.getElementById("settings").hidden) {
+        showNotice(`Some settings differ on ${msg.view.pending.from.name}`, { action: { label: "Choose", run: () => openSettings("Devices") } });
+      }
       return;
     }
     if (msg.type === "copy_received") {
@@ -3416,7 +3434,7 @@
   }
 
   function linkMode() {
-    const mode = localStorage.getItem(LINK_MODE_KEY);
+    const mode = appearanceStorage.getItem(LINK_MODE_KEY);
     return LINK_MODES.some((item) => item.id === mode) ? mode : "peek";
   }
 
@@ -3429,7 +3447,7 @@
       btn.textContent = item.name;
       btn.setAttribute("aria-pressed", String(item.id === current));
       btn.addEventListener("click", () => {
-        localStorage.setItem(LINK_MODE_KEY, item.id);
+        appearanceStorage.setItem(LINK_MODE_KEY, item.id);
         renderLinkModes();
       });
       linkModeTrack.appendChild(btn);
@@ -3519,16 +3537,13 @@
   }
 
   function currentPalettePrefixes() {
-    return palettePrefixList(localStorage.getItem(PALETTE_PREFIX_KEY));
+    return palettePrefixList(appearanceStorage.getItem(PALETTE_PREFIX_KEY));
   }
 
   function savePalettePrefixes(prefixes) {
     const json = serializePalettePrefixes(prefixes);
-    if (json === "{}") {
-      localStorage.removeItem(PALETTE_PREFIX_KEY);
-    } else {
-      localStorage.setItem(PALETTE_PREFIX_KEY, json);
-    }
+    // "{}" (all defaults) is stored too: the daemon keeps it, and settings sync shares it (#1023).
+    appearanceStorage.setItem(PALETTE_PREFIX_KEY, json);
   }
 
   function renderPalettePrefixSettings() {

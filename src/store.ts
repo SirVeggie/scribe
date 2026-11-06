@@ -2436,6 +2436,16 @@ export class BoardStore extends EventEmitter {
     this.db.writeAppearance(settings);
   }
 
+  /** A JSON value in the meta table, such as settings sync's records (#1023). */
+  readMetaJson(key: string): unknown {
+    return this.db?.readMetaJson(key);
+  }
+
+  writeMetaJson(key: string, value: unknown): void {
+    if (!this.db) throw new Error("Database is not loaded");
+    this.db.writeMetaJson(key, value);
+  }
+
   spacesView(): SpacesView {
     const live = this.liveStrip();
     return {
