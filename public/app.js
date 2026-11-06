@@ -688,6 +688,10 @@
       window.scribeAppearance?.receive(msg.settings, msg.revision);
       return;
     }
+    if (msg.type === "vault") {
+      window.scribeProtected?.changed();
+      return;
+    }
     if (msg.type === "audio_output") {
       window.scribeAudio?.setOutput(msg.output);
       window.scribeAudioSettings?.receiveOutput(msg.output);
@@ -1699,7 +1703,7 @@
     { label: "Plugins", sections: window.scribePluginSettings.sections },
     { label: "Integrations", sections: window.scribeIntegrations.sections },
     { label: "Devices", sections: window.scribeDevicesSettings.sections },
-    { label: "Protected data", sections: window.scribeDetectorSettings.sections },
+    { label: "Protected data", sections: [...window.scribeProtected.sections, ...window.scribeDetectorSettings.sections] },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
@@ -5586,7 +5590,11 @@
     const actions = (window.scribeChat?.pageActions?.(tab, "menu", context) || [])
       .filter((action) => (selection ? action.selection !== "none" : action.selection !== "required"))
       .map((action) => ({ label: action.label, action: () => window.scribeChat?.runAction(tab, action, { selection, context }) }));
+    // A protected span under the cursor, or selected text to protect (#1046).
+    const guarded = window.scribeProtected?.menuItems({ id: typeof data.protected === "string" ? data.protected : "", selection }) || [];
     library.openMenu(point, [
+      ...guarded,
+      guarded.length && "sep",
       selection && { label: "Ask agent", action: () => window.scribeChat?.ask(selection, tab) },
       selection && { label: "Copy", action: () => copyText(selection, "Copied selection") },
       link && { label: "Copy link address", action: () => copyText(link, "Copied link") },
@@ -6616,6 +6624,7 @@
     resolveLinks: (targets) => views.resolveAll(targets),
     showNotice,
     confirm: confirmDelete,
+    openMenu: (point, items) => library.openMenu(point, items),
     closeSettings,
     openSettings,
     /** Tell a page's frame (when it has one) about something, e.g. one of its agent threads changing. */

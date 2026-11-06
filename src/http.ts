@@ -78,7 +78,7 @@ import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { agentPortGate, identify, markAgentSocket, prepareSecrets, socketAllowed } from "./callers.js";
 import { Vault, setVault, setVaultUnavailable, vault } from "./vault.js";
-import { redactAgentResponses, restoreAgentBodies, vaultRouter } from "./vaultHttp.js";
+import { pageProtected, redactAgentResponses, restoreAgentBodies, vaultRouter } from "./vaultHttp.js";
 import { markWebSocket, onWebPort } from "./webRequest.js";
 import type { Duplex } from "node:stream";
 import { WebAccess, webFront } from "./devices/web.js";
@@ -170,7 +170,10 @@ async function openProtectedData(): Promise<void> {
   try {
     const opened = await Vault.open(path.join(dataDir(), "vault"), store.protectedStore(), { detectors: store.detectorStore() });
     setVault(opened);
-    opened.onChange(() => reindexAllPages());
+    opened.onChange(() => {
+      reindexAllPages();
+      broadcast({ type: "vault", version: opened.version });
+    });
     watchPagesForSecrets();
   } catch (err) {
     setVaultUnavailable((err as Error).message);
@@ -2785,6 +2788,22 @@ export async function startHttp(): Promise<http.Server> {
     }
   });
 
+  // Which of a page's own text is protected, so its built-in view can blur it (#1046).
+  app.get("/api/tabs/:id/protected", (req, res) => {
+    const tab = store.get(req.params.id);
+    const extra: string[] = [];
+    if (tab?.file) {
+      try {
+        const read = readFileForPage(tab.file.path, tab.file.copy);
+        if ("text" in read) extra.push(read.text);
+      } catch {
+        /* a missing file has nothing to blur */
+      }
+    }
+    res.setHeader("Cache-Control", "no-store");
+    pageProtected(req, res, tab, !isContentHost(req) || framePageId(req) === tab?.id, extra);
+  });
+
   app.get("/api/tabs/:id/file", (req, res) => {
     const tab = store.get(req.params.id);
     if (!tab?.file) {
@@ -3498,7 +3517,8 @@ ${KEYMAP_JS}
     var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
     var href = link ? link.href : "";
     menuOpen = true;
-    parent.postMessage({ type: "scribe-context-menu", x: event.clientX, y: event.clientY, selection: selectedText(), link: /^https?:/i.test(href) ? href : "", context: menuContext(event.target) }, "*");
+    var guarded = event.target && event.target.closest ? event.target.closest("[data-scribe-protected]") : null;
+    parent.postMessage({ type: "scribe-context-menu", x: event.clientX, y: event.clientY, selection: selectedText(), link: /^https?:/i.test(href) ? href : "", context: menuContext(event.target), protected: guarded ? guarded.getAttribute("data-scribe-protected") : "" }, "*");
   });
   // What the page says is under the cursor, for template agent actions' placeholders: the
   // data-scribe-context JSON objects on the element and its ancestors, the nearest one winning per name.

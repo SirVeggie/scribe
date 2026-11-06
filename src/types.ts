@@ -467,6 +467,8 @@ export type BoardEvent =
   | { type: "spaces"; spaces: SpacesView }
   | { type: "page_permission"; id: string; perm: string; value: string }
   | { type: "appearance"; settings: Record<string, string>; revision: number }
+  /** The protected values changed (#1046): views fetch them again. Carries no values. */
+  | { type: "vault"; version: number }
   | { type: "settings_sync"; view: import("./devices/settingsSync.js").SyncView; notices?: import("./devices/settingsSync.js").OfferNotice[] }
   /** Notification sound settings (src/audio), pushed so every open window plays by the same rules. */
   | { type: "audio_output"; output: { sounds: boolean; volume: number; speechVolume: number; cues: Record<string, boolean> } }

@@ -144,6 +144,25 @@ test("agents read protected values as tokens, write them back intact, and can't 
     assert.equal(off.data.detector.enabled, false);
     assert.equal(off.data.detector.history.at(-1).by, "user");
     assert.equal((await call("POST", "/api/vault/detectors/propose", { action: "add", id: "x", pattern: "(a+)+" }, true)).status, 403, "only a chat thread can propose");
+
+    // The user's views (#1046): values and where they are for the user only; edits are the user's.
+    const values = await call("GET", "/api/vault/values");
+    assert.equal(values.data.fragments[0].value, secret);
+    assert.equal((await call("GET", "/api/vault/values", undefined, true)).status, 403);
+    assert.deepEqual((await call("GET", "/api/vault")).data.fragments[0].where, [{ id, title: "Creds" }]);
+    assert.equal((await call("GET", "/api/vault", undefined, true)).data.fragments[0].where, undefined);
+    const own = await call("GET", `/api/tabs/${id}/protected`);
+    assert.deepEqual(own.data.fragments.map((f: { value: string }) => f.value), [secret]);
+    assert.equal((await call("GET", `/api/tabs/${id}/protected`, undefined, true)).status, 404);
+    const fragment = values.data.fragments[0].id as string;
+    assert.equal((await call("PATCH", `/api/vault/${fragment}`, { hint: "old pw" }, true)).status, 403);
+    const renamed = await call("PATCH", `/api/vault/${fragment}`, { hint: "old pw", kind: "password" });
+    assert.equal(renamed.status, 200, renamed.text);
+    assert.ok((await call("GET", `/api/tabs/${id}`, undefined, true)).text.includes(`⟦p:${fragment} old pw⟧`));
+    assert.equal((await call("PATCH", `/api/vault/${fragment}`, { hint: `see ${secret}` })).status, 400);
+    // A new value protects that text from then on; the page still holds the old one, now in the open.
+    assert.equal((await call("PATCH", `/api/vault/${fragment}`, { value: "hunter3-staging-pw" })).status, 200);
+    assert.match((await call("GET", `/api/tabs/${id}`, undefined, true)).text, /hunter2/);
   } finally {
     await fetch(url + "/api/shutdown", { method: "POST" }).catch(() => {});
     await Promise.race([exited, delay(5000)]);

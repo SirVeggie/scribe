@@ -56,6 +56,8 @@ export function restoreAgentBodies(req: express.Request, res: express.Response, 
 
 /** An agent may not protect a value that shows up on more pages than this: ask the user instead. */
 const AGENT_MAX_PAGES = 25;
+/** How many of the pages holding a value the user's list names. */
+const WHERE_MAX = 8;
 
 export type VaultRoutesHost = {
   /** The pages this caller may see, for counts. */
@@ -73,7 +75,8 @@ export type VaultRoutesHost = {
 /**
  * POST /api/vault/protect { value, hint?, kind? }: add a fragment (agents and the user).
  * GET /api/vault: the fragments' metadata, never values, with how many pages hold each.
- * DELETE /api/vault/:id: the user only.
+ * GET /api/vault/values: every fragment with its value, PATCH /api/vault/:id { value?, hint?, kind? } and
+ * DELETE /api/vault/:id: the user only (#1046). Their views blur values and offer reveal and edit.
  * POST /api/vault/show { id? | query?, note? }: a chat's agent puts a value in its chat for the user (#1049).
  * GET /api/vault/:id/value: the value, for the board UI only (the chat's reveal).
  */
@@ -111,12 +114,48 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
     }
   });
   router.get("/", (req, res) => {
-    const pages = host.pages(req);
-    const counts = vault().count(pages.map(pageStrings));
+    const agent = identify(req).viewer === "agent";
+    const where = new Map<string, { id: string; title: string }[]>();
+    for (const tab of host.pages(req)) {
+      for (const fragment of vault().within([pageStrings(tab)])) {
+        const list = where.get(fragment.id) ?? [];
+        list.push({ id: tab.id, title: tab.title });
+        where.set(fragment.id, list);
+      }
+    }
     res.json({
-      fragments: vault().list().map((fragment) => ({ ...fragment, pages: counts.get(fragment.id) ?? 0 })),
+      fragments: vault().list().map((fragment) => {
+        const pages = where.get(fragment.id) ?? [];
+        // The user's list names a few of the pages; an agent gets the count.
+        return { ...fragment, pages: pages.length, ...(agent ? {} : { where: pages.slice(0, WHERE_MAX) }) };
+      }),
       detectors: vault().detectors.list().map(detectorSummary),
     });
+  });
+  router.get("/values", (req, res) => {
+    if (!ownWindow(req)) {
+      res.status(403).json({ error: "Only the user's own Scribe window can read protected values." });
+      return;
+    }
+    res.json({ fragments: vault().values() });
+  });
+  router.patch("/:id", async (req, res) => {
+    if (!ownWindow(req)) {
+      res.status(403).json({ error: "Only the user can edit protected values" });
+      return;
+    }
+    const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+    const text = (key: string) => (typeof body[key] === "string" ? (body[key] as string) : undefined);
+    try {
+      const fragment = await vault().update(req.params.id, { value: text("value"), hint: text("hint"), kind: text("kind") });
+      if (!fragment) {
+        res.status(404).json({ error: "No such protected value" });
+        return;
+      }
+      res.json({ fragment });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
   router.post("/show", (req, res) => {
     const caller = identify(req);
@@ -148,8 +187,7 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
   });
   router.get("/:id/value", (req, res) => {
     // The board UI only: not agents, and not page scripts, which run as the user on their own origin.
-    const caller = identify(req);
-    if (caller.viewer === "agent" || isContentHost(req) || caller.device) {
+    if (!ownWindow(req)) {
       res.status(403).json({ error: "Only the user's own Scribe window can reveal a protected value." });
       return;
     }
@@ -173,6 +211,24 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
     res.json({ ok: true });
   });
   return router;
+}
+
+/**
+ * GET /api/tabs/:id/protected: the protected values in that page's own text, with their ids and hints,
+ * so its view can blur them (#1046). A page learns nothing it doesn't hold already; agents get nothing.
+ */
+export function pageProtected(req: express.Request, res: express.Response, tab: Tab | undefined, ownFrame: boolean, extra: string[] = []): void {
+  if (!tab || identify(req).viewer === "agent" || !ownFrame) {
+    res.status(404).json({ error: "tab not found" });
+    return;
+  }
+  res.json({ fragments: vault().within([pageStrings(tab), ...extra]).map(({ id, value, hint, kind }) => ({ id, value, hint, kind })) });
+}
+
+/** The board UI on this device: not agents, not page scripts (the user on their own origin), not another device. */
+function ownWindow(req: express.Request): boolean {
+  const caller = identify(req);
+  return caller.viewer !== "agent" && !isContentHost(req) && !caller.device;
 }
 
 function pageHas(tab: Tab, value: string): boolean {

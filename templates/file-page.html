@@ -1250,6 +1250,8 @@
   }).observe(pdfPane);
 
   load();
+  // Protected values (#1046): blurred until clicked; right-click offers Unprotect and Edit hint.
+  if (scribe.protect) scribe.protect.watch(document.body);
 })();
 </script>
 </body>

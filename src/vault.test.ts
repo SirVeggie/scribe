@@ -14,6 +14,10 @@ function memoryStore(): VaultStore & { rows: StoredFragment[] } {
     rows,
     list: () => [...rows],
     insert: (row) => void rows.push(row),
+    update: (row) => {
+      const at = rows.findIndex((other) => other.id === row.id);
+      if (at >= 0) rows[at] = row;
+    },
     remove: (id) => {
       const at = rows.findIndex((row) => row.id === id);
       if (at >= 0) rows.splice(at, 1);

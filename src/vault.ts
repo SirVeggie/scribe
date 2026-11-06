@@ -28,6 +28,7 @@ export type StoredFragment = Omit<Fragment, "value"> & { sealed: string };
 export interface VaultStore {
   list(): StoredFragment[];
   insert(row: StoredFragment): void;
+  update(row: StoredFragment): void;
   remove(id: string): boolean;
 }
 
@@ -232,6 +233,46 @@ export class Vault {
     this.byValue.set(value, fragment);
     this.changed();
     return { fragment: metaOf(fragment), existed: false };
+  }
+
+  /** The user's edit of a fragment's hint, kind or value (#1046). Text already saved with the old value keeps it. */
+  async update(id: string, patch: { value?: string; hint?: string; kind?: string }): Promise<FragmentMeta | null> {
+    const current = this.fragments.get(id);
+    if (!current) return null;
+    const value = patch.value ?? current.value;
+    if (!value.trim()) throw new Error("value is empty");
+    if (value.length > MAX_VALUE) throw new Error(`value is longer than ${MAX_VALUE} characters`);
+    if (/[⟦⟧]/.test(value)) throw new Error("value can't contain ⟦ or ⟧");
+    const same = this.byValue.get(value);
+    if (same && same.id !== id) throw new Error("another protected value is the same");
+    const kind = patch.kind === undefined ? current.kind : cleanKind(patch.kind);
+    const hint = patch.hint === undefined ? current.hint : cleanHint(patch.hint, kind);
+    if ([...this.fragments.values()].some((other) => hint.includes(other.id === id ? value : other.value))) {
+      throw new Error("hint can't contain a protected value");
+    }
+    const next: Fragment = { ...current, value, hint, kind };
+    if (this.store) {
+      const key = await this.masterKey();
+      const { value: plain, ...meta } = next;
+      this.store.update({ ...meta, sealed: seal(key, plain) });
+    }
+    if (this.byValue.get(current.value) === current) this.byValue.delete(current.value);
+    this.byValue.set(value, next);
+    this.fragments.set(id, next);
+    this.changed();
+    return metaOf(next);
+  }
+
+  /** Every fragment with its value, for the user's own views (never an agent's). */
+  values(): Fragment[] {
+    return [...this.fragments.values()].sort((a, b) => a.createdAt - b.createdAt).map((fragment) => ({ ...fragment }));
+  }
+
+  /** The fragments whose values show up in these texts, values included: a page may learn which of its own text is protected. */
+  within(texts: Iterable<string>): Fragment[] {
+    const found = new Map<string, Fragment>();
+    for (const text of texts) for (const match of this.matcher.find(text)) found.set(match.ref.id, match.ref);
+    return [...found.values()].map((fragment) => ({ ...fragment }));
   }
 
   /**

@@ -502,6 +502,10 @@ export class BoardDb {
       .run(row.id, row.sealed, row.hint, row.kind, row.source, row.detector ?? null, row.createdBy, row.createdThread ?? null, row.createdAt);
   }
 
+  updateProtected(row: StoredFragment): void {
+    this.db.prepare("UPDATE protected_fragments SET sealed = ?, hint = ?, kind = ? WHERE id = ?").run(row.sealed, row.hint, row.kind, row.id);
+  }
+
   removeProtected(id: string): boolean {
     return Number(this.db.prepare("DELETE FROM protected_fragments WHERE id = ?").run(id).changes) > 0;
   }

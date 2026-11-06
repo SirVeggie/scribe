@@ -5443,6 +5443,8 @@
       const value = el("button", "ag-secret-value blurred", "••••••••••••");
       value.type = "button";
       value.setAttribute("aria-label", "Reveal");
+      // It blurs and reveals itself; the board's protected spans (#1046) leave it alone.
+      value.dataset.scribeProtectSkip = "";
       let loaded = null;
       const load = async () => {
         if (loaded !== null) return loaded;

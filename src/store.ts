@@ -2482,7 +2482,7 @@ export class BoardStore extends EventEmitter {
       if (!this.db) throw new Error("Database is not loaded");
       return this.db;
     };
-    return { list: () => db().listProtected(), insert: (row) => db().insertProtected(row), remove: (id) => db().removeProtected(id) };
+    return { list: () => db().listProtected(), insert: (row) => db().insertProtected(row), update: (row) => db().updateProtected(row), remove: (id) => db().removeProtected(id) };
   }
 
   /** Where the detectors (#1047) keep their switches, counts and unflagged values. */

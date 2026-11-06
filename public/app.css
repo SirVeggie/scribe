@@ -6012,3 +6012,22 @@ html[data-theme="cream"] {
     gap: 2px;
   }
 }
+
+/* Settings → Protected data (#1046, protected.js) */
+.protected-bar { display: flex; gap: 8px; margin: 8px 2px 12px; }
+.protected-search { flex: 1 1 auto; min-width: 0; }
+.protected-list { display: grid; }
+.protected-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 2px; border-bottom: 1px solid var(--border); }
+.protected-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.protected-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--heading); }
+.protected-kind { flex: 0 0 auto; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--muted); font-size: 12px; }
+.protected-actions { grid-column: 2; grid-row: 1 / span 4; display: flex; align-items: flex-start; gap: 6px; }
+.protected-value { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.protected-value code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.protected-value code.masked { letter-spacing: 1px; color: var(--muted); }
+.protected-reveal { padding: 0 8px; font-size: 12px; }
+.protected-meta, .protected-where { color: var(--muted); font-size: 12px; }
+.protected-page { padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: 12px; cursor: pointer; }
+.protected-page:hover { text-decoration: underline; }
+.protected-edit .ag-field-label { color: var(--muted); font-size: 12px; }
+.protected-edit .ag-source-error { margin: 0 20px 8px; padding: 0; }

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 const POINTER_DRAG_JS = readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8");
 const PAGE_WIDGETS_JS = readFileSync(new URL("../public/page-widgets.js", import.meta.url), "utf8");
+const PROTECTED_MARK_JS = readFileSync(new URL("../public/protected-mark.js", import.meta.url), "utf8");
 
 /**
  * Injected into every tab page. Gives the page `window.scribe`:
@@ -19,6 +20,7 @@ const PAGE_WIDGETS_JS = readFileSync(new URL("../public/page-widgets.js", import
  * - blobs (`scribe.saveAsset` …), links (`scribe.open`, `scribe.resolve`, `data-scribe-open`),
  *   `scribe.onOpen` for a link that names a record in the page (`key#card=12`),
  *   `scribe.preview` for Scribe's file viewer, and `scribe.agent` for chat threads the page starts.
+ * - `scribe.protect.watch(root)`: built-in views blur the protected values in their own text (#1046).
  *
  * Boot data is inlined ahead of this script so `scribe.state` is readable synchronously.
  * The ops engine is the daemon's own (stateOps.ts), embedded by source.
@@ -2300,6 +2302,37 @@ ${POINTER_DRAG_JS}
       };
     }
   };
+  ${PROTECTED_MARK_JS}
+  // Protected values in this page's own text, blurred where a built-in view asks for it (#1046). The page
+  // learns only which of its own text is protected; right-clicks go to the board's menu.
+  (function () {
+    var matcher = null;
+    var watcher = null;
+    var timer = null;
+    function load() {
+      timer = null;
+      fetch("/api/tabs/" + encodeURIComponent(tabId) + "/protected").then(function (res) {
+        return res.ok ? res.json() : { fragments: [] };
+      }).then(function (data) {
+        matcher = window.scribeProtectedMark.compile(data.fragments);
+        if (watcher) watcher.refresh();
+      }).catch(function () {});
+    }
+    function soon() {
+      if (watcher && !timer) timer = setTimeout(load, 1500);
+    }
+    window.addEventListener("message", function (event) {
+      if (event.source === window.parent && event.data && event.data.id === tabId && event.data.type === "scribe-protected-changed") soon();
+    });
+    window.scribe.protect = {
+      watch: function (root) {
+        if (watcher || capturing) return;
+        watcher = window.scribeProtectedMark.watch(root || document.body, function () { return matcher; });
+        window.scribe.onChange(soon, { local: true });
+        load();
+      }
+    };
+  })();
   ${PAGE_WIDGETS_JS}
   mountPageWidgets({ base: "/api/tabs/" + encodeURIComponent(tabId) + "/components", capturing: capturing,
     allow: function (id) { return askBoard({ type: "scribe-plugin", op: "allow", plugin: id }, AGENT_ASK_MS); },

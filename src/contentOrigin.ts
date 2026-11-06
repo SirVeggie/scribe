@@ -61,6 +61,7 @@ export function framePageId(req: express.Request): string | undefined {
 const STATE_PATH = /^\/api\/tabs\/[^/]+\/state$/;
 const EVENTS_PATH = /^\/api\/tabs\/[^/]+\/events$/;
 const LOCAL_PATH = /^\/api\/tabs\/[^/]+\/local$/;
+const PROTECTED_PATH = /^\/api\/tabs\/[^/]+\/protected$/;
 const ACTION_PATH = /^\/api\/tabs\/[^/]+\/action$/;
 const PROBLEMS_PATH = /^\/api\/tabs\/[^/]+\/problems$/;
 const PLUGIN_PATH = /^\/api\/tabs\/[^/]+\/plugins\/[^/]+\/(call|state\/[^/]+)$/;
@@ -110,6 +111,7 @@ function pageApi(req: express.Request): boolean {
   if(method==="GET"&&PLUGIN_STATUS_PATH.test(path))return true;
   if (PLUGIN_PATH.test(path) && ((method === "POST" && path.endsWith("/call")) || (method === "GET" && path.includes("/state/")))) return true;
   if ((method === "GET" || method === "PUT") && (STATE_PATH.test(path) || LOCAL_PATH.test(path))) return true;
+  if (method === "GET" && PROTECTED_PATH.test(path)) return true;
   if (method === "POST" && (EVENTS_PATH.test(path) || ACTION_PATH.test(path) || PROBLEMS_PATH.test(path) || TEMPLATE_INCOMPATIBLE_PATH.test(path))) return true;
   if ((method === "GET" || method === "POST") && ASSETS_PATH.test(path)) return true;
   if ((method === "GET" && FILES_READ_PATH.test(path)) || (method === "POST" && FILES_WRITE_PATH.test(path))) return true;
