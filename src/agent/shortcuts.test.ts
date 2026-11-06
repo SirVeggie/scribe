@@ -41,7 +41,7 @@ test("reasoning cycling skips Default and wraps through explicit levels", async 
 test("workspace cycling visits every folder and none as thread counts and recency change", async () => {
   for (const existing of [true, false]) {
     const currentThread = { cwd: "C:/llm-chat" as string | null, scope: { kind: "global" } };
-    const threads = new Map([
+    const threads = new Map<string, { cwd: string | null; scope?: { kind: string } }>([
       ["current", currentThread],
       ["llm", { cwd: "C:/llm-chat" }],
       ["valheim", { cwd: "C:/valheim-wake" }],
