@@ -126,6 +126,7 @@ import { blockSummary, resetSandbox, sandboxed, sandboxNet, type SandboxBlock, t
 import { injectionDetectors } from "./injection.js";
 
 import { parseWidgetInput, widgetJson, widgetString, widgetText, widgetLink, type WidgetAnswer, type WidgetItem, type WidgetInput } from "./widgetTool.js";
+import { htmlErrorText } from "../pageText.js";
 export type { Prefs } from "./prefs.js";
 export { workspaceKey } from "./prefs.js";
 
@@ -2834,6 +2835,7 @@ export class AgentHost {
     this.seq.set(threadId, seq);
     const id = `it_${crypto.randomBytes(6).toString("hex")}`;
     const item = { id, threadId, turnId, seq, createdAt: Date.now(), ...body } as Item;
+    if (item.kind === "notice") item.text = htmlErrorText(item.text);
     // Interactions are answered by their item id.
     if ("requestId" in item && item.requestId === "") item.requestId = id;
     items.push(item);
@@ -5175,9 +5177,10 @@ export class AgentHost {
     }
     // Providers can report the terminal error both as a live notice and as
     // the turn result. Keep the failure metadata without repeating its notice.
-    if (result.error && !this.loadItems(threadId).some((item) =>
-      item.turnId === turn.id && item.kind === "notice" && item.level === "error" && item.text === result.error)) {
-      this.addItem(threadId, turn.id, { kind: "notice", level: "error", text: result.error });
+    const failure = result.error && htmlErrorText(result.error);
+    if (failure && !this.loadItems(threadId).some((item) =>
+      item.turnId === turn.id && item.kind === "notice" && item.level === "error" && item.text === failure)) {
+      this.addItem(threadId, turn.id, { kind: "notice", level: "error", text: failure });
     }
 
     if (run.repo && turn.beforeTree) {

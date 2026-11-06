@@ -92,3 +92,13 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+
+/**
+ * An error message that is a whole HTML page (a proxy's or gateway's error page, #1053) as its
+ * visible text, without the title. Other messages are returned as they are.
+ */
+export function htmlErrorText(message: string): string {
+  if (!/^\s*<(?:!doctype\s+html|html|head|body)\b/i.test(message)) return message;
+  const text = htmlToText(message.replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, " "));
+  return text || message;
+}
