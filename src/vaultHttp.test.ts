@@ -114,6 +114,36 @@ test("agents read protected values as tokens, write them back intact, and can't 
     assert.equal((await call("DELETE", `/api/vault/${fragmentId}`, undefined, true)).status, 403);
     assert.equal((await call("DELETE", `/api/vault/${fragmentId}`)).status, 200);
     assert.match((await call("GET", `/api/tabs/${id}`, undefined, true)).text, /rotate monthly/);
+
+    // Detectors (#1047): a key in a known format is protected without anyone adding it.
+    const ghToken = `ghp_${"a1B2c3D4e5".repeat(3)}x9Y8z7`;
+    const keyPage = await call("POST", "/api/tabs", { key: "ci", title: "CI", activate: false, html: `<p>Deploy token ${ghToken} for CI</p>` });
+    const keyId = keyPage.data.tab.id as string;
+    assert.ok((await call("PUT", `/api/tabs/${keyId}/access`, { level: "open" })).status < 300);
+    const keyRead = await call("GET", `/api/tabs/${keyId}`, undefined, true);
+    assert.ok(!keyRead.text.includes(ghToken), keyRead.text);
+    assert.match(keyRead.data.html as string, /Deploy token ⟦p:[0-9a-f]+ GitHub token⟧ for CI/);
+    assert.ok(((await call("GET", `/api/tabs/${keyId}`)).data.html as string).includes(ghToken), "the user still sees the value");
+    const withDetectors = await call("GET", "/api/vault", undefined, true);
+    const detected = (withDetectors.data.fragments as Array<Record<string, unknown>>).find((f) => f.detector === "github");
+    assert.ok(detected, withDetectors.text);
+    assert.equal(detected.source, "detector");
+    assert.equal((withDetectors.data.detectors as Array<Record<string, unknown>>).find((d) => d.id === "github")?.matches, 1);
+
+    // The user unflags it: agents see the value again and the detector counts a false flag.
+    assert.equal((await call("DELETE", `/api/vault/${detected.id}`)).status, 200);
+    assert.ok((await call("GET", `/api/tabs/${keyId}`, undefined, true)).text.includes(ghToken));
+    const github = (await call("GET", "/api/vault/detectors")).data.detectors.find((d: { id: string }) => d.id === "github");
+    assert.equal(github.unflags, 1);
+    assert.equal(github.falseFlagRate, 1);
+
+    // Switches are the user's; agents propose, and an overly broad pattern is refused before anyone is asked.
+    assert.equal((await call("PUT", "/api/vault/detectors/aws", { enabled: false }, true)).status, 403);
+    const off = await call("PUT", "/api/vault/detectors/aws", { enabled: false });
+    assert.equal(off.status, 200, off.text);
+    assert.equal(off.data.detector.enabled, false);
+    assert.equal(off.data.detector.history.at(-1).by, "user");
+    assert.equal((await call("POST", "/api/vault/detectors/propose", { action: "add", id: "x", pattern: "(a+)+" }, true)).status, 403, "only a chat thread can propose");
   } finally {
     await fetch(url + "/api/shutdown", { method: "POST" }).catch(() => {});
     await Promise.race([exited, delay(5000)]);

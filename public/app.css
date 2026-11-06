@@ -5550,6 +5550,7 @@ html.fx-off *, html.fx-off *::before, html.fx-off *::after {
 .ml-source-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ml-source-detail { font-size: 12px; color: var(--muted); }
 .ml-source button { flex: 0 0 auto; }
+.detector-noisy { color: var(--danger); }
 .ml-status:empty { display: none; }
 .ml-status { margin: 8px 2px; overflow-wrap: anywhere; }
 .ml-source-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 2px 12px; }

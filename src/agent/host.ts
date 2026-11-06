@@ -429,6 +429,17 @@ function savedRules(value: unknown): HookRule[] {
   }
 }
 
+/**
+ * Secret formats in what a chat says or a tool returns become protected values (#1047), so other
+ * chats reading this thread get tokens. Text still streaming waits for its end.
+ */
+function detectInItem(item: Item): void {
+  const thread = item.threadId;
+  if (item.kind === "user") vault().detect(item.text, { thread });
+  else if (item.kind === "text" || item.kind === "reasoning") vault().detect(item.text, { thread, partial: true });
+  else if (item.kind === "tool" && (item.status === "done" || item.status === "error")) vault().detectDeep([item.input, item.output, item.detail, item.diff], { thread });
+}
+
 function userBody(msg: QueuedMessage): Extract<ItemBody, { kind: "user" }> {
   return {
     kind: "user",
@@ -2873,6 +2884,7 @@ export class AgentHost {
     }
     const items = [...this.dirty.values()].filter((item) => this.threads.has(item.threadId));
     this.dirty.clear();
+    for (const item of items) detectInItem(item);
     this.saveRows(() => this.db.saveItems(items), items.map((item) => item.threadId), "Agent item save");
   }
 
@@ -3670,6 +3682,24 @@ export class AgentHost {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
+  }
+
+  /** A detector change an agent proposed (#1047): the user allows or declines it in the chat. */
+  async approveDetectorChange(threadId: string, ask: { title: string; detail: string }, importance: WebImportance = "useful", signal?: AbortSignal): Promise<{ allowed: boolean; message: string }> {
+    if (!this.threads.has(threadId)) throw new Error("detector_propose only works in Scribe chat threads.");
+    const decision = await this.askInChat(threadId, {
+      ...ask,
+      tool: "other",
+      options: [
+        { id: "allow", label: "Allow", kind: "allow_once" },
+        { id: "deny", label: "Decline", kind: "reject_once" },
+      ],
+    }, importance, signal);
+    if (decision === "idle") return { allowed: false, message: "With no turn running the user cannot be asked." };
+    if (decision === "timeout") return { allowed: false, message: "Nobody answered in time. The detectors stay as they are." };
+    if (decision === "cancelled") return { allowed: false, message: "The request was cancelled." };
+    if (decision.optionId !== "allow") return { allowed: false, message: decision.note ? `The user declined: ${decision.note}` : "The user declined the change." };
+    return { allowed: true, message: decision.note ?? "" };
   }
 
   /**

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { Detectors, type DetectorMatch, type DetectorStore } from "./detectors.js";
+import { log } from "./log.js";
 import { defaultStores, loadMasterKey, open, seal, type KeyStore } from "./plugins/secrets.js";
 
 /**
@@ -140,30 +142,38 @@ export class Matcher<T> {
 
 export class Vault {
   private fragments = new Map<string, Fragment>();
+  private byValue = new Map<string, Fragment>();
   private matcher = new Matcher<Fragment>([]);
   private listeners = new Set<() => void>();
+  private notifyQueued = false;
   /** Bumped on every change, so caches of redacted text (search) know to redo theirs. */
   version = 0;
+  /** The secret-format detectors (#1047): their matches become fragments as soon as Scribe sees them. */
+  readonly detectors: Detectors;
 
   private key?: Promise<Buffer>;
 
-  constructor(private store?: VaultStore, private loadKey?: () => Promise<Buffer>) {}
+  constructor(private store?: VaultStore, private loadKey?: () => Promise<Buffer>, detectors?: Detectors) {
+    this.detectors = detectors ?? new Detectors();
+  }
 
   /**
    * The vault kept in `store`, its values sealed with a key the OS keeps under `root`. An empty vault
    * leaves the key alone until something is added (asking DPAPI or a keyring takes a moment).
    */
-  static async open(root: string, store: VaultStore, options: { platform?: NodeJS.Platform; stores?: KeyStore[] } = {}): Promise<Vault> {
+  static async open(root: string, store: VaultStore, options: { platform?: NodeJS.Platform; stores?: KeyStore[]; detectors?: DetectorStore } = {}): Promise<Vault> {
     const rows = store.list();
     const platform = options.platform ?? process.platform;
     const stores = options.stores ?? (platform === "win32" ? ["dpapi", "file"] : defaultStores(platform));
     const create = rows.length === 0;
-    const vault: Vault = new Vault(store, () => loadMasterKey(root, { service: "Scribe protected data", label: "Protected data key", create, stores }));
+    const vault: Vault = new Vault(store, () => loadMasterKey(root, { service: "Scribe protected data", label: "Protected data key", create, stores }), new Detectors(options.detectors));
     if (!rows.length) return vault;
     const key = await vault.masterKey();
     for (const row of rows) {
       const { sealed, ...meta } = row;
-      vault.fragments.set(row.id, { ...meta, value: open(key, sealed) });
+      const fragment = { ...meta, value: open(key, sealed) };
+      vault.fragments.set(row.id, fragment);
+      vault.byValue.set(fragment.value, fragment);
     }
     vault.rebuild();
     return vault;
@@ -192,7 +202,7 @@ export class Vault {
     if (!value.trim()) throw new Error("value is empty");
     if (value.length > MAX_VALUE) throw new Error(`value is longer than ${MAX_VALUE} characters`);
     if (/[⟦⟧]/.test(value)) throw new Error("value can't contain ⟦ or ⟧");
-    const same = [...this.fragments.values()].find((fragment) => fragment.value === value);
+    const same = this.byValue.get(value);
     if (same) return { fragment: metaOf(same), existed: true };
     const kind = cleanKind(input.kind);
     const hint = cleanHint(input.hint, kind);
@@ -213,20 +223,28 @@ export class Vault {
     if (this.store) {
       const key = await this.masterKey();
       // Another add of the same value may have gone in while the key loaded.
-      const raced = [...this.fragments.values()].find((other) => other.value === value);
+      const raced = this.byValue.get(value);
       if (raced) return { fragment: metaOf(raced), existed: true };
       const { value: plain, ...meta } = fragment;
       this.store.insert({ ...meta, sealed: seal(key, plain) });
     }
     this.fragments.set(fragment.id, fragment);
+    this.byValue.set(value, fragment);
     this.changed();
     return { fragment: metaOf(fragment), existed: false };
   }
 
+  /**
+   * Remove a fragment (the user only). Detectors leave its value alone from then on, and one a
+   * detector made counts as an unflag: a false flag in that detector's rate.
+   */
   remove(id: string): boolean {
-    if (!this.fragments.has(id)) return false;
+    const fragment = this.fragments.get(id);
+    if (!fragment) return false;
     this.store?.remove(id);
     this.fragments.delete(id);
+    if (this.byValue.get(fragment.value) === fragment) this.byValue.delete(fragment.value);
+    this.detectors.unflag(fragment.source === "detector" ? fragment.detector : undefined, fragment.value);
     this.changed();
     return true;
   }
@@ -264,6 +282,68 @@ export class Vault {
     return scored.sort((a, b) => b.score - a.score || b.meta.createdAt - a.meta.createdAt).map((entry) => entry.meta);
   }
 
+  /**
+   * Run the detectors over text and protect what they find (#1047). Returns how many fragments that
+   * added. `partial` is for text still being written: a match at its very end waits for the rest.
+   */
+  detect(text: string, opts: { thread?: string; partial?: boolean } = {}): number {
+    if (!text) return 0;
+    return this.protectDetected(this.detectors.scan(text, opts), opts.thread);
+  }
+
+  /** detect over every string in a JSON-like value (an agent item, a page's state). */
+  detectDeep(value: unknown, opts: { thread?: string; partial?: boolean } = {}): number {
+    let added = 0;
+    mapStrings(value, (text) => {
+      added += this.detect(text, opts);
+      return text;
+    });
+    return added;
+  }
+
+  /**
+   * Detected values go in at once, in memory, so the text being redacted right now already has them;
+   * sealing and saving follow when the key is ready. A value removed in between is never saved.
+   */
+  private protectDetected(found: DetectorMatch[], thread?: string): number {
+    let added = 0;
+    for (const { value, detector } of found) {
+      if (this.byValue.has(value) || /[⟦⟧]/.test(value) || value.length > MAX_VALUE) continue;
+      const kind = cleanKind(detector.kind);
+      const fragment: Fragment = {
+        id: this.newId(),
+        value,
+        hint: cleanHint(detector.hint, kind),
+        kind,
+        source: "detector",
+        detector: detector.id,
+        createdBy: `detector: ${detector.label}`.slice(0, 80),
+        ...(thread ? { createdThread: thread } : {}),
+        createdAt: Date.now(),
+      };
+      this.fragments.set(fragment.id, fragment);
+      this.byValue.set(value, fragment);
+      this.detectors.counted(detector.id);
+      added += 1;
+      if (this.store) {
+        const store = this.store;
+        this.masterKey()
+          .then((key) => {
+            if (this.fragments.get(fragment.id) !== fragment) return;
+            const { value: plain, ...meta } = fragment;
+            store.insert({ ...meta, sealed: seal(key, plain) });
+          })
+          .catch((err) => log(`Protected data: could not save a detected ${detector.label}: ${(err as Error).message}. It stays protected until Scribe restarts.`));
+      }
+    }
+    if (added) {
+      this.rebuild();
+      this.version += 1;
+      this.notifySoon();
+    }
+    return added;
+  }
+
   /** How often each fragment shows up in these texts: id → number of texts that contain it. */
   count(texts: Iterable<string>): Map<string, number> {
     const counts = new Map<string, number>();
@@ -277,7 +357,8 @@ export class Vault {
 
   /** Each protected value in text as its token. Tokens already in it stay as they are, so redacting twice changes nothing. */
   redact(text: string): string {
-    if (this.matcher.empty || !text) return text;
+    if (!text) return text;
+    if (this.matcher.empty && !this.detectors.mayMatch(text)) return text;
     if (text.includes("⟦p:")) {
       let out = "";
       let at = 0;
@@ -292,6 +373,8 @@ export class Vault {
 
   private redactPlain(text: string): string {
     if (!text) return text;
+    // A secret in a known format is protected the first time an agent would see it, wherever it came from.
+    this.detect(text);
     const matches = this.matcher.find(text);
     if (!matches.length) return text;
     let out = "";
@@ -305,7 +388,7 @@ export class Vault {
 
   /** Every string in a JSON-like value (keys too), redacted; the value itself is left alone. */
   redactDeep<T>(value: T): T {
-    if (this.matcher.empty) return value;
+    if (this.matcher.empty && !this.detectors.active) return value;
     return mapStrings(value, (text) => this.redact(text)) as T;
   }
 
@@ -338,6 +421,10 @@ export class Vault {
   private changed(): void {
     this.rebuild();
     this.version += 1;
+    this.notify();
+  }
+
+  private notify(): void {
     for (const listener of this.listeners) {
       try {
         listener();
@@ -345,6 +432,16 @@ export class Vault {
         /* a listener's problem is its own */
       }
     }
+  }
+
+  /** Detections happen mid-redaction, often several at once: tell listeners once, after. */
+  private notifySoon(): void {
+    if (this.notifyQueued) return;
+    this.notifyQueued = true;
+    queueMicrotask(() => {
+      this.notifyQueued = false;
+      this.notify();
+    });
   }
 
   private rebuild(): void {

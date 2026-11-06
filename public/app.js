@@ -1699,6 +1699,7 @@
     { label: "Plugins", sections: window.scribePluginSettings.sections },
     { label: "Integrations", sections: window.scribeIntegrations.sections },
     { label: "Devices", sections: window.scribeDevicesSettings.sections },
+    { label: "Protected data", sections: window.scribeDetectorSettings.sections },
     ...(desktopSettingsSection ? [{ label: "Desktop", sections: [desktopSettingsSection] }] : []),
     { label: "Files", sections: [settingsSections[7]] },
     { label: "Import / Export", sections: [settingsSections[6]] },
@@ -1824,6 +1825,7 @@
     window.scribeIntegrations.refresh();
     searchSettingsRequest("status").then(renderSearchSettings).catch(err => { searchPackStatus.textContent = err.message; });
     window.scribeMlSettings.refresh();
+    window.scribeDetectorSettings.refresh();
   }
 
   function closeSettings() {

@@ -19,6 +19,7 @@ import {
   statePath,
 } from "./config.js";
 import { BoardDb, type StoredFolder, type StoredTab } from "./db.js";
+import type { DetectorStore } from "./detectors.js";
 import type { VaultStore } from "./vault.js";
 import { log } from "./log.js";
 import {
@@ -2482,6 +2483,21 @@ export class BoardStore extends EventEmitter {
       return this.db;
     };
     return { list: () => db().listProtected(), insert: (row) => db().insertProtected(row), remove: (id) => db().removeProtected(id) };
+  }
+
+  /** Where the detectors (#1047) keep their switches, counts and unflagged values. */
+  detectorStore(): DetectorStore {
+    const db = (): BoardDb => {
+      if (!this.db) throw new Error("Database is not loaded");
+      return this.db;
+    };
+    return {
+      list: () => db().listDetectors(),
+      save: (record) => db().saveDetector(record),
+      remove: (id) => db().removeDetector(id),
+      unflagged: () => db().listUnflagged(),
+      addUnflagged: (hash, detector) => db().addUnflagged(hash, detector),
+    };
   }
 
   spacesView(): SpacesView {

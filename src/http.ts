@@ -77,7 +77,7 @@ import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { agentPortGate, identify, markAgentSocket, prepareSecrets, socketAllowed } from "./callers.js";
-import { Vault, setVault, setVaultUnavailable } from "./vault.js";
+import { Vault, setVault, setVaultUnavailable, vault } from "./vault.js";
 import { redactAgentResponses, restoreAgentBodies, vaultRouter } from "./vaultHttp.js";
 import { markWebSocket, onWebPort } from "./webRequest.js";
 import type { Duplex } from "node:stream";
@@ -168,13 +168,32 @@ function refreshPluginTemplates(): void {
 /** The vault (#1045) from this board's database; without it, nothing is protected, so say so loudly. */
 async function openProtectedData(): Promise<void> {
   try {
-    const opened = await Vault.open(path.join(dataDir(), "vault"), store.protectedStore());
+    const opened = await Vault.open(path.join(dataDir(), "vault"), store.protectedStore(), { detectors: store.detectorStore() });
     setVault(opened);
     opened.onChange(() => reindexAllPages());
+    watchPagesForSecrets();
   } catch (err) {
     setVaultUnavailable((err as Error).message);
     log(`PROTECTED DATA UNAVAILABLE: ${(err as Error).message}. Agent calls are refused until this is fixed.`);
   }
+}
+
+/**
+ * Detectors (#1047) look at a page soon after each write, so a key pasted into a page is protected
+ * before any agent asks for it (the vault's redaction also checks whatever it hands an agent).
+ */
+function watchPagesForSecrets(): void {
+  const timers = new Map<string, NodeJS.Timeout>();
+  const later = (id: string) => {
+    if (timers.has(id)) return;
+    timers.set(id, setTimeout(() => {
+      timers.delete(id);
+      const tab = store.get(id);
+      if (tab) vault().detectDeep([tab.title, tab.html, tab.state]);
+    }, 400));
+  };
+  store.on("tab_upserted", (tab: { id: string }) => later(tab.id));
+  store.on("tab_state", (tab: { id: string }) => later(tab.id));
 }
 
 export function viewerCount(): number {
@@ -541,6 +560,11 @@ export async function startHttp(): Promise<http.Server> {
     show: (thread, fragment, note) => {
       if (!agentHost) throw new Error("vault_show only works in Scribe chat threads.");
       agentHost.showSecret(thread, fragment, note);
+    },
+    allPages: () => [...store.listOpenTabs(), ...store.listClosedTabs()],
+    approve: (thread, ask, signal) => {
+      if (!agentHost) return Promise.resolve({ allowed: false, message: "Agent chats are not running." });
+      return agentHost.approveDetectorChange(thread, ask, parseWebImportance(ask.importance) ?? "useful", signal);
     },
   }));
   // A chat here reaching another device (#911): device_list, and calls that name a device go over the link.

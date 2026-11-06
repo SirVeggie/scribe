@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
+import type { DetectorRecord } from "./detectors.js";
 import type { StoredFragment, VaultStore } from "./vault.js";
 import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProtectedFragmentSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureBrowserColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, ensureNewestFirstStrip, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
@@ -503,6 +504,36 @@ export class BoardDb {
 
   removeProtected(id: string): boolean {
     return Number(this.db.prepare("DELETE FROM protected_fragments WHERE id = ?").run(id).changes) > 0;
+  }
+
+  /** Detector switches, custom detectors and counts (#1047). */
+  listDetectors(): DetectorRecord[] {
+    const rows = this.db.prepare("SELECT data FROM protected_detectors").all() as Array<{ data: string }>;
+    const out: DetectorRecord[] = [];
+    for (const row of rows) {
+      try {
+        out.push(JSON.parse(row.data) as DetectorRecord);
+      } catch {
+        /* a row this version can't read is skipped */
+      }
+    }
+    return out;
+  }
+
+  saveDetector(record: DetectorRecord): void {
+    this.db.prepare("INSERT INTO protected_detectors (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(record.id, JSON.stringify(record));
+  }
+
+  removeDetector(id: string): void {
+    this.db.prepare("DELETE FROM protected_detectors WHERE id = ?").run(id);
+  }
+
+  listUnflagged(): string[] {
+    return (this.db.prepare("SELECT hash FROM protected_unflagged").all() as Array<{ hash: string }>).map((row) => row.hash);
+  }
+
+  addUnflagged(hash: string, detector: string): void {
+    this.db.prepare("INSERT OR IGNORE INTO protected_unflagged (hash, detector, at) VALUES (?, ?, ?)").run(hash, detector, Date.now());
   }
 
   readPermissions(tabId: string): Array<{ perm: string; value: string; data: string | null; updatedAt: number }> {

@@ -3,6 +3,7 @@ import { identify } from "./callers.js";
 import type { Tab } from "./types.js";
 import { isContentHost } from "./contentOrigin.js";
 import { VaultTokenError, agentValueProblem, vault, vaultUnavailable, type FragmentMeta } from "./vault.js";
+import { MIN_MATCH, SUGGEST_OFF_MIN_MATCHES, SUGGEST_OFF_RATE, patternProblem, type DetectorDef, type DetectorView } from "./detectors.js";
 
 /**
  * Protected data over HTTP (#1045). Everything the daemon answers an agent goes through the vault's
@@ -63,6 +64,10 @@ export type VaultRoutesHost = {
   agentName(req: express.Request): string;
   /** vault_show: the fragment as a card in that chat thread's running turn. Throws when it can't. */
   show(thread: string, fragment: FragmentMeta, note?: string): void;
+  /** Every page, to look for a new or switched-on detector's matches at once. */
+  allPages(): Tab[];
+  /** Ask the user in the agent's chat to approve a detector change (#1047); waits for the answer. */
+  approve(thread: string, ask: { title: string; detail: string; importance?: string }, signal: AbortSignal): Promise<{ allowed: boolean; message: string }>;
 };
 
 /**
@@ -108,7 +113,10 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
   router.get("/", (req, res) => {
     const pages = host.pages(req);
     const counts = vault().count(pages.map(pageStrings));
-    res.json({ fragments: vault().list().map((fragment) => ({ ...fragment, pages: counts.get(fragment.id) ?? 0 })) });
+    res.json({
+      fragments: vault().list().map((fragment) => ({ ...fragment, pages: counts.get(fragment.id) ?? 0 })),
+      detectors: vault().detectors.list().map(detectorSummary),
+    });
   });
   router.post("/show", (req, res) => {
     const caller = identify(req);
@@ -152,6 +160,7 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
     }
     res.set("Cache-Control", "no-store").json({ value });
   });
+  router.use("/detectors", detectorRouter(host));
   router.delete("/:id", (req, res) => {
     if (identify(req).viewer === "agent") {
       res.status(403).json({ error: "Only the user can remove protected values" });
@@ -183,4 +192,237 @@ function pageStrings(tab: Tab): string {
   };
   walk(tab.state);
   return out.join("\n");
+}
+
+/** Detectors as listed: definition, switch, counts and the estimated false-flag rate; the full history only in GET /detectors. */
+function detectorSummary(view: DetectorView): Omit<DetectorView, "history"> & { lastChange?: DetectorView["history"][number] } {
+  const { history, ...rest } = view;
+  return { ...rest, ...(history.length ? { lastChange: history[history.length - 1] } : {}) };
+}
+
+/** Up to this many distinct matches in the user's pages a proposed detector may have: more is too broad to be a secret format. */
+const PROPOSE_MAX_MATCHES = 200;
+const SAMPLES = 6;
+
+/** The value with its middle hidden, enough to tell what was matched without spelling a secret out. */
+export function maskSample(value: string): string {
+  const flat = value.replace(/\s+/g, " ");
+  if (flat.length <= 10) return `${flat.slice(0, 2)}…`;
+  return `${flat.slice(0, 6)}…${flat.slice(-3)} (${flat.length} chars)`;
+}
+
+/** What a pattern would match in these pages: distinct values, the pages they are on, a few samples. */
+export function sampleMatches(
+  pattern: string,
+  flags: string | undefined,
+  pages: Tab[],
+  skip: (value: string) => boolean = () => false
+): { values: number; pages: number; samples: { text: string; page: string }[] } {
+  const re = new RegExp(pattern, `g${flags ?? ""}`);
+  const seen = new Set<string>();
+  const samples: { text: string; page: string }[] = [];
+  let pageCount = 0;
+  for (const tab of pages) {
+    let hit = false;
+    const text = pageStrings(tab);
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      if (!m[0]) {
+        re.lastIndex += 1;
+        continue;
+      }
+      if (m[0].length < MIN_MATCH || skip(m[0])) continue;
+      hit = true;
+      if (seen.has(m[0])) continue;
+      seen.add(m[0]);
+      if (samples.length < SAMPLES) samples.push({ text: maskSample(m[0]), page: tab.title || tab.key || tab.id });
+      if (seen.size > PROPOSE_MAX_MATCHES) break;
+    }
+    if (hit) pageCount += 1;
+    if (seen.size > PROPOSE_MAX_MATCHES) break;
+  }
+  return { values: seen.size, pages: pageCount, samples };
+}
+
+type Proposal = { action: "add" | "edit" | "enable" | "disable" | "remove"; id: string; def?: DetectorDef; reason?: string; importance?: string };
+
+function readProposal(body: Record<string, unknown>): Proposal | string {
+  const action = body.action;
+  if (action !== "add" && action !== "edit" && action !== "enable" && action !== "disable" && action !== "remove") return "action must be add, edit, enable, disable or remove";
+  const id = typeof body.id === "string" ? body.id.trim().toLowerCase() : "";
+  if (!id) return "id is required";
+  const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : undefined;
+  const importance = typeof body.importance === "string" ? body.importance : undefined;
+  const existing = vault().detectors.get(id);
+  if (action === "add" || action === "edit") {
+    if (action === "add" && existing) return `There is already a detector ${id}: use edit, or another id`;
+    if (action === "edit" && !existing) return `No detector ${id}`;
+    if (existing?.builtin) return `${id} is built in: it can only be enabled or disabled. Add a new detector instead.`;
+    const text = (key: string) => (typeof body[key] === "string" ? (body[key] as string).trim() : "");
+    const pattern = text("pattern") || existing?.pattern || "";
+    const flags = text("flags") || existing?.flags || undefined;
+    const problem = patternProblem(pattern, flags);
+    if (problem) return problem;
+    const label = text("label") || existing?.label || id;
+    return {
+      action,
+      id,
+      reason,
+      importance,
+      def: { id, label, hint: text("hint") || existing?.hint || label, kind: text("kind") || existing?.kind || "secret", pattern, ...(flags ? { flags } : {}) },
+    };
+  }
+  if (!existing) return `No detector ${id}`;
+  if (action === "remove" && existing.builtin) return `${id} is built in: disable it instead`;
+  if (action === "enable" && existing.enabled) return `${id} is already on`;
+  if (action === "disable" && !existing.enabled) return `${id} is already off`;
+  return { action, id, reason, importance };
+}
+
+/** The approval's text: what changes, what it would match now, and why. */
+function describeProposal(proposal: Proposal, pages: Tab[]): { title: string; detail: string } | string {
+  const existing = vault().detectors.get(proposal.id);
+  const lines: string[] = [];
+  let title: string;
+  if (proposal.def) {
+    const found = sampleMatches(proposal.def.pattern, proposal.def.flags, pages, (value) => vault().detectors.isUnflagged(value));
+    if (found.values > PROPOSE_MAX_MATCHES) {
+      return `That pattern matches more than ${PROPOSE_MAX_MATCHES} different values in the user's pages: too broad for a secret format. Make it stricter.`;
+    }
+    title = `${proposal.action === "add" ? "Add" : "Change"} detector: ${proposal.def.label}`;
+    if (existing && existing.pattern !== proposal.def.pattern) lines.push(`Was: /${existing.pattern}/${existing.flags ?? ""}`);
+    lines.push(`Pattern: /${proposal.def.pattern}/${proposal.def.flags ?? ""}`, `Agents would see a match as ⟦p:… ${proposal.def.hint}⟧.`);
+    lines.push(
+      found.values
+        ? `Matches ${found.values} value${found.values === 1 ? "" : "s"} on ${found.pages} page${found.pages === 1 ? "" : "s"} now, such as:\n${found.samples.map((sample) => `• ${sample.text} on ${sample.page}`).join("\n")}`
+        : "Matches nothing in your pages now."
+    );
+  } else {
+    const view = existing!;
+    const verb = { enable: "Turn on", disable: "Turn off", remove: "Remove" }[proposal.action as "enable" | "disable" | "remove"];
+    title = `${verb} detector: ${view.label}`;
+    lines.push(`Pattern: /${view.pattern}/${view.flags ?? ""}`);
+    lines.push(
+      view.matches
+        ? `So far: ${view.matches} match${view.matches === 1 ? "" : "es"}, ${view.unflags} unflagged (${Math.round((view.falseFlagRate ?? 0) * 100)}% false flags).`
+        : "No matches so far."
+    );
+    if (proposal.action !== "enable") lines.push("Values it already protected stay protected.");
+  }
+  if (proposal.reason) lines.push(`Why: ${proposal.reason}`);
+  return { title, detail: lines.join("\n") };
+}
+
+/**
+ * Detectors (#1047):
+ * GET /detectors: every detector with its counts and change history (agents too; patterns aren't secret).
+ * PUT /detectors/:id { enabled }, POST /detectors (add or change a custom one), DELETE /detectors/:id: the user's.
+ * POST /detectors/propose: an agent's change, applied only once the user approves it in the chat.
+ */
+function detectorRouter(host: VaultRoutesHost): express.Router {
+  const router = express.Router();
+  const userOnly = (req: express.Request, res: express.Response): boolean => {
+    if (identify(req).viewer !== "agent") return true;
+    res.status(403).json({ error: "Agents change detectors with detector_propose, which asks the user." });
+    return false;
+  };
+  /** A detector that just went on looks at every page now, rather than at each one's next write or read. */
+  const rescan = () =>
+    setImmediate(() => {
+      for (const tab of host.allPages()) vault().detectDeep([tab.title, tab.html, tab.state]);
+    });
+  router.get("/", (_req, res) => {
+    res.json({ detectors: vault().detectors.list(), suggestOffRate: SUGGEST_OFF_RATE, suggestOffMinMatches: SUGGEST_OFF_MIN_MATCHES });
+  });
+  router.put("/:id", (req, res) => {
+    if (!userOnly(req, res)) return;
+    const enabled = (req.body as Record<string, unknown> | undefined)?.enabled;
+    if (typeof enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be true or false" });
+      return;
+    }
+    try {
+      const detector = vault().detectors.setEnabled(req.params.id, enabled, "user");
+      if (enabled) rescan();
+      res.json({ detector });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+  router.post("/", (req, res) => {
+    if (!userOnly(req, res)) return;
+    const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+    const exists = vault().detectors.get(String(body.id ?? "").trim().toLowerCase());
+    const proposal = readProposal({ ...body, action: exists ? "edit" : "add" });
+    if (typeof proposal === "string") {
+      res.status(400).json({ error: proposal });
+      return;
+    }
+    try {
+      const detector = vault().detectors.put(proposal.def!, "user");
+      rescan();
+      res.json({ detector });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+  router.delete("/:id", (req, res) => {
+    if (!userOnly(req, res)) return;
+    if (!vault().detectors.remove(req.params.id)) {
+      res.status(404).json({ error: "No such custom detector (built-in ones can only be turned off)" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+  router.post("/propose", async (req, res) => {
+    const caller = identify(req);
+    if (caller.viewer !== "agent" || !caller.thread) {
+      res.status(403).json({ error: "detector_propose is for Scribe chat threads; the user changes detectors in Settings." });
+      return;
+    }
+    const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+    const proposal = readProposal(body);
+    if (typeof proposal === "string") {
+      res.status(400).json({ error: proposal });
+      return;
+    }
+    let ask: { title: string; detail: string } | string;
+    try {
+      ask = describeProposal(proposal, host.allPages());
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    if (typeof ask === "string") {
+      res.status(400).json({ error: ask });
+      return;
+    }
+    req.setTimeout(0);
+    res.setTimeout(0);
+    const abort = new AbortController();
+    const onClientGone = () => {
+      if (!res.writableEnded) abort.abort();
+    };
+    res.on("close", onClientGone);
+    try {
+      const answer = await host.approve(caller.thread, { ...ask, importance: proposal.importance }, abort.signal);
+      if (!answer.allowed) {
+        if (!res.writableEnded) res.json({ applied: false, message: answer.message });
+        return;
+      }
+      const by = `${host.agentName(req)} (approved by the user)`;
+      const detectors = vault().detectors;
+      let detector: DetectorView | undefined;
+      if (proposal.def) detector = detectors.put(proposal.def, by);
+      else if (proposal.action === "remove") detectors.remove(proposal.id);
+      else detector = detectors.setEnabled(proposal.id, proposal.action === "enable", by);
+      if (proposal.def || proposal.action === "enable") rescan();
+      if (!res.writableEnded) res.json({ applied: true, ...(detector ? { detector: detectorSummary(detector) } : {}), ...(answer.message ? { note: answer.message } : {}) });
+    } catch (err) {
+      if (!res.writableEnded) res.status(400).json({ error: (err as Error).message });
+    } finally {
+      res.off("close", onClientGone);
+    }
+  });
+  return router;
 }

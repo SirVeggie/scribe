@@ -77,7 +77,8 @@ export function secretInput(tool: string, input: Record<string, unknown>): Recor
 
 /** A tool's output with every protected value as its token, or null when it holds none. */
 export function scrubOutput<T>(output: T): T | null {
-  if (vault().size === 0 || output === undefined || output === null) return null;
+  // An empty vault still has detectors (#1047): a key a command prints is protected before the model reads it.
+  if ((vault().size === 0 && !vault().detectors.active) || output === undefined || output === null) return null;
   const before = JSON.stringify(output);
   const after = vault().redactDeep(output);
   return JSON.stringify(after) === before ? null : after;

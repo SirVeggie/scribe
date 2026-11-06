@@ -45,3 +45,17 @@ test("commands take values through per-command variables; other tools get values
     setVault(new Vault());
   }
 });
+
+test("a key in a known format that a command prints is scrubbed even while the vault is empty (#1047)", () => {
+  const vault = new Vault();
+  setVault(vault);
+  try {
+    const key = `ghp_${"a1B2c3D4e5".repeat(3)}x9Y8z7`;
+    const scrubbed = scrubOutput({ stdout: `GITHUB_TOKEN=${key}\n` });
+    assert.ok(scrubbed);
+    assert.match(scrubbed.stdout, /^GITHUB_TOKEN=⟦p:[0-9a-f]+ GitHub token⟧\n$/);
+    assert.equal(vault.list()[0].source, "detector");
+  } finally {
+    setVault(new Vault());
+  }
+});

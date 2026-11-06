@@ -78,6 +78,32 @@ recognise, and a page script or plugin given a value can pass it on. The swapped
 command line of the provider's shell process while it runs (Cursor's host shell excepted), and Claude
 Code may keep the raw tool result in its own session files.
 
+## Detectors (#1047)
+
+src/detectors.ts: regexes for secret formats with a low false-flag risk. Built in: Anthropic and
+OpenAI keys, GitHub tokens, AWS access key ids, Slack tokens, Google API keys, Stripe live keys,
+PEM private keys, JWTs (the header must decode to JSON with `alg`). Email and phone detectors
+exist but are off until the user turns them on.
+
+- A match becomes a fragment with `source: detector`, `detector: <id>` and the detector's hint.
+  Matches go into the vault in memory at once and are sealed and saved once the key is ready.
+- Where they run: inside `Vault.redact` (so anything handed to an agent is checked, wherever it
+  came from), on page writes (debounced, src/http.ts `watchPagesForSecrets`), and on thread items
+  as they are saved (user and agent text, finished tool calls; src/agent/host.ts `detectInItem`).
+  Provider tool output goes through the vault even while it is empty (secretRefs `scrubOutput`),
+  so a key a command prints reaches Claude and Native models as a token.
+  Streaming text skips a match that ends the text, until more arrives. The composer is #1048.
+- Unflag: the user removing a fragment. Its value's SHA-256 goes into `protected_unflagged`, so no
+  detector flags it again; removing a detector-made fragment also counts against that detector.
+- `protected_detectors` keeps each detector's switch, matches, unflags and change history, and
+  custom detectors' definitions. False-flag rate = unflags / matches; at 30 % or more after 4
+  matches Settings -> Protected data suggests turning it off.
+- Agents: `vault_list` includes the detectors and their rates. `detector_propose` (add, edit,
+  enable, disable, remove) asks the user in the chat, with the regex and masked sample matches
+  from the pages; the change records the agent as its author. Built-ins only switch on and off.
+  Patterns must compile, can't match empty text or nest quantifiers (`(a+)+`; JavaScript regexes
+  can't be stopped), and a proposed one matching over 200 values in the pages is refused.
+
 ## Not covered yet
 
 - Values written differently: HTML entities (`&amp;`), JSON escapes, other casing.

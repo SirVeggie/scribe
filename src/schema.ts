@@ -144,3 +144,19 @@ CREATE TABLE IF NOT EXISTS protected_fragments (
   created_at INTEGER NOT NULL
 );
 `;
+
+/**
+ * Detectors (#1047, src/detectors.ts): the user's switches, custom detectors and match/unflag
+ * counts (data is a DetectorRecord as JSON), and hashes of values the user unflagged.
+ */
+export const PROTECTED_DETECTORS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS protected_detectors (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS protected_unflagged (
+  hash TEXT PRIMARY KEY,
+  detector TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+`;

@@ -2081,7 +2081,7 @@ function registerMemoryTools(server: McpServer): void {
 
   server.tool(
     "vault_list",
-    "List the protected values (protect) as metadata only: id, hint, kind, source (user, agent, detector), creator, date, and how many pages you can see contain each. Never the values. Use it to help the user manage them: duplicates, stale or unclear hints.",
+    "List the protected values (protect) as metadata only: id, hint, kind, source (user, agent, detector), creator, date, and how many pages you can see contain each. Never the values. Also lists the detectors: regexes for secret formats whose matches Scribe protects by itself, with their matches, how many the user unflagged, and the estimated false-flag rate (suggestOff when it is high). Use it to help the user manage them: duplicates, stale or unclear hints, noisy detectors.",
     {},
     { readOnlyHint: true },
     async () => {
@@ -2107,6 +2107,27 @@ function registerMemoryTools(server: McpServer): void {
         const failed = data as ApiError & { matches?: unknown };
         return failed.matches ? errorResult(`${failed.error}\n${JSON.stringify(failed.matches)}`) : errorResult(failed.error || `HTTP ${status}`);
       }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "detector_propose",
+    "Propose a change to the detectors (vault_list lists them): add or edit a custom detector, enable or disable one, or remove a custom one. The user is asked in this chat and sees the regex with masked sample matches from their pages; the change applies only if they allow it, and records you as its author. Built-in detectors can only be enabled or disabled. Keep patterns to formats with a low false-flag risk (a fixed prefix and a long random part); a pattern that matches more than 200 values in the pages is refused.",
+    {
+      action: z.enum(["add", "edit", "enable", "disable", "remove"]),
+      id: z.string().describe("The detector's id: an existing one, or for add a new one (2–40 characters, lowercase letters, digits and -)."),
+      pattern: z.string().optional().describe("add/edit: a JavaScript regex source, without slashes. No nested quantifiers such as (a+)+."),
+      flags: z.string().optional().describe("add/edit: regex flags besides g (i, m, s, u)."),
+      label: z.string().optional().describe("add/edit: its name in Settings, e.g. \"Twilio API key\"."),
+      hint: z.string().optional().describe("add/edit: what agents see in its tokens. Default: the label."),
+      kind: z.string().optional().describe("add/edit: api key, token, password, private key, …"),
+      reason: z.string().optional().describe("Why, shown to the user, e.g. how often it was unflagged."),
+      importance: z.enum(["necessary", "important", "useful", "trivial"]).optional().describe("How long a board worker's chat waits for the answer. Default useful."),
+    },
+    async (args, extra) => {
+      const { status, data } = await api("POST", "/api/vault/detectors/propose", args, { signal: extra.signal });
+      if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
       return jsonResult(data);
     }
   );
