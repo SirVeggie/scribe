@@ -46,12 +46,12 @@ function killTree(pid: number | undefined): void {
  * Run one command line to the end (or the timeout, or the signal), with stdout and stderr interleaved.
  * With the thread's sandbox (#899) it runs under srt, and what it refused is added to the output.
  */
-export async function runCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal; sandbox?: SandboxHooks | null }): Promise<CommandResult> {
+export async function runCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal; sandbox?: SandboxHooks | null; env?: Record<string, string> }): Promise<CommandResult> {
   const { result, note } = await sandboxedRun(opts.sandbox, opts.command, { signal: opts.signal }, (line) => spawnCommand({ ...opts, command: line }));
   return note ? { ...result, output: clipOutput(`${result.output}${result.output ? "\n" : ""}${note}`) } : result;
 }
 
-function spawnCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal }): Promise<CommandResult> {
+function spawnCommand(opts: { command: string; cwd: string; timeoutMs?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<CommandResult> {
   return new Promise((resolve) => {
     const { file, args } = shellFor(opts.command);
     let output = "";
@@ -59,7 +59,8 @@ function spawnCommand(opts: { command: string; cwd: string; timeoutMs?: number; 
     let cancelled = false;
     const child = spawn(file, args, {
       cwd: opts.cwd,
-      env: { ...process.env, CURSOR_AGENT: "1" },
+      // env: secret references (#1049), set on this command's process only.
+      env: { ...process.env, CURSOR_AGENT: "1", ...opts.env },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       // Its own process group, so a kill takes its children too.

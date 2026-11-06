@@ -2092,6 +2092,26 @@ function registerMemoryTools(server: McpServer): void {
   );
 
   server.tool(
+    "vault_show",
+    "Show a protected value to the user in this chat, for example when they ask for a saved key or password. The chat shows it blurred to the user only; you get back just that it was shown, never the value. Find it by id (from a ⟦p:<id> …⟧ token or vault_list) or by words from its hint. To use a value in a shell command instead, write its token or $SCRIBE_SECRET_<id> in the command: Scribe sets it for that command only and turns it back into the token in the output.",
+    {
+      id: z.string().optional().describe("The value's id, or its whole ⟦p:…⟧ token."),
+      query: z.string().optional().describe("Words from its hint or kind, when you don't have the id. Several matches return their ids to pick from."),
+      note: z.string().optional().describe("One line shown with it, e.g. what it is for."),
+    },
+    { readOnlyHint: true },
+    async ({ id, query, note }) => {
+      if (!id && !query) return errorResult("Give id or query.");
+      const { status, data } = await api("POST", "/api/vault/show", { id, query, note });
+      if (status >= 400) {
+        const failed = data as ApiError & { matches?: unknown };
+        return failed.matches ? errorResult(`${failed.error}\n${JSON.stringify(failed.matches)}`) : errorResult(failed.error || `HTTP ${status}`);
+      }
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
     "memory_list",
     "List the memories that apply to this chat: global, workspace, and its own provider (Native: its own source), newest first, each with its id. Other providers' memories are private. Your instructions already carry them (the newest, when there are many); use this to search them, or to see them again after changes.",
     { q: z.string().optional().describe("Only memories that mention every one of these words.") },

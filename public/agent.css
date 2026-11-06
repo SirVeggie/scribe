@@ -6933,6 +6933,24 @@ span.ag-usage {
   font-size: 13px;
   line-height: normal;
 }
+/* vault_show (#1049): a protected value, blurred until the user clicks it. */
+.ag-secret-note { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+.ag-secret-row { display: flex; align-items: center; gap: 6px; }
+.ag-secret-value {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font: 12px var(--mono, ui-monospace, monospace);
+  background: var(--code-bg, rgba(127, 127, 127, 0.12));
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ag-secret-value.blurred { filter: blur(4px); user-select: none; }
 /* Inline kit components use the same card chrome as questions and settings. */
 .ag-component-body { position: relative; }
 .ag-component-body iframe { display: block; width: 100%; border: 0; background: var(--bg); }

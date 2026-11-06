@@ -4576,6 +4576,8 @@
           return this.renderUsageLimit(it);
         case "settings":
           return this.renderSettings(it);
+        case "secret":
+          return this.renderSecret(it);
         case "component":
           return window.ScribeComponents.render(it, R, mdCtx);
         case "todos":
@@ -5422,6 +5424,55 @@
       const { missing } = window.scribeSettingsUI.lend(body, it.ids);
       node.append(body);
       if (missing.length) node.append(el("div", "ag-muted", missing.length === it.ids.length ? "These settings are no longer in Scribe." : `Not found any more: ${missing.join(", ")}`));
+      return node;
+    }
+
+    /**
+     * vault_show (#1049): a protected value for the user's eyes. The item holds only its id; the value
+     * comes from the user-only reveal route on the first click and stays blurred until clicked.
+     */
+    renderSecret(it) {
+      const node = el("div", "ag-card ag-secret-card");
+      node.dataset.itemId = it.id;
+      const head = el("div", "ag-card-head");
+      head.append(icon("shield"), el("span", "ag-card-title", it.hint));
+      if (it.fragmentKind && it.fragmentKind !== it.hint) head.append(el("span", "ag-muted", it.fragmentKind));
+      node.append(head);
+      if (it.note) node.append(el("div", "ag-secret-note", it.note));
+      const row = el("div", "ag-secret-row");
+      const value = el("button", "ag-secret-value blurred", "••••••••••••");
+      value.type = "button";
+      value.setAttribute("aria-label", "Reveal");
+      let loaded = null;
+      const load = async () => {
+        if (loaded !== null) return loaded;
+        const res = await fetch(`/api/vault/${encodeURIComponent(it.fragment)}/value`);
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error || `Reveal failed (${res.status})`);
+        loaded = data.value;
+        return loaded;
+      };
+      value.addEventListener("click", async () => {
+        try {
+          value.textContent = await load();
+          const hide = !value.classList.contains("blurred");
+          value.classList.toggle("blurred", hide);
+          value.setAttribute("aria-label", hide ? "Reveal" : "Hide");
+        } catch (err) {
+          value.replaceWith(el("span", "ag-muted", err.message));
+          copy.remove();
+        }
+      });
+      const copy = button(icon("copy"), "ag-icon-btn small", async () => {
+        try {
+          await navigator.clipboard.writeText(await load());
+          notice("Copied");
+        } catch (err) {
+          notice(err.message);
+        }
+      }, "Copy");
+      row.append(value, copy);
+      node.append(row);
       return node;
     }
 

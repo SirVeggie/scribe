@@ -18,6 +18,8 @@ import { SparePool, type AgentProvider, type ProviderSession, type RunSink, type
 import { threadToken } from "../../callers.js";
 import { outputImages } from "../outputImages.js";
 import { authCommand } from "./authCommand.js";
+import { VaultTokenError, vault } from "../../vault.js";
+import { scrubOutput, secretInput } from "../secretRefs.js";
 
 /**
  * Claude through the Claude Agent SDK. One long-lived query per thread in streaming-input mode,
@@ -993,12 +995,18 @@ class ClaudeSession implements ProviderSession {
             hooks: [async (hookInput, _toolUseId, { signal }) => this.gateWeb(hookInput as { tool_name?: string; tool_input?: unknown }, signal)],
           },
           {
+            // Secret references (#1049): ⟦p:…⟧ tokens become their values where the call runs.
+            hooks: [async (hookInput) => this.secretHook(hookInput as { tool_name?: string; tool_input?: unknown })],
+          },
+          {
             // Scribe's hooks (Agent settings, Hooks): every tool call asks the host first, also under
             // Full access. An ask waits on the user, so it gets the web gate's long timeout.
             timeout: 7 * 24 * 60 * 60,
             hooks: [async (hookInput, _toolUseId, { signal }) => this.gateHooks(hookInput as { tool_name?: string; tool_input?: unknown; tool_use_id?: string }, signal)],
           },
         ],
+        // ...and the output comes back with every protected value as its token, whatever printed it.
+        PostToolUse: [{ hooks: [async (hookInput) => this.scrubHook(hookInput as { tool_name?: string; tool_response?: unknown })] }],
       },
       env: { ...sdkEnv(), ...this.ctx.claudeEnv?.(this.thread) },
       stderr: (data) => {
@@ -1078,6 +1086,31 @@ class ClaudeSession implements ProviderSession {
     if (!this.ctx.webRequest) return deny("Web access is off for this thread.");
     const result = await this.ctx.webRequest(thread.id, call, { signal });
     return result.allowed ? allow() : deny(result.message ?? "The user did not allow this web request.");
+  }
+
+  /**
+   * PreToolUse: a call's ⟦p:…⟧ tokens (and $SCRIBE_SECRET_<id> in a command) become their values for
+   * the run only; the model keeps the call as it wrote it. Scribe's own tools are left alone: the
+   * daemon swaps their tokens itself, so values never pass through their MCP process. Web tools too:
+   * a value doesn't go to a search engine or a fetched site's summariser.
+   */
+  private secretHook(inp: { tool_name?: string; tool_input?: unknown }): HookJSONOutput {
+    const name = inp.tool_name ?? "";
+    if (!name || name.startsWith(`mcp__${BOARD_SERVER}__`) || name === "WebSearch" || name === "WebFetch" || !isPlainRecord(inp.tool_input)) return { continue: true };
+    try {
+      const updatedInput = secretInput(name, inp.tool_input);
+      return updatedInput ? { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } } : { continue: true };
+    } catch (err) {
+      if (!(err instanceof VaultTokenError)) return { continue: true };
+      return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: err.message } };
+    }
+  }
+
+  /** PostToolUse: protected values in a tool's output go back to the model as their tokens. */
+  private scrubHook(inp: { tool_name?: string; tool_response?: unknown }): HookJSONOutput {
+    if (inp.tool_name?.startsWith(`mcp__${BOARD_SERVER}__`)) return { continue: true };
+    const updatedToolOutput = scrubOutput(inp.tool_response);
+    return updatedToolOutput === null ? { continue: true } : { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput } };
   }
 
   /**
@@ -1511,7 +1544,11 @@ class ClaudeSession implements ProviderSession {
     if (this.thread.mode === "board" && !name.startsWith(`mcp__${BOARD_SERVER}__`) && !["WebSearch", "WebFetch", "Skill", "TodoWrite", "ToolSearch", ...(pagesReadsFiles(this.thread) ? PAGES_READ_TOOLS : [])].includes(name)) {
       return { behavior: "deny", message: pagesReadsFiles(this.thread) ? `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools, file reads and web search are available.` : `This thread is on the ${APPROVAL_LABEL[this.thread.approval]} rung: only board tools and web search are available.` };
     }
-    const described = describeTool(name, input, this.thread.cwd);
+    // A call with secret references arrives with their values in (secretHook): the card shows tokens, and
+    // "always allow" would save the value into a permission rule, so it isn't offered.
+    const shown = vault().redactDeep(input);
+    const secret = shown !== input && JSON.stringify(shown) !== JSON.stringify(input);
+    const described = describeTool(name, shown, this.thread.cwd);
     const mcpServer = this.userServers().find((server) => name.startsWith(`mcp__${server.name}__`));
     const mcpTool = mcpServer ? name.slice(`mcp__${mcpServer.name}__`.length) : undefined;
     const permissions = new McpPermissions();
@@ -1520,10 +1557,10 @@ class ClaudeSession implements ProviderSession {
     if (mcpServer && mcpTool && permissions.allows(mcpServer, mcpTool, this.thread.id)) return { behavior: "allow", updatedInput: input };
     const options = mcpServer ? mcpApprovalOptions : [
       { id: "allow", label: "Allow once", kind: "allow_once" as const },
-      ...(opts.suggestions && opts.suggestions.length ? [{ id: "always", label: suggestionsLabel(opts.suggestions), description: suggestionsDescription(opts.suggestions) || undefined, kind: "allow_always" as const }] : []),
+      ...(opts.suggestions && opts.suggestions.length && !secret ? [{ id: "always", label: suggestionsLabel(opts.suggestions), description: suggestionsDescription(opts.suggestions) || undefined, kind: "allow_always" as const }] : []),
       { id: "deny", label: "Deny", kind: "reject_once" as const },
     ];
-    const detail = [described.detail ?? (name === "Edit" || name === "Write" ? undefined : summarizeInput(input)), opts.decisionReason, opts.blockedPath ? `Path: ${opts.blockedPath}` : undefined]
+    const detail = [described.detail ?? (name === "Edit" || name === "Write" ? undefined : summarizeInput(shown)), opts.decisionReason && vault().redact(opts.decisionReason), opts.blockedPath ? `Path: ${opts.blockedPath}` : undefined]
       .filter(Boolean)
       .join("\n");
     try {
@@ -1531,7 +1568,7 @@ class ClaudeSession implements ProviderSession {
         {
           toolId: opts.toolUseID,
           tool: toolKind(name),
-          title: opts.title || described.title,
+          title: (opts.title && vault().redact(opts.title)) || described.title,
           detail: detail || undefined,
           // Searches name their folder, and a call outside the allowed folders its blocked path: Scribe's folder grants need them (#743).
           paths: described.paths ?? (str(input.path) ? [str(input.path)!] : opts.blockedPath ? [opts.blockedPath] : undefined),

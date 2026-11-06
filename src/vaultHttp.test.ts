@@ -65,6 +65,14 @@ test("agents read protected values as tokens, write them back intact, and can't 
     assert.equal(listed.data.fragments[0].pages, 1);
     assert.doesNotMatch(listed.text, /hunter2/);
 
+    // The chat's reveal (#1049) is the board UI's; agents can't read it, nor show values outside a chat.
+    const valueRoute = `/api/vault/${added.data.fragment.id}/value`;
+    assert.equal((await call("GET", valueRoute)).data.value, secret);
+    const agentReveal = await call("GET", valueRoute, undefined, true);
+    assert.equal(agentReveal.status, 403, agentReveal.text);
+    assert.doesNotMatch(agentReveal.text, /hunter2/);
+    assert.equal((await call("POST", "/api/vault/show", { query: "staging" }, true)).status, 403);
+
     // Read: the token, never the value, in HTML and state alike.
     const read = await call("GET", `/api/tabs/${id}`, undefined, true);
     assert.equal(read.status, 200, read.text);

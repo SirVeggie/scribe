@@ -24,6 +24,8 @@ import type { ModelOption, ProviderStatus, SlashCommand, Thread, ToolKind, Usage
 import { isPlainRecord, noPages, pagesReadsFiles } from "../types.js";
 import { WEB_SEARCH_SCHEMA, gatedFetchText, gatedSearchText, webCallAllowed, webSearchDescription, type WebAccess, type WebCall } from "../webAccess.js";
 import { clampTimeout, runCommand } from "../hostShell.js";
+import { secretEnv } from "../secretRefs.js";
+import { VaultTokenError, vault } from "../../vault.js";
 import { sandboxed } from "../sandbox.js";
 import { cursorAccessToken } from "./cursorAuth.js";
 import { SqliteCursorStore } from "./cursorStore.js";
@@ -1126,7 +1128,16 @@ class CursorSession implements ProviderSession {
         abort.signal
       );
       if (decision.optionId !== "allow") return fail(decision.note ? `The user denied this command: ${decision.note}` : "The user denied this command.");
-      const result = await runCommand({ command, cwd, timeoutMs: clampTimeout(args.timeout_ms), signal: abort.signal, sandbox: this.ctx.sandbox?.(this.thread.id, this.cwd()) });
+      // Secret references (#1049): tokens read variables set on this command's process only, and the output comes back with tokens.
+      let refs: ReturnType<typeof secretEnv>;
+      try {
+        refs = secretEnv(command, process.platform === "win32" ? "powershell" : "posix");
+      } catch (err) {
+        if (err instanceof VaultTokenError) return fail(err.message);
+        throw err;
+      }
+      const ran = await runCommand({ command: refs?.command ?? command, ...(refs ? { env: refs.env } : {}), cwd, timeoutMs: clampTimeout(args.timeout_ms), signal: abort.signal, sandbox: this.ctx.sandbox?.(this.thread.id, this.cwd()) });
+      const result = { ...ran, output: vault().redact(ran.output) };
       const call = toolId ? this.shellCalls.get(toolId) : undefined;
       if (call) call.exitCode = result.exitCode;
       const status = result.cancelled ? "Cancelled by the user." : result.timedOut ? "Timed out and stopped." : `Exit code: ${result.exitCode ?? "none"}`;

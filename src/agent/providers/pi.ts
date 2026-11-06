@@ -18,6 +18,8 @@ import { serversKey } from "../mcpConfig.js";
 import { SparePool, type AgentProvider, type ApprovalRequest, type ProviderSession, type RunSink, type SessionContext, type SteerInput, type TurnInput, type TurnResult } from "./provider.js";
 import { threadToken } from "../../callers.js";
 import { DEFERRED_TOOLS, TOOL_CALL, TOOL_SEARCH, toolLoadingFor } from "../../toolLoading.js";
+import { VaultTokenError, vault } from "../../vault.js";
+import { scrubOutput, secretInput } from "../secretRefs.js";
 import { checkPath, policyFor } from "../access.js";
 import { sandboxed, sandboxedRun, type SandboxHooks } from "../sandbox.js";
 import { pathInside } from "../toolGrants.js";
@@ -726,6 +728,24 @@ export function describeTools(tools: McpTool[], params: Record<string, unknown>)
     .join("\n\n");
 }
 
+/**
+ * Secret references (#1049): a call's ⟦p:…⟧ tokens (and $SCRIBE_SECRET_<id> in a command) become their
+ * values for the run. Pi hands hooks a copy of the arguments, so the conversation keeps the tokens.
+ * Scribe's own tools are left alone (the daemon swaps their tokens itself), and so are web tools, so a value
+ * doesn't go to a search engine.
+ */
+function secretRefs(event: ToolCallEvent, boardTools: Set<string>): ToolCallEventResult | undefined {
+  if (!isPlainRecord(event.input) || event.toolName === TOOL_CALL || boardTools.has(event.toolName) || event.toolName === "web_fetch" || event.toolName === "web_search") return undefined;
+  try {
+    const updated = secretInput(event.toolName, event.input);
+    if (updated) Object.assign(event.input, updated);
+    return undefined;
+  } catch (err) {
+    if (err instanceof VaultTokenError) return { block: true, reason: err.message };
+    return undefined;
+  }
+}
+
 /** A tool_call names the tool it runs: hooks, the transcript and the stats see that tool and its arguments. */
 export function effectiveTool(name: string, args: Record<string, unknown>): { name: string; args: Record<string, unknown> } {
   if (name === TOOL_CALL && typeof args.name === "string" && DEFERRED_TOOLS.has(args.name)) return { name: args.name, args: isPlainRecord(args.args) ? args.args : {} };
@@ -889,10 +909,15 @@ class PiSession implements ProviderSession {
     return this.ctx.webRequest(this.thread.id, call);
   }
 
+  /** Scribe's own tools in this session: their tokens are the daemon's to swap (secretRefs). */
+  private boardToolNames = new Set<string>();
+
   /** The tools Scribe adds to Pi: the board's, the web fetch, questions and todos. */
   private async customTools(): Promise<ToolDefinition[]> {
     this.board ??= new BoardTools(this.ctx.boardMcp, this.thread.id, !noPages(this.thread.scope), scribeToolsOff(this.thread));
-    const tools = [...(await this.board.tools()), ...(await this.userTools())];
+    const board = await this.board.tools();
+    this.boardToolNames = new Set(board.map((tool) => tool.name));
+    const tools = [...board, ...(await this.userTools())];
     const searchUrl = this.ctx.webSearchUrl?.() ?? "";
     const noSearch = searchUrl ? "" : " Web search is not available.";
     tools.push({
@@ -1168,7 +1193,17 @@ class PiSession implements ProviderSession {
       ...(this.instructions ? { appendSystemPrompt: [this.instructions] } : {}),
       extensionFactories: [{ name: "scribe", hidden: true, factory: (api: ExtensionAPI) => {
         api.on("session_before_compact", (event) => this.beforeCompact(event));
-        api.on("tool_call", (event) => this.gate(event));
+        api.on("tool_call", async (event) => {
+          const gated = await this.gate(event);
+          return gated?.block ? gated : (secretRefs(event, this.boardToolNames) ?? gated);
+        });
+        // Secret references (#1049): protected values in a tool's output go back to the model as tokens.
+        api.on("tool_result", (event) => {
+          const content = scrubOutput(event.content);
+          const structured = scrubOutput(event.structuredContent);
+          if (!content && !structured) return undefined;
+          return { content: content ?? event.content, ...(event.structuredContent !== undefined ? { structuredContent: structured ?? event.structuredContent } : {}) };
+        });
         // These bracket a logical provider call, not each SDK transport retry.
         // Never retain the payload, headers, credentials or response body.
         api.on("before_provider_request", (_event, ctx) => this.observePayload(ctx.model));
@@ -1426,7 +1461,9 @@ class PiSession implements ProviderSession {
         sink.breakBlock();
         this.lastBlock = null;
         // A tool_call shows (and counts) as the tool it runs.
-        const { name, args } = effectiveTool(event.toolName, isPlainRecord(event.args) ? event.args : {});
+        const { name, args: raw } = effectiveTool(event.toolName, isPlainRecord(event.args) ? event.args : {});
+        // Its secret references are already values here (secretRefs): show them as tokens.
+        const args = vault().redactDeep(raw);
         const filePath = str(args.path);
         sink.toolStart({
           toolId: event.toolCallId,

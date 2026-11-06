@@ -538,6 +538,10 @@ export async function startHttp(): Promise<http.Server> {
       const thread = identify(req).thread;
       return (thread && agentHost?.getThread(thread)?.title) || "agent";
     },
+    show: (thread, fragment, note) => {
+      if (!agentHost) throw new Error("vault_show only works in Scribe chat threads.");
+      agentHost.showSecret(thread, fragment, note);
+    },
   }));
   // A chat here reaching another device (#911): device_list, and calls that name a device go over the link.
   const agentDevices: AgentDevicesHost = {

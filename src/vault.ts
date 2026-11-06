@@ -49,7 +49,7 @@ const STOP_WORDS = new Set([
 export function tokenFor(fragment: Pick<Fragment, "id" | "hint">): string {
   return `⟦p:${fragment.id} ${fragment.hint}⟧`;
 }
-const TOKEN = /⟦p:([^\s⟧]*)(?: ([^⟧]*))?⟧/g;
+export const TOKEN = /⟦p:([^\s⟧]*)(?: ([^⟧]*))?⟧/g;
 
 export function cleanHint(hint: unknown, kind: string): string {
   const text = typeof hint === "string" ? hint.replace(/[⟦⟧\p{Cc}]/gu, " ").replace(/\s+/g, " ").trim() : "";
@@ -229,6 +229,39 @@ export class Vault {
     this.fragments.delete(id);
     this.changed();
     return true;
+  }
+
+  /**
+   * A fragment's value, for the daemon's own use only: the user's reveal route and swapping a reference
+   * in where a command runs (secretRefs.ts). Never put what this returns in anything an agent reads.
+   */
+  reveal(id: string): string | undefined {
+    return this.fragments.get(id)?.value;
+  }
+
+  meta(id: string): FragmentMeta | undefined {
+    const fragment = this.fragments.get(id);
+    return fragment ? metaOf(fragment) : undefined;
+  }
+
+  /**
+   * Fragments whose hint, kind or id match a query, best first: an exact id or hint, then hints that hold
+   * every word. Matches metadata only, so an agent can't use it to test a guess at a value.
+   */
+  find(query: string): FragmentMeta[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const exact = this.fragments.get(q.replace(/^⟦p:/, "").split(/[\s⟧]/)[0]);
+    if (exact) return [metaOf(exact)];
+    const words = q.split(/\s+/);
+    const scored: { meta: FragmentMeta; score: number }[] = [];
+    for (const fragment of this.fragments.values()) {
+      const hint = fragment.hint.toLowerCase();
+      const text = `${hint} ${fragment.kind.toLowerCase()}`;
+      if (!words.every((word) => text.includes(word))) continue;
+      scored.push({ meta: metaOf(fragment), score: hint === q ? 2 : hint.startsWith(q) ? 1 : 0 });
+    }
+    return scored.sort((a, b) => b.score - a.score || b.meta.createdAt - a.meta.createdAt).map((entry) => entry.meta);
   }
 
   /** How often each fragment shows up in these texts: id → number of texts that contain it. */

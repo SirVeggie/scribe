@@ -733,6 +733,11 @@ export type ItemBody =
   /** settings_show: rows of Scribe's settings dialogs, shown in the chat to change there (ids from the client's settings index). */
   | { kind: "browser_handoff"; message: string; status: "pending" | "done" | "cancelled"; activity?: string[] }
   | { kind: "settings"; ids: string[]; title?: string }
+  /**
+   * vault_show (#1049): a protected value shown to the user only. The item names the fragment, never
+   * its value: the chat fetches that from the user-only reveal route when the user clicks it.
+   */
+  | { kind: "secret"; fragment: string; hint: string; fragmentKind: string; note?: string }
   | { kind: "component"; html?: string; plugin?: string; component?: string; props?: unknown; title?: string; fallback?: string; summary?: string; local?: Record<string, unknown>; wait: boolean; status: "shown" | "pending" | "answered" | "skipped" | "expired" }
   /**
    * A plan usage limit stopped a user's turn (#78): Continue sends the thread on once the limit

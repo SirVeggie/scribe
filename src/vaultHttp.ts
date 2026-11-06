@@ -1,7 +1,8 @@
 import express from "express";
 import { identify } from "./callers.js";
 import type { Tab } from "./types.js";
-import { VaultTokenError, agentValueProblem, vault, vaultUnavailable } from "./vault.js";
+import { isContentHost } from "./contentOrigin.js";
+import { VaultTokenError, agentValueProblem, vault, vaultUnavailable, type FragmentMeta } from "./vault.js";
 
 /**
  * Protected data over HTTP (#1045). Everything the daemon answers an agent goes through the vault's
@@ -60,12 +61,16 @@ export type VaultRoutesHost = {
   pages(req: express.Request): Tab[];
   /** Who an agent caller is, for createdBy. */
   agentName(req: express.Request): string;
+  /** vault_show: the fragment as a card in that chat thread's running turn. Throws when it can't. */
+  show(thread: string, fragment: FragmentMeta, note?: string): void;
 };
 
 /**
  * POST /api/vault/protect { value, hint?, kind? }: add a fragment (agents and the user).
  * GET /api/vault: the fragments' metadata, never values, with how many pages hold each.
  * DELETE /api/vault/:id: the user only.
+ * POST /api/vault/show { id? | query?, note? }: a chat's agent puts a value in its chat for the user (#1049).
+ * GET /api/vault/:id/value: the value, for the board UI only (the chat's reveal).
  */
 export function vaultRouter(host: VaultRoutesHost): express.Router {
   const router = express.Router();
@@ -104,6 +109,48 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
     const pages = host.pages(req);
     const counts = vault().count(pages.map(pageStrings));
     res.json({ fragments: vault().list().map((fragment) => ({ ...fragment, pages: counts.get(fragment.id) ?? 0 })) });
+  });
+  router.post("/show", (req, res) => {
+    const caller = identify(req);
+    const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+    if (!caller.thread || caller.device) {
+      res.status(403).json({ error: "vault_show only works in this Scribe's own chat threads." });
+      return;
+    }
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    const query = typeof body.query === "string" ? body.query : "";
+    const matches = id ? [vault().meta(id.replace(/^⟦p:/, "").split(/[\s⟧]/)[0])].filter((meta): meta is FragmentMeta => Boolean(meta)) : vault().find(query);
+    if (!matches.length) {
+      res.status(404).json({ error: id ? `No protected value has the id ${id}.` : `No protected value's hint matches "${query}". vault_list shows them all.` });
+      return;
+    }
+    // Several hints fit: the agent picks one by id rather than the user seeing the wrong value.
+    if (matches.length > 1 && !id && matches[0].hint.toLowerCase() !== query.trim().toLowerCase()) {
+      res.status(409).json({ error: "Several protected values match; call vault_show again with one id.", matches: matches.slice(0, 10).map(({ id, hint, kind }) => ({ id, hint, kind })) });
+      return;
+    }
+    const fragment = matches[0];
+    try {
+      host.show(caller.thread, fragment, typeof body.note === "string" ? body.note.slice(0, 200) : undefined);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    res.json({ shown: true, id: fragment.id, hint: fragment.hint });
+  });
+  router.get("/:id/value", (req, res) => {
+    // The board UI only: not agents, and not page scripts, which run as the user on their own origin.
+    const caller = identify(req);
+    if (caller.viewer === "agent" || isContentHost(req) || caller.device) {
+      res.status(403).json({ error: "Only the user's own Scribe window can reveal a protected value." });
+      return;
+    }
+    const value = vault().reveal(req.params.id);
+    if (value === undefined) {
+      res.status(404).json({ error: "This protected value was removed." });
+      return;
+    }
+    res.set("Cache-Control", "no-store").json({ value });
   });
   router.delete("/:id", (req, res) => {
     if (identify(req).viewer === "agent") {

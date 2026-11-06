@@ -5503,6 +5503,14 @@ export class AgentHost {
     this.addItem(threadId, run.turn.id, { kind: "settings", ids, ...(title ? { title } : {}) });
   }
 
+  /** vault_show: a protected value as a card in the thread's running turn, which only the user's view reveals. */
+  showSecret(threadId: string, fragment: { id: string; hint: string; kind: string }, note?: string): void {
+    const run = this.runs.get(threadId);
+    if (!run) throw new Error("vault_show only works while this chat thread has a turn running.");
+    this.closeBlocks(run);
+    this.addItem(threadId, run.turn.id, { kind: "secret", fragment: fragment.id, hint: fragment.hint, fragmentKind: fragment.kind, ...(note ? { note } : {}) });
+  }
+
   componentItem(threadId: string, itemId: string): WidgetItem {
     this.requireThread(threadId);
     const item = this.loadItems(threadId).find(it => it.id === itemId);

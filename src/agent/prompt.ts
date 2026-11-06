@@ -9,6 +9,7 @@ import { memoryBlock, type Memory } from "./memory.js";
 import { skillIndex } from "./scribeSkills.js";
 import { TOOL_CALL, TOOL_SEARCH, toolLoadingFor } from "../toolLoading.js";
 import { APPROVAL_LABEL, noPages, type ContextChip, type Thread } from "./types.js";
+import { vault } from "../vault.js";
 
 /** Scope details the host resolves from the board for a thread's instructions. */
 export type ScopeInfo = {
@@ -155,6 +156,13 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
       `Scribe settings: when the user asks where one of Scribe's own settings is or wants one changed, look it up with settings_find and show the rows that fit with settings_show. They appear in the chat as in the settings dialog and the user changes them there.`,
       `Agent setup: to help the user set up or change Scribe's agent harness beyond a settings click (their MCP servers, hook rules, skills, instruction files), read harness_docs and make the change with harness_change; the user approves it in the chat.`,
       `Inline UI: widget_show displays kit HTML in the chat, with no network or page API access. Include fallback text for history; wait:true returns a kit button or form's reply.`
+    );
+  }
+  // Secret references (#1049), only once the user keeps protected values. Claude and Native swap tokens in any tool call.
+  if (vault().size && !noPages(thread.scope)) {
+    const swaps = thread.provider === "claude" || thread.provider === "pi";
+    lines.push(
+      `Protected values: ⟦p:<id> <hint>⟧ tokens stand for values no model reads; copy them whole.${swaps ? " To use one in a command or tool call, write its token (or $SCRIBE_SECRET_<id> in a command): Scribe puts the value in where the call runs and turns it back into the token in the output." : ""} vault_show shows one to the user in the chat.`
     );
   }
   switch (thread.mode) {
