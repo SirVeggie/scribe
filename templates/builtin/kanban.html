@@ -7214,6 +7214,20 @@
       if (!archiveEl.classList.contains("hidden") && !typing) { archiveEl.classList.add("hidden"); archiveBtn.classList.remove("on"); }
       return;
     }
+    // Enter presses the last comment's Continue / Ask while the card is the top dialog, also from the
+    // emptied comment box right after posting. A focused button or link keeps its own Enter.
+    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && !e.defaultPrevented &&
+        openId && topDialog() === modal && !menuEl && lightbox.classList.contains("hidden")) {
+      var act = document.activeElement;
+      var free = !typing || (act === commentBox && !commentBox.value.trim());
+      var go = free && !(act && act.closest && act.closest("button, a, [role='button']")) &&
+        commentsEl.querySelector(".comment-follow button.primary:not(:disabled)");
+      if (go) {
+        e.preventDefault();
+        go.click();
+        return;
+      }
+    }
     if (e.key === "/" && !typing && !openId) {
       e.preventDefault();
       searchEl.focus();
