@@ -57,6 +57,9 @@
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M1.8 5.8h12.4" stroke="currentColor" stroke-width="1.3"/><circle cx="3.9" cy="4.15" r=".6" fill="currentColor"/><circle cx="5.7" cy="4.15" r=".6" fill="currentColor"/></svg>',
     globe:
       '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>',
+    // Web off (#1019): the globe with a slash from bottom left to top right, cut away along its top-left side.
+    globeOff:
+      '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><defs><mask id="ag-globe-off-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16"><rect width="16" height="16" fill="#fff"/><path d="M1.4 12.6L12.6 1.4" stroke="#000" stroke-width="1.5" stroke-linecap="round"/></mask></defs><g mask="url(#ag-globe-off-gap)"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12" fill="none" stroke="currentColor" stroke-width="1.1"/></g><path d="M2.6 13.4L13.4 2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
     box: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2 4.5L8 2l6 2.5v7L8 14l-6-2.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M2 4.5L8 7l6-2.5M8 7v7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
     more: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>',
     image:

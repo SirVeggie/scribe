@@ -7067,8 +7067,15 @@ main.has-split .help-panel[data-pane] {
   opacity: 0.7;
 }
 
+/* Off reads as clearly off (#1019): dimmer than the other header chips until hovered. */
 .help-web[aria-pressed="false"] {
   color: var(--muted);
+  opacity: 0.55;
+}
+
+.help-web[aria-pressed="false"]:hover,
+.help-web[aria-pressed="false"]:focus-visible {
+  opacity: 0.85;
 }
 
 .help-web[aria-pressed="true"] {

@@ -14867,7 +14867,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
     renderWeb() {
       const on = this.web();
-      this.webBtn.replaceChildren(icon("globe"), el("span", null, "Web"));
+      this.webBtn.replaceChildren(icon(on ? "globe" : "globeOff"), el("span", null, "Web"));
       this.webBtn.setAttribute("aria-pressed", String(on));
     },
 
