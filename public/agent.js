@@ -14539,6 +14539,55 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   }
 
   /**
+   * What the agent did for an answer, in plain words (#1019): its searches with what it searched for, and
+   * counts of what it read. "Searched pages for “themes”, read 2 pages and the Scribe guide".
+   */
+  function helpSummary(items) {
+    const searches = [];
+    const reads = { page: 0, file: 0, chat: 0, web: 0, docs: false };
+    const quote = (q) => (typeof q === "string" && q.trim() ? `“${q.trim().length > 40 ? `${q.trim().slice(0, 39)}…` : q.trim()}”` : "");
+    const search = (what, q) => {
+      const line = q ? `${what} for ${q}` : what;
+      if (!searches.includes(line)) searches.push(line);
+    };
+    for (const it of items) {
+      if (it.kind !== "tool" || it.parentToolId) continue;
+      const name = it.name || "";
+      const input = it.input && typeof it.input === "object" ? it.input : {};
+      const q = quote(input.query ?? input.q ?? input.pattern);
+      if (/library_search|page_list/.test(name)) search("searched pages", q);
+      else if (/page_read|page_grep|page_state/.test(name)) reads.page++;
+      else if (/settings_find/.test(name)) search("looked up settings", q);
+      else if (/scribe_docs|skill_read|harness_docs|plugin_guide|template_/.test(name)) reads.docs = true;
+      else if (/thread_list/.test(name)) search("searched chats", q);
+      else if (/thread_read/.test(name)) reads.chat++;
+      else if (/web_?search/i.test(name)) search("searched the web", q);
+      else if (/fetch/i.test(name)) reads.web++;
+      else if (it.tool === "search") search("searched files", q);
+      else if (it.tool === "read") reads.file++;
+    }
+    const n = (count, one, many) => `${count === 1 ? "a" : count} ${count === 1 ? one : many}`;
+    const read = [
+      reads.page && n(reads.page, "page", "pages"),
+      reads.chat && n(reads.chat, "chat", "chats"),
+      reads.web && n(reads.web, "web page", "web pages"),
+      reads.file && n(reads.file, "file", "files"),
+      reads.docs && "the Scribe guide",
+    ].filter(Boolean);
+    const parts = [...searches.slice(0, 3)];
+    if (searches.length > 3) parts.push(`${searches.length - 3} more ${searches.length === 4 ? "search" : "searches"}`);
+    if (read.length) parts.push(`read ${read.length > 1 ? `${read.slice(0, -1).join(", ")} and ${read[read.length - 1]}` : read[0]}`);
+    if (!parts.length) return "";
+    const text = parts.join(", ");
+    return text[0].toUpperCase() + text.slice(1);
+  }
+
+  function helpDuration(ms) {
+    const s = Math.max(1, Math.round(ms / 1000));
+    return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60 ? `${s % 60} s` : ""}`.trim();
+  }
+
+  /**
    * The answer to show from a turn's items: the cards and images it showed, and the text it wrote after
    * its last tool call. Text before a tool call ("Searching your Library…") was narration, shown only
    * while the turn ran.
@@ -14586,12 +14635,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
 
     /** Save an answer under its question; asking the same question again replaces the older result. */
-    remember(q, items) {
+    remember(q, items, foot = null) {
       // Images and components are served from the thread, which is deleted, so a saved result leaves them out.
       const kept = items.filter((it) => it.kind === "text" || it.kind === "settings").map(({ threadId, parentId, seq, ...rest }) => rest);
       if (!kept.length) return;
       const key = q.trim().toLowerCase();
-      const list = [{ q, at: Date.now(), items: kept }, ...this.history().filter((h) => h.q.trim().toLowerCase() !== key)].slice(0, HELP_HISTORY_MAX);
+      const list = [{ q, at: Date.now(), items: kept, ...(foot ? { ms: foot.ms, did: foot.did } : {}) }, ...this.history().filter((h) => h.q.trim().toLowerCase() !== key)].slice(0, HELP_HISTORY_MAX);
       // Over the storage quota: drop the oldest results until it fits.
       for (let n = list.length; n > 0; n--) {
         try {
@@ -14619,7 +14668,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const meta = el("div", "help-saved");
       meta.append(icon("clock"), el("span", null, `Saved result · ${R.timeAgo(h.at)} ago`));
       meta.append(button("Ask again", "ag-btn small ghost", () => void this.ask(h.q)));
-      this.render(h.items, null, meta);
+      this.render(h.items, null, meta, h.ms ? { ms: h.ms, did: h.did || "" } : null);
     },
 
     model() {
@@ -14970,6 +15019,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
     async finish(id, gen) {
       const question = this.pending?.text;
+      const ms = Date.now() - (this.pending?.since || Date.now());
       let detail;
       try {
         detail = await api("GET", `/threads/${encodeURIComponent(id)}`);
@@ -14985,18 +15035,22 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       items.forEach((it, i) => {
         if (it.kind === "user") from = i;
       });
-      const answer = helpAnswer(items.slice(from + 1));
-      if (question && !detail.error) this.remember(question, answer);
-      this.render(answer, detail.error);
+      const turn = items.slice(from + 1);
+      const answer = helpAnswer(turn);
+      const foot = detail.error ? null : { ms, did: helpSummary(turn) };
+      if (question && !detail.error) this.remember(question, answer, foot);
+      this.render(answer, detail.error, null, foot);
     },
 
-    render(answer, error, meta = null) {
+    render(answer, error, meta = null, foot = null) {
       const out = el("article", "help-answer");
       for (const it of answer) {
         const node = this.renderItem(it);
         if (node) out.append(node);
       }
       if (!out.childNodes.length) out.append(el("p", "ag-muted", error || "No answer came back. Try asking again."));
+      // How long the answer took and what the agent did for it (#1019).
+      else if (foot) out.append(el("p", "help-foot help-block", [`Answered in ${helpDuration(foot.ms)}`, foot.did].filter(Boolean).join(" · ")));
       this.swapResult([...(meta ? [meta] : []), out]);
       animateAnswer(out);
     },

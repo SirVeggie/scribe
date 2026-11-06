@@ -7337,6 +7337,14 @@ main.has-split .help-panel[data-pane] {
   line-height: 1.6;
 }
 
+/* How long the answer took and what the agent did for it (#1019). */
+.help-answer .help-foot {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .help-md table {
   font-size: 13.5px;
 }
