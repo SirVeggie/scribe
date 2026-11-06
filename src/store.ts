@@ -19,6 +19,7 @@ import {
   statePath,
 } from "./config.js";
 import { BoardDb, type StoredFolder, type StoredTab } from "./db.js";
+import type { VaultStore } from "./vault.js";
 import { log } from "./log.js";
 import {
   assertPageAssetRoom,
@@ -2472,6 +2473,15 @@ export class BoardStore extends EventEmitter {
   writeMetaJson(key: string, value: unknown): void {
     if (!this.db) throw new Error("Database is not loaded");
     this.db.writeMetaJson(key, value);
+  }
+
+  /** Where the vault (#1045) keeps its fragments: protected_fragments in this board's database. */
+  protectedStore(): VaultStore {
+    const db = (): BoardDb => {
+      if (!this.db) throw new Error("Database is not loaded");
+      return this.db;
+    };
+    return { list: () => db().listProtected(), insert: (row) => db().insertProtected(row), remove: (id) => db().removeProtected(id) };
   }
 
   spacesView(): SpacesView {

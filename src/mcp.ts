@@ -2065,6 +2065,33 @@ function registerMemoryTools(server: McpServer): void {
   };
 
   server.tool(
+    "protect",
+    "Protect a sensitive value (a password, key, token, private name) so no model reads it again: from now on Scribe shows it to agents as a token ⟦p:<id> <hint>⟧ in pages, cards, search and threads, and swaps the token back to the value when you write it. Use it when the user asks, or when you see such a value the user would not want models to read. Copy tokens exactly as you read them; an unknown or edited token is refused. The user reviews what agents protect.",
+    {
+      value: z.string().describe(`The exact text to protect (at least 6 characters, not a common word).`),
+      hint: z.string().optional().describe("What it is, without the value itself, e.g. \"staging DB password\" (at most 40 characters). Shown in its token."),
+      kind: z.string().optional().describe("password, api-key, token, email, name, address, or other. Default: secret."),
+    },
+    async ({ value, hint, kind }) => {
+      const { status, data } = await api("POST", "/api/vault/protect", { value, hint, kind });
+      if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
+    "vault_list",
+    "List the protected values (protect) as metadata only: id, hint, kind, source (user, agent, detector), creator, date, and how many pages you can see contain each. Never the values. Use it to help the user manage them: duplicates, stale or unclear hints.",
+    {},
+    { readOnlyHint: true },
+    async () => {
+      const { status, data } = await api("GET", "/api/vault");
+      if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+      return jsonResult(data);
+    }
+  );
+
+  server.tool(
     "memory_list",
     "List the memories that apply to this chat: global, workspace, and its own provider (Native: its own source), newest first, each with its id. Other providers' memories are private. Your instructions already carry them (the newest, when there are many); use this to search them, or to see them again after changes.",
     { q: z.string().optional().describe("Only memories that mention every one of these words.") },

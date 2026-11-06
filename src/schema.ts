@@ -126,3 +126,21 @@ CREATE TABLE IF NOT EXISTS page_permissions (
   PRIMARY KEY (tab_id, perm)
 );
 `;
+
+/**
+ * Protected data (#1045, src/vault.ts): fragments no model reads. `sealed` is the value encrypted
+ * with the vault's key; nothing here is exported or handed to agents.
+ */
+export const PROTECTED_FRAGMENTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS protected_fragments (
+  id TEXT PRIMARY KEY,
+  sealed TEXT NOT NULL,
+  hint TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('user','agent','detector')),
+  detector TEXT,
+  created_by TEXT NOT NULL,
+  created_thread TEXT,
+  created_at INTEGER NOT NULL
+);
+`;

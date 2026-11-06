@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { htmlToText, pageText as extractPageText, stateToText as words, ignoredStateField as ignored, type PageTextSource } from "../pageText.js";
 import { collectPageAssetRefs } from "../pageAssets.js";
+import { vault } from "../vault.js";
 
 export const CHUNKER_VERSION = "3";
 export type SearchDeclaration = { records: SearchRecord[] };
@@ -67,6 +68,11 @@ export function analyzePage(tab: PageTextSource, folder: string | null = null, d
     for (const ref of assetRefs(text)) if (!images.has(ref)) images.set(ref, owner ? { ref, owner, label } : { ref, owner: "page", label: tab.title });
   };
   const add = (kind: TextChunk["kind"], key: string, anchor: string | null, label: string, title: string, text: string, headingId?: string) => {
+    // Protected values (#1045) stay out of the index, so a semantic query can't find a page by one.
+    const protectedData = vault();
+    label = protectedData.redact(label);
+    title = protectedData.redact(title);
+    text = protectedData.redact(text);
     if (!text.trim()) return;
     out.push({ kind, key, anchor, label, title, text, headingId, snippet: text.replace(/\s+/g, " ").slice(0, 200), hash: createHash("sha256").update(JSON.stringify([title, text])).digest("hex") });
   };

@@ -81,6 +81,7 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "thread_list",
   "thread_access",
   "memory_list",
+  "vault_list",
   "agent_models",
   "device_list",
   "list_files",

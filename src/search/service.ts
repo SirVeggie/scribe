@@ -43,6 +43,10 @@ export const searchIndex = new SearchIndex(dataDir, {
 let attached = false;
 let replacingPack = false;
 export function setSearchPackReplacing(value: boolean): void { replacingPack = value; }
+/** Look at every page again (a protected value was added or removed, #1045); unchanged chunks keep their vectors. */
+export function reindexAllPages(): void {
+  for (const tab of [...store.listOpenTabs(), ...store.listClosedTabs()]) searchIndex.schedule(tab.id);
+}
 export function refreshSearchIndex(): void {
   if (replacingPack) { searchIndex.pause(); return; }
   if (!attached) {

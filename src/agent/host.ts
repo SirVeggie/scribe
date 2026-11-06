@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { AGENT_PORT, PORT, dataDir } from "../config.js";
 import { browserControl, browserActivity, browserTurnEnded, browserUserMessage, closeThreadBrowser } from "../browser.js";
 import { log } from "../log.js";
+import { vault } from "../vault.js";
 import { toolLoadingFor } from "../toolLoading.js";
 import type { ActionCaller } from "../actions/types.js";
 import { store } from "../store.js";
@@ -2943,7 +2944,9 @@ export class AgentHost {
         throw new Error("Codex has not confirmed that included usage is available again. Waiting for a fresh quota read.");
       }
     }
-    let text = input.text.trim();
+    // What a page, a component or Scribe itself writes (a card prompt, a card's comments) can carry
+    // protected values (#1045); only the person's own composer sends them as typed.
+    let text = (input.from ? vault().redact(input.text) : input.text).trim();
     // "/plan <task>" marks a plan turn (#721), whoever sends it.
     const slash = /^\/plan(?:\s+|$)/.exec(text);
     if (slash) text = text.slice(slash[0].length).trim();

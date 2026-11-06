@@ -24,7 +24,7 @@ export const DEFERRED_TOOLS: ReadonlySet<string> = new Set([
   "harness_docs", "harness_change",
   "settings_find", "settings_show",
   "thread_list", "thread_read", "thread_access", "thread_worktree",
-  "memory_list", "memory_delete",
+  "memory_list", "memory_delete", "protect", "vault_list",
   "page_screenshot", "page_pin", "page_unpin", "page_access", "page_wait",
   "device_list", "web_request", "widget_show", "scribe_docs",
 ]);

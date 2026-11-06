@@ -1,4 +1,5 @@
 import type { Tab } from "./types.js";
+import { vault } from "./vault.js";
 
 export function normalizeSearchText(value: string): string {
   return value.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
@@ -37,26 +38,31 @@ type PageText = Readonly<{
   normalizedData: string;
   hay: string;
 }>;
-type CacheEntry = { revision: number; stateRevision: number; html: string; state: unknown; text: PageText };
+type CacheEntry = { revision: number; stateRevision: number; html: string; state: unknown; title: string; vault: number; text: PageText };
 const cache = new WeakMap<PageTextSource, CacheEntry>();
 
-/** Shared by palette, library and semantic search. Revisions cover in-place state edits. */
+/**
+ * Shared by palette, library and semantic search. Revisions cover in-place state edits.
+ * Protected values (#1045) are left out, so no query can find a page by one.
+ */
 export function pageText(tab: PageTextSource): PageText {
   const old = cache.get(tab);
-  if (old && old.revision === tab.revision && old.stateRevision === tab.stateRevision &&
-      old.html === tab.html && old.state === tab.state && old.text.title === tab.title && old.text.key === (tab.key ?? "")) return old.text;
-  const content = htmlToText(tab.html);
-  const data = stateToText(tab.state);
-  const normalizedTitle = normalizeSearchText(tab.title);
+  const protectedData = vault();
+  if (old && old.revision === tab.revision && old.stateRevision === tab.stateRevision && old.vault === protectedData.version &&
+      old.html === tab.html && old.state === tab.state && old.title === tab.title && old.text.key === (tab.key ?? "")) return old.text;
+  const content = protectedData.redact(htmlToText(tab.html));
+  const data = protectedData.redact(stateToText(tab.state));
+  const title = protectedData.redact(tab.title);
+  const normalizedTitle = normalizeSearchText(title);
   const normalizedKey = normalizeSearchText(tab.key ?? "");
   const normalizedContent = normalizeSearchText(content);
   const normalizedData = normalizeSearchText(data);
-  const text = Object.freeze({ title: tab.title, key: tab.key ?? "", content, data,
+  const text = Object.freeze({ title, key: tab.key ?? "", content, data,
     normalizedTitle, normalizedKey, normalizedContent, normalizedData,
     hay: `${normalizedTitle} ${normalizedKey} ${normalizedContent} ${normalizedData}` });
   // Partial sources without revision counters cannot safely cache in-place edits.
   if (tab.revision !== undefined && tab.stateRevision !== undefined) {
-    cache.set(tab, { revision: tab.revision, stateRevision: tab.stateRevision, html: tab.html, state: tab.state, text });
+    cache.set(tab, { revision: tab.revision, stateRevision: tab.stateRevision, html: tab.html, state: tab.state, title: tab.title, vault: protectedData.version, text });
   }
   return text;
 }

@@ -77,6 +77,8 @@ import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { agentPortGate, identify, markAgentSocket, prepareSecrets, socketAllowed } from "./callers.js";
+import { Vault, setVault, setVaultUnavailable } from "./vault.js";
+import { redactAgentResponses, restoreAgentBodies, vaultRouter } from "./vaultHttp.js";
 import { markWebSocket, onWebPort } from "./webRequest.js";
 import type { Duplex } from "node:stream";
 import { WebAccess, webFront } from "./devices/web.js";
@@ -104,7 +106,7 @@ import { browserViewHtml } from "./browserPage.js";
 import { FileConflictError, fileViewerHtml, linkedImagePath, listFolder, readFileBytes, readFileForPage, samePath, writeFileText } from "./filePages.js";
 import { readPdfText } from "./pdfText.js";
 import { searchEmbedder } from "./search/embedder.js";
-import { refreshSearchIndex, searchIndex } from "./search/service.js";
+import { refreshSearchIndex, reindexAllPages, searchIndex } from "./search/service.js";
 import { PluginService } from "./plugins/service.js";
 import { underServiceManager } from "./service.js";
 import { PluginActions } from "./plugins/actions.js";
@@ -163,6 +165,18 @@ function refreshPluginTemplates(): void {
   }));
 }
 
+/** The vault (#1045) from this board's database; without it, nothing is protected, so say so loudly. */
+async function openProtectedData(): Promise<void> {
+  try {
+    const opened = await Vault.open(path.join(dataDir(), "vault"), store.protectedStore());
+    setVault(opened);
+    opened.onChange(() => reindexAllPages());
+  } catch (err) {
+    setVaultUnavailable((err as Error).message);
+    log(`PROTECTED DATA UNAVAILABLE: ${(err as Error).message}. Agent calls are refused until this is fixed.`);
+  }
+}
+
 export function viewerCount(): number {
   return viewers.count();
 }
@@ -178,6 +192,7 @@ export async function startHttp(): Promise<http.Server> {
   setPluginActions(pluginActions);
   refreshPluginTemplates();
   prepareSecrets();
+  await openProtectedData();
   refreshSearchIndex();
   // Watch linked disk folders (#707) once start-up is done: the first scan of each can take a moment.
   setTimeout(() => store.watchDisk(), 3000).unref();
@@ -351,6 +366,8 @@ export async function startHttp(): Promise<http.Server> {
   app.use(remoteAgentGate(peers));
   peerNames = (id) => peers.nameOf(id);
   app.use(contentOriginGate);
+  // Protected values (#1045) never reach an agent: every answer to one is redacted on its way out.
+  app.use(redactAgentResponses);
   // These open a window on this device's own screen: not for someone viewing it from another device.
   app.post(["/api/tabs/:id/file/open-location", "/api/agent/integrations/intellij/open", "/api/search/open-folder"], (req, res, next) => {
     if (identify(req).device || identify(req).web) res.status(409).json({ error: "This opens on the device's own screen, so it is not available from another device." });
@@ -417,6 +434,7 @@ export async function startHttp(): Promise<http.Server> {
   pluginService.startKeptAlive();
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use("/api/plugins",express.json({limit:"90mb"}));
+  app.use("/api/plugins",restoreAgentBodies);
   // Copies between devices (#907) parse their own bodies: bundles and blobs are bigger than 6 MB.
   const copyHost: CopyHost = {
     exportFile: (scope) => store.exportFile(scope),
@@ -510,6 +528,17 @@ export async function startHttp(): Promise<http.Server> {
   }, log);
   app.use("/api/memory-sync", memorySync.router());
   app.use(express.json({ limit: "6mb" }));
+  app.use(restoreAgentBodies);
+  app.use("/api/vault", vaultRouter({
+    pages: (req) => {
+      const see = reachable(req);
+      return [...store.listOpenTabs(viewerOf(req), see), ...store.listClosedTabs(viewerOf(req), see)];
+    },
+    agentName: (req) => {
+      const thread = identify(req).thread;
+      return (thread && agentHost?.getThread(thread)?.title) || "agent";
+    },
+  }));
   // A chat here reaching another device (#911): device_list, and calls that name a device go over the link.
   const agentDevices: AgentDevicesHost = {
     remoteAgent: (thread, device, writtenFor) => agentHost?.remoteAgentFor(thread, device, writtenFor) ?? "Only Scribe chats can reach other devices.",

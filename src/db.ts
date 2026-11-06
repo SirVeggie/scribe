@@ -3,7 +3,8 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { normalizeTabAssets } from "./assets.js";
 import type { PageAssetDraft, PageAssetMeta } from "./pageAssets.js";
-import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureBrowserColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, ensureNewestFirstStrip, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
+import type { StoredFragment, VaultStore } from "./vault.js";
+import { ensureFolderInstructionsColumn, ensurePageAssetSchema, ensurePageLocalSchema, ensurePagePermissionSchema, ensureProtectedFragmentSchema, ensureProvenanceColumn, ensureReplyToColumn, ensureTemplateSchema, ensureWorkspaceColumn, ensureFileColumn, ensureTempColumn, ensureBrowserColumn, ensureAccessColumns, ensureMadeInColumn, ensureFolderDiskColumn, ensureNewestFirstStrip, migrateV1ToLibrarySchema, migrateV2ToV3 } from "./dbMigrate.js";
 import { parseSearchDeclaration } from "./search/chunker.js";
 import { normalizeFolderAccess, normalizePageAccess } from "./pageAccess.js";
 import { normalizeEvents } from "./events.js";
@@ -306,6 +307,7 @@ export class BoardDb {
       ensurePageAssetSchema(db);
       ensurePageLocalSchema(db);
       ensurePagePermissionSchema(db);
+      ensureProtectedFragmentSchema(db);
       ensureFolderInstructionsColumn(db);
       ensureProvenanceColumn(db);
       ensureReplyToColumn(db);
@@ -476,6 +478,31 @@ export class BoardDb {
         "INSERT INTO page_local (tab_id, viewer, state, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(tab_id, viewer) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at"
       )
       .run(tabId, viewer, state, Date.now());
+  }
+
+  /** Protected fragments (#1045), values still sealed: src/vault.ts opens them. */
+  listProtected(): StoredFragment[] {
+    const rows = this.db.prepare("SELECT * FROM protected_fragments ORDER BY created_at").all() as Array<{
+      id: string; sealed: string; hint: string; kind: string; source: StoredFragment["source"]; detector: string | null;
+      created_by: string; created_thread: string | null; created_at: number;
+    }>;
+    return rows.map((row) => ({
+      id: row.id, sealed: row.sealed, hint: row.hint, kind: row.kind, source: row.source,
+      ...(row.detector ? { detector: row.detector } : {}),
+      createdBy: row.created_by,
+      ...(row.created_thread ? { createdThread: row.created_thread } : {}),
+      createdAt: row.created_at,
+    }));
+  }
+
+  insertProtected(row: StoredFragment): void {
+    this.db
+      .prepare("INSERT INTO protected_fragments (id, sealed, hint, kind, source, detector, created_by, created_thread, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(row.id, row.sealed, row.hint, row.kind, row.source, row.detector ?? null, row.createdBy, row.createdThread ?? null, row.createdAt);
+  }
+
+  removeProtected(id: string): boolean {
+    return Number(this.db.prepare("DELETE FROM protected_fragments WHERE id = ?").run(id).changes) > 0;
   }
 
   readPermissions(tabId: string): Array<{ perm: string; value: string; data: string | null; updatedAt: number }> {
@@ -672,6 +699,7 @@ export class BoardDb {
       ensurePageAssetSchema(db);
       ensurePageLocalSchema(db);
       ensurePagePermissionSchema(db);
+      ensureProtectedFragmentSchema(db);
       ensureFolderInstructionsColumn(db);
       ensureProvenanceColumn(db);
       ensureReplyToColumn(db);

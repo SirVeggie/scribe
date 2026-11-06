@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 
 /** Where the AES key for non-Windows secrets lives. */
-export type KeyStore = "keychain" | "libsecret" | "file";
+export type KeyStore = "keychain" | "libsecret" | "dpapi" | "file";
 const SERVICE = "Scribe plugin secrets", ACCOUNT = "master-key";
 
 /**
@@ -35,50 +35,62 @@ export class PluginSecrets {
     const loaded = this.key ??= this.loadKey(create);
     return loaded.catch(error => { if (this.key === loaded) this.key = undefined; throw error; });
   }
-  private async loadKey(create: boolean): Promise<Buffer> {
-    const record = path.join(this.root, "key.json");
-    if (fs.existsSync(record)) {
-      const store = (JSON.parse(fs.readFileSync(record, "utf8")) as { store: KeyStore }).store;
-      const hex = await readKey(store, this.root).catch(() => null);
-      if (!hex || !/^[0-9a-f]{64}$/.test(hex)) throw new Error(`Plugin secret key not available from ${storeName(store)}`);
-      return Buffer.from(hex, "hex");
-    }
-    if (!create) throw new Error("Plugin secret key is missing");
-    const hex = crypto.randomBytes(32).toString("hex");
-    fs.mkdirSync(this.root, { recursive: true });
-    for (const store of this.options.stores ?? defaultStores(this.platform)) {
-      try { await writeKey(store, this.root, hex); if (await readKey(store, this.root) !== hex) continue; } catch { continue; }
-      fs.writeFileSync(record, JSON.stringify({ store }), { mode: 0o600 });
-      return Buffer.from(hex, "hex");
-    }
-    throw new Error("No place to keep the plugin secret key");
+  private loadKey(create: boolean): Promise<Buffer> {
+    return loadMasterKey(this.root, { service: SERVICE, label: "Plugin secret key", create, stores: this.options.stores ?? defaultStores(this.platform) });
   }
 }
 
-function defaultStores(platform: NodeJS.Platform): KeyStore[] {
+/**
+ * A random AES-256 key kept in the first of `stores` that takes it, recorded in `root`/key.json so a
+ * keyring that is locked later fails loudly instead of a new key orphaning what it sealed.
+ * "dpapi" keeps it in `root`/master.dpapi, sealed to the Windows user.
+ */
+export async function loadMasterKey(root: string, options: { service: string; label: string; create: boolean; stores: KeyStore[] }): Promise<Buffer> {
+  const { service, label } = options;
+  const record = path.join(root, "key.json");
+  if (fs.existsSync(record)) {
+    const store = (JSON.parse(fs.readFileSync(record, "utf8")) as { store: KeyStore }).store;
+    const hex = await readKey(store, root, service).catch(() => null);
+    if (!hex || !/^[0-9a-f]{64}$/.test(hex)) throw new Error(`${label} not available from ${storeName(store)}`);
+    return Buffer.from(hex, "hex");
+  }
+  if (!options.create) throw new Error(`${label} is missing`);
+  const hex = crypto.randomBytes(32).toString("hex");
+  fs.mkdirSync(root, { recursive: true });
+  for (const store of options.stores) {
+    try { await writeKey(store, root, hex, service); if (await readKey(store, root, service) !== hex) continue; } catch { continue; }
+    fs.writeFileSync(record, JSON.stringify({ store }), { mode: 0o600 });
+    return Buffer.from(hex, "hex");
+  }
+  throw new Error(`No place to keep the ${label.toLowerCase()}`);
+}
+
+export function defaultStores(platform: NodeJS.Platform): KeyStore[] {
   if (platform === "darwin") return ["keychain", "file"];
   return process.env.DBUS_SESSION_BUS_ADDRESS ? ["libsecret", "file"] : ["file"];
 }
-function storeName(store: KeyStore): string { return store === "keychain" ? "the macOS Keychain" : store === "libsecret" ? "the Secret Service (libsecret)" : "key file"; }
+function storeName(store: KeyStore): string { return store === "keychain" ? "the macOS Keychain" : store === "libsecret" ? "the Secret Service (libsecret)" : store === "dpapi" ? "Windows DPAPI" : "key file"; }
 
-async function readKey(store: KeyStore, root: string): Promise<string> {
+async function readKey(store: KeyStore, root: string, service: string): Promise<string> {
   if (store === "file") return fs.readFileSync(path.join(root, "master.key"), "utf8").trim();
-  if (store === "keychain") return (await run("security", ["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"])).trim();
-  return (await run("secret-tool", ["lookup", "service", SERVICE, "account", ACCOUNT])).trim();
+  if (store === "dpapi") return (await dpapi(fs.readFileSync(path.join(root, "master.dpapi"), "utf8"), true)).trim();
+  if (store === "keychain") return (await run("security", ["find-generic-password", "-s", service, "-a", ACCOUNT, "-w"])).trim();
+  return (await run("secret-tool", ["lookup", "service", service, "account", ACCOUNT])).trim();
 }
-async function writeKey(store: KeyStore, root: string, hex: string): Promise<void> {
+async function writeKey(store: KeyStore, root: string, hex: string, service: string): Promise<void> {
   if (store === "file") { const file = path.join(root, "master.key"); fs.writeFileSync(file, hex, { mode: 0o600 }); fs.chmodSync(file, 0o600); return; }
+  if (store === "dpapi") { fs.writeFileSync(path.join(root, "master.dpapi"), await dpapi(hex, false), { mode: 0o600 }); return; }
   // `security -i` reads its command from stdin, so the key never shows in argv.
-  if (store === "keychain") { await run("security", ["-i"], `add-generic-password -U -s "${SERVICE}" -a ${ACCOUNT} -w ${hex}\n`); return; }
-  await run("secret-tool", ["store", `--label=${SERVICE}`, "service", SERVICE, "account", ACCOUNT], hex);
+  if (store === "keychain") { await run("security", ["-i"], `add-generic-password -U -s "${service}" -a ${ACCOUNT} -w ${hex}\n`); return; }
+  await run("secret-tool", ["store", `--label=${service}`, "service", service, "account", ACCOUNT], hex);
 }
 
-function seal(key: Buffer, value: string): string {
+export function seal(key: Buffer, value: string): string {
   const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const data = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   return "v1:" + Buffer.concat([iv, cipher.getAuthTag(), data]).toString("base64");
 }
-function open(key: Buffer, payload: string): string {
+export function open(key: Buffer, payload: string): string {
   if (!payload.startsWith("v1:")) throw new Error("Unknown plugin secret format");
   const raw = Buffer.from(payload.slice(3), "base64"), decipher = crypto.createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
   decipher.setAuthTag(raw.subarray(12, 28));
