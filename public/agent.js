@@ -14774,7 +14774,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       window.scribeApp?.rerender();
       window.scribeMotion?.reveal(this.root, true, { translate: "translateY(8px)" });
       this.input.focus();
-      this.input.select();
+      // A question typed before Help was closed comes back with the caret at its end, not selected for a stray key to replace.
+      const end = this.input.value.length;
+      this.input.setSelectionRange(end, end);
     },
 
     close() {
@@ -14784,7 +14786,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.host = null;
       // A closed Help starts over: the next question gets a fresh thread.
       this.reset();
+      // Text still in the field stays for the next time Help opens (#1019).
+      const draft = this.input.value;
       this.clearInput("");
+      this.input.value = draft;
+      this.typed = Boolean(draft);
       this.renderExamples();
       window.scribeApp?.rerender();
       return true;
