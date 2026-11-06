@@ -419,7 +419,8 @@ s-code > pre { margin: 0; padding: 10px 14px; overflow: auto; background: none; 
   padding: 6px 10px;
   max-width: 100%;
 }
-:where(textarea) { box-sizing: border-box; width: 100%; min-height: 90px; resize: vertical; line-height: 1.45; }
+/* Grows with its text up to 40% of the panel; kit.js sizes it where field-sizing is missing. */
+:where(textarea) { box-sizing: border-box; width: 100%; min-height: 90px; max-height: 40vh; field-sizing: content; resize: vertical; line-height: 1.45; }
 :where(input, textarea, select):focus-visible { outline: none; border-color: var(--kit-border-strong); }
 :where(textarea, input)::placeholder { color: var(--muted); opacity: 0.8; }
 

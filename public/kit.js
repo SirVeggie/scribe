@@ -252,6 +252,16 @@
   });
 
   // ---------- reply wiring ----------
+  // Text areas grow with their text (kit.css caps them at 40vh); this covers browsers without field-sizing.
+  if (!(window.CSS && CSS.supports("field-sizing", "content"))) {
+    document.addEventListener("input", function (event) {
+      var area = event.target;
+      if (area.tagName !== "TEXTAREA") return;
+      area.style.height = "auto";
+      area.style.height = area.scrollHeight + 2 + "px";
+    });
+  }
+
   var scribe = window.scribe;
   if (!scribe) return;
 
