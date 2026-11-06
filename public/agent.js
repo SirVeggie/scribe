@@ -8030,7 +8030,16 @@
     if (S.filter === "here") return hereGroup(thread) || "global";
     const s = thread.scope;
     if (s.kind === "global") return "global";
+    // Threads of deleted pages and folders share one group rather than a Missing page each (#1036).
+    if (homeGone(s)) return "deleted";
     return `${s.kind}:${s.ref}`;
+  }
+
+  /** The thread's page or folder is gone (deleted, or in the Trash). */
+  function homeGone(scope) {
+    if (scope.kind === "page") return !app()?.findAnyTab?.(scope.ref);
+    if (scope.kind === "folder") return !(app()?.folders?.() || []).some((f) => f.id === scope.ref);
+    return false;
   }
 
   /** A page's folder and the folders above it, nearest first. */
@@ -8088,6 +8097,7 @@
       return { icon: "box", text: R.basename(dir) || dir, kind: "Workspace" };
     }
     const s = here?.startsWith("page:") ? { kind: "page", ref: here.slice(5) } : thread.scope;
+    if (groupKey(thread) === "deleted") return { icon: "trash", text: "Pages and folders", kind: "Deleted" };
     const label = scopeLabel(s);
     const kind = s.kind === "page" ? "Page" : s.kind === "folder" ? "Folder" : s.kind === "workspace" ? "Workspace" : "Global";
     return { icon: label.icon, text: s.kind === "global" ? "Global" : label.text, kind };
@@ -8728,7 +8738,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         const folded = !q && S.collapsedGroups.has(key);
         // The folder a workspace group stands for: every group of the Workspaces list, and app scope None elsewhere.
         const dir = S.filter === "workspaces" ? workspaceDir(first) : key.startsWith("ws:") ? activeTab()?.workspace : first.scope.kind === "workspace" ? first.scope.ref : null;
-        out.push(groupHead(key, groupTitle(first), { folded, count: members.length, dir, canAdd: S.filter !== "archived", ctx }));
+        out.push(groupHead(key, groupTitle(first), { folded, count: members.length, dir, canAdd: S.filter !== "archived" && key !== "deleted", ctx }));
         if (folded) continue;
         const items = [];
         for (const t of visible) {

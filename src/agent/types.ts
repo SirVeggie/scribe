@@ -255,6 +255,8 @@ export type Thread = {
   fork?: ThreadFork;
   pinned: boolean;
   archived: boolean;
+  /** Archived because this page or folder (its scope) was deleted (#1036): restoring it unarchives the thread. */
+  archivedWith?: string;
   createdAt: number;
   updatedAt: number;
   /** Last user message or finished turn; drives list order. */

@@ -836,6 +836,9 @@ export class AgentHost {
     this.unusedPages = new Set(this.db.getSetting<string[]>("unusedPages", []));
     store.on("tab_closed", this.onPageClosed);
     store.on("tab_upserted", this.onPageUpserted);
+    store.on("tab_deleted", this.onHomeDeleted);
+    store.on("folders", this.onHomeDeleted);
+    this.syncDeletedHomes();
     this.scheduleUnusedPageCleanup();
     this.noteWorkspaces(this.workspaceFolders().values());
   }
@@ -855,7 +858,46 @@ export class AgentHost {
     if (!store.isClosed(tab.id) && this.unusedPages.delete(tab.id)) {
       this.db.setSetting("unusedPages", [...this.unusedPages]);
     }
+    // A page back from the Trash brings its threads back.
+    if (this.archivedHomes.has(tab.id)) this.syncDeletedHomes();
   };
+
+  private onHomeDeleted = (): void => this.syncDeletedHomes();
+
+  /** Pages and folders whose threads were archived because they were deleted. */
+  private archivedHomes = new Set<string>();
+
+  /**
+   * Threads of a page or folder that went to the Trash are archived with it (#1036), so the list
+   * does not fill with Missing page groups, and come back when it is restored. A thread that is
+   * busy or pinned stays; the list groups it under Deleted until the user archives it.
+   */
+  private syncDeletedHomes(): void {
+    const folders = new Set(store.listFolders().map((f) => f.id));
+    const gone = (scope: ThreadScope): boolean => (scope.kind === "page" ? !store.get(scope.ref!) : !folders.has(scope.ref!));
+    this.archivedHomes.clear();
+    for (const t of [...this.threads.values()]) {
+      if ((t.scope.kind !== "page" && t.scope.kind !== "folder") || !t.scope.ref || t.temporary || t.help) continue;
+      // A helper goes and comes back with the thread that started it.
+      if (t.helperOf && this.threads.has(t.helperOf)) continue;
+      const home = t.scope.ref;
+      if (!gone(t.scope)) {
+        if (t.archived && t.archivedWith === home) this.updateThread(t.id, { archived: false });
+        continue;
+      }
+      if (t.archived) {
+        if (t.archivedWith === home) this.archivedHomes.add(home);
+        continue;
+      }
+      const busy = this.runs.has(t.id) || this.resuming.has(t.id) || (this.status.get(t.id) ?? "idle") !== "idle" || this.queues.get(t.id)?.length;
+      if (busy || t.pinned) continue;
+      this.updateThread(t.id, { archived: true });
+      const archived = this.threads.get(t.id)!;
+      archived.archivedWith = home;
+      this.db.saveThread(archived);
+      this.archivedHomes.add(home);
+    }
+  }
 
   private scheduleUnusedPageCleanup(): void {
     if (this.closed || !this.unusedPages.size || this.unusedPageCleanupScheduled) return;
@@ -1199,6 +1241,8 @@ export class AgentHost {
     if (this.usageWindowTimer) clearInterval(this.usageWindowTimer);
     store.off("tab_closed", this.onPageClosed);
     store.off("tab_upserted", this.onPageUpserted);
+    store.off("tab_deleted", this.onHomeDeleted);
+    store.off("folders", this.onHomeDeleted);
     if (this.codexUsageTimer) clearTimeout(this.codexUsageTimer);
     if (this.pageRunTimer) clearInterval(this.pageRunTimer);
     if (this.pruneTimer) clearTimeout(this.pruneTimer);
@@ -2174,7 +2218,10 @@ export class AgentHost {
     }
     if (patch.scope?.kind === "page" && patch.scope.ref) store.promoteDraft(patch.scope.ref, { activate: false });
     if (typeof patch.pinned === "boolean") next.pinned = patch.pinned;
-    if (typeof patch.archived === "boolean") next.archived = patch.archived;
+    if (typeof patch.archived === "boolean") {
+      next.archived = patch.archived;
+      delete next.archivedWith;
+    }
     if (typeof patch.hooksOff === "boolean") {
       if (patch.hooksOff) next.hooksOff = true;
       else delete next.hooksOff;
