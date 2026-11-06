@@ -3753,7 +3753,7 @@
       }
       if (this.variant === "side") {
         acts.append(button(icon("expand"), "ag-icon-btn", () => enterFull("side"), "Full window (Ctrl+Shift+L)"));
-        acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), "Close (Ctrl+L)", false));
+        acts.append(button(icon("close"), "ag-icon-btn", () => sidebar.setOpen(false), window.scribeKeymap.tip("Close", "agent-side"), false));
       } else if (this.variant === "full" && CHAT) {
         acts.append(button(icon("collapse"), "ag-icon-btn", () => returnChatToMain(), "Back to the main window", false));
       } else if (this.variant === "full") {
@@ -9231,7 +9231,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       panel.append(head, input, bar);
       view.helperHost = panel;
       view.helperBackground = [head, input, bar];
-      const handle = button("", "dock-handle", () => this.setShown(true), "Agent (Ctrl+K)", false);
+      const handle = button("", "dock-handle", () => this.setShown(true), window.scribeKeymap.tip("Agent", "agent-dock"), false);
       this.handleClock = el("span", "ag-clock dock-handle-clock");
       this.handleText = el("span", "dock-handle-text");
       handle.append(icon("sparkle", "ag-ico dock-handle-ico"), el("span", "dock-dot"), this.handleClock, el("span", "dock-handle-sep"), this.handleText, el("kbd", null, "Ctrl K"));
@@ -11528,20 +11528,22 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   /* ---------- agent settings: their own dialog, opened from the chat header or the board's Settings ---------- */
 
-  const KEYS = [
-    ["Ctrl+Alt+S / Ctrl+,", "General settings"],
-    ["Ctrl+Alt+Shift+S / Ctrl+Shift+,", "Agent settings"],
-    ["Ctrl+L", "Sidebar chat"],
-    ["Ctrl+K", "Floating chat"],
-    ["Ctrl+Shift+L", "Full window"],
+  /** The keys an action has now (remappable in Settings -> Shortcuts, #1022). */
+  const keysFor = (id) => window.scribeKeymap.bindings(id).map(window.scribeKeymap.show).join(" / ") || "None";
+  const KEYS = () => [
+    [keysFor("settings"), "General settings"],
+    [keysFor("agent-settings"), "Agent settings"],
+    [keysFor("agent-side"), "Sidebar chat"],
+    [keysFor("agent-dock"), "Floating chat"],
+    [keysFor("agent-full"), "Full window"],
     ["Ctrl+↑ / Ctrl+↓", "From a chat into the full window and back; expand, collapse, or hide the floating chat"],
-    ["Ctrl+J", "Threads"],
-    ["Ctrl+Shift+K", "New thread with this chat's agent settings"],
-    ["Ctrl+'", "Next starred model"],
-    ["Ctrl+Alt+'", "Next reasoning level"],
-    ["Ctrl+Shift+'", "Next mode"],
-    ["Ctrl+.", "Next workspace, then none"],
-    ["Ctrl+Shift+.", "Next Scribe access (this page, its folder, global, none)"],
+    [keysFor("agent-threads"), "Threads"],
+    [keysFor("agent-new"), "New thread with this chat's agent settings"],
+    [keysFor("agent-model"), "Next starred model"],
+    [keysFor("agent-effort"), "Next reasoning level"],
+    [keysFor("agent-mode"), "Next mode"],
+    [keysFor("agent-workspace"), "Next workspace, then none"],
+    [keysFor("agent-scope"), "Next Scribe access (this page, its folder, global, none)"],
     ["Enter", "Send (or a new line, from Chat settings)"],
     ["Ctrl+Enter", "Always send"],
     ["Shift+Enter", "Always a new line"],
@@ -12727,7 +12729,9 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         hint: "Choose which rungs Ctrl+Shift+' cycles through. All of them remain in the access picker.",
       }));
       const list = el("div", "ag-keys");
-      for (const [combo, what] of KEYS) list.append(el("kbd", null, combo), el("span", null, what));
+      const listKeys = () => list.replaceChildren(...KEYS().flatMap(([combo, what]) => [el("kbd", null, combo), el("span", null, what)]));
+      listKeys();
+      window.scribeKeymap.onChange(listKeys);
       keys.append(el("h3", null, "Keys"), list);
 
       panel.append(title, providers, cursor, helpers, forkSummaries, memory, instructions, sources, usage, chat, keys);

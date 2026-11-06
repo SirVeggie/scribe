@@ -4841,6 +4841,15 @@
 
   const keymap = window.scribeKeymap;
   const BOARD_KEY_ACTIONS = keymap.actions().map((a) => a.id).filter((id) => !id.startsWith("agent-") || id === "agent-settings");
+  // Top bar tooltips name the keys the user has now.
+  const keyTips = () => {
+    for (const [id, text, action] of [["new-tab", "New page", "new-page"], ["agent-toggle", "Agent chat", "agent-side"], ["library-toggle", "Library", "library"]]) {
+      const button = document.getElementById(id);
+      if (button) button.dataset.tooltip = keymap.tip(text, action);
+    }
+  };
+  keyTips();
+  keymap.onChange(keyTips);
   // Pages already open get remapped keys at once; new ones are served with them.
   keymap.onChange(() => {
     for (const [id, frame] of frames) {
