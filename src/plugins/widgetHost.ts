@@ -27,6 +27,10 @@ function poll(check: () => void): () => void {
   };
 }
 
+// A write past the socket's high-water mark returns false without the client
+// being slow, so wait for drain and close only when the client stays behind.
+export const SLOW_CLIENT = { bufferBytes: 1024 * 1024, drainMs: 15_000 };
+
 export function relayWidgetEvents(res: express.Response, options: {
   plugins: Pick<PluginService, "subscribe">;
   plugin: string;
@@ -39,14 +43,23 @@ export function relayWidgetEvents(res: express.Response, options: {
   let closed = false;
   let unsubscribe: (() => void) | undefined;
   let unpoll: (() => void) | undefined;
-  const close = () => {
+  let blockedSince: number | undefined;
+  const drained = () => { blockedSince = undefined; };
+  // A client that stopped reading would never take the rest, so drop it instead of ending.
+  const close = (drop?: unknown) => {
     if (closed) return;
     closed = true;
     unsubscribe?.(); unpoll?.();
     res.off("close", close);
-    res.end();
+    res.off("drain", drained);
+    if (drop === true) res.destroy(); else res.end();
   };
-  const send = (data: unknown) => { if (!closed && !res.write(`data: ${JSON.stringify(data)}\n\n`)) close(); };
+  const write = (chunk: string) => {
+    if (closed || res.write(chunk)) return;
+    if (res.writableLength > SLOW_CLIENT.bufferBytes) close(true);
+    else blockedSince ??= Date.now();
+  };
+  const send = (data: unknown) => write(`data: ${JSON.stringify(data)}\n\n`);
   const reload = () => { send({ type: "reload" }); close(); };
   unsubscribe = plugins.subscribe((id, name, data, registry) => {
     if (closed || (id !== plugin && id !== "*")) return;
@@ -56,7 +69,12 @@ export function relayWidgetEvents(res: express.Response, options: {
       if (typeof state?.key === "string" && widgetStateAllowed(definition.state, state.key)) send({ type: "plugin-state", key: state.key, revision: state.revision });
     } else if (definition.events.includes(name) && Buffer.byteLength(JSON.stringify(data) ?? "null") <= 64 * 1024) send({ type: "plugin-event", name, data });
   });
-  unpoll = poll(() => { if (!valid()) reload(); else if (!res.write(": keepalive\n\n")) close(); });
+  unpoll = poll(() => {
+    if (!valid()) reload();
+    else if (blockedSince === undefined) write(": keepalive\n\n");
+    else if (Date.now() - blockedSince >= SLOW_CLIENT.drainMs) close(true);
+  });
   res.on("close", close);
+  res.on("drain", drained);
   send({ type: "ready" });
 }
