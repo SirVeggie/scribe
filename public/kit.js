@@ -312,6 +312,13 @@
     return text.length > 280 ? text.slice(0, 279) + "…" : text;
   }
 
+  /** The heading of the section an unlabelled form sits in, so its reply says which part it answers. */
+  function sectionOf(form) {
+    var section = form.closest("section, article");
+    var heading = section && section.querySelector("h1, h2, h3");
+    return heading && !form.contains(heading) ? heading.textContent.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+  }
+
   function saveDraft(form, key) {
     var drafts = Object.assign({}, scribe.local[DRAFTS] || {});
     var draft = {};
@@ -429,7 +436,9 @@
       pending = true;
       var answers = answersOf(form);
       // A labelled form (data-reply="Create card: Search") names its action; the answers follow it.
-      var summary = form.getAttribute("data-reply").trim() || summaryOf(answers);
+      // Unlabelled, it is named by its section's heading when it has one.
+      var section = sectionOf(form);
+      var summary = form.getAttribute("data-reply").trim() || (section ? section + " · " : "") + summaryOf(answers);
       var submit = event.submitter || form.querySelector('button[type="submit"], button:not([type])');
       if (submit) submit.disabled = true;
       show(form, "Sending…");

@@ -105,6 +105,14 @@ test("kit reply buttons use the host bridge, lock once, signal without a target,
       assert.equal(await page.locator("button:disabled").count(), 1);
       assert.equal(await page.locator("#a").getAttribute("aria-pressed"), null);
     }
+    // A form's reply says which part it answers: its label, else its section's heading.
+    await setup("ok", `<section><h2>Strands</h2><form data-reply="Create card: Strands"><input name="scope" value="full"><button type="submit">Send</button></form></section>
+      <section><h2>Faces  and icons</h2><form id="b" data-reply><input name="scope" value="api"><button type="submit">Send</button></form></section>
+      <form id="c" data-reply><input name="notes" value="hi"><button type="submit">Send</button></form>`);
+    for (const sel of ["form[data-reply^=Create] button", "#b button", "#c button"]) await page.locator(sel).click();
+    await page.waitForFunction(() => (window as any).calls.length === 3);
+    assert.deepEqual(await page.evaluate(() => (window as any).calls.map((c: any) => c.options.summary)), ["Create card: Strands", "Faces and icons · scope: api", "notes: hi"]);
+
     for (const context of ["bad", "null", "[]", "42"]) {
       await setup("ok", `<button data-reply data-context='${context}'>A</button>`);
       await page.locator("button").click();
