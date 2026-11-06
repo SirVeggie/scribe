@@ -2557,7 +2557,8 @@
     }
     li.addEventListener("pointerdown", function (e) { startCardDrag(e, c.id, li); });
     li.addEventListener("contextmenu", function (e) {
-      if (isInteractive(e.target) || e.target.closest("a")) return;
+      // A protected span keeps Scribe's menu (Edit hint, Unprotect).
+      if (isInteractive(e.target) || e.target.closest("a, [data-scribe-protected]")) return;
       e.preventDefault();
       openCardMenu(c.id, e.clientX, e.clientY);
     });

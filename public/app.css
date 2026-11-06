@@ -6015,6 +6015,7 @@ html[data-theme="cream"] {
 
 /* Settings → Protected data (#1046, protected.js) */
 .protected-bar { display: flex; gap: 8px; margin: 8px 2px 12px; }
+.protected-bar button, .protected-actions button { white-space: nowrap; }
 .protected-search { flex: 1 1 auto; min-width: 0; }
 .protected-list { display: grid; }
 .protected-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 2px; border-bottom: 1px solid var(--border); }
