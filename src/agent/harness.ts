@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { dataDir } from "../config.js";
 import type { ResolvedMcpServer } from "./mcpConfig.js";
-import { mcpCall, toolUses, type ThreadStats, type ToolUse } from "./threadStats.js";
+import { addErrorKinds, mcpCall, toolUses, type ThreadStats, type ToolErrorKind, type ToolUse } from "./threadStats.js";
 import type { Item, ProviderId, Thread, ThreadMode, Turn, TurnLatency, Usage } from "./types.js";
 import { summarize, type LatencySummary } from "./latency.js";
 import { threadToken } from "../callers.js";
@@ -274,9 +274,10 @@ export type HarnessStats = {
   /** Start of the window (epoch ms), or null for all time. */
   since: number | null;
   threads: number;
-  totals: TokenTotals & { toolCalls: number; toolErrors: number };
+  /** toolErrorKinds splits toolErrors by cause; errors kept before #684 have none. */
+  totals: TokenTotals & { toolCalls: number; toolErrors: number; toolErrorKinds: Partial<Record<ToolErrorKind, number>> };
   outcomes: { done: number; error: number; cancelled: number };
-  providers: Array<TokenTotals & { provider: ProviderId; threads: number; toolCalls: number; toolErrors: number; errors: number; latency?: LatencyStats }>;
+  providers: Array<TokenTotals & { provider: ProviderId; threads: number; toolCalls: number; toolErrors: number; toolErrorKinds: Partial<Record<ToolErrorKind, number>>; errors: number; latency?: LatencyStats }>;
   models: Array<TokenTotals & { provider: ProviderId; model: string; toolCalls: number; latency?: LatencyStats }>;
   days: Array<CostTotals & { day: string; prompt: Partial<Record<ProviderId, number>>; output: Partial<Record<ProviderId, number>>; turns: number }>;
   toolKinds: ToolRow[];
@@ -390,7 +391,7 @@ export function harnessStats(
   since: number | null = null,
   deleted: ThreadStats[] = []
 ): HarnessStats {
-  const totals = { ...emptyTotals(), toolCalls: 0, toolErrors: 0 };
+  const totals = { ...emptyTotals(), toolCalls: 0, toolErrors: 0, toolErrorKinds: {} };
   const outcomes = { done: 0, error: 0, cancelled: 0 };
   const providers = new Map<ProviderId, HarnessStats["providers"][number]>();
   const models = new Map<string, HarnessStats["models"][number]>();
@@ -422,7 +423,7 @@ export function harnessStats(
     const turns = source.turns.filter((turn) => !turn.reverted && (since === null || turn.startedAt >= since));
     if (!turns.length) continue;
     counted += 1;
-    const row = bump(providers, provider, () => ({ ...emptyTotals(), provider, threads: 0, toolCalls: 0, toolErrors: 0, errors: 0 }));
+    const row = bump(providers, provider, () => ({ ...emptyTotals(), provider, threads: 0, toolCalls: 0, toolErrors: 0, toolErrorKinds: {}, errors: 0 }));
     row.threads += 1;
     const own = { ...emptyTotals(), toolCalls: 0 };
     const kept = new Set(turns.map((turn) => turn.id));
@@ -463,6 +464,10 @@ export function harnessStats(
       own.toolCalls += use.calls;
       totals.toolErrors += use.errors;
       row.toolErrors += use.errors;
+      if (use.errorKinds) {
+        addErrorKinds(totals.toolErrorKinds, use.errorKinds);
+        addErrorKinds(row.toolErrorKinds, use.errorKinds);
+      }
       const model = turns.find((turn) => turn.id === use.turnId)?.model ?? thread.model;
       bump(models, `${provider}\n${model}`, () => ({ ...emptyTotals(), provider, model, toolCalls: 0 })).toolCalls += use.calls;
       add(bump(toolKinds, use.tool, () => newTool(use.tool, use.tool)));

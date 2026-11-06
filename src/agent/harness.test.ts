@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { discoverSkills, harnessStats, instructionSections, mcpCall, promptTokens, skillFrontmatter } from "./harness.js";
+import { threadStats, toolErrorKind } from "./threadStats.js";
 import type { Item, Thread, Turn } from "./types.js";
 import { launchChromium } from "../chromium.js";
 
@@ -514,4 +515,38 @@ test("harnessStats compares turns by how Scribe's tools were loaded", () => {
   assert.equal(pi.mode, "board");
   assert.equal(pi.searches, 1);
   assert.equal(pi.deferredCalls, 1);
+});
+test("tool errors keep their cause, also in deleted-thread stats", () => {
+  assert.equal(toolErrorKind({ tool: "execute", exitCode: 1, output: "ℹ fail 2" }), "exit");
+  assert.equal(toolErrorKind({ tool: "execute", output: "Permission for this action was denied by the Claude Code auto mode classifier." }), "denied");
+  assert.equal(toolErrorKind({ tool: "mcp", output: "user rejected MCP tool call" }), "denied");
+  assert.equal(toolErrorKind({ tool: "mcp", output: 'no column "x". Columns: Inbox' }), "input");
+  assert.equal(toolErrorKind({ tool: "edit", output: "<tool_use_error>File has not been read yet.</tool_use_error>" }), "input");
+  assert.equal(toolErrorKind({ tool: "mcp", output: "locator.click: Timeout 8000ms exceeded." }), "transport");
+  assert.equal(toolErrorKind({ tool: "read", output: "error" }), "other");
+
+  const threads = [thread("a", { provider: "codex", model: "gpt" })];
+  const turns = { a: [turn("a1", "a", { model: "gpt" })] };
+  const items = {
+    a: [
+      tool("i1", "a", "a1", { status: "error", exitCode: 1, output: "" }),
+      tool("i2", "a", "a1", { status: "error", exitCode: 1, output: "" }),
+      tool("i3", "a", "a1", { name: "mcp__scribe__read_file", tool: "mcp", title: "Scribe: read_file", status: "error", output: "File read denied: path is outside the workspace scope" }),
+    ],
+  };
+  const kept = threadStats(threads[0], turns.a, items.a, null, 1);
+  assert.deepEqual(kept.tools.find((use) => use.tool === "execute")?.errorKinds, { exit: 2 });
+  // An old record without causes counts as unclassified: in toolErrors, not in toolErrorKinds.
+  const old = { ...kept, id: "old", tools: kept.tools.map(({ errorKinds: _, ...use }) => use) };
+  const stats = harnessStats([], () => [], () => [], null, [kept, old]);
+  assert.equal(stats.totals.toolErrors, 6);
+  assert.deepEqual(stats.totals.toolErrorKinds, { exit: 2, denied: 1 });
+  assert.deepEqual(stats.providers[0].toolErrorKinds, { exit: 2, denied: 1 });
+});
+
+test("skill_read opening a skill counts as a use of it on every provider; its other files do not", () => {
+  const read = (id: string, input: unknown) => tool(id, "a", "a1", { name: "mcp_tool_call", tool: "mcp", title: "Scribe: skill_read", input });
+  const items = [read("i1", { name: "scribe" }), read("i2", { name: "scribe", section: "Forms" }), read("i3", { name: "scribe", file: "PAGE-AGENT.md" })];
+  const stats = harnessStats([thread("a", { provider: "codex", model: "gpt" })], () => [turn("a1", "a", { model: "gpt" })], () => items);
+  assert.deepEqual(stats.skills, [{ name: "scribe", calls: 2 }]);
 });

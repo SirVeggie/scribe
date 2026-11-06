@@ -21,6 +21,27 @@ function toolName(item: { name: string; tool: string }): string {
   return item.name || item.tool;
 }
 
+/**
+ * Why a tool call failed, from its kind, exit code and the start of its output, so the reason
+ * outlives the output (#684). exit: a command ran and returned non-zero (failing tests, rg with no
+ * match), which is mostly ordinary work; denied: an approval, sandbox or permission refusal;
+ * input: the tool refused its arguments; transport: a timeout or a lost connection.
+ */
+export type ToolErrorKind = "exit" | "denied" | "input" | "transport" | "other";
+
+const DENIED = /doesn't want to proceed|was rejected|user rejected|denied by|was denied|read denied|permission for this action|requires approval|not (requested|authorized)|lacks trusted intent|outside (the|this chat's) (workspace|trusted|scribe access)|without (explicit )?user auth|cannot request interactive approval|blocked by (the )?(sandbox|policy)/i;
+const TRANSPORT = /timed? ?out|timeout \d+ms exceeded|ECONNREFUSED|ECONNRESET|ERR_CONNECTION|socket hang up|connection (closed|lost|reset)|context was destroyed|target (page|closed)|tool call failed for/i;
+const INPUT = /tool_use_error|input validation|invalid (input|arguments?)|is required|expected (a |an )?\w+, received|no (column|card|section|skill|browser tab|such (tool|file))|not found|ENOENT|does not exist|not supported|rejected the pattern|unknown (action|tool)|provide (an? )?\w+ or/i;
+
+export function toolErrorKind(item: { tool: ToolKind; output?: string; exitCode?: number }): ToolErrorKind {
+  const head = (item.output ?? "").slice(0, 400);
+  if (DENIED.test(head)) return "denied";
+  if (item.tool === "execute") return "exit";
+  if (TRANSPORT.test(head)) return "transport";
+  if (INPUT.test(head)) return "input";
+  return "other";
+}
+
 /** Tool calls of one kind in one turn, without what they read or wrote. */
 export type ToolUse = {
   turnId: string;
@@ -30,6 +51,8 @@ export type ToolUse = {
   skill?: string;
   calls: number;
   errors: number;
+  /** errors split by toolErrorKind; missing on stats kept before #684. */
+  errorKinds?: Partial<Record<ToolErrorKind, number>>;
   inputChars: number;
   outputChars: number;
   /** Estimated per call, so totals match the harness view's. */
@@ -43,7 +66,9 @@ export function toolUses(items: Item[]): ToolUse[] {
   for (const item of items) {
     if (item.kind !== "tool" || !item.turnId) continue;
     const call = item.tool === "mcp" || /^mcp__/.test(item.name) ? mcpCall(item) : null;
-    const skill = item.name === "Skill" && item.input && typeof item.input === "object" ? (item.input as { skill?: unknown }).skill : null;
+    const input = item.input && typeof item.input === "object" ? (item.input as { skill?: unknown; name?: unknown; file?: unknown }) : null;
+    // Claude's Skill tool, or Scribe's skill_read opening a skill (not one of its other files), which every provider uses.
+    const skill = item.name === "Skill" ? input?.skill : call?.server === "scribe" && call.tool === "skill_read" && !input?.file ? input?.name : null;
     const output = item.output?.length ?? 0;
     out.push({
       turnId: item.turnId,
@@ -53,6 +78,7 @@ export function toolUses(items: Item[]): ToolUse[] {
       ...(typeof skill === "string" ? { skill } : {}),
       calls: 1,
       errors: item.status === "error" ? 1 : 0,
+      ...(item.status === "error" ? { errorKinds: { [toolErrorKind(item)]: 1 } } : {}),
       inputChars: item.input === undefined ? 0 : (JSON.stringify(item.input) ?? "").length,
       outputChars: output,
       outputTokens: estimateTokens(output),
@@ -62,6 +88,11 @@ export function toolUses(items: Item[]): ToolUse[] {
   return out;
 }
 
+export function addErrorKinds(into: Partial<Record<ToolErrorKind, number>>, from: Partial<Record<ToolErrorKind, number>>): Partial<Record<ToolErrorKind, number>> {
+  for (const [kind, n] of Object.entries(from) as Array<[ToolErrorKind, number]>) into[kind] = (into[kind] ?? 0) + n;
+  return into;
+}
+
 /** The same calls, one entry per turn and kind of call. */
 function packToolUses(uses: ToolUse[]): ToolUse[] {
   const byKey = new Map<string, ToolUse>();
@@ -69,11 +100,12 @@ function packToolUses(uses: ToolUse[]): ToolUse[] {
     const key = [use.turnId, use.name, use.tool, use.mcp?.server ?? "", use.mcp?.tool ?? "", use.skill ?? ""].join("\n");
     const cur = byKey.get(key);
     if (!cur) {
-      byKey.set(key, { ...use });
+      byKey.set(key, { ...use, ...(use.errorKinds ? { errorKinds: { ...use.errorKinds } } : {}) });
       continue;
     }
     cur.calls += use.calls;
     cur.errors += use.errors;
+    if (use.errorKinds) cur.errorKinds = addErrorKinds(cur.errorKinds ?? {}, use.errorKinds);
     cur.inputChars += use.inputChars;
     cur.outputChars += use.outputChars;
     cur.outputTokens += use.outputTokens;

@@ -237,6 +237,8 @@ test("a column named by whole words of one title resolves; ambiguous words still
   two.columns.push({ id: "ask", title: "blocked / Needs input" });
   assert.equal(card(run(two, "move", { card: 1, to: "needs input" }).state, 1).col, "ask");
   assert.throws(() => run(two, "move", { card: 1, to: "needs" }), /no column "needs"/);
+  assert.equal(card(run(two, "move", { card: 1, to: { title: "Inbox" } }).state, 1).col, "in");
+  assert.equal(card(run(two, "move", { card: 1, to: { role: "done" } }).state, 1).col, "done");
 });
 
 test("creation and cross-column moves default to top in every column, with bottom available explicitly", () => {

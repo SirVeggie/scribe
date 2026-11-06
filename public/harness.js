@@ -152,6 +152,25 @@
 
   const pct = (part, whole) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "–");
   const count = (n) => Number(n || 0).toLocaleString();
+  const ERROR_KINDS = [["exit", "Command exited non-zero"], ["denied", "Denied"], ["input", "Bad arguments"], ["transport", "Timeout or connection"], ["other", "Other"]];
+  /** Failed tool calls by cause, for a tip; errors kept before causes were recorded count as unclassified. */
+  function failedKinds(r) {
+    const kinds = r.toolErrorKinds || {};
+    const lines = ERROR_KINDS.filter(([key]) => kinds[key]).map(([key, label]) => `${label}: ${count(kinds[key])}`);
+    const unclassified = r.toolErrors - ERROR_KINDS.reduce((n, [key]) => n + (kinds[key] || 0), 0);
+    if (unclassified > 0) lines.push(`Unclassified (older): ${count(unclassified)}`);
+    return lines.join("\n");
+  }
+  function failedCell(r) {
+    const span = el("span", null, pct(r.toolErrors, r.toolCalls));
+    const tip = r.toolErrors ? failedKinds(r) : "";
+    if (tip) {
+      span.dataset.tooltip = tip;
+      span.setAttribute("aria-description", tip);
+      span.tabIndex = 0;
+    }
+    return span;
+  }
 
   function duration(ms) {
     if (!ms) return "–";
@@ -294,7 +313,7 @@
         ["Turns", count(t.turns), `${count(stats.outcomes.error)} failed · ${count(stats.outcomes.cancelled)} stopped`],
         ["Sent to models", tokens(t.prompt), `${pct(t.cached, t.prompt)} read from cache`],
         ["Written by models", tokens(t.output), t.reasoning ? `${tokens(t.reasoning)} reasoning` : ""],
-        ["Tool calls", count(t.toolCalls), `${(t.toolCalls / Math.max(1, t.turns)).toFixed(1)} a turn · ${pct(t.toolErrors, t.toolCalls)} failed`],
+        ["Tool calls", count(t.toolCalls), `${(t.toolCalls / Math.max(1, t.turns)).toFixed(1)} a turn · ${pct(t.toolErrors, t.toolCalls)} failed`, t.toolErrors ? failedKinds(t) : ""],
         ["Cost", t.pricedTurns ? costText(t.costUsd) : "Unknown", t.pricedTurns ? costStatus(t) : "", `${costText(t)}\n${count(t.unpricedTurns)} unpriced turns\nEstimated: ${costText(t.estimatedCostUsd)}\nProvider-reported: ${costText(t.reportedCostUsd)}`],
       ])
     );
@@ -317,7 +336,7 @@
           { label: "Sent a turn", num: true, get: (r) => tokens(r.prompt / Math.max(1, r.turns)) },
           { label: "Written", num: true, get: (r) => tokens(r.output) },
           { label: "Tools a turn", num: true, get: (r) => (r.toolCalls / Math.max(1, r.turns)).toFixed(1) },
-          { label: "Tools failed", num: true, get: (r) => pct(r.toolErrors, r.toolCalls) },
+          { label: "Tools failed", num: true, get: failedCell },
           { label: "Turns failed", num: true, get: (r) => pct(r.errors, r.turns) },
           { label: "Cost", num: true, get: (r) => costText(r) },
         ],

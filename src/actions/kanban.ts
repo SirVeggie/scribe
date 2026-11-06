@@ -298,6 +298,11 @@ function findCard(state: BoardState, ref: unknown): Card {
 
 /** Columns matching a role (all of them), else one by id or title. */
 function matchColumns(state: BoardState, ref: unknown): Column[] {
+  // Some models pass the column as { role } or { title } rather than the plain string.
+  if (ref && typeof ref === "object") {
+    const named = ref as { role?: unknown; id?: unknown; title?: unknown };
+    ref = named.role ?? named.id ?? named.title;
+  }
   const text = str(ref).trim();
   const cols = columns(state);
   const lower = text.toLowerCase();
