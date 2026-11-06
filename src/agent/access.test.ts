@@ -27,6 +27,43 @@ async function fixture(name: string) {
 type T = Parameters<typeof policyFor>[0];
 const code = (cwd: string, extra: Partial<Thread> = {}): T => ({ id: "access-test", cwd, mode: "code", approval: "edits", provider: "pi", ...extra }) as T;
 
+test("Claude transcripts stay closed; a Claude thread reads only its own memory (#1041)", async () => {
+  const f = await fixture("transcripts");
+  const previous = process.env.SCRIBE_HOME;
+  process.env.SCRIBE_HOME = f.data;
+  try {
+    const config = path.join(f.home, ".claude");
+    const enc = (p: string) => p.replace(/[^a-zA-Z0-9]/g, "-");
+    const mine = path.join(config, "projects", enc(f.cwd));
+    const theirs = path.join(config, "projects", enc(f.outside));
+    for (const dir of [path.join(mine, "memory"), theirs, path.join(config, "file-history", "s1"), path.join(config, "skills")]) await fs.mkdir(dir, { recursive: true });
+    for (const file of [path.join(mine, "memory", "MEMORY.md"), path.join(mine, "s1.jsonl"), path.join(theirs, "s2.jsonl"), path.join(config, "history.jsonl"), path.join(config, "settings.json")]) await fs.writeFile(file, "x");
+    // An added account links projects to the default one, as prepareProfile does.
+    const own = path.join(f.data, "agent", "claude-accounts", "acc_1");
+    await fs.mkdir(own, { recursive: true });
+    await fs.symlink(path.join(config, "projects"), path.join(own, "projects"), "junction");
+    await fs.writeFile(path.join(own, "settings.json"), "{}");
+
+    for (const account of ["default", "acc_1"]) {
+      const policy = policyFor(code(f.cwd, { provider: "claude", claudeAccount: account }), f.env);
+      assert.equal(checkPath(policy, path.join(mine, "memory", "MEMORY.md"), "read").verdict, "allow", account);
+      for (const p of [path.join(mine, "s1.jsonl"), path.join(theirs, "s2.jsonl"), path.join(config, "history.jsonl"), path.join(config, "file-history", "s1")]) {
+        assert.equal(checkPath(policy, p, "read").verdict, "deny", `${account}: ${p}`);
+      }
+      assert.notEqual(checkPath(policy, path.join(config, "settings.json"), "read").verdict, "deny", account);
+    }
+    const viaAccount = policyFor(code(f.cwd, { provider: "claude", claudeAccount: "acc_1" }), f.env);
+    assert.equal(checkPath(viaAccount, path.join(own, "settings.json"), "read").verdict, "allow");
+    assert.equal(checkPath(viaAccount, path.join(own, "projects", enc(f.cwd), "memory", "MEMORY.md"), "read").verdict, "allow");
+    assert.equal(checkPath(viaAccount, path.join(own, "projects", enc(f.outside), "s2.jsonl"), "read").verdict, "deny");
+    // Another provider gets no memory exception.
+    assert.equal(checkPath(policyFor(code(f.cwd), f.env), path.join(mine, "memory", "MEMORY.md"), "read").verdict, "deny");
+  } finally {
+    if (previous === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = previous;
+    await f.done();
+  }
+});
+
 test("checkPath allows the workspace, asks outside it, and resolves '..' before deciding", async () => {
   const f = await fixture("roots");
   try {

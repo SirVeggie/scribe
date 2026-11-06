@@ -4,7 +4,7 @@ import path from "node:path";
 import { dataDir } from "../config.js";
 import { pageCheckoutDir } from "../pageCheckout.js";
 import { threadFilesDir } from "./attachments.js";
-import { accountsRoot } from "./claudeAccounts.js";
+import { accountsRoot, defaultConfigDir } from "./claudeAccounts.js";
 import { windowsSandbox } from "./codexMxc.js";
 import { skillFolders } from "./harness.js";
 import { pathInside, realTarget, threadCwd } from "./toolGrants.js";
@@ -32,7 +32,7 @@ export type AccessPolicy = {
   readRoots: string[];
   /** Protected: never read or written through Scribe's gates, whatever the roots and grants say. */
   deny: string[];
-  /** Folders inside a protected one that this thread may still use: its worktree, attachments, own account, skills. */
+  /** Folders inside a protected one that this thread may still use: its worktree, attachments, own account and memory, skills. */
   denyExcept: string[];
   /** Credentials inside those folders, which no exception opens. */
   secrets: string[];
@@ -73,7 +73,31 @@ const HOME_SECRETS = [
   "Library/Application Support/BraveSoftware", "Library/Application Support/Firefox", "Library/Keychains", "Library/Cookies",
   // Windows' own credential and key stores.
   "AppData/Roaming/Microsoft/Credentials", "AppData/Local/Microsoft/Credentials", "AppData/Roaming/Microsoft/Protect",
+  // Cursor's login and its agents' chats, every workspace's (#1041).
+  ".cursor/sdk/auth.json", ".cursor/chats", ".cursor/acp-sessions", ".cursor/projects",
+  "AppData/Roaming/Cursor/User/globalStorage", ".config/Cursor/User/globalStorage", "Library/Application Support/Cursor/User/globalStorage",
 ];
+
+/**
+ * What Claude Code keeps of every session in its config folder: transcripts (with memory beside them in
+ * projects/<folder>/memory), file snapshots and the prompt history. Reading them would get around
+ * thread_read's scopes (#1041); Claude Code reads its own session itself, not through its tools.
+ */
+const CLAUDE_TRANSCRIPTS = ["projects", "file-history", "history.jsonl"];
+
+/** Claude Code's memory folder for a working folder, as it names it under projects. */
+function claudeMemoryDir(config: string, folder: string): string {
+  return path.join(config, "projects", path.resolve(folder).replace(/[^a-zA-Z0-9]/g, "-"), "memory");
+}
+
+/** An account folder's entries other than the transcripts: its settings, skills, shell snapshots. */
+function accountParts(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).filter((name) => !CLAUDE_TRANSCRIPTS.includes(name)).map((name) => path.join(dir, name));
+  } catch {
+    return [];
+  }
+}
 
 /** A path in both forms a check can meet it in: as written (resolved) and through its links. */
 function forms(p: string): string[] {
@@ -125,6 +149,8 @@ function linkTargets(wt: NonNullable<Thread["worktree"]>): string[] {
 export function policyFor(thread: PolicyThread, env: PolicyEnv = {}): AccessPolicy {
   const home = env.home ?? os.homedir();
   const data = env.data ?? dataDir();
+  // With a home given (tests), the daemon's CLAUDE_CONFIG_DIR doesn't apply.
+  const claudeConfig = env.home ? path.join(home, ".claude") : defaultConfigDir(process.env, home);
   const cwd = threadCwd(thread);
   const wt = thread.worktree && !thread.worktree.closed ? thread.worktree : null;
   const realCwd = cwd ? existing(cwd) : null;
@@ -141,6 +167,10 @@ export function policyFor(thread: PolicyThread, env: PolicyEnv = {}): AccessPoli
 
   const own = thread.provider === "claude" && thread.claudeAccount && thread.claudeAccount !== "default" && /^[\w-]+$/.test(thread.claudeAccount)
     ? path.join(accountsRoot(data), thread.claudeAccount) : null;
+  // A Claude thread keeps its memory (Claude Code names it by the workspace, or by the main checkout's folder for a worktree).
+  const memory = thread.provider === "claude" && cwd
+    ? [claudeConfig, own].filter((c): c is string => Boolean(c)).flatMap((c) => [cwd, wt?.repo].filter((f): f is string => Boolean(f)).map((f) => claudeMemoryDir(c, f)))
+    : [];
   const skills = skillFolders(thread.cwd, home, data).filter((f) => !thread.provider || f.providers.includes(thread.provider)).map((f) => f.dir);
   const attachments = thread.id ? threadFilesDir(thread.id) : null;
   const checkout = thread.id && thread.mode === "code" ? pageCheckoutDir(thread.id) : null;
@@ -151,6 +181,7 @@ export function policyFor(thread: PolicyThread, env: PolicyEnv = {}): AccessPoli
     // Skills are loaded from files on demand, including user/provider folders outside the workspace.
     ...skills,
     own,
+    ...memory,
     ...grants.map((g) => g.path),
   ].filter((p): p is string => Boolean(p)).map(existing).filter((p): p is string => Boolean(p));
 
@@ -159,7 +190,8 @@ export function policyFor(thread: PolicyThread, env: PolicyEnv = {}): AccessPoli
   // Its workspace there is one of Scribe's worktrees, or the scratch folder of a thread without one.
   const cwdIsScribes = Boolean(cwd && (pathInside(path.join(path.resolve(data), "worktrees"), path.resolve(cwd)) && path.resolve(cwd) !== path.join(path.resolve(data), "worktrees")
     || (env.scratchDir && path.resolve(cwd) === path.resolve(env.scratchDir))));
-  const denyExcept = [cwdIsScribes ? cwd : null, attachments, checkout, own, ...skills].filter((p): p is string => Boolean(p));
+  // Of its own account folder only the parts that hold no other thread's sessions.
+  const denyExcept = [cwdIsScribes ? cwd : null, attachments, checkout, ...(own ? accountParts(own) : []), ...memory, ...skills].filter((p): p is string => Boolean(p));
   const userPaths = (env.protectedPaths ?? []).filter((p) => path.isAbsolute(p));
   return {
     cwd,
@@ -167,7 +199,8 @@ export function policyFor(thread: PolicyThread, env: PolicyEnv = {}): AccessPoli
     writeRoots: uniq(writeRoots),
     readRoots: uniq([...writeRoots, ...readExtra]),
     // Other threads' page checkouts are in the temp folder.
-    deny: uniq([data, path.resolve(pageCheckoutDir(""), "..", ".."), ...HOME_SECRETS.map((rel) => path.join(home, rel)), ...userPaths].flatMap(forms)),
+    deny: uniq([data, path.resolve(pageCheckoutDir(""), "..", ".."), ...HOME_SECRETS.map((rel) => path.join(home, rel)),
+      ...CLAUDE_TRANSCRIPTS.map((rel) => path.join(claudeConfig, rel)), ...userPaths].flatMap(forms)),
     denyExcept: uniq(denyExcept.flatMap(forms)),
     secrets: uniq([own ? path.join(own, ".credentials.json") : null, own ? path.join(own, ".claude.json") : null].filter((p): p is string => Boolean(p)).flatMap(forms)),
     readOnly: uniq(links),
