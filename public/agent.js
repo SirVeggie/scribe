@@ -14504,6 +14504,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
    */
   const HELP_IDLE_MS = 12 * 60 * 60 * 1000;
   const HELP_MODEL_KEY = "scribe.agent.helpModel";
+  /** "on" when Help may search and fetch the web (#1019); off by default, so answers come from Scribe's own guide. */
+  const HELP_WEB_KEY = "scribe.agent.helpWeb";
   /** Previous results, newest first: { q, at, items }. Kept after the thread is gone, so a question needn't be asked twice. */
   const HELP_HISTORY_KEY = "scribe.agent.helpHistory";
   const HELP_HISTORY_MAX = 40;
@@ -14611,8 +14613,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     result: null,
     status: null,
     modelBtn: null,
+    webBtn: null,
     sendBtn: null,
     threadId: null,
+    /** Whether the help thread was made with web access on. */
+    threadWeb: false,
     askedAt: 0,
     /** The question being answered: drawn when its turn ends. */
     pending: null,
@@ -14698,7 +14703,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.modelBtn = button("", "ag-chip help-model", (event) => this.pickModel(event.currentTarget), "Model for Help");
       this.historyBtn = button(icon("clock"), "ag-icon-btn help-history", (event) => this.pickHistory(event.currentTarget), "Previous results");
       const close = button(icon("close"), "ag-icon-btn help-close", () => this.close(), "Close Help");
-      head.append(this.modelBtn, this.historyBtn, close);
+      this.webBtn = button("", "ag-chip help-web", () => this.toggleWeb(), "Web access for Help");
+      head.append(this.modelBtn, this.webBtn, this.historyBtn, close);
       const form = el("form", "help-ask");
       this.input = el("input", "help-input");
       this.input.type = "text";
@@ -14763,6 +14769,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.root.hidden = false;
       this.open = true;
       this.renderModel();
+      this.renderWeb();
       this.sync();
       window.scribeApp?.rerender();
       window.scribeMotion?.reveal(this.root, true, { translate: "translateY(8px)" });
@@ -14848,6 +14855,23 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.modelBtn.replaceChildren(icon("sparkle"), el("span", null, modelLabel(current.provider, current.model) || PROVIDER_LABEL[current.provider] || "Model"));
     },
 
+    web() {
+      return localStorage.getItem(HELP_WEB_KEY) === "on";
+    },
+
+    renderWeb() {
+      const on = this.web();
+      this.webBtn.replaceChildren(icon("globe"), el("span", null, "Web"));
+      this.webBtn.setAttribute("aria-pressed", String(on));
+    },
+
+    toggleWeb() {
+      localStorage.setItem(HELP_WEB_KEY, this.web() ? "off" : "on");
+      this.renderWeb();
+      // Like a model change: the next question starts a thread with the new setting.
+      if (this.threadId && !this.pending) this.reset();
+    },
+
     pickModel(anchor) {
       const current = this.model();
       openModelMenu(anchor, current, (provider, model) => {
@@ -14889,7 +14913,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     async ask(raw) {
       const text = String(raw || "").trim();
       if (!text || this.pending) return;
-      if (this.threadId && Date.now() - this.askedAt > HELP_IDLE_MS) this.reset();
+      // A thread made before Web was switched (while a question ran) keeps its old setting: start a new one.
+      if (this.threadId && (Date.now() - this.askedAt > HELP_IDLE_MS || this.threadWeb !== this.web())) this.reset();
       const gen = ++this.gen;
       this.askedAt = Date.now();
       this.pending = { text, since: Date.now(), items: new Map(), shown: null };
@@ -14900,12 +14925,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       try {
         if (!this.threadId) {
           const choice = this.model();
-          const { thread } = await api("POST", "/threads", { help: true, provider: choice.provider, model: choice.model, effort: this.effort(choice), remember: false });
+          const { thread } = await api("POST", "/threads", { help: true, provider: choice.provider, model: choice.model, effort: this.effort(choice), web: this.web() ? "on" : "off", remember: false });
           if (gen !== this.gen) {
             api("DELETE", `/threads/${encodeURIComponent(thread.id)}`).catch(() => {});
             return;
           }
           this.threadId = thread.id;
+          this.threadWeb = this.web();
         }
         await api("POST", `/threads/${encodeURIComponent(this.threadId)}/messages`, { text });
       } catch (err) {

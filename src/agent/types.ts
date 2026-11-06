@@ -198,7 +198,7 @@ export type Thread = {
    */
   noTools?: true;
   /**
-   * A Help chat (#962): Read-only, no workspace, web off, with the help guide in its instructions. The Help
+   * A Help chat (#962): Read-only, no workspace, web off unless the panel's Web switch is on (#1019), with the help guide in its instructions. The Help
    * panel shows it and the thread lists leave it out. Temporary: deleted when the daemon starts.
    */
   help?: true;

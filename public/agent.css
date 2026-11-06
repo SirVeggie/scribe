@@ -7062,8 +7062,22 @@ main.has-split .help-panel[data-pane] {
   color: var(--heading);
 }
 
-.help-model .ag-ico {
+.help-model .ag-ico,
+.help-web .ag-ico {
   opacity: 0.7;
+}
+
+.help-web[aria-pressed="false"] {
+  color: var(--muted);
+}
+
+.help-web[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.help-web[aria-pressed="true"] .ag-ico {
+  opacity: 1;
 }
 
 /* Sticky with its field. Once stuck to the top it gets a solid backdrop behind the field, and the

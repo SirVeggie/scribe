@@ -1988,11 +1988,13 @@ export class AgentHost {
   }
 
   /**
-   * A Help chat (#962): global scope, Read-only, no workspace, web off. It reads pages and shows settings
-   * rows; the guide in its instructions does the rest. No prewarmed spare: that one has a workspace's tools.
+   * A Help chat (#962): global scope, Read-only, no workspace, web off unless the panel's Web switch is on
+   * (#1019). It reads pages and shows settings rows; the guide in its instructions does the rest. No
+   * prewarmed spare: that one has a workspace's tools.
    */
   private createHelpThread(input: ThreadPatch): ThreadView {
-    const thread = this.draftThread({ provider: input.provider, model: input.model, effort: input.effort, modelParams: input.modelParams, scope: { kind: "global", ref: null }, cwd: null, useWorktree: false, mode: "board", approval: "readonly", web: "off", title: "Help" });
+    const web = input.web === "on" ? "on" : "off";
+    const thread = this.draftThread({ provider: input.provider, model: input.model, effort: input.effort, modelParams: input.modelParams, scope: { kind: "global", ref: null }, cwd: null, useWorktree: false, mode: "board", approval: "readonly", web, title: "Help" });
     thread.help = true;
     delete thread.custom;
     delete thread.planNext;
