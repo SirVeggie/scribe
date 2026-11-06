@@ -1490,14 +1490,20 @@ window.createLibrary = function createLibrary(host) {
   async function deletePage(id) {
     const page = model.pageById.get(id);
     let recycle = false;
+    // Pages linking here would be left with broken links (#1036): name them before deleting.
+    const links = await send("GET", `/api/library/links/${encodeURIComponent(id)}`)
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => data.pages || [])
+      .catch(() => []);
     // Always confirm filesystem deletion; keep the file unless the checkbox is selected.
-    if (page?.file && !page.file.copy) {
-      const check = fileDeletionCheck([page]);
-      const choice = await host.choose(`Delete “${page.title}”?`, [
+    const check = page?.file && !page.file.copy ? fileDeletionCheck([page]) : undefined;
+    if (check || links.length) {
+      const linked = links.length ? ` It's linked from ${plural(links.length, "page")}:` : "";
+      const choice = await host.choose(`Delete “${page?.title ?? "page"}”?${linked}`, [
         { value: "delete", label: "Delete", danger: true },
-      ], { check });
+      ], { check, links });
       if (!choice) return;
-      recycle = check.checked;
+      recycle = Boolean(check?.checked);
     }
     const res = await send("DELETE", `/api/tabs/${encodeURIComponent(id)}?permanent=true${recycle ? "&file=trash" : ""}`);
     if (res.ok) {

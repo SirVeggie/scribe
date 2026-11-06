@@ -869,8 +869,8 @@ export class AgentHost {
 
   /**
    * Threads of a page or folder that went to the Trash are archived with it (#1036), so the list
-   * does not fill with Missing page groups, and come back when it is restored. A thread that is
-   * busy or pinned stays; the list groups it under Deleted until the user archives it.
+   * does not fill with Missing page groups, and come back when it is restored. A busy thread
+   * stays (the list groups it under Deleted) until its turn ends; pinned ones are archived too.
    */
   private syncDeletedHomes(): void {
     const folders = new Set(store.listFolders().map((f) => f.id));
@@ -890,13 +890,21 @@ export class AgentHost {
         continue;
       }
       const busy = this.runs.has(t.id) || this.resuming.has(t.id) || (this.status.get(t.id) ?? "idle") !== "idle" || this.queues.get(t.id)?.length;
-      if (busy || t.pinned) continue;
+      if (busy) continue;
       this.updateThread(t.id, { archived: true });
       const archived = this.threads.get(t.id)!;
       archived.archivedWith = home;
       this.db.saveThread(archived);
       this.archivedHomes.add(home);
     }
+  }
+
+  /** A Scribe skill was deleted for good: threads and Kanban workers stop listing it. */
+  forgetSkill(id: string): void {
+    for (const t of this.threads.values()) {
+      if (t.skills?.includes(id)) this.updateThread(t.id, { skills: t.skills.filter((s) => s !== id) });
+    }
+    store.dropWorkerSkill(id);
   }
 
   private scheduleUnusedPageCleanup(): void {
@@ -5236,6 +5244,8 @@ export class AgentHost {
       this.turnWaiters.delete(threadId);
     }
     void this.pageRuns.check(threadId);
+    // A thread that was busy when its page or folder was deleted is archived once it goes idle.
+    if (!this.runs.has(threadId) && (latest?.scope.kind === "page" || latest?.scope.kind === "folder")) this.syncDeletedHomes();
   }
 
   /** Keeps the turn's file versions on disk, so a diff tool can compare them without git. */

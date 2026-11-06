@@ -28,9 +28,11 @@ test("a deleted page's threads are archived with it and come back when it is res
   host.updateThread(pinned.id, { pinned: true });
   store.deleteMany([page.id]);
   assert.equal(host.getThread(thread.id)?.archived, true);
-  assert.equal(host.getThread(pinned.id)?.archived, false);
+  assert.equal(host.getThread(pinned.id)?.archived, true);
   store.restoreFromTrash(page.id);
   assert.equal(host.getThread(thread.id)?.archived, false);
+  assert.equal(host.getThread(pinned.id)?.archived, false);
+  assert.equal(host.getThread(pinned.id)?.pinned, true);
 });
 
 test("a thread the user archived stays archived when its page is restored", () => {
@@ -40,6 +42,24 @@ test("a thread the user archived stays archived when its page is restored", () =
   store.deleteMany([page.id]);
   store.restoreFromTrash(page.id);
   assert.equal(host.getThread(thread.id)?.archived, true);
+});
+
+test("a purged skill is dropped from threads and Kanban workers", () => {
+  const board = store.upsert({ title: "Board", html: "<p>b</p>", state: { settings: { workers: { w1: { name: "W", skills: ["sk_a", "sk_b"] } } } } }).tab;
+  const thread = host.createThread({ scope: { kind: "global" } });
+  host.updateThread(thread.id, { skills: ["sk_a", "sk_b"] });
+  host.forgetSkill("sk_a");
+  assert.deepEqual(host.getThread(thread.id)?.skills, ["sk_b"]);
+  const workers = (store.get(board.id)!.state as { settings: { workers: Record<string, { skills: string[] }> } }).settings.workers;
+  assert.deepEqual(workers.w1.skills, ["sk_b"]);
+});
+
+test("linkedFrom finds pages and card text that link to a page by key", () => {
+  const target = store.upsert({ key: "link-target", title: "Target", html: "<p>t</p>" }).tab;
+  const page = store.upsert({ title: "Linker", html: '<a data-scribe-open="scribe:link-target">x</a>' }).tab;
+  const board = store.upsert({ title: "Cards", html: "<p>c</p>", state: { cards: [{ description: "See [[scribe:link-target]]" }] } }).tab;
+  store.upsert({ title: "Near miss", html: "<p>scribe:link-target-2</p>" });
+  assert.deepEqual(store.linkedFrom(target.id).map((p) => p.id).sort(), [page.id, board.id].sort());
 });
 
 test("a deleted folder's threads are archived with it", () => {

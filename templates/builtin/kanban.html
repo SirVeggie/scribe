@@ -2567,7 +2567,7 @@
   function creatorElement(c) {
     var name = str(c.createdBy).trim();
     var thread = str(c.createdThread).trim();
-    var canOpen = thread && scribe.agent && typeof scribe.agent.show === "function";
+    var canOpen = thread && !threadGone(thread) && scribe.agent && typeof scribe.agent.show === "function";
     var node = el(canOpen ? "button" : "div", "card-creator", "Created by ");
     var nameEl = el("span", "", name === "user" ? "you" : name || "unknown");
     var wid = name !== "user" && workerIdFor(name);
@@ -2580,11 +2580,21 @@
       node.addEventListener("click", function (e) {
         e.stopPropagation();
         scribe.agent.show(thread, { where: "sidebar" }).then(function (r) {
-          if (!r || !r.ok) setHint(r && r.error === "not_found" ? "That thread is gone." : "Couldn't open the thread.");
+          if (!r || !r.ok) noThread(thread, r);
         });
       });
     }
     return node;
+  }
+
+  // A deleted chat's link is hidden (#1036) once the board learns it is gone.
+  function threadGone(tid) { return !!(threadStatus[tid] && threadStatus[tid].gone); }
+  function noThread(tid, r) {
+    if (r && r.error === "not_found") {
+      threadStatus[tid] = { status: "idle", queued: 0, run: null, gone: true };
+      setHint("That thread is gone.");
+      renderLater();
+    } else setHint("Couldn't open the thread.");
   }
 
   function openBlockers(c) {
@@ -4268,10 +4278,10 @@
       });
     }
     var thread = c.thread || (c.claim && c.claim.thread);
-    if (thread && scribe.agent && typeof scribe.agent.show === "function") {
+    if (thread && !threadGone(thread) && scribe.agent && typeof scribe.agent.show === "function") {
       menuButton(menuEl, "Open thread", function () {
         scribe.agent.show(thread, { where: "sidebar" }).then(function (r) {
-          if (!r || !r.ok) setHint(r && r.error === "not_found" ? "That thread is gone." : "Couldn't open the thread.");
+          if (!r || !r.ok) noThread(thread, r);
         });
       });
     }
@@ -5499,6 +5509,19 @@
     scribe.update([{ op: "merge", path: "settings/workers/" + id, value: patch }]);
   }
   function removeWorker(id) {
+    // Its cards are unassigned (#1036), or no worker would ever take them; a card its agent still holds keeps the name.
+    var name = workerName(worker(id) || {});
+    if (name) {
+      var changed = false;
+      var cards = allCards().map(function (c) {
+        if (!sameName(c.assignee, name) || c.claim) return c;
+        changed = true;
+        var next = Object.assign({}, c);
+        delete next.assignee;
+        return next;
+      });
+      if (changed) scribe.set({ cards: cards });
+    }
     var all = Object.assign({}, workers());
     delete all[id];
     var next = Object.assign({}, settings());
@@ -7027,7 +7050,7 @@
   function askRemoveWorker(id) {
     var w = worker(id);
     if (!w) return;
-    askConfirm({ title: "Remove " + (workerName(w) || "this worker") + "?", text: "Its setup is deleted. Cards assigned to it keep the name. A running agent keeps going until you stop it from the chat.", ok: "Remove" }).then(function (ok) {
+    askConfirm({ title: "Remove " + (workerName(w) || "this worker") + "?", text: "Its setup is deleted and its cards are unassigned. A running agent keeps going until you stop it from the chat.", ok: "Remove" }).then(function (ok) {
       if (!ok) return;
       if (workerPending && workerPending.id === id) workerPending = null;
       if (workerEdit === id) closeWorker();

@@ -362,7 +362,7 @@ export async function startHttp(): Promise<http.Server> {
   app.use(worktreePreviewSite(id => agentHost?.getThread(id)?.worktree));
   // The board's own controls (#682): chats, approvals, folders, trash, export. An agent calling them
   // directly could answer its own access request or move a folder into its scope.
-  app.use(["/api/agent", "/api/export", "/api/import", "/api/copy", "/api/trash", "/api/undo", "/api/library/delete", "/api/library/cleanup", "/api/settings/index", "/api/onboarding", "/api/folders", "/api/ml/settings", "/api/audio/settings"], (req, res, next) => {
+  app.use(["/api/agent", "/api/export", "/api/import", "/api/copy", "/api/trash", "/api/undo", "/api/library/delete", "/api/library/links", "/api/library/cleanup", "/api/settings/index", "/api/onboarding", "/api/folders", "/api/ml/settings", "/api/audio/settings"], (req, res, next) => {
     const read = req.method === "GET" && (req.baseUrl === "/api/folders" || req.baseUrl.endsWith("/settings"));
     if (read || viewerOf(req) !== "agent") {
       next();
@@ -2003,6 +2003,12 @@ export async function startHttp(): Promise<http.Server> {
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
     }
+  });
+
+  // Pages that link to this one, so deleting it can say so (#1036).
+  app.get("/api/library/links/:id", (req, res) => {
+    if (refuseAgent(req, res)) return;
+    res.json({ pages: store.linkedFrom(req.params.id) });
   });
 
   // Close/delete results list ids this call affected. Do not include closedCount

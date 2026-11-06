@@ -39,6 +39,7 @@ async function fixture(browser: Browser) {
     w.choices = []; w.choice = "delete"; w.recycle = false;
     w.fetch = async (url: string, options: any) => {
       const body = options.body ? JSON.parse(options.body) : {};
+      if (url.startsWith("/api/library/links/")) return { ok: true, json: async () => ({ pages: w.links || [] }) };
       w.requests.push({ url, method: options.method, ...body });
       if (url.endsWith("/instructions")) Object.assign(w.folders.find((f: any) => url.includes(`/${f.id}/`)), body);
       return { ok: true, json: async () => ({}) };
@@ -52,7 +53,7 @@ async function fixture(browser: Browser) {
       hoverCard: { hide() {}, bind() {}, suspend() {}, resume() {} },
       showNotice() {}, confirm: async () => true, fileSettings: () => ({}),
       choose: async (message: string, _buttons: any, opts: any = {}) => {
-        w.choices.push({ message, checked: opts.check?.checked });
+        w.choices.push({ message, checked: opts.check?.checked, ...(opts.links?.length ? { links: opts.links } : {}) });
         if (opts.check) opts.check.checked = w.recycle;
         return w.choice;
       },
@@ -165,8 +166,11 @@ test("file deletion defaults to keeping files and folder choices include nested 
       await page.locator(`.lib-row[data-id="${id}"]`).dispatchEvent("contextmenu", { clientX: 130, clientY: 120 });
       await page.getByRole("menuitem", { name: label, exact: true }).click();
     };
+    await page.evaluate(() => { (window as any).links = [{ id: "y", title: "Y" }]; });
     await remove("x");
     assert.deepEqual(await page.evaluate(() => (window as any).requests.at(-1)), { url: "/api/tabs/x?permanent=true", method: "DELETE" });
+    assert.deepEqual(await page.evaluate(() => (window as any).choices.at(-1).links), [{ id: "y", title: "Y" }], "names the pages linking here");
+    await page.evaluate(() => { (window as any).links = []; });
     assert.equal(await page.evaluate(() => (window as any).choices.at(-1).checked), false);
     await page.evaluate(() => { (window as any).choice = null; });
     await remove("work", "Delete folder…");

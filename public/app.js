@@ -3851,14 +3851,8 @@
       await fetch(`/api/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
       return;
     }
-    if (tab?.file) {
-      await library.deletePage(id);
-      return;
-    }
-    const res = await fetch(`/api/tabs/${encodeURIComponent(id)}?permanent=true`, { method: "DELETE" });
-    if (res.ok) {
-      showNotice(`Deleted “${tab?.title || "page"}”`, { undo: true });
-    }
+    // The Library asks first when the file goes too or other pages link here.
+    await library.deletePage(id);
   }
 
   /** Gives a Library page a tab (or focuses it). `before` places it in the strip; null means the end of its group. */
@@ -3998,6 +3992,23 @@
     choiceMessage.textContent = message;
     choiceActions.replaceChildren();
     choiceMessage.parentElement.querySelector(".choice-check")?.remove();
+    choiceMessage.parentElement.querySelector(".choice-links")?.remove();
+    // Pages to peek at instead of going on: a click cancels the dialog and opens one.
+    if (opts.links?.length) {
+      const list = document.createElement("div");
+      list.className = "choice-links";
+      for (const link of opts.links) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = link.title || "Untitled";
+        btn.addEventListener("click", () => {
+          choiceDlg.close("cancel");
+          views.open(link.id, "peek");
+        });
+        list.appendChild(btn);
+      }
+      choiceMessage.after(list);
+    }
     let box = null;
     if (opts.check) {
       const label = document.createElement("label");

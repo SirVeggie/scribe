@@ -2148,6 +2148,34 @@ export class BoardStore extends EventEmitter {
     return pages;
   }
 
+  /** A skill was deleted for good: Kanban workers stop listing it. */
+  dropWorkerSkill(skillId: string): void {
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      const settings = isPlainObject(tab.state) ? tab.state.settings : undefined;
+      const workers = isPlainObject(settings) && isPlainObject(settings.workers) ? settings.workers : {};
+      const ops = Object.entries(workers).flatMap(([id, worker]) => {
+        const skills = isPlainObject(worker) && Array.isArray(worker.skills) ? worker.skills : null;
+        if (!skills?.includes(skillId)) return [];
+        return [{ op: "set", path: `settings/workers/${id.replaceAll("~", "~0").replaceAll("/", "~1")}/skills`, value: skills.filter((s) => s !== skillId) }];
+      });
+      if (ops.length) this.writeState(tab.id, { ops, lenient: true });
+    }
+  }
+
+  /** Library pages whose HTML or state links to this page by key (cards and comments included). */
+  linkedFrom(idOrKey: string): Array<{ id: string; key: string; title: string }> {
+    const target = this.locate(idOrKey)?.tab;
+    if (!target) return [];
+    const key = target.key.toLowerCase();
+    const out: Array<{ id: string; key: string; title: string }> = [];
+    for (const tab of [...this.tabs.values(), ...this.closed.values()]) {
+      if (tab.id === target.id || tab.temp) continue;
+      const text = tab.html + (tab.state === undefined ? "" : JSON.stringify(tab.state));
+      if (text.toLowerCase().includes(key) && pageKeysInText(text).includes(key)) out.push({ id: tab.id, key: tab.key, title: tab.title });
+    }
+    return out;
+  }
+
   /** An agent rewrote the page's code: what it was trusted with no longer holds. Returns whether anything was reset. */
   resetRiskyPermissions(idOrKey: string): boolean {
     const tab = this.locate(idOrKey)?.tab;

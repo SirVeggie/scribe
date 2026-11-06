@@ -535,6 +535,7 @@ export function agentRouter(host: AgentHost): express.Router {
           return { skill: skills.restore(id) };
         case "purge":
           skills.purge(id);
+          host.forgetSkill(id);
           return { ok: true };
         default:
           throw new Error(`Unknown skill action: ${req.params.op}`);
