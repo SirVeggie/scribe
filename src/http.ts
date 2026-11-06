@@ -3420,14 +3420,43 @@ const BOARD_CHROME_INJECT = `<style data-scribe-scroll>${BOARD_SCROLLBAR_CSS}</s
   // Choosing an item, or clicking anywhere else in the board, takes focus from the page and closes the menu.
   window.addEventListener("blur", function () { menuOpen = false; });
   // The board gives the focus back after its chat closes (#829): return it to the field the page had.
-  var lastFocus = null;
-  document.addEventListener("focusin", function (event) { lastFocus = event.target; }, true);
+  // A page that re-renders (a board updating while the chat was open) replaces the field: find its successor
+  // by id, name or position, and put the caret back where it was.
+  var lastFocus = null, lastPath = "", lastCaret = null;
+  function pathTo(el) {
+    if (el.id) return "#" + CSS.escape(el.id);
+    var parts = [];
+    for (var node = el; node && node.nodeType === 1 && node !== document.body; node = node.parentElement) {
+      if (node.id) { parts.unshift("#" + CSS.escape(node.id)); break; }
+      var name = node.getAttribute("name");
+      var part = node.tagName.toLowerCase() + (name ? '[name="' + CSS.escape(name) + '"]' : "");
+      var parentEl = node.parentElement;
+      if (parentEl) part += ":nth-child(" + (Array.prototype.indexOf.call(parentEl.children, node) + 1) + ")";
+      parts.unshift(part);
+    }
+    return parts.join(" > ");
+  }
+  function caretOf(el) {
+    try { return typeof el.selectionStart === "number" ? [el.selectionStart, el.selectionEnd] : null; } catch (err) { return null; }
+  }
+  document.addEventListener("focusin", function (event) {
+    if (event.target === document.body || !(event.target instanceof Element)) return;
+    lastFocus = event.target; lastCaret = null;
+    try { lastPath = pathTo(event.target); } catch (err) { lastPath = ""; }
+  }, true);
+  document.addEventListener("focusout", function (event) { if (event.target === lastFocus) lastCaret = caretOf(lastFocus); }, true);
   window.addEventListener("message", function (event) {
     if (event.source !== parent || !event.data) return;
     if (event.data.type === "scribe-refocus") {
-      if (lastFocus && lastFocus.isConnected && lastFocus !== document.body && lastFocus.focus) {
-        try { lastFocus.focus({ preventScroll: true }); } catch (err) {}
-      }
+      var at = document.activeElement;
+      if (at && at !== document.body) return;
+      var target = lastFocus && lastFocus.isConnected ? lastFocus : null;
+      if (!target && lastPath) { try { target = document.querySelector(lastPath); } catch (err) {} }
+      if (!target || !target.focus) return;
+      try {
+        target.focus({ preventScroll: true });
+        if (lastCaret && target.setSelectionRange && target.value.length >= lastCaret[1]) target.setSelectionRange(lastCaret[0], lastCaret[1]);
+      } catch (err) {}
       return;
     }
     if (event.data.type === "scribe-select-all") {

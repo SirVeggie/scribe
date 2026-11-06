@@ -9005,6 +9005,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       localStorage.setItem(LS.side, open ? "1" : "0");
       this.apply();
       if (open) {
+        focusBack.note(document.activeElement);
         this.ensureThread();
         setTimeout(() => this.view.focus(), 50);
       } else focusBack.restore();
@@ -9280,6 +9281,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       if (shown) this.syncThread();
       this.apply();
       if (shown) {
+        focusBack.note(document.activeElement);
         this.bindFeed();
         setTimeout(() => this.view.focus(), 60);
       } else {
@@ -13928,6 +13930,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     },
   };
   document.addEventListener("focusin", (event) => focusBack.note(event.target), true);
+  // Focus moving into a page frame doesn't always fire focusin on the iframe here; the window's blur does.
+  window.addEventListener("blur", () => setTimeout(() => focusBack.note(document.activeElement)));
 
   /* ---------- keys ---------- */
 
