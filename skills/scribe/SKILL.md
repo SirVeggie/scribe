@@ -103,7 +103,7 @@ Never hardcode light-theme colors (`#222`, `black`) or fall back to them (`var(-
 
 ### Page kit: elements and form wiring
 
-Fragment pages get Scribe's page kit: script-free form wiring, themed fields and buttons, and elements for parts that need behavior: `<s-question>` for questions, `<s-options>` to compare options and pick one, `<s-mock>` for UI mock-ups, `<s-code>` for code with a Copy button. It has no boxes, cards or badges: style the page yourself. Kit elements render into the page and every kit rule sits in `:where()`, so your CSS restyles them; the `--kit-*` variables on `:root` retheme them all.
+Fragment pages get Scribe's page kit: script-free form wiring, themed fields and buttons, and elements for parts that need behavior: `<s-question>` for questions, `<s-options>` to compare options and pick one, `<s-mock>` for UI mock-ups, `<s-code>` for code with a Copy button. It has no boxes, cards or badges: style the page yourself. Kit elements render into the page and every kit rule sits in `:where()`, so your CSS restyles them; the `--kit-*` variables on `:root` retheme them all. A full document gets only the reply wiring (`form[data-reply]`, `button[data-reply]`), not the kit's styles or elements.
 
 Never make a page plainer to save tokens: its HTML is a small share of a chat's cost. Make design docs, investigations and comparisons easy to scan: color-code categories and options (your own tags, toned sections and table cells), draw flows or architecture (a `flow` row, or inline SVG), and show proposed UI as a mock-up rather than describing it.
 

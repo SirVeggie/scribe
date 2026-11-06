@@ -95,6 +95,17 @@ export function inlineKit(html: string, read: (file: "kit.css" | "kit.js") => st
   return html.replace(KIT_CSS_LINK, () => `<style>${read("kit.css")}</style>`).replace(KIT_JS_SCRIPT, () => `<script>${read("kit.js")}</script>`);
 }
 
+/**
+ * The kit script a full document still needs when served: it uses reply wiring
+ * (form[data-reply], button[data-reply]) without loading kit.js itself. Without it a
+ * reply form does a plain browser submit, which reloads the page and loses the answers.
+ */
+export function kitScriptFor(html: string): string {
+  if (!/\bdata-reply\b/i.test(html)) return "";
+  if (/<script\b[^>]*\bsrc=["'][^"']*\/kit\.js(?:\?[^"']*)?["']/i.test(html)) return "";
+  return KIT_JS_TAG + "\n";
+}
+
 export function wrapHtml(title: string, raw: string): string {
   const html = toLf(raw);
   const trimmed = html.trim();

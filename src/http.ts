@@ -63,7 +63,7 @@ import { formatAnswers, parseQuestionInput } from "./agent/questionTool.js";
 import { findSettings, parseShowInput, setSettingsCatalog, settingsCatalog } from "./agent/settingsTool.js";
 import { parseWebImportance, type WebCall } from "./agent/webAccess.js";
 import type { AccessScope } from "./agent/threadAccess.js";
-import { BOARD_SCROLLBAR_CSS, inlineKit } from "./wrapHtml.js";
+import { BOARD_SCROLLBAR_CSS, inlineKit, kitScriptFor } from "./wrapHtml.js";
 import { COMPONENT_PATH, inlineComponents, readComponent, type ComponentReader } from "./coreComponents.js";
 import { spliceHtmlSlot } from "./htmlSlot.js";
 import { searchRouter } from "./search/routes.js";
@@ -3458,7 +3458,8 @@ function injectBoardRuntime(tab: Tab, viewer: string | null, captureLocal?: Boar
     ...diagnostic, id: tab.id, capture: capturing, tones: KIT_TONES,
     insertLine: html.slice(0, at).split("\n").length, insertedLines: 0,
   } : null;
-  const renderSnippet = () => `<script src="/tooltip.js?v=3" defer></script>
+  const kitScript = tab.browser || tab.file ? "" : kitScriptFor(html);
+  const renderSnippet = () => `${kitScript}<script src="/tooltip.js?v=3" defer></script>
 <style data-scribe-bridge>${BOARD_STALE_CSS}</style>
 <script>window.__SCRIBE_BOOT__=${boot};
 ${problemBoot ? `window.__SCRIBE_PROBLEMS__=${jsonForScript(problemBoot)};\n${PAGE_PROBLEM_JS}` : ""}

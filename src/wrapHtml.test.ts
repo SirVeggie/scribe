@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { inlineKit, KIT_CSS_TAG, KIT_JS_TAG, PAGE_THEME, wrapHtml } from "./wrapHtml.js";
+import { inlineKit, KIT_CSS_TAG, KIT_JS_TAG, kitScriptFor, PAGE_THEME, wrapHtml } from "./wrapHtml.js";
 import { chromium } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 import { skillDocs } from "./skillDocs.js";
@@ -119,4 +119,13 @@ test("scribe_docs serves the kit's declarative reply button contract", () => {
   const docs = skillDocs("Page kit");
   assert.equal(docs.error, undefined);
   for (const term of ["button data-reply", "data-context", "submitted", "component", "disabled"]) assert.ok(docs.text.includes(term), term);
+});
+
+test("kitScriptFor adds kit.js only to full documents that use reply wiring without it", () => {
+  const form = '<!DOCTYPE html><html><head></head><body><form data-reply><button type="submit">Send</button></form></body></html>';
+  assert.equal(kitScriptFor(form), KIT_JS_TAG + "\n");
+  assert.equal(kitScriptFor('<!DOCTYPE html><html><body><button data-reply="Yes">Yes</button></body></html>'), KIT_JS_TAG + "\n");
+  assert.equal(kitScriptFor("<!DOCTYPE html><html><body><form><button>Go</button></form></body></html>"), "");
+  assert.equal(kitScriptFor(form.replace("<head></head>", '<head><script src="/kit.js" defer></script></head>')), "");
+  assert.equal(kitScriptFor(wrapHtml("Fragment", "<form data-reply></form>")), "");
 });
