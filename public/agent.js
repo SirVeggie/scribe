@@ -989,8 +989,11 @@
       return;
     }
     const main = el("span", "ag-scope-main");
-    main.append(icon(sc.icon), el("span", "ag-scope-text", sc.text), el("span", "ag-scope-sep", "·"));
-    node.replaceChildren(main, icon("box"), el("span", null, R.basename(dir) || dir));
+    main.append(icon(sc.icon), el("span", "ag-scope-text", sc.text));
+    // Each part on its own, so the setting wheel can sit over just the one being cycled.
+    const ws = el("span", "ag-scope-dir");
+    ws.append(icon("box"), el("span", null, R.basename(dir) || dir));
+    node.replaceChildren(main, el("span", "ag-scope-sep", "·"), ws);
   }
 
   function dirKey(dir) {
@@ -9357,7 +9360,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       btn.classList.remove("tight");
       if (!btn.querySelector(".ag-scope-main")) return;
       const cut = (node) => node && node.scrollWidth > node.clientWidth + 1;
-      if (cut(btn) || cut(btn.querySelector(".ag-scope-text")) || cut(btn.lastElementChild)) btn.classList.add("tight");
+      if (cut(btn) || cut(btn.querySelector(".ag-scope-text")) || cut(btn.querySelector(".ag-scope-dir > span:last-child"))) btn.classList.add("tight");
     },
     /** When the thread's current run started: its running turn, else when the dock first saw it running. */
     runStart(t) {
@@ -10632,19 +10635,53 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return dock.view;
   }
 
-  /** The pill a cycling shortcut changes in this chat, for the setting wheel. */
+  /** The pill a cycling shortcut changes in this chat, for the setting wheel: for the scope chip, just the part it cycles. */
   function wheelAnchor(view, setting) {
-    if (setting === "workspace" || setting === "scope") return view.variant === "dock" ? dock.scopeBtn : view.header?.querySelector(".ag-scope-chip");
-    return view.bar?.querySelector(`[data-wheel="${setting}"]`);
+    if (setting !== "workspace" && setting !== "scope") return view.bar?.querySelector(`[data-wheel="${setting}"]`);
+    const chip = view.variant === "dock" ? dock.scopeBtn : view.header?.querySelector(".ag-scope-chip");
+    const part = chip?.querySelector(setting === "workspace" ? ".ag-scope-dir" : ".ag-scope-main");
+    return part?.getClientRects().length ? part : chip;
+  }
+
+  /** Values stepped to on an open setting wheel, applied when it closes (#1017), so the bar stays put meanwhile. */
+  const wheelPending = new Map();
+  let wheelApplied = Promise.resolve();
+
+  function wheelKey(view, setting) {
+    return `${view.variant}:${view.threadId || "draft"}:${setting}`;
+  }
+
+  /** What a cycling shortcut steps from: the value its open wheel shows, else `current`. */
+  function wheelValue(view, setting, current) {
+    const pending = wheelPending.get(wheelKey(view, setting));
+    return pending ? pending.value : current;
+  }
+
+  /** Before a cycling step: another setting's wheel closes and its value is applied first, as the step reads it. */
+  async function settleWheel(view, setting) {
+    const key = wheelKey(view, setting);
+    if ([...wheelPending.keys()].some((k) => k !== key)) window.scribeSettingWheel?.close();
+    await wheelApplied;
   }
 
   /**
-   * Show a cycling step on the setting wheel (#1017) over that setting's pill: the list, the index
-   * shown before the step and the new one. False when the pill isn't on screen.
+   * Show a cycling step on the setting wheel over that setting's pill: the list, the index shown before
+   * the step and the new one. The value is applied when the wheel closes; right away when the pill
+   * isn't on screen, and then this returns false so the caller can say what changed.
    */
-  function showWheel(view, setting, items, from, to, render) {
-    const key = `${view.variant}:${view.threadId || "draft"}:${setting}`;
-    return Boolean(window.scribeSettingWheel?.show({ key, find: () => wheelAnchor(view, setting), items, from, to, render }));
+  async function stepWheel(view, setting, { items, from, to, render, apply, beside }) {
+    const key = wheelKey(view, setting);
+    const onClose = () => {
+      const pending = wheelPending.get(key);
+      if (!pending) return;
+      wheelPending.delete(key);
+      wheelApplied = wheelApplied.then(() => pending.apply(pending.value)).catch((err) => notice(err.message));
+    };
+    wheelPending.set(key, { value: items[to], apply });
+    if (window.scribeSettingWheel?.show({ key, find: () => wheelAnchor(view, setting), items, from, to, render, onClose, beside })) return true;
+    wheelPending.delete(key);
+    await apply(items[to]);
+    return false;
   }
 
   /** Latest non-favourite model per chat, kept in that chat's cycle until another replaces it. */
@@ -10652,15 +10689,17 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   async function cycleModel() {
     const view = targetView();
+    await settleWheel(view, "model");
     const s = view.settings();
     const t = view.thread();
     // A thread with messages keeps its provider, so only that provider's favourites apply.
     const locked = Boolean(t && t.stats.turns > 0);
     const usable = (f) => providerAvailable(f.provider) && modelInfo(f.provider, f.id) && (!locked || f.provider === s.provider);
     const candidates = new Set(favoriteModels());
-    const current = modelKey(s.provider, s.model);
+    const shownModel = wheelValue(view, "model", null);
+    const current = shownModel ? modelKey(shownModel.provider, shownModel.id) : modelKey(s.provider, s.model);
     const chatKey = view.threadId || `draft:${view.variant}`;
-    if (!candidates.has(current)) cycleExtras.set(chatKey, { provider: s.provider, id: s.model });
+    if (!shownModel && !candidates.has(current)) cycleExtras.set(chatKey, { provider: s.provider, id: s.model });
     const extra = cycleExtras.get(chatKey);
     if (extra && usable(extra)) candidates.add(modelKey(extra.provider, extra.id));
     // Use the picker's provider, model and Native source order, regardless of when stars were added.
@@ -10675,13 +10714,17 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const at = list.findIndex((f) => modelKey(f.provider, f.id) === current);
     const nextAt = (at + 1) % list.length;
     const next = list[nextAt];
-    const shown = showWheel(view, "model", list, at < 0 ? nextAt - 1 : at, nextAt, (f) => ({ nodes: [providerIcon(f.provider), el("span", null, modelInfo(f.provider, f.id)?.label || f.id)] }));
-    await view.updateSettings(next.provider === s.provider ? { model: next.id } : { provider: next.provider, model: next.id });
+    const shown = await stepWheel(view, "model", {
+      items: list, from: at < 0 ? nextAt - 1 : at, to: nextAt,
+      render: (f) => ({ nodes: [providerIcon(f.provider), el("span", null, modelInfo(f.provider, f.id)?.label || f.id)] }),
+      apply: (f) => view.updateSettings(f.provider === view.settings().provider ? { model: f.id } : { provider: f.provider, model: f.id }),
+    });
     if (!shown) notice(`Model: ${modelInfo(next.provider, next.id)?.label || next.id}`);
   }
 
   async function cycleEffort() {
     const view = targetView();
+    await settleWheel(view, "effort");
     const s = view.settings();
     const info = modelInfo(s.provider, s.model);
     if (!info?.efforts?.length) {
@@ -10689,11 +10732,14 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return;
     }
     const levels = info.efforts.map((e) => e.id);
-    const at = levels.indexOf(s.effort);
+    const at = levels.indexOf(wheelValue(view, "effort", null)?.id ?? s.effort);
     const nextAt = (at + 1) % levels.length;
     const next = levels[nextAt];
-    const shown = showWheel(view, "effort", info.efforts, at < 0 ? nextAt - 1 : at, nextAt, (e) => ({ nodes: [icon("think"), el("span", null, e.label || e.id)] }));
-    await view.updateSettings({ effort: next });
+    const shown = await stepWheel(view, "effort", {
+      items: info.efforts, from: at < 0 ? nextAt - 1 : at, to: nextAt,
+      render: (e) => ({ nodes: [icon("think"), el("span", null, e.label || e.id)] }),
+      apply: (e) => view.updateSettings({ effort: e.id }),
+    });
     const label = info.efforts.find((e) => e.id === next)?.label || next;
     if (!shown) notice(`Reasoning: ${label}`);
   }
@@ -14093,11 +14139,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   async function cycleMode() {
     const view = targetView();
+    await settleWheel(view, "mode");
     const s = view.settings();
+    const approval = wheelValue(view, "mode", null)?.id || s.approval;
     const disabled = prefs().disabledModes || [];
     // Up to a custom mode's highest rung.
     const rungs = APPROVALS.filter((a) => rungRank(a.id) <= rungRank(s.custom?.max || "full"));
-    const at = rungs.findIndex((a) => a.id === s.approval);
+    const at = rungs.findIndex((a) => a.id === approval);
     let next;
     for (let offset = 1; offset <= rungs.length; offset += 1) {
       const rung = rungs[(at + offset) % rungs.length];
@@ -14110,13 +14158,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       notice("No rungs enabled for cycling. Choose them in Agent settings.");
       return;
     }
-    if (next.id === s.approval) return;
+    if (next.id === approval) return;
     // The wheel shows the rungs the shortcut visits, and the current one.
-    const shownRungs = rungs.filter((r) => !disabled.includes(r.id) || r.id === s.approval);
+    const shownRungs = rungs.filter((r) => !disabled.includes(r.id) || r.id === approval);
     const rungText = (r) => (s.custom ? `${s.custom.name} · ${r.label}` : r.label);
     const render = (r) => ({ cls: `ap-${r.id}`, nodes: [icon("shield"), el("span", null, rungText(r))] });
-    const shown = showWheel(view, "mode", shownRungs, shownRungs.findIndex((r) => r.id === s.approval), shownRungs.indexOf(next), render);
-    await view.updateSettings({ approval: next.id, mode: accessMode(next.id) });
+    const shown = await stepWheel(view, "mode", {
+      items: shownRungs, from: shownRungs.findIndex((r) => r.id === approval), to: shownRungs.indexOf(next), render,
+      apply: (r) => view.updateSettings({ approval: r.id, mode: accessMode(r.id) }),
+    });
     if (!shown) notice(`Access: ${next.label}`);
   }
 
@@ -14139,7 +14189,8 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   async function cycleWorkspace() {
     const view = targetView();
-    const current = view.settings().cwd || null;
+    await settleWheel(view, "workspace");
+    const current = wheelValue(view, "workspace", view.settings().cwd || null);
     const dirs = workspaceCycleList(current);
     const list = [...dirs, null];
     if (list.length < 2) {
@@ -14149,17 +14200,15 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     const at = current ? list.findIndex((dir) => dir && dirKey(dir) === dirKey(current)) : list.length - 1;
     const nextAt = (Math.max(at, 0) + 1) % list.length;
     const next = list[nextAt];
-    const scope = view.settings().scope;
-    const shown = showWheel(view, "workspace", list, Math.max(at, 0), nextAt, (dir) => wheelScope(scope, dir));
-    await view.setWorkspace(next);
+    const s = view.settings();
+    // Only the workspace turns. With a Scribe scope and no workspace yet, the chip shows only the scope: the rows sit after it.
+    const shown = await stepWheel(view, "workspace", {
+      items: list, from: Math.max(at, 0), to: nextAt,
+      render: (dir) => ({ nodes: dir ? [icon("box"), el("span", null, R.basename(dir) || dir)] : [icon("close"), el("span", null, "None")] }),
+      apply: (dir) => view.setWorkspace(dir),
+      beside: (node) => s.scope.kind !== "workspace" && !node.classList.contains("ag-scope-dir"),
+    });
     if (!shown) notice(next ? `Workspace: ${R.basename(next) || next}` : "Workspace: None");
-  }
-
-  /** A wheel row for the scope chip: what the chip would show with that scope and workspace. */
-  function wheelScope(scope, cwd) {
-    const node = el("span");
-    fillScopeDisplay(node, scope, cwd);
-    return { nodes: [...node.childNodes] };
   }
 
   /** Scribe access options the scope menu would offer for this chat, in that order. */
@@ -14181,18 +14230,27 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
 
   async function cycleScope() {
     const view = targetView();
+    await settleWheel(view, "scope");
     const s = view.settings();
+    const currentScope = wheelValue(view, "scope", s.scope);
     const list = scopeCycleList(view);
     if (list.length < 2) {
       notice("No other Scribe access to cycle");
       return;
     }
-    let at = list.findIndex((scope) => sameScope(scope, s.scope));
-    if (at < 0 && s.scope.kind === "workspace") at = list.findIndex((scope) => scope.kind === "workspace");
+    let at = list.findIndex((scope) => sameScope(scope, currentScope));
+    if (at < 0 && currentScope.kind === "workspace") at = list.findIndex((scope) => scope.kind === "workspace");
     const nextAt = (Math.max(at, 0) + 1) % list.length;
     const next = list[nextAt];
-    const shown = showWheel(view, "scope", list, Math.max(at, 0), nextAt, (scope) => wheelScope(scope, s.cwd));
-    await view.setScope(next);
+    // Only the Scribe part turns: over its part of the chip, or the whole chip when that shows only the workspace.
+    const shown = await stepWheel(view, "scope", {
+      items: list, from: Math.max(at, 0), to: nextAt,
+      render: (scope) => {
+        const sc = scope.kind === "workspace" ? { icon: "close", text: "None" } : scopeLabel(scope);
+        return { nodes: [icon(sc.icon), el("span", null, sc.text)] };
+      },
+      apply: (scope) => view.setScope(scope),
+    });
     if (!shown) notice(`Scribe: ${next.kind === "workspace" ? "None" : scopeLabel(next).text}`);
   }
 

@@ -5,8 +5,9 @@
  * toward the edges. It closes when Ctrl is released, and the text settles back into the pill.
  *
  * One fixed layer over the whole window, placed from the pill's position, so the floating chat, the
- * sidebar and the full window need no code of their own. The pill keeps its width while the drum is
- * open, so the bar doesn't shift behind it, and takes its new width once on close.
+ * sidebar and the full window need no code of their own. The caller applies the chosen value only
+ * when the drum closes (onClose), so nothing in the bar moves while it is open; the pill then takes
+ * its new width once and stays hidden until the text has settled into it.
  */
 (() => {
   const OPEN_MS = 230;
@@ -35,9 +36,13 @@
     return layer;
   }
 
+  /** Where the current value's row sits: over the anchor, or just past its text when it is only a neighbour (beside). */
   function rectOf(node) {
     const r = node.getBoundingClientRect();
-    return { x: r.left, y: r.top, w: r.width, h: r.height };
+    if (!W?.beside?.(node)) return { x: r.left, y: r.top, w: r.width, h: r.height };
+    const cs = getComputedStyle(node);
+    const x = r.right - parseFloat(cs.paddingRight) - W.padL + (parseFloat(cs.columnGap) || 0);
+    return { x, y: r.top, w: 0, h: r.height };
   }
 
   /** The anchor the caller's finder returns now: the bar re-renders on every settings change. */
@@ -47,9 +52,9 @@
       release(W.el);
       W.el = node && node.isConnected && node.getClientRects().length ? node : null;
     }
-    if (W.el && !W.closing) {
+    if (W.el && !W.beside?.(W.el)) {
       W.el.classList.add("ag-wheel-anchor");
-      W.el.style.width = `${W.lockW}px`;
+      W.el.style.width = W.closing ? "" : `${W.lockW}px`;
     }
     return W.el;
   }
@@ -64,8 +69,11 @@
     const node = document.createElement("span");
     const out = W.render(item) || {};
     node.className = `${W.baseCls} ${out.cls || ""} ag-wheel-item`;
-    for (const p of COPY) node.style[p] = W.style[p];
+    // A row with its own class (an access rung) takes that class's colour, not the pill's.
+    for (const p of COPY) if (p !== "color" || !out.cls) node.style[p] = W.style[p];
     node.replaceChildren(...(out.nodes || []));
+    // The current value brightens toward the heading colour; a coloured row keeps some of its hue.
+    node.wheelTint = out.cls ? 0.45 : 1;
     return node;
   }
 
@@ -131,7 +139,7 @@
     const f = fit(Math.round(W.posTo));
     const ox = f.dx * o, oy = f.dy * o;
     // A soft spot of the surface colour hides what is behind the values; it has no edge.
-    const vw = f.box.w + 90, vh = f.box.h + 50;
+    const vw = f.box.w + 110, vh = f.box.h + 70;
     const vx = f.box.x + f.dx + f.box.w / 2 - vw / 2, vy = f.box.y + f.dy + f.box.h / 2 - vh / 2;
     Object.assign(W.veil.style, { width: `${vw}px`, height: `${vh}px`, transform: `translate(${vx}px, ${vy}px) scale(${lerp(0.4, 1, o)})`, opacity: String(o) });
     const keep = new Set();
@@ -149,7 +157,10 @@
         node = makeItem(W.items[mod(i, n)]);
         W.nodes.set(i, node);
         layer.append(node);
+        node.wheelBase = getComputedStyle(node).color;
       }
+      const hi = Math.round(100 * o * clamp(1 - Math.abs(k), 0, 1) * node.wheelTint);
+      node.style.color = hi ? `color-mix(in srgb, var(--heading, #fff) ${hi}%, ${node.wheelBase})` : node.wheelBase;
       const sc = lerp(1, p.scale, ok);
       node.style.transform = `translate(${px(a.x + ox)}px, ${px(a.y + oy + p.y * ok)}px)${sc === 1 ? "" : ` scale(${sc})`}`;
       node.style.opacity = String(op);
@@ -167,8 +178,17 @@
     W.raf = requestAnimationFrame(frame);
   }
 
+  /** Hand the chosen value to the caller, once. */
+  function commit() {
+    const done = W?.onClose;
+    if (!done) return;
+    W.onClose = null;
+    done();
+  }
+
   function finish() {
     if (!W) return;
+    commit();
     cancelAnimationFrame(W.raf);
     release(W.el);
     layer?.replaceChildren();
@@ -179,7 +199,8 @@
     if (!W || W.closing) return;
     W.closing = true;
     W.closeFrom = { ...W.a };
-    release(W.el); // the pill takes its new width once; the text glides to it
+    W.el && (W.el.style.width = ""); // the pill takes its new width once; the text glides to it
+    commit();
     W.openFrom = W.open;
     W.openTo = 0;
     W.openT0 = performance.now();
@@ -201,9 +222,12 @@
    * find(): the pill now (the bar re-renders on each change).
    * items, from, to: the cycle's list, the index shown before this step and the new one.
    * render(item): { nodes, cls? }, the pill's content for that item.
-   * Returns false when the pill isn't on screen, so the caller can fall back to a notice.
+   * onClose(): apply the value shown last; called once, when the drum closes or another one replaces it.
+   * beside(node): true when the anchor doesn't show the value (it isn't set yet): the rows then sit
+   * just past its text and leave it visible.
+   * Returns false when the pill isn't on screen, so the caller can apply the value itself.
    */
-  function show({ key, find, items, from, to, render }) {
+  function show({ key, find, items, from, to, render, onClose, beside }) {
     if (!items?.length) return false;
     if (W && (W.key !== key || W.closing)) finish();
     const now = performance.now();
@@ -218,14 +242,16 @@
       layer.append(veil);
       const start = mod(from, items.length);
       W = {
-        key, find, render, items, el: null, veil, nodes: new Map(),
+        key, find, render, beside, items, el: null, veil, nodes: new Map(),
         style: getComputedStyle(el), baseCls: el.className.replace(/\bap-[\w-]+\b/g, "").replace("ag-wheel-anchor", ""),
-        lockW: el.getBoundingClientRect().width, a: rectOf(el),
+        lockW: el.getBoundingClientRect().width, a: null,
         pos: start, posFrom: start, posTo: start, posT0: now,
         open: 0, openFrom: 0, openTo: 1, openT0: now, closing: false, idle: 0,
       };
       // Item styles copy the pill's; take them before it is hidden.
+      W.padL = parseFloat(W.style.paddingLeft) || 0; // rows copy the pill's padding
       W.style = Object.fromEntries(COPY.map((p) => [p, W.style[p]]));
+      W.a = rectOf(el);
       track();
       measure();
       W.raf = requestAnimationFrame(frame);
@@ -243,11 +269,19 @@
     W.posT0 = now;
     W.holding = ctrlDown;
     W.idle = now + IDLE_MS;
+    W.onClose = onClose;
     return true;
   }
 
   const onKey = (event) => {
     ctrlDown = event.ctrlKey || event.metaKey;
+    // Ctrl+Enter while the drum is open would send with the old setting: apply it and drop that Enter.
+    if (event.type === "keydown" && event.key === "Enter" && W && !W.closing) {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+      return;
+    }
     if (W && W.holding && !ctrlDown) {
       W.holding = false;
       close();

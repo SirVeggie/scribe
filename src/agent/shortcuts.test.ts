@@ -20,7 +20,14 @@ test("reasoning cycling skips Default and wraps through explicit levels", async 
       }),
       modelInfo: () => ({ defaultEffort: "low", efforts: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }),
       notice: (message: string) => notices.push(message),
-      showWheel: () => false, // no pill on screen: the notice still reports the step
+      settleWheel: async () => {},
+      wheelValue: (_view: unknown, _setting: string, current: unknown) => current,
+      wheelAnchor: () => null,
+      // No pill on screen: the step applies at once and the notice reports it.
+      stepWheel: async (_view: unknown, _setting: string, { items, to, apply }: { items: unknown[]; to: number; apply: (v: unknown) => Promise<void> }) => {
+        await apply(items[to]);
+        return false;
+      },
     });
     const start = source.indexOf("  async function cycleEffort()");
     vm.runInContext(source.slice(start, source.indexOf("  function applyButton()", start)), ctx);
@@ -33,7 +40,7 @@ test("reasoning cycling skips Default and wraps through explicit levels", async 
 
 test("workspace cycling visits every folder and none as thread counts and recency change", async () => {
   for (const existing of [true, false]) {
-    const currentThread = { cwd: "C:/llm-chat" as string | null };
+    const currentThread = { cwd: "C:/llm-chat" as string | null, scope: { kind: "global" } };
     const threads = new Map([
       ["current", currentThread],
       ["llm", { cwd: "C:/llm-chat" }],
@@ -50,7 +57,14 @@ test("workspace cycling visits every folder and none as thread counts and recenc
       dirKey: (dir: string) => (dir || "").replace(/\\/g, "/").replace(/\/$/, "").toLowerCase(),
       prefs: () => ({ recentWorkspaces: recent }),
       notice: () => {}, R: { basename: (dir: string) => dir.split("/").at(-1) },
-      showWheel: () => false,
+      settleWheel: async () => {},
+      wheelValue: (_view: unknown, _setting: string, current: unknown) => current,
+      wheelAnchor: () => null,
+      // No pill on screen: the step applies at once and the notice reports it.
+      stepWheel: async (_view: unknown, _setting: string, { items, to, apply }: { items: unknown[]; to: number; apply: (v: unknown) => Promise<void> }) => {
+        await apply(items[to]);
+        return false;
+      },
       targetView: () => ({
         settings: () => currentThread,
         setWorkspace: async (dir: string | null) => {

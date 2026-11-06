@@ -351,6 +351,13 @@ html.tight-small .agent-pane {
   flex: 0 4 auto;
 }
 
+.ag-scope-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+}
+
 .ag-scope-text {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4866,7 +4873,8 @@ body.resizing-split main.has-split .agent-dock {
 }
 
 /* No room for both scope parts: keep the workspace, the more important one (see dock.fitScope). */
-.dock-scope.tight .ag-scope-main {
+.dock-scope.tight .ag-scope-main,
+.dock-scope.tight .ag-scope-sep {
   display: none;
 }
 
@@ -7383,14 +7391,25 @@ main.has-split .help-panel[data-pane] {
   z-index: var(--z-popover);
   pointer-events: none;
 }
-/* No box: a soft spot of the surface colour hides what is behind the values and has no edge. */
+/*
+ * No box: a soft spot, a shade darker than the surface under the pill, hides what is behind the
+ * values. Solid behind the rows, with no visible edge.
+ */
+.ag-wheel-layer {
+  --ag-wheel-shade: #000;
+}
+html[data-theme="cream"] .ag-wheel-layer {
+  --ag-wheel-shade: var(--ag-wheel-surface, var(--bg));
+}
 .ag-wheel-veil {
+  --ag-wheel-bg: color-mix(in srgb, var(--ag-wheel-surface, var(--bg)) 62%, var(--ag-wheel-shade));
   position: absolute;
   left: 0;
   top: 0;
   background: radial-gradient(closest-side,
-    color-mix(in srgb, var(--ag-wheel-surface, var(--bg)) 96%, transparent) 0,
-    color-mix(in srgb, var(--ag-wheel-surface, var(--bg)) 90%, transparent) 55%,
+    var(--ag-wheel-bg) 0,
+    var(--ag-wheel-bg) 58%,
+    color-mix(in srgb, var(--ag-wheel-bg) 70%, transparent) 78%,
     transparent 100%);
 }
 /* No will-change: a promoted layer is drawn once and then scaled, which blurs the text. */
