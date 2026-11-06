@@ -735,10 +735,11 @@ export function agentRouter(host: AgentHost): express.Router {
       }
       // The board sends from: "page" for messages a page's own code sent through board.agent.
       // plan: the composer's Plan chip (#721); false drops a planNext the user turned off.
+      // asIs: the composer's Send as is (#1048), the user's own choice; a page can't make it.
       if (body.from !== "page") host.interact(req.params.id);
       // at: the daemon's send time, which pages compare with activityAt (a window's clock can read ahead).
       const at = Date.now();
-      return { at, ...host.send(req.params.id, { text, images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}), ...(typeof body.plan === "boolean" ? { plan: body.plan } : {}), ...(body.steer === true ? { steer: true } : {}), ...(body.now === true ? { now: true } : {}) }) };
+      return { at, ...host.send(req.params.id, { text, images, files, context, ...(body.from === "page" ? { from: "page" as const } : {}), ...(body.dock === true ? { dock: true } : {}), ...(typeof body.plan === "boolean" ? { plan: body.plan } : {}), ...(body.steer === true ? { steer: true } : {}), ...(body.now === true ? { now: true } : {}), ...(body.asIs === true && body.from !== "page" ? { asIs: true } : {}) }) };
     })
   );
 

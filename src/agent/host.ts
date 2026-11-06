@@ -271,6 +271,8 @@ type QueuedMessage = {
   dock?: boolean;
   /** A plan turn (#721): /plan, the composer's Plan chip, or a thread started in the old plan mode. */
   plan?: boolean;
+  /** The user chose Send as is (#1048): the provider gets the text and files with their protected values. */
+  asIs?: boolean;
 };
 
 /** The Kanban card a board message is about: its number and the board page it is on. */
@@ -351,7 +353,10 @@ function promptText(msg: QueuedMessage, thread: Thread, guides: string, pageEdit
             : "";
   const text = msg.card && !msg.card.resume ? `<card_comment>\n${msg.text}\n</card_comment>` : msg.text;
   const files = filesBlock(msg.files, msg.saved.files, { nativePdf: thread.provider === "claude", canReadFiles: thread.mode !== "board" || pagesReadsFiles(thread) });
-  return recapBlock(thread) + origin + pageEdits + contextBlock(msg.context) + guides + files + text;
+  // The transcript keeps what was written; the provider reads protected values as tokens (#1048),
+  // the message's own text and files too unless the user chose Send as is.
+  const own = files + text;
+  return vault().redact(recapBlock(thread) + origin + pageEdits + contextBlock(msg.context) + guides) + (msg.asIs ? own : vault().redact(own));
 }
 
 function editsInsideWorkspace(t: Thread, paths: string[] | undefined): boolean {
@@ -522,7 +527,7 @@ export type PageAskResult =
 export type MissingWorkspace = { path: string; threads: number; found: string | null; dismissed: boolean };
 
 /** plan: send it as a plan turn (#721), or false to drop a thread's planNext; text starting with /plan is one too. */
-export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "component" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean; steer?: boolean; now?: boolean };
+export type SendInput = { text: string; images?: ChatImage[]; files?: ChatFile[]; context?: ContextChip[]; from?: "page" | "component" | "scribe" | "agent" | "hook"; card?: CardRef; dock?: boolean; plan?: boolean; steer?: boolean; now?: boolean; asIs?: boolean };
 
 export class AgentHost {
   readonly db: AgentDb;
@@ -2545,7 +2550,7 @@ export class AgentHost {
     if (msg.from || msg.card) return null;
     const name = /^\/([\w:.-]+)(?=\s|$)/.exec(msg.text)?.[1];
     if (!name || !this.providerCommands(thread.provider).some((cmd) => cmd.name === name)) return null;
-    return msg.text;
+    return msg.asIs ? msg.text : vault().redact(msg.text);
   }
 
   private rememberCommands(provider: ProviderId, list: SlashCommand[]): void {
@@ -2956,9 +2961,9 @@ export class AgentHost {
         throw new Error("Codex has not confirmed that included usage is available again. Waiting for a fresh quota read.");
       }
     }
-    // What a page, a component or Scribe itself writes (a card prompt, a card's comments) can carry
-    // protected values (#1045); only the person's own composer sends them as typed.
-    let text = (input.from ? vault().redact(input.text) : input.text).trim();
+    // Protected values stay as written here, for the user's transcript; promptText hands the provider
+    // tokens (#1045, #1048). Only the person's own composer may choose Send as is.
+    let text = input.text.trim();
     // "/plan <task>" marks a plan turn (#721), whoever sends it.
     const slash = /^\/plan(?:\s+|$)/.exec(text);
     if (slash) text = text.slice(slash[0].length).trim();
@@ -3000,6 +3005,7 @@ export class AgentHost {
       ...(input.card ? { card: input.card } : {}),
       ...(input.dock && !input.from ? { dock: true } : {}),
       ...(plan ? { plan: true } : {}),
+      ...(input.asIs && !input.from ? { asIs: true } : {}),
     };
     if (tagged.length) {
       thread.threadGrants = grantScopes(thread.threadGrants, tagged.map((chip) => ({ kind: "thread" as const, id: chip.id })));
@@ -3264,7 +3270,11 @@ export class AgentHost {
     if (text !== undefined && !text.trim() && !msg.images.length && !msg.files.length) throw new Error("Empty message");
     const steer = msg.edit.steer;
     const item = this.loadItems(threadId).find((it) => it.id === itemId);
-    if (text !== undefined) msg.text = text;
+    if (text !== undefined && text !== msg.text) {
+      msg.text = text;
+      // Send as is answered the text the user checked, not an edit of it.
+      delete msg.asIs;
+    }
     delete msg.edit;
     if (item?.kind === "user") {
       item.text = msg.text;
@@ -5107,7 +5117,7 @@ export class AgentHost {
           (run.clock ??= { waits: [] }).sentAt = Date.now();
           result = await session.run(
             {
-              text: command ?? (msg ? note + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : note + pageEdits),
+              text: command ?? (msg ? note + planNote + promptText(msg, thread, this.pageGuides(thread, msg), pageEdits) : vault().redact(note + pageEdits)),
               images: msg?.images ?? [],
               documents: msg ? pdfs(msg) : [],
               instructions: threadInstructions(live, this.scopeInfo(thread)),
@@ -7427,7 +7437,7 @@ export class AgentHost {
   private async summarizeContext(thread: Thread, prompt: string, signal: AbortSignal): Promise<string> {
     signal.throwIfAborted();
     const { provider, model } = summaryChoice(this.prefs(), thread);
-    const text = await this.agent(provider).complete(prompt, model, signal);
+    const text = await this.agent(provider).complete(vault().redact(prompt), model, signal);
     signal.throwIfAborted();
     return text;
   }
@@ -7451,7 +7461,7 @@ export class AgentHost {
             ["five_hour", "seven_day"].includes(w.id) && w.utilization >= 1))) continue;
       const startedAt = Date.now();
       try {
-        const text = await agent.complete(prompt, model, signal);
+        const text = await agent.complete(vault().redact(prompt), model, signal);
         signal?.throwIfAborted();
         const label = this.cachedModels(provider).find((m) => m.id === model)?.label ?? model;
         return { text, model: label };
@@ -7498,7 +7508,7 @@ export class AgentHost {
       run.abort = new AbortController();
       try {
         const middle = material.middle.length > MAX_FORK_MIDDLE ? `…${material.middle.slice(-MAX_FORK_MIDDLE)}` : material.middle;
-        const summary = (await this.agent(provider).complete(summaryPrompt(middle), model, run.abort.signal)).trim();
+        const summary = (await this.agent(provider).complete(vault().redact(summaryPrompt(middle)), model, run.abort.signal)).trim();
         if (!summary) throw new Error("the summary came back empty");
         material.summary = summary;
         this.db.setSetting(`fork:${threadId}`, material);

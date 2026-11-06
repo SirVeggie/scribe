@@ -5900,6 +5900,7 @@
       this.input.rows = 1;
       this.input.placeholder = this.variant === "dock" ? "Ask or make a change…" : "Message the agent…";
       this.input.addEventListener("input", () => {
+        if (this.protectPending) this.hideProtect();
         this.syncInline();
         this.autosize();
         this.updatePicker();
@@ -5947,6 +5948,9 @@
       this.sendSlot = el("div", "ag-send-slot");
       this.forkNote = el("div", "ag-fork-note");
       this.forkNote.hidden = true;
+      // Protected values in a message about to be sent (#1048): send them as tokens or as typed.
+      this.protectNote = el("div", "ag-fork-note ag-protect-note");
+      this.protectNote.hidden = true;
       // Working helpers of this thread, above the input.
       this.helperDock = el("div", "ag-helpers");
       this.helperDock.hidden = true;
@@ -5958,7 +5962,7 @@
       this.dictationLive = el("div", "ag-dictation-live");
       this.dictationLive.hidden = true;
       this.dictationLive.setAttribute("aria-live", "polite");
-      box.append(this.slash, this.helperApprovals, this.helperDock, this.taskDock, this.forkNote, this.dictationLive, this.ctxRow);
+      box.append(this.slash, this.helperApprovals, this.helperDock, this.taskDock, this.forkNote, this.protectNote, this.dictationLive, this.ctxRow);
       if (this.floating) {
         box.append(this.inputWrap);
       } else {
@@ -6539,6 +6543,44 @@
      * Above the input of a fork that has not run yet: how the earlier conversation comes along, and an
      * offer to archive the thread it came from. Both go once the first message is sent.
      */
+    /** The protected values and detected secrets in a message and its text files, or null when there are none (or the check fails: the daemon still sends tokens). */
+    async protectedHits(text) {
+      const files = this.attachments
+        .filter((f) => !f.mimeType.startsWith("image/") && typeof f.data === "string" && f.data.length <= 140000)
+        .map(({ name, mimeType, data }) => ({ name, mimeType, data }));
+      try {
+        const res = await fetch("/api/vault/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, files }) });
+        if (!res.ok) return null;
+        const hits = await res.json();
+        return hits.fragments?.length || hits.detected?.length ? hits : null;
+      } catch {
+        return null;
+      }
+    }
+
+    showProtect(hits, text, how) {
+      this.protectPending = { text, files: this.attachments.length };
+      const note = this.protectNote;
+      const hints = [...new Set([...hits.fragments, ...hits.detected].map((h) => h.hint))];
+      const line = el("div", "ag-fork-line");
+      const choose = (answer) => {
+        this.protectAnswer = answer;
+        void this.send(how);
+      };
+      // Detected secrets aren't in the vault yet: protecting adds them, then sends the tokens.
+      const first = hits.detected.length ? button("Protect & send", "ag-fork-act primary", () => choose("tokens")) : button("Send as ⟦p:…⟧", "ag-fork-act primary", () => choose("tokens"));
+      line.append(icon("shield"), el("span", "ag-protect-hints", hints.join(", ")), first, button("Send as is", "ag-fork-act", () => choose("as-is")));
+      note.replaceChildren(line);
+      note.hidden = false;
+    }
+
+    hideProtect() {
+      this.protectPending = null;
+      if (!this.protectNote || this.protectNote.hidden) return;
+      this.protectNote.hidden = true;
+      this.protectNote.replaceChildren();
+    }
+
     renderForkNote(t) {
       const note = this.forkNote;
       note.replaceChildren();
@@ -7295,6 +7337,21 @@
         setTimeout(() => this.send(how), 100);
         return;
       }
+      // Protected values (#1048): the daemon hands the provider tokens unless the user picks Send as is.
+      // Enter again on the same message takes the chip's first choice.
+      let protect = this.protectAnswer || (this.protectPending?.text === text && this.protectPending.files === this.attachments.length ? "tokens" : null);
+      this.protectAnswer = null;
+      if (!protect) {
+        this.sending = true;
+        const hits = await this.protectedHits(text);
+        this.sending = false;
+        if (hits && this.input.value.trim() === text) {
+          this.showProtect(hits, text, how);
+          return;
+        }
+      }
+      this.hideProtect();
+      const asIs = protect === "as-is";
       this.sending = true;
       // Reuse a draft whose creation has not returned yet, rather than creating a second thread.
       if (this.draft?.saving) await this.draft.saving;
@@ -7388,7 +7445,7 @@
         this.stick = true;
         // dock: the host watches a floating-chat turn for a new page on its way (pageIntent.ts).
         // plan: false too, so a planNext the user turned off is dropped.
-        const res = await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(how === "steer" ? { steer: true } : how === "now" ? { now: true } : {}), ...(this.variant === "dock" ? { dock: true } : {}) });
+        const res = await api("POST", `/threads/${encodeURIComponent(id)}/messages`, { text, images, files, context, plan, ...(how === "steer" ? { steer: true } : how === "now" ? { now: true } : {}), ...(this.variant === "dock" ? { dock: true } : {}), ...(asIs ? { asIs: true } : {}) });
         // Until its item reaches the transcript, Enter on the empty box still finds this message.
         if (res?.queued && res.item?.id) this.justQueued = { threadId: id, id: res.item.id, at: Date.now() };
         this.renderComposerBar();

@@ -58,6 +58,13 @@ test("agents read protected values as tokens, write them back intact, and can't 
     // The user adds the value; agents only ever see metadata.
     const added = await call("POST", "/api/vault/protect", { value: secret, hint: "staging password", kind: "password" });
     assert.equal(added.status, 200, added.text);
+
+    // The composer's check before sending (#1048): the user's window only, attached text files too.
+    const file = { name: "a.txt", mimeType: "text/plain", data: Buffer.from(`x ${secret}`).toString("base64") };
+    const checked = await call("POST", "/api/vault/check", { text: "nothing here", files: [file] });
+    assert.deepEqual(checked.data.fragments.map((f: { hint: string }) => f.hint), ["staging password"]);
+    assert.equal(JSON.stringify(checked.data).includes(secret), false);
+    assert.equal((await call("POST", "/api/vault/check", { text: secret }, true)).status, 403);
     const token = added.data.token as string;
     assert.match(token, /^⟦p:[0-9a-f]+ staging password⟧$/);
     const listed = await call("GET", "/api/vault", undefined, true);

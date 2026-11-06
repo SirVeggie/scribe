@@ -396,6 +396,23 @@ export class Vault {
     return counts;
   }
 
+  /**
+   * What redact would replace in these texts, without protecting anything yet (#1048): the vault's
+   * fragments that show up, and detector matches not in the vault. The composer asks before it sends.
+   */
+  hits(texts: Iterable<string>): { fragments: FragmentMeta[]; detected: { detector: string; hint: string }[] } {
+    const fragments = new Map<string, FragmentMeta>();
+    const detected = new Map<string, { detector: string; hint: string }>();
+    for (const text of texts) {
+      if (!text) continue;
+      for (const match of this.matcher.find(text)) fragments.set(match.ref.id, metaOf(match.ref));
+      for (const { value, detector } of this.detectors.scan(text)) {
+        if (!this.byValue.has(value)) detected.set(value, { detector: detector.id, hint: cleanHint(detector.hint, cleanKind(detector.kind)) });
+      }
+    }
+    return { fragments: [...fragments.values()], detected: [...detected.values()] };
+  }
+
   /** Each protected value in text as its token. Tokens already in it stay as they are, so redacting twice changes nothing. */
   redact(text: string): string {
     if (!text) return text;

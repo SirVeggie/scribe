@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { log as writeLog } from "../log.js";
+import { vault } from "../vault.js";
 import { fakeAdapter } from "./adapters/fake.js";
 import { jevAdapter } from "./adapters/jev.js";
 import { ML_FEATURES, featureOn, fileStore, normalizeSource, sourceView, type MlStore } from "./settings.js";
@@ -289,7 +290,8 @@ export class MlService {
       const blocked = (options.sends ?? []).find((kind) => !settings.send[kind]);
       if (blocked) throw new MlError("not_allowed", `Sending ${blocked} to the classifier is switched off`);
       source = this.pickSource(settings, options.source);
-      const request = validateRequest(state, questions);
+      // A classifier is a model too: protected values reach it as tokens (#1048).
+      const request = vault().redactDeep(validateRequest(state, questions));
       const useCache = options.cache !== false;
       const key = createHash("sha256").update(JSON.stringify([source.id, source.baseUrl, source.model, request])).digest("hex");
       const hit = useCache ? this.cache.get(key) : undefined;

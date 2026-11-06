@@ -2,6 +2,7 @@ import express from "express";
 import { identify } from "./callers.js";
 import type { Tab } from "./types.js";
 import { isContentHost } from "./contentOrigin.js";
+import { MAX_INLINE_TEXT_BYTES, isTextFile } from "./agent/attachments.js";
 import { VaultTokenError, agentValueProblem, vault, vaultUnavailable, type FragmentMeta } from "./vault.js";
 import { MIN_MATCH, SUGGEST_OFF_MIN_MATCHES, SUGGEST_OFF_RATE, patternProblem, type DetectorDef, type DetectorView } from "./detectors.js";
 
@@ -185,6 +186,21 @@ export function vaultRouter(host: VaultRoutesHost): express.Router {
     }
     res.json({ shown: true, id: fragment.id, hint: fragment.hint });
   });
+  router.post("/check", (req, res) => {
+    // The composer's check before it sends (#1048): which protected values and detected secrets a message holds.
+    if (!ownWindow(req)) {
+      res.status(403).json({ error: "Only the user's own Scribe window can check a message." });
+      return;
+    }
+    const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+    const texts = [typeof body.text === "string" ? body.text : ""];
+    for (const file of Array.isArray(body.files) ? body.files.slice(0, 20) : []) {
+      const text = attachedText(file);
+      if (text) texts.push(text);
+    }
+    const found = vault().hits(texts);
+    res.json({ fragments: found.fragments.map(({ id, hint }) => ({ id, hint })), detected: found.detected });
+  });
   router.get("/:id/value", (req, res) => {
     // The board UI only: not agents, and not page scripts, which run as the user on their own origin.
     if (!ownWindow(req)) {
@@ -229,6 +245,15 @@ export function pageProtected(req: express.Request, res: express.Response, tab: 
 function ownWindow(req: express.Request): boolean {
   const caller = identify(req);
   return caller.viewer !== "agent" && !isContentHost(req) && !caller.device;
+}
+
+/** An attached file's text, when promptText would put it in the message (attachments.ts filesBlock). */
+function attachedText(file: unknown): string {
+  if (!file || typeof file !== "object") return "";
+  const { name, mimeType, data } = file as Record<string, unknown>;
+  if (typeof name !== "string" || typeof mimeType !== "string" || typeof data !== "string") return "";
+  if (!isTextFile(name, mimeType) || Math.floor((data.length * 3) / 4) > MAX_INLINE_TEXT_BYTES) return "";
+  return Buffer.from(data, "base64").toString("utf8");
 }
 
 function pageHas(tab: Tab, value: string): boolean {

@@ -21,9 +21,8 @@ hand out values it can no longer redact.
 child only ever gets redacted text, so page_read, page_grep (it greps the redacted page),
 page_state, page_action, thread_read/list, helper reports, library_search snippets and file-page
 text are all covered. Each match becomes `⟦p:<id> <hint>⟧` (src/vault.ts, one Aho–Corasick
-matcher; leftmost-longest, non-overlapping). Messages a page, component, hook or Scribe sends into
-a chat (card prompts, card comments) are redacted in `AgentHost.send`; the person's own composer is
-not.
+matcher; leftmost-longest, non-overlapping). Messages into a chat are redacted on their way to
+the provider (#1048, below).
 
 Search: `pageText` (words search, palette) and the semantic chunker redact before matching or
 indexing, so a query can't find a page by a value. A vault change re-indexes; unchanged chunks
@@ -92,7 +91,7 @@ exist but are off until the user turns them on.
   as they are saved (user and agent text, finished tool calls; src/agent/host.ts `detectInItem`).
   Provider tool output goes through the vault even while it is empty (secretRefs `scrubOutput`),
   so a key a command prints reaches Claude and Native models as a token.
-  Streaming text skips a match that ends the text, until more arrives. The composer is #1048.
+  Streaming text skips a match that ends the text, until more arrives.
 - Unflag: the user removing a fragment. Its value's SHA-256 goes into `protected_unflagged`, so no
   detector flags it again; removing a detector-made fragment also counts against that detector.
 - `protected_detectors` keeps each detector's switch, matches, unflags and change history, and
@@ -119,6 +118,27 @@ exist but are off until the user turns them on.
 - Right-click: a span gets Edit hint and Unprotect; selected text (in a chat or any page) gets
   Protect selection, which asks for a hint and kind. Pages send the span id with their
   scribe-context-menu message; the board shows the menu and does the call.
+
+## Messages to the provider (#1048)
+
+The only point where Scribe keeps a value from the provider itself: everything a chat sends it.
+
+- `promptText` (src/agent/host.ts) redacts the whole prompt: the user's text, inlined text files, the
+  rewind recap, context chips, page guides and page edits. The transcript item keeps the text as
+  written, so the user's own view shows the value (blurred, #1046) and other chats reading the thread
+  get tokens through the HTTP redaction. The same goes for board prompts and card comments, page and
+  hook messages, helper briefs (from: "agent"), provider slash commands, fork summaries and the
+  utility `complete` calls, and every classifier request (src/ml/service.ts `decide`).
+- Redacting runs the detectors, so a detected secret is protected the moment it is sent.
+- The composer (public/agent.js `protectedHits`) asks POST /api/vault/check { text, files } before it
+  sends (board window only, like the reveal). Nothing is protected by the check. On a hit it shows one
+  line: the hints, then **Send as ⟦p:…⟧** (vault hits) or **Protect & send** (detector hits), and
+  **Send as is**. Enter again takes the first. Editing the text drops the chip.
+- Send as is (`asIs` on the message) sends the text and files as written; only the composer can ask
+  for it (a page's message never), and editing a queued message drops it. The recap, chips and
+  guides are still redacted. A detected value sent as is is still protected for later reads (the
+  transcript item's detection); unprotect it in Settings if it was a false flag.
+- Not redacted: PDFs and images sent to the provider as documents.
 
 ## Not covered yet
 

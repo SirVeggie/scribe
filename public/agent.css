@@ -2886,6 +2886,17 @@ textarea.ag-q-input {
   background: rgba(var(--lift-rgb), 0.08);
 }
 
+.ag-fork-act.primary {
+  border-color: var(--accent-ring);
+  color: var(--accent);
+}
+
+.ag-protect-hints {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ag-textarea {
   font: inherit;
   font-size: 13.5px;
