@@ -62,3 +62,29 @@ This file records what was decided, for the cards that implement it. It builds o
   `memorySync` pref is now only its default.
 - **Not yet.** Search by meaning switch (it is a daemon setting, not a browser preference), and the opt-in and
   offer categories for card (2).
+
+## Implemented in #1024
+
+- **Categories.** `sources`, `keys` (Include keys), `allowlists` (all off until switched on) and `offers` (on)
+  join the Sync page. Keys flow only while Sources flows on that device.
+- **List records.** `src/devices/syncExtras.ts` keeps one record per list item, so two devices that each added
+  one keep both: `src:<kind>:<id>` (a source as canonical JSON without its key; kind model, ml, stt, tts),
+  `srckey:<kind>:<id>` (its key), `allow:web:<domain>` and `allow:cmd:<command>` (`"1"`). `""` means gone.
+  Before every exchange the daemon compares its stores with the records (`stampExtras`): a changed item gets a
+  fresh stamp, a removed one a `""` record. The starting web allowlist is a default and needs no records.
+  A key record is kept only while its source is on the device, so a source that arrived without a key never
+  clears the others' keys.
+- **Local sources.** A loopback endpoint (127.x, localhost, ::1), or a speech source that uses a loopback model
+  source, is never sent; a record from another device with the same id leaves it alone. An incoming source
+  whose endpoint origin changed drops this device's own key unless a synced one comes with it.
+- **Keys** are stored where each store keeps them (agent.sqlite for model sources, ml-settings.json,
+  audio-settings.json), like a key the user typed. Choose setup shows only their last four characters.
+- **Offers.** `src/devices/syncOffers.ts`: each device sends its inventory (global MCP servers without `cwd`,
+  installed plugins) with its sync body; env values and headers go only with Include keys, except `${VAR}`
+  references, and the offer names the ones left out. The receiver keeps the last inventory per device (meta
+  `settingsOffers`), lists what it lacks, and sends a `settings_sync` event with `notices` once per new offer.
+  Add writes a server into mcp.json's global layer. A plugin is asked of its device
+  (`POST /api/settings-sync/plugin`, link only), which sends it with the #907 copy, so it waits in Plugins
+  for the usual review; plugin settings (paths) are not part of a copy. Headless devices keep no offers.
+- **Guard.** The Sync page's routes refuse agents and other origins, like `/api/copy`.
+- **Known limit.** Two sources with the same id on devices already joined: the newest stamp wins silently.

@@ -780,6 +780,13 @@
       if (msg.view.pending && document.getElementById("settings").hidden) {
         showNotice(`Some settings differ on ${msg.view.pending.from.name}`, { action: { label: "Choose", run: () => openSettings("Devices") } });
       }
+      // Offers (#1024): another device has MCP servers or plugins this one doesn't.
+      for (const notice of msg.notices ?? []) {
+        const parts = [];
+        if (notice.mcp) parts.push(countOf(notice.mcp, "MCP server"));
+        if (notice.plugins) parts.push(countOf(notice.plugins, "plugin"));
+        showNotice(`${notice.from.name} has ${parts.join(" and ")} this device doesn't`, { action: { label: "Add…", run: () => openSettings("Devices") } });
+      }
       return;
     }
     if (msg.type === "copy_received") {
@@ -1799,7 +1806,7 @@
   window.scribeAudioSettings.init({ confirm: confirmDelete });
   window.scribePluginSettings.init({confirm:confirmDelete});
   window.scribePluginSettings.refresh();
-  window.scribeDevicesSettings.init({ confirm: confirmDelete });
+  window.scribeDevicesSettings.init({ confirm: confirmDelete, open: (category) => openSettings(category) });
   function openSettings(category) {
     if (isPaletteOpen()) {
       closePalette();

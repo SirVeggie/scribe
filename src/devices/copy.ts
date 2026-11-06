@@ -275,6 +275,11 @@ class PendingPlugins {
   }
 }
 
+/** Ids of the plugins copied here that wait for review (settings sync leaves them out of its offers). */
+export function pendingPluginIds(home: string): string[] {
+  return new PendingPlugins(path.join(deviceDir(home), "pending-plugins.json")).list().map((p) => p.id);
+}
+
 /**
  * /api/copy: `POST /` copies to a paired device and `GET /targets` lists them (the board's UI, on
  * this device or through another device's gateway); `/incoming/*` takes a copy from a paired device

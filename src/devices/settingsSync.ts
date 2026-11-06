@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import express, { Router } from "express";
-import { categoryOf, parseAppearance, type Appearance, type PrefCategory } from "../appearance.js";
+import { categoryOf, parseAppearance, type Appearance } from "../appearance.js";
+import { identify } from "../callers.js";
+import { shellOrigin } from "../contentOrigin.js";
+import type { McpServer } from "../agent/mcpConfig.js";
 import { peerCall } from "./copy.js";
 import { peerDeviceOf } from "./link.js";
 import type { PeerService } from "./peers.js";
+import { describeExtra, extraCategory, parseSourceKey, validExtra, type ExtrasSnapshot, type SourceKind } from "./syncExtras.js";
+import { cleanInventory, listOffers, newOffers, type Inventory, type Offer, type OffersState } from "./syncOffers.js";
 
 /**
  * Settings sync between paired devices (#1023, decisions in docs/device-sync-design-979.md).
@@ -22,13 +27,20 @@ import type { PeerService } from "./peers.js";
  *
  * A headless device stores and passes the records on, so devices that are rarely on at the same time
  * still meet, but applies none of them and sends none of its own.
+ *
+ * #1024 adds the opt-in categories: sources (and their keys under a switch of their own) and the
+ * allowlists, kept as one record per list item (syncExtras.ts), and offers of MCP servers and plugins,
+ * which travel as each device's inventory beside the records (syncOffers.ts) and are never applied.
  */
 
-export const SYNC_CATEGORIES = ["appearance", "layout", "chat", "memories"] as const;
+export const SYNC_CATEGORIES = ["appearance", "layout", "chat", "memories", "sources", "keys", "allowlists", "offers"] as const;
 export type SyncCategory = (typeof SYNC_CATEGORIES)[number];
+/** Opt-in categories: off until someone in the group switches them on. */
+const OFF_BY_DEFAULT: SyncCategory[] = ["sources", "keys", "allowlists"];
 
 export type SyncRecord = { v: string; n: number; d: string };
-export type ConflictRow = { key: string; category: PrefCategory; mine: string; theirs: string };
+/** label: a readable name for list items (sources, allowlist entries); mine and theirs are then display text. */
+export type ConflictRow = { key: string; category: SyncCategory; mine: string; theirs: string; label?: string };
 export type Pending = { from: { id: string; name: string }; rows: ConflictRow[]; theirs: Record<string, SyncRecord> };
 
 export type SyncState = {
@@ -44,13 +56,17 @@ export type SyncState = {
   keepOwn: SyncCategory[];
 };
 
-export type SyncBody = { joined: boolean; settled: string[]; relay?: boolean; records: Record<string, SyncRecord> };
+/** New offers from one device, for a notice. */
+export type OfferNotice = { from: { id: string; name: string }; mcp: number; plugins: number };
+
+export type SyncBody = { joined: boolean; settled: string[]; relay?: boolean; records: Record<string, SyncRecord>; inventory?: Inventory };
 
 export type SyncView = {
   relay: boolean;
   joined: boolean;
   categories: { id: SyncCategory; on: boolean; keepOwn: boolean }[];
   pending: { from: { id: string; name: string }; rows: ConflictRow[] } | null;
+  offers: Offer[];
 };
 
 export const switchKey = (category: SyncCategory) => `sync:${category}`;
@@ -92,13 +108,14 @@ export function newer(a: SyncRecord, b: SyncRecord): boolean {
 
 function keyCategory(key: string): SyncCategory | "switch" | undefined {
   if (key.startsWith("sync:")) return (SYNC_CATEGORIES as readonly string[]).includes(key.slice(5)) ? "switch" : undefined;
-  return categoryOf(key);
+  return categoryOf(key) ?? extraCategory(key);
 }
 
 function validKey(key: string, value: string): boolean {
   const category = keyCategory(key);
   if (!category) return false;
   if (category === "switch") return value === "0" || value === "1";
+  if (extraCategory(key)) return validExtra(key, value);
   try {
     parseAppearance({ [key]: value });
     return true;
@@ -110,14 +127,20 @@ function validKey(key: string, value: string): boolean {
 /** Whether a category syncs in the group: its switch record, else on (memories: this device's old switch). */
 export function groupOn(state: SyncState, category: SyncCategory, memoryDefault = true): boolean {
   const rec = state.records[switchKey(category)];
-  return rec ? rec.v === "1" : category === "memories" ? memoryDefault : true;
+  return rec ? rec.v === "1" : category === "memories" ? memoryDefault : !OFF_BY_DEFAULT.includes(category);
+}
+
+/** A category syncs on this device: on for the group and not kept here. Keys go only with their sources. */
+export function categoryFlows(state: SyncState, category: SyncCategory, memoryDefault = true): boolean {
+  if (category === "keys" && !categoryFlows(state, "sources", memoryDefault)) return false;
+  return groupOn(state, category, memoryDefault) && !state.keepOwn.includes(category);
 }
 
 function flows(state: SyncState, key: string, memoryDefault: boolean): boolean {
   const category = keyCategory(key);
   if (!category) return false;
   if (category === "switch") return true;
-  return groupOn(state, category, memoryDefault) && !state.keepOwn.includes(category);
+  return categoryFlows(state, category, memoryDefault);
 }
 
 /** What this device sends: the switches, and the records of the categories that sync here. */
@@ -169,8 +192,8 @@ export function mergeBody(
     } else if (key.startsWith("sync:") || (joined && theirJoined)) take = newer(rec, mine);
     else if (!joined && theirJoined && settledHere) take = true;
     else if (!joined) {
-      const category = categoryOf(key);
-      if (category) {
+      const category = keyCategory(key);
+      if (category && category !== "switch") {
         conflicts.push({ key, category, mine: mine.v, theirs: rec.v });
         theirs[key] = rec;
       }
@@ -233,6 +256,32 @@ export function stampLocal(state: SyncState, self: string, settings: Appearance,
   return next;
 }
 
+/**
+ * Bring the list records (sources, keys, allowlists) up to date with what this device has: a changed or
+ * new item gets a fresh stamp, an item gone from here a "" record. A key with no record that equals its
+ * default stays unrecorded, and a source's key is recorded only while the source is here.
+ */
+export function stampExtras(state: SyncState, self: string, snapshot: ExtrasSnapshot): SyncState {
+  let next = state;
+  const keys = new Set([...Object.keys(snapshot.values), ...Object.keys(snapshot.defaults)]);
+  for (const key of Object.keys(state.records)) if (extraCategory(key)) keys.add(key);
+  for (const key of keys) {
+    if (snapshot.local.has(key) || !extraCategory(key)) continue;
+    if (key.startsWith("srckey:")) {
+      const source = parseSourceKey(key);
+      if (!source || snapshot.values[`src:${source.kind}:${source.id}`] === undefined) continue;
+    }
+    const value = snapshot.values[key] ?? "";
+    const rec = next.records[key];
+    if (!rec && value === (snapshot.defaults[key] ?? "")) continue;
+    if (rec?.v === value) continue;
+    if (next === state) next = { ...state, records: { ...state.records } };
+    next.n += 1;
+    next.records[key] = { v: value, n: next.n, d: self };
+  }
+  return next;
+}
+
 export type SettingsSyncHost = {
   self(): { id: string; name: string };
   /** A headless device: store and pass on only. */
@@ -245,8 +294,23 @@ export type SettingsSyncHost = {
   apply(patch: Appearance, keys: string[]): void;
   /** The memory switch before it moved to the Sync page (#978): the default for the Memories category. */
   memoryDefault(): boolean;
-  /** The Sync view changed (a choice waits, a switch flipped). */
-  changed(view: SyncView): void;
+  /** The Sync view changed (a choice waits, a switch flipped); notices: new offers to tell the user about. */
+  changed(view: SyncView, notices?: OfferNotice[]): void;
+  /** Sources and allowlists as this device has them now (#1024). */
+  extras?(): ExtrasSnapshot;
+  /** Write list records from another device ("" removes); keyFor gives a source's synced key when keys sync here. */
+  applyExtras?(patch: Record<string, string>, keyFor: (kind: SourceKind, id: string) => string | undefined): void;
+  /** Offers (#1024): this device's MCP servers and plugins, the stored offers, and accepting one. */
+  offers?: {
+    inventory(includeSecrets: boolean): Inventory;
+    read(): OffersState;
+    write(state: OffersState): void;
+    /** Whether this device has the server or plugin already (installed, or a plugin waiting for review). */
+    has(kind: Offer["kind"], id: string): boolean;
+    addMcp(name: string, server: McpServer): void;
+    /** Send a plugin to a paired device, where it waits for review (#907). */
+    sendPlugin(target: string, id: string): Promise<unknown>;
+  };
 };
 
 const SYNC_MS = 5 * 60_000;
@@ -263,6 +327,7 @@ export class SettingsSync {
   start(): void {
     // Values saved before sync existed (or while the daemon was older) become this device's records.
     if (!this.host.relay()) this.localChange(Object.keys(this.host.settings()), false);
+    this.refreshExtras();
     this.timer = setInterval(() => this.nudge(0), SYNC_MS);
     this.timer.unref();
     let online = new Set<string>();
@@ -291,18 +356,38 @@ export class SettingsSync {
   /** Whether a category syncs on this device (the group's switch, and not kept to itself). */
   enabled(category: SyncCategory): boolean {
     const state = this.host.read();
-    return groupOn(state, category, this.host.memoryDefault()) && (this.host.relay() || !state.keepOwn.includes(category));
+    if (this.host.relay()) return groupOn(state, category, this.host.memoryDefault());
+    return categoryFlows(state, category, this.host.memoryDefault());
   }
 
   view(): SyncView {
     const state = this.host.read();
     const memoryDefault = this.host.memoryDefault();
+    // List items read as names and endpoints, and a key never shows.
+    const rows = state.pending?.rows.map((row) => (extraCategory(row.key) ? { ...row, ...describeExtra(row.key, row.mine, row.theirs) } : row));
     return {
       relay: this.host.relay(),
       joined: this.host.relay() || state.joined,
       categories: SYNC_CATEGORIES.map((id) => ({ id, on: groupOn(state, id, memoryDefault), keepOwn: state.keepOwn.includes(id) })),
-      pending: state.pending ? { from: state.pending.from, rows: state.pending.rows } : null,
+      pending: state.pending && rows ? { from: state.pending.from, rows } : null,
+      offers: this.offers(),
     };
+  }
+
+  /** What the other devices have and this one doesn't, while offers are on here. */
+  private offers(): Offer[] {
+    const host = this.host.offers;
+    if (!host || this.host.relay() || !this.enabled("offers")) return [];
+    const paired = new Map(this.peers.view().peers.map((p) => [p.id, p.name] as const));
+    return listOffers(host.read(), (kind, id) => host.has(kind, id), (id) => paired.get(id));
+  }
+
+  /** Stamp sources and allowlists as this device has them now, so a change made here wins over older ones. */
+  refreshExtras(): void {
+    if (this.host.relay() || !this.host.extras) return;
+    const state = this.host.read();
+    const next = stampExtras(state, this.host.self().id, this.host.extras());
+    if (next !== state) this.host.write(next);
   }
 
   /** The user changed preferences here. */
@@ -346,9 +431,9 @@ export class SettingsSync {
     return this.emit();
   }
 
-  private emit(): SyncView {
+  private emit(notices?: OfferNotice[]): SyncView {
     const view = this.view();
-    this.host.changed(view);
+    this.host.changed(view, notices?.length ? notices : undefined);
     return view;
   }
 
@@ -358,26 +443,87 @@ export class SettingsSync {
     const prefKeys = keys.filter((key) => categoryOf(key));
     for (const key of prefKeys) patch[key] = state.records[key].v;
     if (prefKeys.length) this.host.apply(patch, prefKeys);
+    const extraKeys = keys.filter((key) => extraCategory(key));
+    if (extraKeys.length && this.host.applyExtras) {
+      const extras: Record<string, string> = {};
+      for (const key of extraKeys) extras[key] = state.records[key].v;
+      const keysFlow = categoryFlows(state, "keys", this.host.memoryDefault());
+      this.host.applyExtras(extras, (kind, id) => (keysFlow ? state.records[`srckey:${kind}:${id}`]?.v : undefined));
+      // Whatever the stores made of it is this device's now (a no-op when they took it as sent).
+      this.refreshExtras();
+    }
   }
 
   private body(): SyncBody {
-    return outgoingBody(this.host.read(), this.host.relay(), this.host.memoryDefault());
+    this.refreshExtras();
+    const body = outgoingBody(this.host.read(), this.host.relay(), this.host.memoryDefault());
+    // Offers go between the devices that are on together; a headless device doesn't keep them.
+    if (this.host.offers && !this.host.relay() && this.enabled("offers")) body.inventory = this.host.offers.inventory(this.enabled("keys"));
+    return body;
   }
 
   /** Merge a device's body; true when anything here changed. */
   take(from: { id: string; name: string }, body: SyncBody): boolean {
+    this.refreshExtras();
     const before = this.host.read();
     const result = mergeBody(before, body, this.host.self().id, from, { relay: this.host.relay(), memoryDefault: this.host.memoryDefault() });
     const changed = JSON.stringify(result.state) !== JSON.stringify(before);
-    if (!changed) return false;
+    const notices = this.takeInventory(from, body.inventory);
+    if (!changed) {
+      if (notices) this.emit(notices);
+      return false;
+    }
     this.host.write(result.state);
     this.applyKeys(result.state, result.changed);
-    const viewChanged = JSON.stringify(before.pending) !== JSON.stringify(result.state.pending) || before.joined !== result.state.joined ||
+    const viewChanged = notices !== undefined || JSON.stringify(before.pending) !== JSON.stringify(result.state.pending) || before.joined !== result.state.joined ||
       SYNC_CATEGORIES.some((c) => before.records[switchKey(c)]?.v !== result.state.records[switchKey(c)]?.v);
-    if (viewChanged) this.emit();
+    if (viewChanged) this.emit(notices);
     // Pass it on to the other devices.
     this.nudge();
     return true;
+  }
+
+  /** Keep a device's inventory; returns the notices for offers not shown before, or undefined when the offers stayed the same. */
+  private takeInventory(from: { id: string; name: string }, raw: unknown): OfferNotice[] | undefined {
+    const host = this.host.offers;
+    if (!host || this.host.relay() || !this.enabled("offers")) return undefined;
+    const inventory = cleanInventory(raw);
+    if (!inventory) return undefined;
+    const before = host.read();
+    const previous = before.devices[from.id]?.inventory;
+    if (previous && JSON.stringify(previous) === JSON.stringify(inventory)) return undefined;
+    let state: OffersState = { ...before, devices: { ...before.devices, [from.id]: { name: from.name, at: Date.now(), inventory } } };
+    const fresh = newOffers(state, listOffers(state, (kind, id) => host.has(kind, id), (id) => (id === from.id ? from.name : this.peers.nameOf(id))));
+    state = fresh.state;
+    host.write(state);
+    return fresh.notices;
+  }
+
+  /** Add a server another device offers; a plugin is asked of its device, and waits for review here. */
+  async acceptOffer(kind: Offer["kind"], id: string): Promise<{ view: SyncView; plugin?: unknown }> {
+    const host = this.host.offers;
+    if (!host) throw new Error("Offers are not available here");
+    const offer = this.offers().find((o) => o.kind === kind && o.id === id);
+    if (!offer) throw new Error("That offer is gone");
+    if (kind === "mcp") {
+      const item = host.read().devices[offer.from.id]?.inventory.mcp.find((m) => m.name === id);
+      if (!item) throw new Error("That offer is gone");
+      host.addMcp(id, item.server);
+      this.nudge(0);
+      return { view: this.emit() };
+    }
+    const plugin = await peerCall(this.peers, offer.from.id, "POST", "/api/settings-sync/plugin", { id });
+    return { view: this.emit(), plugin };
+  }
+
+  dismissOffer(kind: Offer["kind"], id: string): SyncView {
+    const host = this.host.offers;
+    if (host) {
+      const state = host.read();
+      const key = `${kind}:${id}`;
+      if (!state.dismissed.includes(key)) host.write({ ...state, dismissed: [...state.dismissed, key].slice(-500) });
+    }
+    return this.emit();
   }
 
   sync(): Promise<void> {
@@ -418,7 +564,53 @@ export class SettingsSync {
         res.status(400).json({ error: (err as Error).message });
       }
     });
+    // A paired device accepted one of this device's plugin offers: send it there, to wait for review.
+    router.post("/plugin", express.json(), async (req, res) => {
+      const device = peerDeviceOf(req.socket);
+      if (!device) {
+        res.status(403).json({ error: "Plugin offers are for paired devices" });
+        return;
+      }
+      try {
+        const id = typeof req.body?.id === "string" ? req.body.id : "";
+        const offered = this.host.offers && !this.host.relay() && this.enabled("offers") && this.host.offers.inventory(false).plugins.some((p) => p.id === id);
+        if (!offered) throw new Error("This device doesn't offer that plugin.");
+        res.json(await this.host.offers!.sendPlugin(device, id));
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message });
+      }
+    });
+    // The rest is the user's Sync page: agents get no say, and changes come from the board's own pages.
+    router.use((req, res, next) => {
+      if (identify(req).viewer === "agent") {
+        res.status(403).json({ error: "Only the board UI changes settings sync" });
+        return;
+      }
+      const origin = req.get("origin");
+      if (req.method !== "GET" && origin && !shellOrigin(req, origin)) {
+        res.status(403).json({ error: "Settings sync can only be changed from the board" });
+        return;
+      }
+      next();
+    });
     router.get("/status", (_req, res) => res.json(this.view()));
+    router.post("/offers/accept", express.json(), async (req, res) => {
+      try {
+        const kind = req.body?.kind === "mcp" || req.body?.kind === "plugin" ? (req.body.kind as Offer["kind"]) : undefined;
+        if (!kind || typeof req.body?.id !== "string") throw new Error("Name an offer");
+        res.json(await this.acceptOffer(kind, req.body.id));
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message });
+      }
+    });
+    router.post("/offers/dismiss", express.json(), (req, res) => {
+      const kind = req.body?.kind === "mcp" || req.body?.kind === "plugin" ? (req.body.kind as Offer["kind"]) : undefined;
+      if (!kind || typeof req.body?.id !== "string") {
+        res.status(400).json({ error: "Name an offer" });
+        return;
+      }
+      res.json(this.dismissOffer(kind, req.body.id));
+    });
     router.put("/category", express.json(), (req, res) => {
       const { category, on, keepOwn } = (req.body ?? {}) as { category?: string; on?: unknown; keepOwn?: unknown };
       if (!(SYNC_CATEGORIES as readonly string[]).includes(category ?? "")) {

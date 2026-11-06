@@ -187,6 +187,20 @@ export class MlService {
     return sourceView(source);
   }
 
+  /** The sources with their keys, for settings sync (#1024). */
+  sources(): MlSource[] {
+    return this.store.read().sources;
+  }
+
+  /** Replace the sources (settings sync from another device); the default stays if it is still there. */
+  replaceSources(sources: MlSource[]): void {
+    const settings = this.store.read();
+    settings.sources = sources;
+    if (!sources.some((s) => s.id === settings.defaultSource)) settings.defaultSource = sources[0]?.id;
+    this.store.write(settings);
+    this.cache.clear();
+  }
+
   /** Remove a source. If it was the default, the first one left takes over. */
   deleteSource(id: string): void {
     const settings = this.store.read();

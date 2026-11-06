@@ -1325,6 +1325,12 @@ export class AgentHost {
     return sourceView(source);
   }
 
+  /** Replace the whole list, keys included: settings sync from another device (#1024). */
+  setModelSources(sources: OpenAISource[]): void {
+    this.db.setSetting("openai.sources", sources);
+    (this.providers.pi as PiProvider).invalidate();
+  }
+
   deleteModelSource(id: string): void {
     const sources = this.modelSources();
     if (!sources.some((s) => s.id === id)) throw new Error(`source not found: ${id}`);

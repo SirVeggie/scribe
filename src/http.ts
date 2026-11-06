@@ -88,10 +88,15 @@ import { AskSource, AskWatcher } from "./devices/attention.js";
 import { TAINT_HEADER, remoteReader } from "./devices/agentAccess.js";
 import { agentForwarder, remoteAgentGate, remoteAgentRouter, type AgentDevicesHost } from "./devices/agentRoutes.js";
 import { peerDeviceOf } from "./devices/link.js";
-import { copyRouter } from "./devices/copy.js";
+import { copyRouter, pendingPluginIds, sendCopy, type CopyHost } from "./devices/copy.js";
 import type { Described } from "./devices/references.js";
 import { MemorySync } from "./devices/memorySync.js";
 import { SettingsSync, cleanState } from "./devices/settingsSync.js";
+import { applyAllowlists, applySources, mergeSnapshots, snapshotAllowlists, snapshotSources, type SourceLists } from "./devices/syncExtras.js";
+import { cleanOffers, mcpInventory } from "./devices/syncOffers.js";
+import { applyImport, readMcpFile, writeMcpFile } from "./agent/mcpConfig.js";
+import { fileStore as audioFileStore } from "./audio/settings.js";
+import { mlService } from "./ml/service.js";
 import { MirrorPusher, MirrorStore, mirrorDescribe, mirrorRouter, mirrorSpaces, mirrorView, type MirrorSource } from "./devices/mirror.js";
 import { PDFJS_PATH, contentOriginGate, framePageId, isContentHost, requestOrigin, requestSuffix } from "./contentOrigin.js";
 import { DiskLinkTakenError, FileExistsError, NeedsLocationError } from "./diskFolders.js";
@@ -390,6 +395,13 @@ export async function startHttp(): Promise<http.Server> {
   const sweepTimer = setInterval(() => scheduleSweep(0), 60_000);
   sweepTimer.unref?.();
   scheduleSweep(5000);
+  // A change to sources, allowlists, MCP servers or plugins goes to the other devices soon, not on the next
+  // 5-minute round of settings sync (#1024). Set once settings sync exists, further down.
+  let settingsSyncNudge = () => {};
+  app.use(["/api/agent", "/api/ml", "/api/audio", "/api/plugins"], (req, res, next) => {
+    if (req.method !== "GET") res.once("finish", () => { if (res.statusCode < 400) settingsSyncNudge(); });
+    next();
+  });
   app.use("/api/agent", agentRouter(agentHost));
   try{
     const folder=path.join(INSTALL_ROOT,"plugins","builtin","git-history");
@@ -406,7 +418,7 @@ export async function startHttp(): Promise<http.Server> {
   onBrowserChange((view, threadId) => broadcast({ type: "agent_browser", threadId, view }));
   app.use("/api/plugins",express.json({limit:"90mb"}));
   // Copies between devices (#907) parse their own bodies: bundles and blobs are bigger than 6 MB.
-  app.use("/api/copy", copyRouter(peers, {
+  const copyHost: CopyHost = {
     exportFile: (scope) => store.exportFile(scope),
     importBoard: (parsed) => store.importBoard(parsed, "closed"),
     revision: (key) => store.get(key)?.revision,
@@ -421,13 +433,20 @@ export async function startHttp(): Promise<http.Server> {
     exportPlugin: (id) => pluginService.export(id, { source: true }),
     previewPlugin: (files, detailed) => pluginService.preview(files, detailed),
     received: (event) => broadcast({ type: "copy_received", ...event }),
-  }, dataDir()));
+  };
+  app.use("/api/copy", copyRouter(peers, copyHost, dataDir()));
   // Mirrors (#910) parse their own bodies too: pages and blobs go in batches of several MB.
   app.use("/api/mirror", mirrorRouter(peers, mirrorPusher, mirrorStore));
   // Memories follow the user to their paired devices (#978).
   const memoryHost = agentHost;
   // Preferences follow the user too (#1023); the Sync page's Memories switch replaces #978's.
   let appearanceApply: (patch: Record<string, string>, keys: string[]) => void = () => {};
+  // Speech sources are read from their file each time, so this store and the audio service's agree.
+  const audioSettingsStore = audioFileStore();
+  const syncSourceLists = (): SourceLists => {
+    const audio = audioSettingsStore.read();
+    return { model: memoryHost.modelSources(), ml: mlService().sources(), stt: audio.sources, tts: audio.ttsSources };
+  };
   const settingsSync = new SettingsSync(peers, {
     self: () => ({ id: peers.identity.id, name: peers.identity.name }),
     relay: () => process.env.SCRIBE_HEADLESS === "1" || (process.env.SCRIBE_HEADLESS !== "0" && process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY),
@@ -436,9 +455,51 @@ export async function startHttp(): Promise<http.Server> {
     settings: () => store.readAppearance(),
     apply: (patch, keys) => appearanceApply(patch, keys),
     memoryDefault: () => memoryHost.prefs().memorySync,
-    changed: (view) => broadcast({ type: "settings_sync", view }),
+    changed: (view, notices) => broadcast({ type: "settings_sync", view, ...(notices ? { notices } : {}) }),
+    // Sources and allowlists (#1024): read from and written back to their own stores.
+    extras: () => {
+      const prefs = memoryHost.prefs();
+      return mergeSnapshots(
+        snapshotSources(syncSourceLists()),
+        snapshotAllowlists({ web: prefs.webAllowlist, cmd: prefs.commandAllowlist }),
+      );
+    },
+    applyExtras: (patch, keyFor) => {
+      const lists = syncSourceLists();
+      const kinds = applySources(lists, patch, keyFor);
+      if (kinds.includes("model")) memoryHost.setModelSources(lists.model);
+      if (kinds.includes("ml")) mlService().replaceSources(lists.ml);
+      if (kinds.includes("stt") || kinds.includes("tts")) {
+        const audio = audioSettingsStore.read();
+        audioSettingsStore.write({ ...audio, sources: lists.stt, ttsSources: lists.tts });
+      }
+      const prefs = memoryHost.prefs();
+      const allow = { web: [...prefs.webAllowlist], cmd: [...prefs.commandAllowlist] };
+      if (applyAllowlists(allow, patch).length) memoryHost.setPrefs({ webAllowlist: allow.web, commandAllowlist: allow.cmd });
+    },
+    // Offers (#1024): MCP servers and plugins the other devices have.
+    offers: {
+      inventory: (includeSecrets) => ({
+        mcp: mcpInventory(readMcpFile().mcpServers, includeSecrets),
+        plugins: pluginService.list().map(({ id, name, version }) => ({ id, name, version })),
+      }),
+      read: () => cleanOffers(store.readMetaJson("settingsOffers")),
+      write: (state) => store.writeMetaJson("settingsOffers", state),
+      has: (kind, id) => {
+        if (kind === "plugin") return pluginService.list().some((p) => p.id === id) || pendingPluginIds(dataDir()).includes(id);
+        const file = readMcpFile();
+        return Object.hasOwn(file.mcpServers, id) || Object.values(file.workspaces).some((layer) => Object.hasOwn(layer.mcpServers, id));
+      },
+      addMcp: (name, server) => {
+        const file = readMcpFile();
+        if (file.error) throw new Error(`mcp.json can't be read: ${file.error}`);
+        writeMcpFile(applyImport(file, [{ scope: "global", name, server }]));
+      },
+      sendPlugin: (target, id) => sendCopy(peers, copyHost, target, { plugins: [id] }),
+    },
   }, log);
   app.use("/api/settings-sync", settingsSync.router());
+  settingsSyncNudge = () => settingsSync.nudge();
   const memorySync = new MemorySync(peers, {
     enabled: () => settingsSync.enabled("memories"),
     memories: () => memoryHost.memories(),

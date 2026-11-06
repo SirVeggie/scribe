@@ -124,6 +124,10 @@
     layout: { label: "Layout and navigation", hint: "Pane sides, page links, the tab strip, Clear, the space switch offer and search prefixes" },
     chat: { label: "Chat preferences", hint: "Send key, Queue or Steer, empty Enter, reasoning, compact thread lists, presets, suggestions and the agent button" },
     memories: { label: "Memories", hint: "Memories set to This device stay here. Workspace memories go only to devices with a clone of the same git repository." },
+    sources: { label: "Sources", hint: "Model, classifier and speech sources, without their API keys. Sources on this computer (127.0.0.1, localhost) stay here. Provider logins never sync: log in on each device." },
+    keys: { label: "Include keys", hint: "The sources' API keys, and MCP servers' environment values and headers in offers. They go over the paired link and are saved on each device.", sub: "sources" },
+    allowlists: { label: "Allowlists", hint: "Web and command allowlists. Adding an entry on one device adds it on all of them." },
+    offers: { label: "Offer MCP servers and plugins", hint: "Servers and plugins another device has and this one doesn't are listed here to add. Nothing is installed on its own; plugins wait for review in Plugins." },
   };
   const PREF_LABELS = {
     "scribe.theme": "Theme", "scribe.tightSmall": "Tighter small text", "scribe.uiEffects": "Interface effects",
@@ -164,10 +168,14 @@
     syncSection.hidden = !sync;
     if (!sync) return;
     syncList.replaceChildren();
+    const byId = Object.fromEntries(sync.categories.map((c) => [c.id, c]));
     for (const category of sync.categories) {
       const info = SYNC_CATEGORIES[category.id];
       if (!info) continue;
-      const row = el("div", "setting-row");
+      // Include keys sits under Sources and only matters while Sources syncs here.
+      const parent = info.sub ? byId[info.sub] : null;
+      if (parent && (!parent.on || parent.keepOwn)) continue;
+      const row = el("div", info.sub ? "setting-row sync-sub" : "setting-row");
       const name = tip(el("span", "setting-hinted", info.label), info.hint);
       name.id = `sync-${category.id}-label`;
       const toggle = el("button", "pill-toggle");
@@ -186,11 +194,57 @@
       box.disabled = !category.on;
       box.addEventListener("change", () => changeSync({ category: category.id, keepOwn: box.checked }));
       own.append(box, el("span", null, "This device keeps its own"));
+      if (info.sub) own.classList.add("sync-sub");
       syncList.append(own);
     }
     syncStatus.textContent = sync.relay ? "This device is headless: it keeps the shared settings for the others and uses none of them." : "";
     renderChoose();
+    renderOffers();
   }
+
+  // Offers (#1024): MCP servers and plugins another device has and this one doesn't.
+  const syncOffers = el("div", "sync-offers");
+  syncOffers.hidden = true;
+  syncSection.insertBefore(syncOffers, syncStatus);
+  function renderOffers() {
+    const offers = sync?.offers ?? [];
+    syncOffers.hidden = !offers.length;
+    if (!offers.length) {
+      syncOffers.replaceChildren();
+      return;
+    }
+    const rows = offers.map((offer) => {
+      const row = el("div", "setting-row sync-offer");
+      const info = el("span", "sync-offer-info");
+      const kind = offer.kind === "mcp" ? "MCP server" : `Plugin ${offer.detail}`;
+      info.append(el("strong", null, offer.label), el("span", "settings-hint", `${kind} on ${offer.from.name}`));
+      if (offer.kind === "mcp") {
+        const command = el("code", "sync-offer-command", offer.detail);
+        info.append(command);
+        if (offer.withheld?.length) info.append(el("span", "settings-hint", `Without ${offer.withheld.join(", ")}: add them after.`));
+      }
+      const add = button(offer.kind === "mcp" ? "Add" : "Review…", async () => {
+        add.disabled = true;
+        try {
+          const result = await syncRequest("POST", "/offers/accept", { kind: offer.kind, id: offer.id });
+          renderSync(result.view);
+          syncStatus.textContent = offer.kind === "mcp" ? `Added ${offer.label} to your MCP servers.` : "";
+          // The plugin now waits for review, as copies do (#907).
+          if (offer.kind === "plugin") openSettings("Plugins");
+        } catch (err) {
+          syncStatus.textContent = err.message;
+          add.disabled = false;
+        }
+      });
+      const dismiss = button("Dismiss", async () => {
+        try { renderSync(await syncRequest("POST", "/offers/dismiss", { kind: offer.kind, id: offer.id })); } catch (err) { syncStatus.textContent = err.message; }
+      });
+      row.append(info, add, dismiss);
+      return row;
+    });
+    syncOffers.replaceChildren(el("h4", null, "On your other devices"), ...rows);
+  }
+  let openSettings = () => {};
 
   async function changeSync(body) {
     try { renderSync(await syncRequest("PUT", "/category", body)); } catch (err) { syncStatus.textContent = err.message; }
@@ -218,12 +272,14 @@
     const rows = el("div", "sync-choose-rows");
     for (const row of pending.rows) {
       const line = el("div", "setting-row");
-      const label = el("span", null, PREF_LABELS[row.key] || row.key);
+      // List items (sources, allowlist entries) come with their name and readable values.
+      const shown = (value) => (row.label ? value : prefValue(value));
+      const label = el("span", null, row.label || PREF_LABELS[row.key] || row.key);
       label.id = `sync-row-${row.key.replace(/[^\w-]/g, "-")}`;
       const track = el("div", "button-track text-track");
       track.setAttribute("role", "group");
       track.setAttribute("aria-labelledby", label.id);
-      for (const [choice, text] of [["mine", `Here: ${prefValue(row.mine)}`], ["theirs", `${other}: ${prefValue(row.theirs)}`]]) {
+      for (const [choice, text] of [["mine", `Here: ${shown(row.mine)}`], ["theirs", `${other}: ${shown(row.theirs)}`]]) {
         const pick = button(text, () => {
           choices[row.key] = choice;
           renderChoose();
@@ -591,8 +647,9 @@
     /** The daemon's settings_sync event: a switch flipped, or a Choose setup waits. */
     syncChanged: renderSync,
     /** `confirm(message, label)` resolves true when the user agrees to revoke a device. */
-    init({ confirm }) {
+    init({ confirm, open }) {
       if (confirm) confirmRevoke = confirm;
+      if (open) openSettings = open;
     },
     refresh,
     /** The daemon's device_paired event: this device's code was used. */

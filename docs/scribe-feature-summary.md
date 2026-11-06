@@ -368,6 +368,14 @@ Memories go to every paired device unless set to This device. Edits merge per me
 
 Appearance, layout and navigation, and chat preferences live in the daemon, so the desktop app, every browser and the gateway view of the device agree. Each category switched on is the same on all paired devices; a switch off stops it for the group, and "This device keeps its own" stops it on one device. At the first pairing, settings changed on one device flow to the other; settings both changed differently wait on a Choose setup panel in the Sync section. A headless device only passes settings on.
 
+#### Sources, allowlists and offers between paired devices
+
+- Discoverability: Easy to miss. Off until switched on in the Sync section, except offers.
+- Find it: Settings → Devices → Sync → Sources, Include keys, Allowlists, Offer MCP servers and plugins
+- Sources: `src/devices/syncExtras.ts`, `src/devices/syncOffers.ts`, `src/devices/settingsSync.ts`
+
+Model, classifier and speech sources sync as endpoints; sources on this computer (127.0.0.1, localhost) stay local, and API keys go only with Include keys. Web and command allowlists merge entry by entry, so adding one on any device adds it on all. MCP servers and plugins another device has show in the Sync section (and as a notice) to add: a server goes into mcp.json without its working folder (and without env values or headers unless keys are included); a plugin is sent over and waits for review in Plugins. Provider logins never sync.
+
 #### Provider/project instructions still apply
 
 - Discoverability: Worth a closer look. Several instruction systems coexist and have different scopes.
