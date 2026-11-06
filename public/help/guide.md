@@ -488,6 +488,12 @@ Starts, pauses, blocked launches, usage waits, resumes and merges are logged. A 
 
 The configured classifier can suggest chips for a new or edited card. Clicking applies one; a suggestion is separate from the card’s actual labels/priority. Label descriptions can give the classifier useful context.
 
+#### Format a card's description
+
+- Find it: card dialog → Description → Format · Board settings → Format model
+
+A small model (Claude Haiku unless you pick another) rewrites the description as cleaner Markdown, keeping its wording. Undo format puts the old text back.
+
 #### Template actions become agent commands
 
 - Find it: Page/card right-click · Ctrl+P · chat / menu

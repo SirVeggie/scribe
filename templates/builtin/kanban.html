@@ -585,6 +585,12 @@
     color: var(--text);
     cursor: pointer;
   }
+  /* Format: a small model tidies the description into Markdown (#1038). */
+  .desc-tools { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 550; }
+  .desc-tools.hidden { display: none; }
+  .desc-note { color: var(--muted); font-size: 12px; font-weight: 400; }
+  .desc-note.error { color: var(--danger); }
+  .desc-format { padding: 2px 8px; font-size: 12px; }
   .cover-toggle .switch {
     width: 28px;
     height: 16px;
@@ -1146,7 +1152,7 @@
       <div class="m-feed hidden" id="mFeed" aria-live="polite"></div>
       <div class="m-grid">
         <div>
-          <div class="section-label">Description</div>
+          <div class="section-label">Description <span class="desc-tools hidden" id="descTools"><span class="desc-note" id="descNote"></span><button class="ghost desc-format" id="descFormat" type="button">Format</button></span></div>
           <div class="md-preview" id="mdPreview" tabindex="0" role="textbox" aria-multiline="true" aria-label="Description"></div>
           <textarea class="md-editor hidden" id="mdEditor" aria-label="Description" placeholder="Markdown. Paste an image to embed it. Ctrl+Enter saves."></textarea>
 
@@ -1228,6 +1234,10 @@
         <span class="txt"><b>Suggest labels and priority</b><span>While the board is open, a new or edited card's title and description go to the classifier from Scribe's settings. What it suggests shows on the card as chips you accept or dismiss.</span><span class="setting-warn" id="sSuggestNote"></span></span>
         <input class="switch" id="sSuggest" type="checkbox">
       </label>
+      <div class="setting">
+        <span class="txt"><b>Format model</b><span>Runs the description's Format button.</span></span>
+        <button class="field select-btn" id="sFormatModel" type="button"></button>
+      </div>
       <div class="confirm-row">
         <button class="ghost" id="settingsClose" type="button">Close</button>
       </div>
@@ -3233,6 +3243,8 @@
       }
     });
 
+    renderDescTools(c);
+
     region(checklistEl, [c.id, c.checklist, editingCheck], function () { buildModalChecklist(c); });
 
     // images
@@ -3561,6 +3573,109 @@
       saveDescription();
       startEditTitle();
     }
+  });
+
+  // ---------- Format: tidy a description into Markdown ----------
+  // A one-off chat without tools (settings.formatModel, else Claude's Haiku when there is one) rewrites
+  // the description as cleaner Markdown. It replaces the text only if nobody changed it meanwhile, and
+  // Undo puts the old text back until the description changes again.
+  var descTools = $("descTools"), descNote = $("descNote"), descFormat = $("descFormat");
+  /** { cardId, threadId? } while a chat formats; { cardId, before, after } once it did; { cardId, text } for a failure. */
+  var formatting = null, formatUndo = null, formatError = null, formatOptionsAsked = false;
+  function canFormat() {
+    return Boolean(scribe.agent && typeof scribe.agent.start === "function" && typeof scribe.agent.wait === "function");
+  }
+  function renderDescTools(c) {
+    var busy = formatting && formatting.cardId === c.id;
+    var undo = formatUndo && formatUndo.cardId === c.id && c.description === formatUndo.after;
+    var err = formatError && formatError.cardId === c.id ? formatError.text : "";
+    descTools.classList.toggle("hidden", !canFormat() || c.archived || !(busy || undo || err || c.description.trim()));
+    descFormat.textContent = busy ? "Formatting…" : undo ? "Undo format" : "Format";
+    descFormat.disabled = Boolean(busy || (formatting && !busy));
+    descNote.textContent = err;
+    descNote.className = "desc-note" + (err ? " error" : "");
+    // formatChoice reads the models when the button is clicked, without waiting for them.
+    if (canFormat() && !agentOptions && !formatOptionsAsked) {
+      formatOptionsAsked = true;
+      loadAgentOptions();
+    }
+  }
+  function formatChoice() {
+    var saved = settings().formatModel;
+    if (saved && str(saved.model)) return { provider: str(saved.provider), model: str(saved.model) };
+    var haiku = agentOptions && agentOptions.models && arr(agentOptions.models.claude).find(function (m) { return /haiku/i.test(str(m && m.id)); });
+    return haiku ? { provider: "claude", model: haiku.id } : null;
+  }
+  function formatPrompt(text) {
+    return [
+      "Reformat this Kanban card description into clean, readable Markdown.",
+      "Keep all of its content and the author's own wording: do not reword, add, drop, summarise or answer anything.",
+      "Split long runs of text into paragraphs, and use lists, short headings, bold, or inline code only where the text already has that structure (steps, options, file names, commands).",
+      "Keep existing Markdown, links, image references like ![x](#img-…), card references like #12, and [[…]] links exactly as they are.",
+      "Reply with the formatted Markdown only: no code fence around it, no comments.",
+      "",
+      "Description:",
+      text
+    ].join("\n");
+  }
+  /** The reply's Markdown, without a fence the model wrapped the whole of it in. */
+  function formatReply(reply) {
+    var t = str(reply).trim();
+    var m = /^```(?:markdown|md)?[ \t]*\n([\s\S]*?)\n```$/i.exec(t);
+    return m ? m[1].trim() : t;
+  }
+  function formatDescription() {
+    var c = openId && card(openId);
+    if (!c || formatting) return;
+    if (formatUndo && formatUndo.cardId === c.id && c.description === formatUndo.after) {
+      var before = formatUndo.before;
+      formatUndo = null;
+      updateCard(c.id, function (x) { x.description = before; return x; });
+      return;
+    }
+    var id = c.id, text = editingDesc ? mdEditor.value : c.description;
+    if (editingDesc) saveDescription();
+    if (!text.trim()) return;
+    var opts = { title: ("Format · #" + c.num + " " + c.title).slice(0, 120), tools: false, temporary: true };
+    var choice = formatChoice();
+    if (choice) {
+      opts.provider = choice.provider;
+      opts.model = choice.model;
+      var m = agentOptions && agentOptions.models && arr(agentOptions.models[choice.provider]).find(function (x) { return x && x.id === choice.model; });
+      if (m && arr(m.efforts).some(function (e) { return e && e.id === "low"; })) opts.effort = "low";
+    }
+    formatting = { cardId: id };
+    formatUndo = null;
+    formatError = null;
+    renderModal();
+    // start comes first in the click, before any other await, so it counts as the user's click.
+    scribe.agent.start(formatPrompt(text), opts).then(function (r) {
+      if (!r || !r.ok) throw new Error(launchError(r));
+      formatting.threadId = r.threadId;
+      return scribe.agent.wait(r.threadId);
+    }).then(function (w) {
+      if (!w || w.ok === false) throw new Error(str(w && (w.message || w.error)) || "The format chat did not answer.");
+      var next = formatReply(w.reply), now = card(id);
+      if (!now) return;
+      if (now.description !== text) formatError = { cardId: id, text: "The description changed meanwhile; left as is." };
+      else if (!next) formatError = { cardId: id, text: "No formatted text came back." };
+      else if (next !== text) {
+        formatUndo = { cardId: id, before: text, after: next };
+        updateCard(id, function (x) { x.description = next; return x; });
+      }
+    }).catch(function (err) {
+      formatError = { cardId: id, text: str(err && err.message) || "Could not format the description." };
+    }).finally(function () {
+      var tid = formatting && formatting.threadId;
+      formatting = null;
+      if (tid && typeof scribe.agent.delete === "function") scribe.agent.delete(tid).catch(function () {});
+      renderModal();
+    });
+  }
+  // Keep the editor's text: its blur saves it before the click reads the card.
+  descFormat.addEventListener("click", function (e) {
+    e.stopPropagation();
+    formatDescription();
   });
 
   var editingCheck = null;
@@ -4895,6 +5010,24 @@
     sHideAddColumn.checked = Boolean(s.hideAddColumn);
     sShowDoneDate.checked = Boolean(s.showDoneDate);
     if (!suggestAsking) sSuggest.checked = Boolean(s.suggest);
+    renderFormatModel();
+  }
+  var sFormatModel = $("sFormatModel"), formatPicker = null;
+  /** The Format button's model; until one is picked, the label names the default it falls back to. */
+  function renderFormatModel() {
+    var row = sFormatModel.closest(".setting");
+    row.classList.toggle("hidden", !(canFormat() && typeof scribe.agent.modelPicker === "function"));
+    if (row.classList.contains("hidden")) return;
+    loadAgentOptions().then(function () {
+      var saved = settings().formatModel;
+      var placeholder = !saved && formatChoice() ? "Haiku (default)" : "Default model";
+      if (!formatPicker) {
+        formatPicker = scribe.agent.modelPicker(sFormatModel, {
+          value: saved || null, placeholder: placeholder,
+          onChange: function (v) { saveSetting("formatModel", v && v.model ? { provider: v.provider, model: v.model } : null); }
+        });
+      } else formatPicker.set(saved || null);
+    });
   }
   var SUGGEST_BLOCKED = {
     denied: "This board isn't allowed to use the classifier here. Change it from the tab menu: Permissions…",
