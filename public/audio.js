@@ -252,6 +252,20 @@
     const right = after && !/^[\s,.;:!?)}\]]/.test(after) && !/[\s([{]$/.test(text) ? " " : "";
     return { value: before + left + text + right + after, caret: before.length + left.length + text.length + right.length };
   }
+  /**
+   * Send keyword (#1060): when the transcript ends with the keyword's words (case, punctuation and
+   * apostrophes ignored), returns the text before it without trailing commas; otherwise null.
+   */
+  function stripSendKeyword(text, keyword) {
+    const norm = word => word.toLocaleLowerCase().replace(/['’]/g, "");
+    const want = (String(keyword || "").match(/[\p{L}\p{N}'’]+/gu) || []).map(norm);
+    if (!want.length) return null;
+    const words = [...String(text || "").matchAll(/[\p{L}\p{N}'’]+/gu)];
+    if (words.length < want.length) return null;
+    const tail = words.slice(-want.length);
+    if (tail.some((m, i) => norm(m[0]) !== want[i])) return null;
+    return text.slice(0, tail[0].index).replace(/[\s,;:–—-]+$/u, "");
+  }
   /* ---------- output: one AudioContext, master volume, channels (#564) ---------- */
   // audio-cues.js loads first in the shell; cues stay silent without it.
   const rules = () => window.scribeAudioCues;
@@ -379,7 +393,7 @@
   }
 
   window.scribeAudio = { capture, transcribe, dictate, stream, resampler, available, refresh, settings: () => view,
-    device, setDevice, insertAtCaret, cancel: owner => { if (!owner || active?.owner === owner) active?.cancel(); },
+    device, setDevice, insertAtCaret, stripSendKeyword, cancel: owner => { if (!owner || active?.owner === owner) active?.cancel(); },
     play, route, cue, threadCue, setOutput, output: () => output };
   window.addEventListener("pagehide", () => active?.cancel());
   void refresh().catch(() => {});

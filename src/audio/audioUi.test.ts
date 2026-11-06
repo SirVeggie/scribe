@@ -150,18 +150,35 @@ test("caret insertion replaces selection and spaces words without separating pun
   }
 });
 
+test("send keyword matches only at the end and is stripped with its punctuation (#1060)", () => {
+  const context = vm.createContext({ window: { addEventListener() {} } });
+  vm.runInContext(fs.readFileSync(new URL("../../public/audio.js", import.meta.url), "utf8"), context);
+  const strip = context.window.scribeAudio.stripSendKeyword;
+  for (const [text, keyword, expected] of [
+    ["Fix the bug. Send it.", "send it", "Fix the bug."],
+    ["Fix the bug, send it!", "Send it", "Fix the bug"],
+    ["Send it", "send it", ""],
+    ["Please send it to Bob.", "send it", null],
+    ["Tämä on valmis, lähetä", "lähetä", "Tämä on valmis"],
+    ["Okay. Over and out", "over, and out", "Okay."],
+    ["Lets go", "let's go", ""],
+    ["Anything", "", null],
+    ["it", "send it", null],
+  ] as const) assert.equal(strip(text, keyword), expected, `${text} / ${keyword}`);
+});
+
 test("Chromium capture stops tracks, enforces one session and cap; composer handles editing, cancellation, sending and push-to-talk", async () => {
   const browser = await launchChromium({ headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"], purpose: "Audio UI test" });
   try {
     const page = await browser.newPage(); page.setDefaultTimeout(7000);
     const settings = { stt: { source: "test", model: "whisper-1" }, input: { sendAfterDictation: false, pushToTalk: true }, sources: [{ id: "test", name: "Test" }], available: true };
-    let transcriptionRequests = 0, delay = 0;
+    let transcriptionRequests = 0, delay = 0, spoken = "spoken words";
     await page.route("http://127.0.0.1:47999/**", async route => {
       const url = route.request().url();
       if (url.includes("/api/audio/settings")) return route.fulfill({ json: settings });
       if (url.includes("/api/audio/transcriptions")) {
         transcriptionRequests++; if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-        return route.fulfill({ json: { ok: true, text: "spoken words" } });
+        return route.fulfill({ json: { ok: true, text: spoken } });
       }
       return route.fulfill({ contentType: "text/html", body: '<main><textarea></textarea><div class="bar"><button class="ag-mic"><span class="ag-mic-status"></span></button></div></main>' });
     });
@@ -219,6 +236,15 @@ test("Chromium capture stops tracks, enforces one session and cap; composer hand
     assert.equal(await page.locator("textarea").inputValue(), "Other draft");
     assert.equal(await page.evaluate(() => (window as any).sent), 1);
     delay = 0;
+
+    // A send keyword at the end sends without the keyword, even with sending after dictation off (#1060).
+    settings.input.sendAfterDictation = false; (settings.input as any).sendKeyword = "send it"; spoken = "Spoken words, send it.";
+    // Without AudioWorkletNode it records a clip (the worklet module cannot load behind page routes); stopping by hand is the pause.
+    await page.evaluate(() => { (window as any).view.input.value = ""; (window as any).AudioWorkletNode = undefined; });
+    await page.locator("button").click(); await page.waitForFunction(() => document.querySelector("button")?.getAttribute("data-state") === "recording");
+    await page.locator("button").click(); await page.waitForFunction(() => (window as any).sent === 2);
+    assert.equal(await page.locator("textarea").inputValue(), "Spoken words");
+    delete (settings.input as any).sendKeyword; spoken = "spoken words";
 
     settings.available = false;
     await page.locator("button").click(); await page.waitForFunction(() => (window as any).openedSettings === "Audio");

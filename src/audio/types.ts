@@ -18,7 +18,7 @@ export type AudioSettings = {
   stt: { source?: string; model: string; language?: string; custom?: { baseUrl: string; apiKey?: string } };
   ttsSources: TtsSource[];
   tts: TtsSettings;
-  input: { sendAfterDictation: boolean; pushToTalk: boolean; livePreview: boolean };
+  input: { sendAfterDictation: boolean; pushToTalk: boolean; livePreview: boolean; /** Spoken at the end, then a pause, sends the dictation (#1060). */ sendKeyword?: string };
   /** Notification sounds (phase C): off until the user turns them on. */
   output: AudioOutput;
 };

@@ -290,7 +290,7 @@ Request a planning turn, then accept the plan to continue with implementation. A
 
 - Find it: Composer microphone · Ctrl+Shift+Space · Settings → Audio
 
-Configure a speech-to-text source/model, microphone and language. Options include send after dictation, push-to-talk and showing text while speaking. Experimental live transcription supports server stream or sliding-window modes. Hosted sources receive the recording.
+Configure a speech-to-text source/model, microphone and language. Options include send after dictation, a send keyword (say it at the end and pause for a second to send), push-to-talk and showing text while speaking. Experimental live transcription supports server stream or sliding-window modes. Hosted sources receive the recording.
 
 ### Recover & branch
 

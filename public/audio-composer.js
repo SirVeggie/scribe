@@ -1,5 +1,7 @@
 (() => {
   "use strict";
+  // Silence after the send keyword before it sends (#1060), so the word inside a sentence does not.
+  const KEYWORD_PAUSE_MS = 1000;
   window.scribeAudio.bindComposer = view => {
     let session = null, owner = null, state = "idle", epoch = 0, started = 0, level = 0, timer;
     let held = false, releasePending = false;
@@ -40,8 +42,14 @@
         if (current !== epoch) return;
         if (!settings.available) { clear(); window.scribeApp?.openSettings?.("Audio"); return; }
         started = Date.now();
-        const streaming = Boolean(settings.streaming), preview = streaming && settings.input.livePreview !== false;
-        const next = await window.scribeAudio[streaming ? "stream" : "dictate"]({ owner, preview,
+        // A send keyword (#1060) needs speech events, so it streams even with the source's live transcription off.
+        const keyword = settings.input.sendKeyword || "", listen = Boolean(keyword && window.AudioWorkletNode && window.WebSocket);
+        const streaming = Boolean(settings.streaming) || listen, preview = Boolean(settings.streaming) && settings.input.livePreview !== false;
+        let heard = false;
+        const next = await window.scribeAudio[streaming ? "stream" : "dictate"]({ owner, preview, force: listen && !settings.streaming,
+          ...(listen ? { pauseMs: KEYWORD_PAUSE_MS, onSpeech: speech => {
+            if (current === epoch && speech.final && window.scribeAudio.stripSendKeyword(speech.text, keyword) !== null) { heard = true; stop(); }
+          } } : {}),
           onText: text => { if (current === epoch && preview) live(text); },
           onLevel: v => { level = v; },
           onState: nextState => { if (current !== epoch) return; if (nextState === "recording" || nextState === "transcribing") { state = nextState; paint(); } },
@@ -53,11 +61,14 @@
         if (current !== epoch) return;
         clear();
         if (!result.ok) { window.scribeAudio.notice(result.message); return; }
-        const input = view.input;
-        const inserted = window.scribeAudio.insertAtCaret(input.value, input.selectionStart, input.selectionEnd, result.text);
+        // Stopping by hand right after the keyword counts as its pause too.
+        const stripped = keyword ? window.scribeAudio.stripSendKeyword(result.text, keyword) : null;
+        const text = stripped ?? result.text, input = view.input;
+        const inserted = window.scribeAudio.insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text);
         input.value = inserted.value; input.setSelectionRange(inserted.caret, inserted.caret);
         input.dispatchEvent(new Event("input", { bubbles: true })); view.focus();
-        if (result.text.trim() && settings.input.sendAfterDictation) view.send();
+        const byKeyword = stripped !== null || heard;
+        if (byKeyword ? input.value.trim() : result.text.trim() && settings.input.sendAfterDictation) view.send();
       } catch (err) { if (current === epoch) { clear(); window.scribeAudio.notice(err.message); } }
     }
     const toggle = () => { if (state === "recording") stop(); else if (state === "idle") void start(); };

@@ -108,6 +108,8 @@ test("settings and usage survive reopening; settings do not contain source crede
     assert.equal(reopened.usage().calls, 1);
     assert.ok(!fs.readFileSync(path.join(root, "audio-settings.json"), "utf8").includes("secret-key"));
     reopened.update({ input: { sendAfterDictation: false } }); assert.equal(reopened.view().stt.language, "en");
+    assert.equal(reopened.update({ input: { sendKeyword: "  send it " } }).input.sendKeyword, "send it");
+    assert.equal(reopened.update({ input: { sendKeyword: "" } }).input.sendKeyword, undefined);
     assert.throws(() => reopened.update({ stt: { source: "missing" } }), /existing/);
     assert.equal(reopened.update({ stt: { source: "", language: "" } }).available, false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

@@ -305,6 +305,9 @@
     }
   }
   const send = row("Send after dictation", "send", "switch");
+  const keyword = row("Send keyword", "keyword", "text"); keyword.placeholder = "e.g. send it"; keyword.maxLength = 100;
+  { const tip = "Ending dictation with this phrase and a one-second pause sends the message, without the phrase.", label = keyword.previousElementSibling;
+    label.dataset.tooltip = tip; label.setAttribute("aria-description", tip); }
   const push = row("Push-to-talk (Ctrl+Shift+Space)", "push", "switch");
   const livePreview = row("Show text while dictating", "live", "switch");
   const mic = row("Microphone", "mic", "select");
@@ -328,6 +331,7 @@
       renderSources();
       renderSpeech();
       send.setAttribute("aria-checked", String(view.input.sendAfterDictation));
+      if (document.activeElement !== keyword) keyword.value = view.input.sendKeyword || "";
       push.setAttribute("aria-checked", String(view.input.pushToTalk));
       livePreview.setAttribute("aria-checked", String(view.input.livePreview !== false));
       livePreview.closest(".setting-row").hidden = !view.profiles.some(p => p.streaming);
@@ -339,7 +343,7 @@
   let saving = Promise.resolve();
   function save() {
     const body = { input: { sendAfterDictation: send.getAttribute("aria-checked") === "true", pushToTalk: push.getAttribute("aria-checked") === "true",
-      livePreview: livePreview.getAttribute("aria-checked") === "true" } };
+      livePreview: livePreview.getAttribute("aria-checked") === "true", sendKeyword: keyword.value.trim() } };
     saving = saving.then(async () => {
       const res = await fetch("/api/audio/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const result = await res.json(); if (!res.ok) throw new Error(result.error);
@@ -347,7 +351,7 @@
     }).catch(err => { status.textContent = err.message; });
     return saving;
   }
-  [send, push, livePreview].forEach(input => input.addEventListener("change", save));
+  [send, keyword, push, livePreview].forEach(input => input.addEventListener("change", save));
   mic.addEventListener("change", () => window.scribeAudio.setDevice(mic.value));
   navigator.mediaDevices?.addEventListener("devicechange", devices);
   section.append(status);

@@ -14,7 +14,7 @@ export function normalizeSettings(value: unknown): AudioSettings {
   const body = value as Partial<AudioSettings> | null;
   const str = (v: unknown, max: number) => typeof v === "string" ? v.trim().slice(0, max) : "";
   const source = str(body?.stt?.source, 100), language = str(body?.stt?.language, 20);
-  const custom = body?.stt?.custom;
+  const custom = body?.stt?.custom, sendKeyword = str(body?.input?.sendKeyword, 100);
   return { sources: Array.isArray(body?.sources) ? body.sources.map(s => ({
     id: str(s.id, 100), name: str(s.name, 200), source: str(s.source, 100),
     model: str(s.model, 200) || "whisper-1", language: str(s.language, 20),
@@ -25,7 +25,7 @@ export function normalizeSettings(value: unknown): AudioSettings {
     ...(custom ? { custom: { baseUrl: str(custom.baseUrl, 2000), apiKey: str(custom.apiKey, 4000) } } : {}) },
     ...speechSources(body),
     input: { sendAfterDictation: body?.input?.sendAfterDictation === true, pushToTalk: body?.input?.pushToTalk !== false,
-      livePreview: body?.input?.livePreview !== false }, output: normalizeOutput(body?.output) };
+      livePreview: body?.input?.livePreview !== false, ...(sendKeyword ? { sendKeyword } : {}) }, output: normalizeOutput(body?.output) };
 }
 /** Speed as the OpenAI endpoint takes it: 0.25 to 4, 1 is normal (left out). */
 export function normalizeSpeed(value: unknown): number | undefined {
