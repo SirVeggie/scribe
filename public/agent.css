@@ -4256,6 +4256,11 @@ html.tight-small .agent-full {
 /* Capsule with two tabs above the input (thread, scope) and the settings tab below, sliding out from behind.
    With output showing, the tabs' panels disappear and thread and scope sit on the output surface. */
 
+/* Help in front of the tab: the floating chat steps aside (#1019). */
+.agent-dock.help-covered {
+  display: none;
+}
+
 .agent-dock {
   --dock-surface: var(--panel);
   --dock-surface-2: color-mix(in srgb, var(--panel) 90%, var(--bg));

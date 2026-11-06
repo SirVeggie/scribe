@@ -14784,6 +14784,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       this.root.hidden = true;
       this.open = false;
       this.host = null;
+      this.syncDock();
       // A closed Help starts over: the next question gets a fresh thread.
       this.reset();
       // Text still in the field stays for the next time Help opens (#1019).
@@ -14835,6 +14836,12 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       const pane = this.host ? app.paneOf(this.host) : "";
       if (pane) this.root.dataset.pane = pane;
       else delete this.root.dataset.pane;
+      this.syncDock();
+    },
+
+    /** The floating chat, pill and all, stays out of sight while Help is in front of its tab (#1019). */
+    syncDock() {
+      dock.root?.classList.toggle("help-covered", this.covers(window.scribeApp?.activeId()));
     },
 
     /** Empty the field, keeping the question as its placeholder. */
