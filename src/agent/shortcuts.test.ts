@@ -20,6 +20,7 @@ test("reasoning cycling skips Default and wraps through explicit levels", async 
       }),
       modelInfo: () => ({ defaultEffort: "low", efforts: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }),
       notice: (message: string) => notices.push(message),
+      showWheel: () => false, // no pill on screen: the notice still reports the step
     });
     const start = source.indexOf("  async function cycleEffort()");
     vm.runInContext(source.slice(start, source.indexOf("  function applyButton()", start)), ctx);
@@ -49,6 +50,7 @@ test("workspace cycling visits every folder and none as thread counts and recenc
       dirKey: (dir: string) => (dir || "").replace(/\\/g, "/").replace(/\/$/, "").toLowerCase(),
       prefs: () => ({ recentWorkspaces: recent }),
       notice: () => {}, R: { basename: (dir: string) => dir.split("/").at(-1) },
+      showWheel: () => false,
       targetView: () => ({
         settings: () => currentThread,
         setWorkspace: async (dir: string | null) => {
@@ -83,6 +85,7 @@ function fixture() {
     full: { root: root("full"), view: {} },
     allowlists: { close: () => false },
     agentSettings: { close: () => false }, modalStack: [],
+    help: { escape: () => false },
     window: { addEventListener: (_: string, fn: any) => { onKey = fn; } },
   });
   const start = source.indexOf("  function shortcut(action)");

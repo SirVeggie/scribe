@@ -6352,6 +6352,7 @@
       this.renderContext();
       const info = modelInfo(s.provider, s.model);
       const model = button("", "ag-pill", (event) => this.modelMenu(event.currentTarget), "Model", false);
+      model.dataset.wheel = "model";
       model.append(providerIcon(s.provider), el("span", null, info?.label || s.model));
       bar.append(model);
       const hasEffort = info?.efforts?.length || info?.params?.some((p) => p.id !== CONTEXT_PARAM);
@@ -6360,6 +6361,7 @@
         const fast = info.params?.find((p) => p.id === "fast");
         const fastOn = fast ? (s.modelParams?.fast ?? fast.default) === "true" : false;
         const eff = button("", "ag-pill", (event) => this.effortMenu(event.currentTarget), "Reasoning and model options", false);
+        eff.dataset.wheel = "effort";
         eff.append(icon("think"), el("span", null, info.efforts.length ? effortLabel : "Options"));
         if (fastOn) eff.append(el("span", "ag-tag tiny", "fast"));
         bar.append(eff);
@@ -6369,6 +6371,7 @@
         const ap = APPROVALS.find((a) => a.id === s.approval) || APPROVALS[2];
         const detail = s.custom ? `${s.custom.name}: ${ap.label}. ${customDetail(s.custom, s.custom.max)}` : approvalDetail(ap, s.provider);
         const apBtn = button("", `ag-pill ap-${ap.id}`, (event) => this.accessMenu(event.currentTarget), detail);
+        apBtn.dataset.wheel = "mode";
         apBtn.append(icon("shield"), el("span", null, s.custom ? `${s.custom.name} · ${ap.label}` : ap.label));
         bar.append(apBtn);
       }
@@ -10629,6 +10632,21 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     return dock.view;
   }
 
+  /** The pill a cycling shortcut changes in this chat, for the setting wheel. */
+  function wheelAnchor(view, setting) {
+    if (setting === "workspace" || setting === "scope") return view.variant === "dock" ? dock.scopeBtn : view.header?.querySelector(".ag-scope-chip");
+    return view.bar?.querySelector(`[data-wheel="${setting}"]`);
+  }
+
+  /**
+   * Show a cycling step on the setting wheel (#1017) over that setting's pill: the list, the index
+   * shown before the step and the new one. False when the pill isn't on screen.
+   */
+  function showWheel(view, setting, items, from, to, render) {
+    const key = `${view.variant}:${view.threadId || "draft"}:${setting}`;
+    return Boolean(window.scribeSettingWheel?.show({ key, find: () => wheelAnchor(view, setting), items, from, to, render }));
+  }
+
   /** Latest non-favourite model per chat, kept in that chat's cycle until another replaces it. */
   const cycleExtras = new Map();
 
@@ -10655,9 +10673,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return;
     }
     const at = list.findIndex((f) => modelKey(f.provider, f.id) === current);
-    const next = list[(at + 1) % list.length];
+    const nextAt = (at + 1) % list.length;
+    const next = list[nextAt];
+    const shown = showWheel(view, "model", list, at < 0 ? nextAt - 1 : at, nextAt, (f) => ({ nodes: [providerIcon(f.provider), el("span", null, modelInfo(f.provider, f.id)?.label || f.id)] }));
     await view.updateSettings(next.provider === s.provider ? { model: next.id } : { provider: next.provider, model: next.id });
-    notice(`Model: ${modelInfo(next.provider, next.id)?.label || next.id}`);
+    if (!shown) notice(`Model: ${modelInfo(next.provider, next.id)?.label || next.id}`);
   }
 
   async function cycleEffort() {
@@ -10669,10 +10689,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return;
     }
     const levels = info.efforts.map((e) => e.id);
-    const next = levels[(levels.indexOf(s.effort) + 1) % levels.length];
+    const at = levels.indexOf(s.effort);
+    const nextAt = (at + 1) % levels.length;
+    const next = levels[nextAt];
+    const shown = showWheel(view, "effort", info.efforts, at < 0 ? nextAt - 1 : at, nextAt, (e) => ({ nodes: [icon("think"), el("span", null, e.label || e.id)] }));
     await view.updateSettings({ effort: next });
     const label = info.efforts.find((e) => e.id === next)?.label || next;
-    notice(`Reasoning: ${label}`);
+    if (!shown) notice(`Reasoning: ${label}`);
   }
 
   function applyButton() {
@@ -14088,8 +14111,13 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return;
     }
     if (next.id === s.approval) return;
+    // The wheel shows the rungs the shortcut visits, and the current one.
+    const shownRungs = rungs.filter((r) => !disabled.includes(r.id) || r.id === s.approval);
+    const rungText = (r) => (s.custom ? `${s.custom.name} · ${r.label}` : r.label);
+    const render = (r) => ({ cls: `ap-${r.id}`, nodes: [icon("shield"), el("span", null, rungText(r))] });
+    const shown = showWheel(view, "mode", shownRungs, shownRungs.findIndex((r) => r.id === s.approval), shownRungs.indexOf(next), render);
     await view.updateSettings({ approval: next.id, mode: accessMode(next.id) });
-    notice(`Access: ${next.label}`);
+    if (!shown) notice(`Access: ${next.label}`);
   }
 
   /** Known folders in a stable order: cycling changes thread counts and recent-workspace order. */
@@ -14119,9 +14147,19 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
       return;
     }
     const at = current ? list.findIndex((dir) => dir && dirKey(dir) === dirKey(current)) : list.length - 1;
-    const next = list[(Math.max(at, 0) + 1) % list.length];
+    const nextAt = (Math.max(at, 0) + 1) % list.length;
+    const next = list[nextAt];
+    const scope = view.settings().scope;
+    const shown = showWheel(view, "workspace", list, Math.max(at, 0), nextAt, (dir) => wheelScope(scope, dir));
     await view.setWorkspace(next);
-    notice(next ? `Workspace: ${R.basename(next) || next}` : "Workspace: None");
+    if (!shown) notice(next ? `Workspace: ${R.basename(next) || next}` : "Workspace: None");
+  }
+
+  /** A wheel row for the scope chip: what the chip would show with that scope and workspace. */
+  function wheelScope(scope, cwd) {
+    const node = el("span");
+    fillScopeDisplay(node, scope, cwd);
+    return { nodes: [...node.childNodes] };
   }
 
   /** Scribe access options the scope menu would offer for this chat, in that order. */
@@ -14151,9 +14189,11 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     }
     let at = list.findIndex((scope) => sameScope(scope, s.scope));
     if (at < 0 && s.scope.kind === "workspace") at = list.findIndex((scope) => scope.kind === "workspace");
-    const next = list[(Math.max(at, 0) + 1) % list.length];
+    const nextAt = (Math.max(at, 0) + 1) % list.length;
+    const next = list[nextAt];
+    const shown = showWheel(view, "scope", list, Math.max(at, 0), nextAt, (scope) => wheelScope(scope, s.cwd));
     await view.setScope(next);
-    notice(`Scribe: ${next.kind === "workspace" ? "None" : scopeLabel(next).text}`);
+    if (!shown) notice(`Scribe: ${next.kind === "workspace" ? "None" : scopeLabel(next).text}`);
   }
 
   function escape() {

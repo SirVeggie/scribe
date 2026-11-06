@@ -7374,3 +7374,40 @@ main.has-split .help-panel[data-pane] {
     transform: translateY(6px);
   }
 }
+
+/* ---------- setting wheel (#1017, setting-wheel.js) ---------- */
+
+.ag-wheel-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-popover);
+  pointer-events: none;
+}
+/* No box: a soft spot of the surface colour hides what is behind the values and has no edge. */
+.ag-wheel-veil {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: radial-gradient(closest-side,
+    color-mix(in srgb, var(--ag-wheel-surface, var(--bg)) 96%, transparent) 0,
+    color-mix(in srgb, var(--ag-wheel-surface, var(--bg)) 90%, transparent) 55%,
+    transparent 100%);
+}
+/* No will-change: a promoted layer is drawn once and then scaled, which blurs the text. */
+.ag-wheel-item {
+  position: absolute !important;
+  left: 0;
+  top: 0;
+  margin: 0 !important;
+  width: auto !important;
+  max-width: none !important;
+  white-space: nowrap;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform-origin: 0 50%;
+  transition: none !important;
+}
+.ag-wheel-anchor {
+  opacity: 0 !important;
+  transition: none !important;
+}
