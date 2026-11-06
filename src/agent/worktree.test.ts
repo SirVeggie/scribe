@@ -427,6 +427,29 @@ test("merge refuses when the main checkout is on another branch", async () => {
   assert.equal(sh(repo, "branch", "--list", wt.branch).replace("*", "").trim(), wt.branch);
 });
 
+test("uncommitted main-checkout changes the merge would overwrite: set back when they match the branch, else named (#817)", async () => {
+  fs.writeFileSync(path.join(repo, "lock.txt"), "v1\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-q", "-m", "add lock");
+  const { worktree: wt } = await createWorktree(repo, repo, "dirty main");
+  fs.writeFileSync(path.join(wt.path, "lock.txt"), "v2\n");
+  fs.writeFileSync(path.join(wt.path, "new.txt"), "new\n");
+  await commitAll(wt, "edit lock");
+
+  fs.writeFileSync(path.join(repo, "lock.txt"), "local\n");
+  await assert.rejects(mergeWorktree(wt), (err: Error) => /Uncommitted changes in the main checkout .* to lock\.txt/.test(err.message) && !/new\.txt/.test(err.message));
+  assert.equal(fs.readFileSync(path.join(repo, "lock.txt"), "utf8"), "local\n", "a different change is left alone");
+
+  fs.writeFileSync(path.join(repo, "lock.txt"), "v2\n");
+  fs.writeFileSync(path.join(repo, "new.txt"), "new\n");
+  fs.writeFileSync(path.join(repo, "unrelated.txt"), "keep\n");
+  assert.deepEqual(await mergeWorktree(wt), { commits: 1, base: "main" });
+  assert.equal(sh(repo, "status", "--porcelain"), "?? unrelated.txt");
+  fs.rmSync(path.join(repo, "unrelated.txt"));
+  await removeWorktree(wt);
+  await dropBranchIfEmpty(wt);
+});
+
 test("merge rebases a branch the base has moved past, and leaves a conflicting one as it was", async () => {
   const { worktree: wt } = await createWorktree(repo, repo, "rebase me");
   fs.writeFileSync(path.join(wt.path, "mine.txt"), "mine\n");

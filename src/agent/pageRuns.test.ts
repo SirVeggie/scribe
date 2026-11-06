@@ -344,6 +344,21 @@ test("a merge no agent can fix ends at once", async () => {
   assert.deepEqual(state.sent, []);
 });
 
+test("uncommitted main-checkout changes are not the agent's to fix (#817)", async () => {
+  for (const why of [
+    "Uncommitted changes in the main checkout (S:\\repo) to package-lock.json would be overwritten by this merge, so nothing was merged.",
+    "The merge did not go through, so nothing changed: error: Your local changes to the following files would be overwritten by merge: package-lock.json",
+  ]) {
+    const { state, runs, turn } = harness();
+    state.mergeFails = [why];
+    runs.register("th", "page1", {});
+    turn({});
+    await runs.check("th");
+    assert.equal(runs.get("th")!.outcome?.fixable, false);
+    assert.deepEqual(state.sent, []);
+  }
+});
+
 test("a merge fixed by the agent ends done", async () => {
   const { state, runs, turn } = harness();
   state.mergeFails = ["CONFLICT"];

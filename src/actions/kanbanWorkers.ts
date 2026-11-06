@@ -596,7 +596,7 @@ function wrapUp(plan: Plan, state: BoardState, id: string, w: Worker, threadId: 
     if (out.fixable) {
       blocked = plan.mergeFailed(id, threadId, str(out.message), usage).ids;
     } else {
-      // The main checkout's branch, a detached HEAD: the next merge would fail too.
+      // The main checkout's branch or uncommitted changes, a detached HEAD: the next merge would fail too.
       const r = plan.blockCards(id, plan.unmergedCards(threadId), `The board could not merge this card's branch, so its work isn't in yet: ${str(out.message)}`, "Branch didn't merge", threadId, true, usage);
       const which = r.list ? `the branch of ${r.list}` : "the agent's branch";
       const back = r.list && r.backTo ? ` ${r.list} ${r.nums.length === 1 ? "is" : "are"} back in ${r.backTo.title}.` : "";

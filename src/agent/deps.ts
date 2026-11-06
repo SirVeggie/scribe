@@ -49,7 +49,9 @@ function runNpmInstall(repo: string): Promise<{ ok: boolean; output: string }> {
     // npm is a .cmd on Windows, which execFile only runs through a shell. The arguments are fixed.
     execFile(
       "npm",
-      ["install", "--no-audit", "--no-fund"],
+      // --no-save: only bring node_modules up to the lockfile. Rewriting package-lock.json (npm
+      // drops or adds "peer" flags) left the main checkout dirty, and that blocks the next merge (#817).
+      ["install", "--no-save", "--no-audit", "--no-fund"],
       { cwd: repo, shell: process.platform === "win32", windowsHide: true, timeout: 600_000, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
       (err, stdout, stderr) => resolve({ ok: !err, output: `${stdout ?? ""}${stderr ?? ""}`.trim() })
     );

@@ -132,9 +132,9 @@ export function runView(run: PageRun): PageRunView {
   };
 }
 
-/** Whether an agent can sort out a failed merge in its worktree (not the main checkout's branch or a detached HEAD). */
+/** Whether an agent can sort out a failed merge in its worktree (not the main checkout's branch, its uncommitted changes, or a detached HEAD). */
 export function agentCanFixMerge(why: string): boolean {
-  return !/main checkout is on|detached HEAD/i.test(why);
+  return !/main checkout is on|detached HEAD|changes in the main checkout|would be overwritten by merge/i.test(why);
 }
 
 function cleanData(value: unknown): Record<string, unknown> | undefined {

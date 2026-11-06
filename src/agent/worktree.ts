@@ -416,6 +416,11 @@ export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: numb
     status = await worktreeStatus(wt);
     if (!status.ahead) return { commits: 0, base };
   }
+  const inTheWay = await mainChangesInTheWay(wt);
+  if (inTheWay.length) {
+    const shown = inTheWay.slice(0, 5).join(", ") + (inTheWay.length > 5 ? `, and ${inTheWay.length - 5} more` : "");
+    throw new Error(`Uncommitted changes in the main checkout (${wt.repo}) to ${shown} would be overwritten by this merge, so nothing was merged. Commit, stash or discard them there, then merge again.`);
+  }
   const res = await git(["merge", "--no-edit", wt.branch], wt.repo, { timeoutMs: 120_000 });
   if (res.code !== 0) {
     const mergeHead = await git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], wt.repo, { timeoutMs: 5000 });
@@ -423,6 +428,50 @@ export async function mergeWorktree(wt: ThreadWorktree): Promise<{ commits: numb
     throw new Error(`The merge did not go through, so nothing changed: ${(res.stdout + res.stderr).trim().split("\n").slice(-4).join(" ")}`);
   }
   return { commits: status.ahead, base };
+}
+
+/**
+ * Files with uncommitted changes in the main checkout that the merge would change, which make
+ * `git merge` refuse; no agent can fix that from its worktree (#817). On a fast-forward, a file
+ * whose uncommitted content already matches the branch's is set back first, since the merge writes
+ * the same content (an edit made in both places, like npm's lockfile rewrites).
+ */
+async function mainChangesInTheWay(wt: ThreadWorktree): Promise<string[]> {
+  const dirty = await dirtyFiles(wt.repo);
+  if (!dirty.length) return [];
+  const diff = await git(["diff", "--name-only", "-z", "HEAD", wt.branch], wt.repo, { timeoutMs: 30_000 });
+  if (diff.code !== 0) return [];
+  const changed = new Set(diff.stdout.split("\0").filter(Boolean));
+  const blocking = dirty.filter((file) => changed.has(file));
+  if (!blocking.length) return [];
+  const forward = (await git(["merge-base", "--is-ancestor", "HEAD", wt.branch], wt.repo, { timeoutMs: 10_000 })).code === 0;
+  const left: string[] = [];
+  for (const file of blocking) {
+    if (forward && (await sameAsBranch(wt, file)) && (await setBack(wt.repo, file))) {
+      log(`worktree: set back ${file} in ${wt.repo} before merging ${wt.branch}; its uncommitted change matched the branch`);
+    } else {
+      left.push(file);
+    }
+  }
+  return left;
+}
+
+/** Whether the main checkout's copy of a file (or its absence) matches the branch's. */
+async function sameAsBranch(wt: ThreadWorktree, file: string): Promise<boolean> {
+  const theirs = await git(["rev-parse", "--verify", "--quiet", `${wt.branch}:${file}`], wt.repo, { timeoutMs: 10_000 });
+  if (!fs.existsSync(path.join(wt.repo, file))) return theirs.code !== 0;
+  if (theirs.code !== 0) return false;
+  const ours = await git(["hash-object", "--", file], wt.repo, { timeoutMs: 10_000 });
+  return ours.code === 0 && ours.stdout.trim() === theirs.stdout.trim();
+}
+
+/** Drop a file's uncommitted change in the main checkout: back to HEAD, or removed when HEAD lacks it. */
+async function setBack(repo: string, file: string): Promise<boolean> {
+  const inHead = (await git(["rev-parse", "--verify", "--quiet", `HEAD:${file}`], repo, { timeoutMs: 10_000 })).code === 0;
+  if (inHead) return (await git(["checkout", "HEAD", "--", file], repo, { timeoutMs: 30_000 })).code === 0;
+  await git(["rm", "-q", "--cached", "--ignore-unmatch", "--", file], repo, { timeoutMs: 10_000 });
+  fs.rmSync(path.join(repo, file), { force: true });
+  return true;
 }
 
 /**
