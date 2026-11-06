@@ -46,7 +46,7 @@ test("a thread the user archived stays archived when its page is restored", () =
 
 test("a purged skill is dropped from threads and Kanban workers", () => {
   const board = store.upsert({ title: "Board", html: "<p>b</p>", state: { settings: { workers: { w1: { name: "W", skills: ["sk_a", "sk_b"] } } } } }).tab;
-  const thread = host.createThread({ scope: { kind: "global" } });
+  const thread = host.createThread({ scope: { kind: "global", ref: null } });
   host.updateThread(thread.id, { skills: ["sk_a", "sk_b"] });
   host.forgetSkill("sk_a");
   assert.deepEqual(host.getThread(thread.id)?.skills, ["sk_b"]);
