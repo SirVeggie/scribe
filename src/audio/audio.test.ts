@@ -141,6 +141,8 @@ test("OpenAI adapter uploads multipart with daemon-only auth and maps response e
   await new Promise<void>(resolve => server.once("listening", resolve));
   const baseUrl = `http://127.0.0.1:${(server.address() as any).port}/v1`;
   let status = 200, content = "", text = "Words";
+  const savedHome = process.env.SCRIBE_HOME, home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-audio-log-"));
+  process.env.SCRIBE_HOME = home;
   app.post("/v1/audio/transcriptions", express.raw({ type: () => true }), (req, res) => {
     assert.equal(req.get("authorization"), "Bearer secret-key"); content = req.body.toString();
     res.status(status).json(status === 200 ? { text } : { error: { message: "secret-key" } });
@@ -159,8 +161,13 @@ test("OpenAI adapter uploads multipart with daemon-only auth and maps response e
     status = 404;
     assert.match((await openAiEngine.transcribe(request) as any).message, /\/v1/, "a missing endpoint hints at the /v1 path");
     status = 400;
-    assert.equal((await openAiEngine.transcribe({ ...request, audio: new Blob(["sound"], { type: "audio/wav" }) }) as any).error, "engine", "a rejected WAV is not a format problem");
-  } finally { server.close(); }
+    const rejected = await openAiEngine.transcribe({ ...request, audio: new Blob(["sound"], { type: "audio/wav" }) }) as any;
+    assert.equal(rejected.error, "engine", "a rejected WAV is not a format problem");
+    assert.match(rejected.message, /audio or the model name "whisper-1"/, "a 400 hints at the audio or model name");
+    const logged = fs.readFileSync(path.join(home, "daemon.log"), "utf8");
+    assert.match(logged, /speech-to-text \(model whisper-1, wav\) failed \(400\) at 127\.0\.0\.1/); assert.match(logged, /\[key\]/);
+    assert.ok(!logged.includes("secret-key"), "the logged upstream body has the key taken out");
+  } finally { server.close(); if (savedHome === undefined) delete process.env.SCRIBE_HOME; else process.env.SCRIBE_HOME = savedHome; fs.rmSync(home, { recursive: true, force: true }); }
 });
 test("routes reject page origins, form uploads, oversize bytes, and ungranted tab headers; settings round trip", async () => {
   const { service, calls } = setup(); const app = express(); app.use("/api/audio", audioRouter(service));

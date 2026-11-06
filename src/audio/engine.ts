@@ -1,5 +1,21 @@
 import { authHeaders, type OpenAISource } from "../agent/openaiSources.js";
+import { log } from "../log.js";
 import type { SttEngine, TtsEngine } from "./types.js";
+
+/** The start of an error body, with the source's key, bearer tokens and sk- style keys taken out. */
+export function redactUpstream(text: string, apiKey?: string): string {
+  let out = text.slice(0, 2000);
+  if (apiKey) out = out.split(apiKey).join("[key]");
+  out = out.replace(/Bearer\s+[^\s"',}]+/gi, "Bearer [key]").replace(/\b(sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, "[key]");
+  return out.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300);
+}
+/** Logs a failed upstream answer: the host only (URLs can carry keys in the query), the status and the redacted body. */
+async function logUpstream(res: Response, source: OpenAISource, what: string): Promise<void> {
+  const body = await res.text().catch(() => "");
+  let host = "";
+  try { host = new URL(source.baseUrl).host; } catch { /* a bad URL fails before here */ }
+  log(`audio: ${what} failed (${res.status}) at ${host}`, redactUpstream(body, source.apiKey) || undefined);
+}
 
 export const openAiEngine: SttEngine = {
   async transcribe({ source, model, audio, language, prompt, signal }) {
@@ -12,12 +28,16 @@ export const openAiEngine: SttEngine = {
     if (prompt) form.append("prompt", prompt);
     const res = await fetch(`${source.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`, { method: "POST", headers: authHeaders(source), body: form, signal });
     if (!res.ok) {
+      // Never relay upstream bodies: they can contain credentials or endpoint details. daemon.log gets a redacted copy.
+      await logUpstream(res, source, `speech-to-text (model ${model}, ${ext})`);
       // llama.cpp's server reads only WAV/MP3/FLAC and answers other formats with 400.
       if ((res.status === 400 || res.status === 415) && !["wav", "mp3", "flac"].includes(ext))
         return { ok: false, error: "format", message: `This source cannot read ${ext} audio (${res.status}).` };
       if (res.status === 404) return { ok: false, error: "engine", message: "No transcription endpoint at this URL (404). OpenAI-compatible URLs usually end in /v1." };
-      const error = res.status === 401 || res.status === 403 ? "auth" : res.status === 429 ? "rate_limit" : "engine";
-      // Never relay upstream bodies: they can contain credentials or endpoint details.
+      if (res.status === 400 || res.status === 415 || res.status === 422)
+        return { ok: false, error: "engine", message: `The source could not read the audio or the model name "${model}" (${res.status}). Details are in daemon.log.` };
+      if (res.status === 401 || res.status === 403) return { ok: false, error: "auth", message: `The source refused the API key (${res.status}).`, retryable: false };
+      const error = res.status === 429 ? "rate_limit" : "engine";
       return { ok: false, error, message: `Speech-to-text request failed (${res.status}).`, retryable: res.status === 429 || res.status >= 500 };
     }
     const body = await res.json() as { text?: unknown };
