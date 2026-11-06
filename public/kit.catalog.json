@@ -14,7 +14,7 @@
         }
       ],
       "write": "form[data-reply=\"label\"?][data-confirm?]",
-      "gives": "Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo. A page can have several, each sent on its own; a data-reply value becomes the reply's summary, else the heading of the form's section leads it. With data-confirm it also gets a Confirm button (a data-quiet submit) that saves the answers without asking the agent for a turn.",
+      "gives": "Keeps a local draft and submits named fields through scribe.reply (a submitted signal without replyTo). Several per page, each sent alone; the data-reply value is the summary, else the section heading leads it. data-confirm adds a Confirm button: saved, no agent turn.",
       "example": "<form data-reply><textarea name=\"notes\"></textarea><button type=\"submit\">Send answers</button></form>"
     },
     {

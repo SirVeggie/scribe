@@ -112,7 +112,7 @@ Never make a page plainer to save tokens: its HTML is a small share of a chat's 
 <!-- kit-catalog:start -->
 | Write | Gives | Example |
 |---|---|---|
-| ` form[data-reply="label"?][data-confirm?] ` | Keeps a local draft and submits named fields through scribe.reply, or a submitted signal without replyTo. A page can have several, each sent on its own; a data-reply value becomes the reply's summary, else the heading of the form's section leads it. With data-confirm it also gets a Confirm button (a data-quiet submit) that saves the answers without asking the agent for a turn. | ` <form data-reply><textarea name="notes"></textarea><button type="submit">Send answers</button></form> ` |
+| ` form[data-reply="label"?][data-confirm?] ` | Keeps a local draft and submits named fields through scribe.reply (a submitted signal without replyTo). Several per page, each sent alone; the data-reply value is the summary, else the section heading leads it. data-confirm adds a Confirm button: saved, no agent turn. | ` <form data-reply><textarea name="notes"></textarea><button type="submit">Send answers</button></form> ` |
 | ` <s-question name label type?> / <s-choice value checked?> ` | A question set apart from the text around it, inside a form[data-reply]. With s-choice children it is one choice (type="many" for check boxes); without, a text box (type="line" for one line); type="scale" with min, max, low and high. required and value (the default) work too. | ` <s-question name="approach" label="Which approach?"><s-choice value="a" checked>Patch <small>an hour</small></s-choice><s-choice value="b">Rewrite</s-choice></s-question> ` |
 | ` <s-options name? style="--min:…"> / <s-option value label recommended?> ` | Options side by side, each with its own content. With a name, inside a form[data-reply] the user picks one like a radio; outside a form each gets a Choose button that replies at once. Without a name it only compares. | ` <s-options name="plan"><s-option value="a" label="Patch" recommended><p>An hour, low risk.</p></s-option><s-option value="b" label="Rewrite"><p>A day.</p></s-option></s-options> ` |
 | ` button[data-reply][data-context] ` | Sends the summary (button text when empty) and an optional JSON answers object through the host's scribe.reply. | ` <button data-reply="Use option B" data-context='{"option":"B"}'>Choose B</button> ` |
@@ -155,23 +155,20 @@ Never make a page plainer to save tokens: its HTML is a small share of a chat's 
 
 Put each question next to the part of the page it is about, and give every form a free-text field so the user can answer in their own words.
 
-**Shape the forms by how the user will act on them.** Decisions that only make sense together (a plan's choices) go in one form wrapping the page, sent once. Items the user can take up one at a time get a form each: ideas, proposals or findings that could each become a card, options to try separately, review points. Give each its own note field and a submit button named for what it does, with the item in the form's `data-reply` label, so the user can fill in and send one, come back for another later, or leave the rest:
+**Shape the forms by how the user will act on them.** Decisions that only make sense together go in one form, sent once. Items the user can take up one at a time get a form each: ideas, proposals or findings that could each become a card, options to try separately, review points. Give each its own note field and a submit button named for what it does, with the item in the form's `data-reply` label, so the user can send one now and leave the rest:
 
 ```html
 <section>
   <h2>One Settings window</h2>
   <p>…the finding…</p>
   <form data-reply="Create card: One Settings window">
-    <s-question name="scope" label="Scope">
-      <s-choice value="merge" checked>Merge the five dialogs</s-choice><s-choice value="tree">Tree first</s-choice>
-    </s-question>
     <s-question name="notes" label="Notes for the card" placeholder="Optional"></s-question>
     <button type="submit">Create card</button>
   </form>
 </section>
 ```
 
-Each send is its own reply (the label is its summary, the fields follow), and a sent form can be changed and sent again. Act on each reply as it arrives (create that card, answer that point) rather than waiting for the rest. A page can mix both: per-item forms and one form for the overall questions.
+Each send is its own reply (the label is its summary, the fields follow), and a sent form can be changed and sent again. Act on each reply as it arrives rather than waiting for the rest. A page can mix both: per-item forms and one form for the overall questions.
 
 In a Scribe chat, show the form and call `page_ask` on it: your turn resumes with the answers. Elsewhere, `page_wait` on `submitted` (its data names the form: its `id`, else `form0`, `form1`…).
 
@@ -186,7 +183,7 @@ page_show({ key: "card-320-questions", html, background: true,
             replyTo: { page: "scribe:agent-todo", card: 320 } })
 ```
 
-`<form data-reply>` does the rest: the answers become the user's comment on the card (summary, answers, a peek link to the form) and go to the card's chat, into its running turn or as Continue once it ended. So you can release the card and end your turn. Add `data-confirm` to a card form whose answers may need no reply from you (a choice, an approval): it gets a **Confirm** button beside Send that saves them on the card, with Continue on offer, without starting your chat. `page_patch` with `replyTo` (no edits) wires an existing page; `replyTo: null` clears it. For a submit button in your own markup: `scribe.reply` in `PAGE-SCRIPTS.md`.
+`<form data-reply>` does the rest: the answers become the user's comment on the card (summary, answers, a peek link to the form) and go to the card's chat, into its running turn or as Continue once it ended. So you can release the card and end your turn. Add `data-confirm` when the answers may need no reply (a choice, an approval). `page_patch` with `replyTo` (no edits) wires an existing page; `replyTo: null` clears it. For a submit button in your own markup: `scribe.reply` in `PAGE-SCRIPTS.md`.
 
 ### Page components
 
