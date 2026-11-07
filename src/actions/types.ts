@@ -114,6 +114,8 @@ export type ActionSet = {
   sweep?(state: BoardState, ctx: SweepContext): ActionOutcome | null;
   /** A run of this page's (see agent/pageRuns.ts) is done and would merge: a reason to keep its branch unmerged, or null. */
   runHold?(state: BoardState, threadId: string): string | null;
+  /** A run of this page's waits to be sent on: a reason it should end instead (what it worked on was deleted), or null. */
+  runGone?(state: BoardState, threadId: string, data: Record<string, unknown>): string | null;
   /** Scribe moved one of the page's runs on (a limit wait, a resume, a merge fix, its end), e.g. to log it on the page. */
   runEvent?(state: BoardState, event: RunEvent, now: number): ActionOutcome | null;
   /**

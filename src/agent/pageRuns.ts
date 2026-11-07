@@ -48,6 +48,8 @@ export type RunOutcome = {
   message?: string;
   /** merge_failed: whether an agent could have fixed it (false: the main checkout's branch, a detached HEAD). */
   fixable?: boolean;
+  /** cancelled before it was sent on: the page's reason it has nothing left to do (its Kanban card was deleted). */
+  gone?: string;
   /** done without a merge: the page's reason to keep the branch unmerged (a Kanban card the chat still holds). */
   held?: string;
   /** done: the last turn ran without Scribe's MCP, and why (#924), so the agent couldn't reach the page. */
@@ -109,6 +111,8 @@ export type RunDeps = {
   hasWorktree(threadId: string): boolean;
   /** The page's reason to keep the branch unmerged, from its template's actions; null to merge. */
   hold(run: PageRun): string | null | Promise<string | null>;
+  /** The page's reason not to send a waiting run on (what it worked on was deleted); null to go on. */
+  gone?(run: PageRun): string | null | Promise<string | null>;
   /** Throws when the message could not be sent. */
   send(threadId: string, text: string): void;
   /** Merges and closes the worktree; resolves with Scribe's message, throws with why it didn't. */
@@ -244,6 +248,12 @@ export class PageRuns {
     const turn = deps.lastTurn(run.threadId);
 
     if (run.phase === "waiting" && run.wait) {
+      // What the chat worked on is gone (its card was deleted): end the run instead of sending it on.
+      const gone = await deps.gone?.(run);
+      if (gone) {
+        this.end(run, { kind: "cancelled", gone, error: `Not sent on: ${gone}.` }, `Not sent on: ${gone}`);
+        return;
+      }
       // Waiting out a usage limit: another account may have room by now.
       if (run.wait.reason !== "capacity" && turn?.limitResetsAt && this.moveAccount(run, turn, run.wait.count, now)) return;
       if (now < run.wait.until) return;

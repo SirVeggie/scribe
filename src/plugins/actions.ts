@@ -54,6 +54,11 @@ export class PluginActions {
     const result=await this.service.hook(binding.id,binding.t.key,"runHold",[tab.state,thread],{kind:"system",page:tab.id});
     return typeof result==="string"?result:null;
   }
+  async runGone(tab:Tab,thread:string,data:Record<string,unknown>):Promise<string|null> {
+    const binding=this.binding(tab);if(!binding?.t.hooks?.includes("runGone"))return null;
+    const result=await this.service.hook(binding.id,binding.t.key,"runGone",[tab.state,thread,data],{kind:"system",page:tab.id});
+    return typeof result==="string"?result:null;
+  }
   async runEvent(tab:Tab,event:RunEvent):Promise<void> {
     if(!this.binding(tab)?.t.hooks?.includes("runEvent"))return;
     await this.invoke(tab,"runEvent",t=>[t.state,event,Date.now()],undefined,false,true);

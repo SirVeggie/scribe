@@ -940,6 +940,19 @@ export class BoardStore extends EventEmitter {
     }
   }
 
+  /** A page's reason to end a run instead of sending it on (see ActionSet.runGone), or null. */
+  runGone(pageId: string, threadId: string, data: Record<string, unknown>): string | null {
+    const tab = this.locate(pageId)?.tab;
+    const set = tab ? this.actionsFor(tab) : undefined;
+    if (!tab || !set?.runGone) return null;
+    try {
+      return set.runGone(tab.state, threadId, data);
+    } catch (err) {
+      log(`Run gone check failed on ${tab.key}`, String(err));
+      return null;
+    }
+  }
+
   /**
    * Scribe moved one of a page's runs on: log an agent_run event on the page (agents and pages can
    * wait on it) and let the page's actions record it (a Kanban board's worker log).

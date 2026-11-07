@@ -61,7 +61,7 @@ export const manifestSchema = z.object({
     description: z.string().max(1000).optional(),
     default: z.unknown().optional(),
   })).default({}),
-  templates: z.array(z.object({ key: pluginId, metadata: file, html: file, guide: file.optional(), actions: z.record(z.string(), z.object({ description: z.string(), args: z.string() })).optional(), hooks: z.array(z.enum(["seed", "reply", "replyDelivered", "sweep", "drive", "launched", "launchAllowed", "runHold", "runEvent"])).optional() })).max(50).default([]),
+  templates: z.array(z.object({ key: pluginId, metadata: file, html: file, guide: file.optional(), actions: z.record(z.string(), z.object({ description: z.string(), args: z.string() })).optional(), hooks: z.array(z.enum(["seed", "reply", "replyDelivered", "sweep", "drive", "launched", "launchAllowed", "runHold", "runGone", "runEvent"])).optional() })).max(50).default([]),
 }).strict();
 export type PluginManifest = z.infer<typeof manifestSchema>;
 /** Compares declared access across versions; records saved before access.env read as having none. */

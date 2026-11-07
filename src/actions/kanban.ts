@@ -1247,6 +1247,15 @@ export const kanbanActions: ActionSet = {
     return held.length ? `it still holds ${held.map((c) => `#${c.num}`).join(", ")}` : null;
   },
 
+  runGone(state: BoardState, threadId: string, data: Record<string, unknown>): string | null {
+    // A worker chat waiting on a plan limit has nothing to go on with once its card was deleted,
+    // unless it took another card that it still holds.
+    const num = Number(data.card);
+    if (!num || cards(state).some((c) => c.num === num)) return null;
+    if (cards(state).some((c) => c.claim && !c.claim.stale && c.claim.thread === threadId)) return null;
+    return `its card #${num} was deleted`;
+  },
+
   runEvent(state: BoardState, event: RunEvent, now: number): ActionOutcome | null {
     // The worker log keeps what Scribe did for a worker's chat (limit waits, resumes, merge fixes); the page logs how it ended.
     const data = event.run.data ?? {};

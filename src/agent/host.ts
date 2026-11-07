@@ -816,6 +816,10 @@ export class AgentHost {
           const tab=store.get(run.pageId);
           return tab && pluginActions?.binding(tab)?pluginActions.runHold(tab,run.threadId):store.runHold(run.pageId,run.threadId);
         },
+        gone: (run) => {
+          const tab=store.get(run.pageId);
+          return tab && pluginActions?.binding(tab)?pluginActions.runGone(tab,run.threadId,run.data ?? {}):store.runGone(run.pageId,run.threadId,run.data ?? {});
+        },
         send: (id, text) => void this.send(id, { text, from: "page" }),
         merge: async (id) => {
           const wt = this.threads.get(id) && openWorktree(this.threads.get(id)!);

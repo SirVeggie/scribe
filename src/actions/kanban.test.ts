@@ -949,6 +949,15 @@ test("runHold keeps a chat's branch unmerged while it still holds a card", () =>
   assert.equal(kanbanActions.runHold!(claimed, "th2"), null);
 });
 
+test("runGone ends a waiting chat whose card was deleted, unless it holds another (#1062)", () => {
+  const state = board();
+  assert.equal(kanbanActions.runGone!(state, "th1", { worker: "w_op", card: 1 }), null);
+  assert.equal(kanbanActions.runGone!(state, "th1", { worker: "w_op" }), null);
+  assert.equal(kanbanActions.runGone!(state, "th1", { worker: "w_op", card: 999 }), "its card #999 was deleted");
+  const claimed = run(state, "claim", { card: 1 }, agent({ thread: "th1" })).state;
+  assert.equal(kanbanActions.runGone!(claimed, "th1", { worker: "w_op", card: 999 }), null);
+});
+
 test("runEvent logs Scribe's steps for a worker's chat in the worker log", () => {
   const state = { ...board(), settings: { workers: { w_op: { name: "Opus" } } } };
   const view = { phase: "waiting" as const, fixes: 0, after: 1, createdAt: 1, merge: true, data: { worker: "w_op", card: 2 }, wait: { until: 5000, count: 1 } };

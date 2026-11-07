@@ -583,6 +583,9 @@ function wrapUp(plan: Plan, state: BoardState, id: string, w: Worker, threadId: 
   if (out.kind === "limit") {
     plan.endRun(id, `${str(out.error)} Its chat is kept; press ▶ to go on with the next card.`, true, usage);
     go = false;
+  } else if (out.gone) {
+    // Scribe didn't send the chat on after its limit: its card was deleted meanwhile.
+    plan.log(id, "done", `Ended the agent's chat without sending it on: ${out.gone}`, { card, thread: threadId, usage });
   } else if (out.kind === "failed" || out.kind === "cancelled") {
     const how = out.kind === "failed" ? `failed${out.error ? `: ${out.error}` : ""}` : "was stopped";
     if (Number(run?.fixes) > 0) {
@@ -636,6 +639,8 @@ function finishSolo(plan: Plan, state: BoardState, id: string, threadId: string,
   const extra = { card: cardNum, thread: threadId, usage };
   if (out?.kind === "limit") {
     plan.blockChatCards(id, threadId, `${str(out.error)} ${KEPT_NOTE}`, "Out of plan usage", usage);
+  } else if (out?.gone) {
+    plan.log(id, "solo", `${what}: ended its chat without sending it on: ${out.gone}`, extra);
   } else if (out && (out.kind === "failed" || out.kind === "cancelled")) {
     const how = out.kind === "failed" ? `failed${out.error ? `: ${out.error}` : ""}` : "was stopped";
     if (Number(run?.fixes) > 0) plan.mergeFailed(id, threadId, `the agent's turn to fix it ${how}.`, usage);

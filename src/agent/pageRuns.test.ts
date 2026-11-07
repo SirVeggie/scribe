@@ -14,6 +14,7 @@ function harness(opts: { worktree?: boolean } = {}) {
     recovery: true,
     worktree: opts.worktree ?? true,
     hold: null as string | null,
+    gone: null as string | null,
     sendFails: null as string | null,
     mergeFails: [] as string[],
     sent: [] as string[],
@@ -30,6 +31,7 @@ function harness(opts: { worktree?: boolean } = {}) {
     recoveryAllowed: () => state.recovery,
     hasWorktree: () => state.worktree,
     hold: () => state.hold,
+    gone: () => state.gone,
     send: (_id, text) => {
       if (state.sendFails) throw new Error(state.sendFails);
       state.sent.push(text);
@@ -169,6 +171,23 @@ test("a plan limit waits for the reset, then for the provider's confirmation, th
   turn({});
   await runs.check("th");
   assert.equal(runs.get("th")!.outcome?.kind, "done");
+});
+
+test("a waiting run whose card was deleted ends instead of being sent on (#1062)", async () => {
+  const { state, runs, turn } = harness();
+  runs.register("th", "page1", { data: { worker: "w1", card: 12 } });
+  const resetsAt = state.now + 3_600_000;
+  turn({ status: "error", error: "usage limit", limitResetsAt: resetsAt });
+  await runs.check("th");
+  assert.equal(runs.get("th")!.phase, "waiting");
+  state.gone = "its card #12 was deleted";
+  state.now = resetsAt + RESUME_DELAY_MS;
+  await runs.check("th");
+  const run = runs.get("th")!;
+  assert.equal(run.phase, "ended");
+  assert.deepEqual(run.outcome, { kind: "cancelled", gone: "its card #12 was deleted", error: "Not sent on: its card #12 was deleted." });
+  assert.deepEqual(state.sent, []);
+  assert.equal(state.merges, 0);
 });
 
 test("Claude's session limit keeps the run waiting and resumes the same chat (#701)", async () => {

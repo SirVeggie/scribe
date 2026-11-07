@@ -383,6 +383,17 @@ test("a chat that ended without its Scribe MCP says so on the card it still hold
   assert.match((card(next, 1).comments as { text: string }[]).at(-1)!.text, /^The agent's Scribe MCP didn't connect \(MCP server scribe connection timed out\), so it couldn't finish/);
 });
 
+test("a chat Scribe didn't send on because its card was deleted is not a failure (#1062)", () => {
+  const state = board({ run: { since: 5, card: 9, startedAt: 100 }, threadId: "th_1", fails: 2 });
+  const { c, released } = ctx({ th_1: ended({ kind: "cancelled", gone: "its card #9 was deleted", error: "Not sent on: its card #9 was deleted." }) });
+  const out = drive(state, c)!;
+  assert.deepEqual(released, ["th_1"]);
+  assert.equal(out.launch?.ref.card, 1);
+  const next = apply(state, out);
+  assert.equal(worker(next).fails, 2);
+  assert.match(log(next).find((l) => l.kind === "done")!.text, /^Ended the agent's chat without sending it on: its card #9 was deleted/);
+});
+
 test("three failed chats in a row pause the worker", () => {
   const state = board({ run: { since: 5, card: 1, startedAt: 100 }, threadId: "th_1", fails: 2 });
   Object.assign(card(state, 1), { col: "work", thread: "th_1", claim: { holder: "Opus", thread: "th_1", at: 100 } });
