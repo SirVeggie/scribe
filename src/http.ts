@@ -1104,10 +1104,13 @@ export async function startHttp(): Promise<http.Server> {
       const pluginReply=source?await pluginActions?.reply(source,req.body?.data,req.body?.summary,threadInfo,quiet):null;
       const { target, result, deliver } = pluginReply ?? store.receiveReply(req.params.id, { summary: req.body?.summary, data: req.body?.data, quiet }, threadInfo);
       let delivered: "steered" | "queued" | "started" | null = null;
+      if (source) agentHost?.pageReplied(source.id, { summary: req.body?.summary, data: req.body?.data });
       if (deliver && agentHost && !quiet) {
         const source = store.get(req.params.id);
         try {
-          delivered = agentHost.cardMessage(deliver.thread, {
+          // The chat's page_ask on this form returns the answer, so it is not steered in as well.
+          if (source && agentHost.asksPage(deliver.thread, source.id)) delivered = "steered";
+          else delivered = agentHost.cardMessage(deliver.thread, {
             num: deliver.num,
             board: target.title || "Kanban board",
             boardKey: target.key,

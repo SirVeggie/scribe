@@ -70,6 +70,23 @@ test("page_ask waits on the page's submit and returns its state", async () => {
   assert.equal(host.listThreads().find((t) => t.id === threadId)?.asking, undefined);
 });
 
+test("a form's scribe.reply answers page_ask with its data (#1063)", async () => {
+  store.upsert({ key: "ask-reply", title: "Reply form", html: "<p>form</p>" });
+  const threadId = runningThread();
+  const page = store.get("ask-reply")!;
+  const pending = host.askPage(threadId, { page: "ask-reply", events: ["submit"], timeoutMs: 5000, signal: new AbortController().signal });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(host.asksPage(threadId, page.id), true);
+  host.pageReplied(page.id, { summary: " Picked\n A ", data: { approach: "A", notes: "x".repeat(5000) } });
+  const result = await pending;
+  assert.ok("answered" in result && result.answered === true);
+  assert.deepEqual(result.events.map((e) => e.name), ["reply"]);
+  assert.equal(result.reply?.summary, "Picked A");
+  assert.equal((result.reply?.data as { approach: string }).approach, "A");
+  assert.equal(pageQuestion(threadId).status, "answered");
+  assert.equal(host.asksPage(threadId, page.id), false);
+});
+
 test("skipping the chat card ends page_ask with the user's note", async () => {
   store.upsert({ key: "ask-skip", title: "Skip me", html: "<p>form</p>" });
   const threadId = runningThread();

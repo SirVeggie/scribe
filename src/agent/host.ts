@@ -519,7 +519,7 @@ type RunState = {
 
 /** What page_ask hands back to the agent. */
 export type PageAskResult =
-  | { answered: true; page: { id: string; key: string }; events: PageEvent[]; cursor: number; state: unknown; stateRevision: number }
+  | { answered: true; page: { id: string; key: string }; events: PageEvent[]; reply?: { summary: string; data: unknown }; cursor: number; state: unknown; stateRevision: number }
   | { answered: false; page: { id: string; key: string }; cursor: number; closed: boolean; deleted: boolean; timedOut: boolean }
   | { skipped: true; note?: string; page: { id: string; key: string } }
   | { cancelled: true; page: { id: string; key: string } };
@@ -555,6 +555,10 @@ export class AgentHost {
   private dirty = new Map<string, Item>();
   private pending = new Map<string, Pending>();
   private browserHandoffs = new Set<string>();
+  /** Threads whose page_ask waits on a page, by page id: that page's scribe.reply answers it (#1063). */
+  private pageAsks = new Map<string, Set<string>>();
+  /** The last scribe.reply on a page some page_ask waits on, by page id, for askPage to return. */
+  private pageReplies = new Map<string, { summary: string; data: unknown }>();
   private componentWrites = new Map<string, { at: number; count: number }>();
   /** "Allow once" answers to web_request, per thread, until a web call uses them. */
   private webPasses = new Map<string, Array<{ call: WebCall; at: number }>>();
@@ -5462,7 +5466,11 @@ export class AgentHost {
     const signal = AbortSignal.any([stop.signal, opts.signal]);
     const chat = this.waitPending<QuestionAnswer>(threadId, run, "question", item.id, signal);
     chat.catch(() => {});
-    const page = waitForEvents({ idOrKey: tab.id, names: opts.events, after, timeoutMs: opts.timeoutMs, viewer: "agent", abort: signal });
+    // A form wired to a card (page_show replyTo) answers with scribe.reply, which logs `reply` on it.
+    const names = opts.events.includes("reply") ? opts.events : [...opts.events, "reply"];
+    const page = waitForEvents({ idOrKey: tab.id, names, after, timeoutMs: opts.timeoutMs, viewer: "agent", abort: signal });
+    const asks = this.pageAsks.get(threadId) ?? new Set<string>();
+    this.pageAsks.set(threadId, asks.add(tab.id));
     try {
       const first = await Promise.race([chat.then((answer) => ({ answer }) as const), page.then((wait) => ({ wait }) as const)]);
       if ("answer" in first) {
@@ -5486,12 +5494,32 @@ export class AgentHost {
         const notes = planNotes(last.data) ?? planNotes(now?.state);
         run.plan = { accepted: last.name === "accept", ...(notes ? { notes } : {}), page: tab.key };
       }
-      return { ...base, answered: true, events: wait.events, stateRevision: now?.stateRevision ?? wait.stateRevision, state: now?.state ?? null };
+      const reply = last.name === "reply" ? this.pageReplies.get(tab.id) : undefined;
+      return { ...base, answered: true, events: wait.events, ...(reply ? { reply } : {}), stateRevision: now?.stateRevision ?? wait.stateRevision, state: now?.state ?? null };
     } catch {
       return { cancelled: true, page: { id: tab.id, key: tab.key } };
     } finally {
       stop.abort();
+      asks.delete(tab.id);
+      if (!asks.size && this.pageAsks.get(threadId) === asks) this.pageAsks.delete(threadId);
+      if (![...this.pageAsks.values()].some((a) => a.has(tab.id))) this.pageReplies.delete(tab.id);
     }
+  }
+
+  /** Whether this thread's page_ask waits on the page: its scribe.reply then answers the call instead of steering in. */
+  asksPage(threadId: string, pageId: string): boolean {
+    return this.pageAsks.get(threadId)?.has(pageId) ?? false;
+  }
+
+  /**
+   * A form's scribe.reply (#320): when a page_ask waits on that form, the reply is its answer
+   * (#1063). The event carries only the summary (events are small); askPage hands back the data.
+   */
+  pageReplied(pageId: string, input: { summary?: unknown; data?: unknown }): void {
+    if (![...this.pageAsks.values()].some((asks) => asks.has(pageId))) return;
+    const summary = typeof input.summary === "string" ? input.summary.trim().replace(/\s+/g, " ").slice(0, 300) : "";
+    this.pageReplies.set(pageId, { summary, data: input.data ?? {} });
+    store.logEvent(pageId, { name: "reply", data: { summary }, by: "user" });
   }
 
   /** Give the user the browser and keep the turn waiting until they hand it back. */

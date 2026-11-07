@@ -1577,7 +1577,7 @@ export async function startMcp(): Promise<void> {
 function registerAsk(server: McpServer): void {
   server.tool(
     "page_ask",
-    "Ask the user with a page and wait for their answer. Build the form page first with page_show (background: true is fine): it should explain what you need, include a freeform text field, and call scribe.signal(\"submit\") when the user submits. page_ask shows it in the chat as a question card the user opens, marks this turn as waiting for the user, and returns when the page sends one of events: answered, the page's events and its state after the answer. Also returns when the user skips it in the chat (skipped, with their note), closes or deletes the page, or the wait times out. Use this instead of page_wait whenever you need the user's input to carry on.",
+    "Ask the user with a page and wait for their answer. Build the form page first with page_show (background: true is fine): it should explain what you need, include a freeform text field, and call scribe.signal(\"submit\") when the user submits (a scribe.reply form also answers it, with its reply). page_ask shows it in the chat as a question card the user opens, marks this turn as waiting for the user, and returns when the page sends one of events: answered, the page's events and its state after the answer. Also returns when the user skips it in the chat (skipped, with their note), closes or deletes the page, or the wait times out. Use this instead of page_wait whenever you need the user's input to carry on.",
     {
       id: z.string().optional().describe("Tab id, e.g. t_ab12cd34."),
       key: z.string().optional().describe("Page key, e.g. scribe:deploy-options."),
