@@ -9554,6 +9554,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         if (start) this.status.append(setClock(el("span", "ag-clock"), start));
       }
       if (status === "running") this.setHandleText(this.live?.text || "Working…", this.live?.key || "working");
+      else if (status === "idle" && t?.scheduled && !(t.unread && !t.fromPage)) this.setHandleText(`Continues ${scheduleTime(t.scheduled.at)}`, "scheduled");
       else this.setHandleText(status === "waiting" ? "Needs your answer" : t?.unread && !t.fromPage ? "Reply ready" : "Ask the agent", status);
     },
     /** CSS transitions retarget text mid-swap, retaining the slide and blur of rapid updates. */
