@@ -557,6 +557,13 @@ export class UpdateService {
     if (this.available.blocked) throw new Error(this.available.blocked);
     try {
       if (this.install.kind === "git") {
+        // Fetch again first, so Update takes everything on the upstream now, not only what the last check saw.
+        this.phase = "checking";
+        this.changed();
+        this.available = await this.checkGitInstall();
+        this.checkedAt = this.now();
+        if (!this.available) throw new Error("There is no update to install");
+        if (this.available.blocked) throw new Error(this.available.blocked);
         if (!this.gitTarget) throw new Error("Check for updates first");
         this.phase = "installing";
         this.changed();

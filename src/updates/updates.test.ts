@@ -136,6 +136,33 @@ test("applyGit goes back to the previous commit when the build fails", async () 
   assert.equal(builds, 2, "the previous version is built again");
 });
 
+test("Update on a checkout fetches again and installs commits pushed after the check", async () => {
+  const dir = tmp();
+  const origin = path.join(dir, "origin.git");
+  const work = path.join(dir, "work");
+  const clone = path.join(dir, "clone");
+  execFileSync("git", ["init", "--bare", "-q", "-b", "master", origin]);
+  execFileSync("git", ["clone", "-q", origin, work]);
+  const push = (n: string) => {
+    fs.writeFileSync(path.join(work, "a.txt"), n);
+    gitIn(work, "add", ".");
+    gitIn(work, "commit", "-qm", n);
+    gitIn(work, "push", "-q", "origin", "HEAD:master");
+  };
+  push("first");
+  execFileSync("git", ["clone", "-q", origin, clone]);
+  push("second");
+  const run: Runner = (command, args, options) => (command === "git" ? runCommand(command, args, options) : Promise.resolve({ code: 0, stdout: "", stderr: "" }));
+  let restarts = 0;
+  const { svc } = service(clone, tmp(), { run, restart: async () => { restarts++; } });
+  assert.equal((await svc.check()).available?.label, "1 new commit on origin/master");
+  push("third");
+  await svc.apply();
+  assert.equal(gitIn(clone, "rev-parse", "HEAD"), gitIn(work, "rev-parse", "HEAD"));
+  assert.equal(svc.view().available?.label, "2 new commits on origin/master");
+  assert.equal(restarts, 1);
+});
+
 test("windowsInstallScript runs the installer silently and restarts what was running", () => {
   const withApp = windowsInstallScript("C:\\Temp\\Scribe's setup.exe", "C:\\Programs\\Scribe\\app", true);
   assert.match(withApp, /'C:\\Temp\\Scribe''s setup\.exe' -ArgumentList '\/S','\/UPDATE','\/R'/);
