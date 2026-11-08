@@ -1948,6 +1948,20 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /** provider_usage from a Scribe chat's MCP (#1065): plan usage per provider, with the change since this chat's last call. */
+  app.post("/api/provider-usage", (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "provider_usage only works in Scribe chat threads." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    agentHost
+      .agentUsage(thread, { provider: typeof body.provider === "string" && body.provider ? body.provider.slice(0, 40) : undefined, refresh: body.refresh === true })
+      .then((result) => res.json(result))
+      .catch((err: Error) => res.status(400).json({ error: err.message }));
+  });
+
   /** memory_list, memory_save and memory_delete from a Scribe chat's MCP: the memories agents share (#104). */
   app.post("/api/memory/:op", (req, res) => {
     const thread = threadOf(req);

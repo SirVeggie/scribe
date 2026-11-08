@@ -7733,6 +7733,7 @@
     harness_docs: () => ["Read agent setup docs"],
     harness_change: () => ["Change agent setup"],
     agent_models: () => ["List models"],
+    provider_usage: (i) => ["Read plan usage", firstText(i, "provider")],
     plugin_list: () => ["List plugins"],
     plugin_guide: (i) => ["Read plugin guide", firstText(i, "id")],
     plugin_call: (i) => ["Call plugin", [firstText(i, "id"), firstText(i, "method")].filter(Boolean).join(" · ")],

@@ -84,6 +84,7 @@ const READ_ONLY_TOOLS: readonly string[] = [
   "vault_list",
   "vault_show",
   "agent_models",
+  "provider_usage",
   "device_list",
   "list_files",
   "browser_screenshot",

@@ -86,6 +86,7 @@ import { cleanCustomModes, modeKeepsServer, modeMax, modeOff, READ_SHELL_WAIT_MS
 import { pageOwned } from "./threadList.js";
 import { activityKey, threadActivity } from "./activity.js";
 import { sumThreadUsage, sumUsageTree } from "./usage.js";
+import { usageView, type UsageView } from "./agentUsage.js";
 import { likePatterns, matchMessages, messageSnippet, searchWords, type ThreadMessageHit } from "./threadSearch.js";
 import { allowedGrants, canReadThread, grantScopes, isMessage, itemMatches, itemText, queryWords, requestableScopes, scopeLabel, scopesGranted, threadScopeLabel, type AccessScope, type ScopeLookup } from "./threadAccess.js";
 import { grantRows, revokeGrant } from "./grants.js";
@@ -1007,6 +1008,8 @@ export class AgentHost {
   private usageFetch: Promise<void> | null = null;
   private lastUsageFetchAt = 0;
   private cursorUsageFetchAt = 0;
+  /** Each chat's last provider_usage reading, for the change since then (#1065). */
+  private usageSnapshots = new Map<string, { at: number; limits: Partial<Record<string, PlanLimits>> }>();
   private codexUsageTimer: NodeJS.Timeout | null = null;
   private codexUsageFetch: Promise<void> | null = null;
   private codexUsageFetchAt = 0;
@@ -1022,6 +1025,31 @@ export class AgentHost {
   /** Shared provider usage for every meter. Claude/Cursor windows display zero after reset. */
   limits(): Partial<Record<ProviderId, PlanLimits>> {
     return this.liveLimits();
+  }
+
+  /**
+   * provider_usage from a chat's MCP (#1065): the meters' plan usage, compact, with each window's
+   * change since this chat's previous call. refresh reads the providers again first (at most once a
+   * minute each), without a model message.
+   */
+  async agentUsage(threadId: string, opts: { provider?: string; refresh?: boolean }): Promise<UsageView> {
+    const only = opts.provider;
+    if (only && !(only in this.providers)) throw new Error(`Unknown provider: ${only}. Use claude, codex, cursor or pi.`);
+    if (opts.refresh && !this.fakes) {
+      const want = (p: ProviderId) => (!only || only === p) && (p === "pi" || Boolean(this.planLimits[p]));
+      await Promise.allSettled([
+        want("claude") ? this.refreshClaudeUsage(true) : null,
+        ...(want("claude") ? this.claudePool.ids().map((id) => this.claudePool.refresh(id)) : []),
+        want("codex") ? this.refreshCodexUsage() : null,
+        want("cursor") ? this.refreshCursorUsage(60_000) : null,
+        want("pi") ? Promise.all([...this.balances.keys()].map((api) => this.refreshBalance(api, 60_000))) : null,
+      ]);
+    }
+    const now = Date.now();
+    const limits = this.liveLimits();
+    const view = usageView(limits, this.spend(), now, this.usageSnapshots.get(threadId), only);
+    this.usageSnapshots.set(threadId, { at: now, limits: { ...this.usageSnapshots.get(threadId)?.limits, ...(only ? { [only]: limits[only as ProviderId] } : limits) } });
+    return view;
   }
 
   /** Today's cost of Native chats per pay-per-use API, with DeepSeek's balance where the key is DeepSeek's (#980). */
@@ -1089,12 +1117,12 @@ export class AgentHost {
     return out;
   }
 
-  /** After a Cursor turn, pull its plan usage, at most once per CURSOR_USAGE_TTL_MS. */
-  private refreshCursorUsage(): void {
-    if (this.closed || this.fakes || this.loggingOut.has("cursor") || Date.now() - this.cursorUsageFetchAt < CURSOR_USAGE_TTL_MS) return;
+  /** After a Cursor turn, pull its plan usage, at most once per CURSOR_USAGE_TTL_MS (minGap: an agent's provider_usage). */
+  private refreshCursorUsage(minGap = CURSOR_USAGE_TTL_MS): Promise<void> {
+    if (this.closed || this.fakes || this.loggingOut.has("cursor") || Date.now() - this.cursorUsageFetchAt < minGap) return Promise.resolve();
     this.cursorUsageFetchAt = Date.now();
     const generation = this.authGenerations.get("cursor");
-    void (this.providers.cursor as CursorProvider).fetchPlanUsage().then((resp) => {
+    return (this.providers.cursor as CursorProvider).fetchPlanUsage().then((resp) => {
       if (this.closed || this.loggingOut.has("cursor") || generation !== this.authGenerations.get("cursor") || !resp) return;
       const parsed = planLimitsFromCursorUsage(resp, Date.now());
       if (parsed) this.commitLimits("cursor", parsed, false);
@@ -1200,15 +1228,16 @@ export class AgentHost {
     return false;
   }
 
-  private refreshClaudeUsage(): Promise<void> {
+  /** asked: an agent's provider_usage, which reads even while Claude turns run (still at most once a minute). */
+  private refreshClaudeUsage(asked = false): Promise<void> {
     if (this.usageFetch) return this.usageFetch;
-    this.usageFetch = this.doRefreshClaudeUsage().finally(() => {
+    this.usageFetch = this.doRefreshClaudeUsage(asked).finally(() => {
       this.usageFetch = null;
     });
     return this.usageFetch;
   }
 
-  private async doRefreshClaudeUsage(): Promise<void> {
+  private async doRefreshClaudeUsage(asked: boolean): Promise<void> {
     if (this.closed || this.loggingOut.has("claude")) return;
     if (this.usageTimer) {
       clearTimeout(this.usageTimer);
@@ -1216,7 +1245,7 @@ export class AgentHost {
     }
     const sinceFetch = Date.now() - this.lastUsageFetchAt;
     // Prefer an idle moment, but continuous worker turns must not starve the board's account meter.
-    if (this.claudeTurnRunning() && sinceFetch < 5 * 60_000) {
+    if (!asked && this.claudeTurnRunning() && sinceFetch < 5 * 60_000) {
       this.usageTimer = setTimeout(() => void this.refreshClaudeUsage(), Math.min(30_000, 5 * 60_000 - sinceFetch));
       this.usageTimer.unref?.();
       return;
@@ -5309,7 +5338,7 @@ export class AgentHost {
     if (latency) run.usage = { ...run.usage, latency };
     turn.usage = run.usage;
     if (result.error) turn.error = result.error;
-    if (thread.provider === "cursor") this.refreshCursorUsage();
+    if (thread.provider === "cursor") void this.refreshCursorUsage();
     const plan = this.planProvider(thread);
     if (plan === "codex") void this.refreshCodexUsage();
     if (result.status === "error") {

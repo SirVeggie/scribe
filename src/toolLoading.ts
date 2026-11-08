@@ -20,7 +20,7 @@ export const DEFERRED_TOOLS: ReadonlySet<string> = new Set([
   "plugin_create", "plugin_read", "plugin_patch", "plugin_reload", "plugin_install",
   "browser_open", "browser_act", "browser_snapshot", "browser_screenshot", "browser_eval",
   "browser_console", "browser_network", "browser_viewport", "browser_tabs", "browser_control",
-  "agent_models", "agent_run",
+  "agent_models", "agent_run", "provider_usage",
   "harness_docs", "harness_change",
   "settings_find", "settings_show",
   "thread_list", "thread_read", "thread_access", "thread_worktree",
@@ -30,7 +30,7 @@ export const DEFERRED_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** The deferred scheme and its version, as recorded on turns. */
-export const TOOL_LOADING = "deferred-2";
+export const TOOL_LOADING = "deferred-3";
 
 /** The scheme a provider's turns run with now; undefined: every tool is sent up front (or the provider decides itself). */
 export function toolLoadingFor(provider: string): string | undefined {

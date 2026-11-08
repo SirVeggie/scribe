@@ -2214,6 +2214,25 @@ function registerHelperTools(server: McpServer): void {
   }
 
   server.tool(
+    "provider_usage",
+    "The user's plan usage per provider (claude, codex, cursor; pi: today's pay-per-use API cost), as the usage meters show it: each window's percent used, reset time and pace. Each window also gets its change since this chat's previous call, so call it before and after a piece of work to see what it used. Usage is account-wide: other chats and apps running at the same time count too.",
+    {
+      provider: z.string().optional().describe("Only this provider: claude, codex, cursor or pi."),
+      refresh: z.boolean().optional().describe("Read the providers again first, without a model message (at most once a minute each; Cursor otherwise updates only after its turns). Check at/ageSeconds."),
+    },
+    { readOnlyHint: true },
+    async ({ provider, refresh }, extra) => {
+      try {
+        const { status, data } = await api("POST", "/api/provider-usage", { provider, refresh }, { signal: extra.signal, timeoutMs: 90_000 });
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "provider_usage failed");
+      }
+    }
+  );
+
+  server.tool(
     "agent_models",
     "List the providers and models agent_run can hand a task to. Only for when the user, or this chat's instructions, told you to use a helper agent on another model.",
     {
