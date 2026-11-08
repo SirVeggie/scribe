@@ -1559,6 +1559,7 @@ export async function startMcp(): Promise<void> {
     registerWidget(server);
     registerWebRequest(server);
     registerThreadUpdate(server);
+    registerThreadSchedule(server);
     if (!off.has("threads")) registerThreadTools(server);
     if (!off.has("helpers")) registerHelperTools(server);
     registerMemoryTools(server);
@@ -1895,6 +1896,33 @@ function registerThreadUpdate(server: McpServer): void {
         return errorResult((err as Error).message || "thread_update failed");
       } finally {
         clearInterval(heartbeat);
+      }
+    }
+  );
+}
+
+/**
+ * thread_schedule: the chat sends itself, or a helper it started, a message at a later time (#1064),
+ * such as "update the app after 18:30" while the user is still using it.
+ */
+function registerThreadSchedule(server: McpServer): void {
+  server.tool(
+    "thread_schedule",
+    "Continue this chat thread, or a helper thread you started with agent_run, at a later time: Scribe sends it a message then, as a new turn (or after the turn it is running). Use it when the user asks for something to happen later, e.g. \"update the app after 18:30\": do what you can now, schedule the rest, and end your turn. Times are the machine's local time. A thread has one schedule; a new one replaces it. The user sees it in the chat with buttons to send it early or cancel it. Returns the scheduled time.",
+    {
+      at: z.string().optional().describe("When: a local date-time like 2026-11-08T18:30, or a time of day like 18:30 (the next one). Or use inMinutes."),
+      inMinutes: z.number().optional().describe("When, as minutes from now."),
+      message: z.string().optional().describe("What the thread is told then: the rest of the task, with what it needs to know. Default: go on with the task."),
+      thread: z.string().optional().describe("A helper thread id from agent_run. Default this thread."),
+      cancel: z.boolean().optional().describe("Cancel the thread's schedule instead."),
+    },
+    async (input) => {
+      try {
+        const { status, data } = await api("POST", "/api/thread-schedule", input);
+        if (status >= 400) return errorResult((data as ApiError).error || `HTTP ${status}`);
+        return jsonResult(data);
+      } catch (err) {
+        return errorResult((err as Error).message || "thread_schedule failed");
       }
     }
   );

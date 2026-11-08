@@ -85,7 +85,8 @@ test("optional app instructions are on by default and left out once turned off",
   assert.doesNotMatch(threadInstructions({ ...thread, helperOf: "th_x" } as Thread, {}), /In your first turn/);
   // The workspace move is not optional.
   assert.match(none, /This thread: When the work moves to a folder outside the workspace/);
-  assert.doesNotMatch(threadInstructions({ ...thread, mode: "board", cwd: null } as Thread, { instructionsOff: ["threadTitle"] }), /This thread:/);
+  // With neither, only thread_schedule is left (#1064).
+  assert.match(threadInstructions({ ...thread, mode: "board", cwd: null } as Thread, { instructionsOff: ["threadTitle"] }), /This thread: When the user wants something done later/);
   // Pages with a workspace reads files there (#718).
   const pages = threadInstructions({ ...thread, mode: "board" } as Thread, { instructionsOff: ["threadTitle"] });
   assert.match(pages, /This thread: When you need to read files in a folder outside the workspace/);

@@ -1832,6 +1832,30 @@ export async function startHttp(): Promise<http.Server> {
       .finally(() => res.off("close", onClientGone));
   });
 
+  /** thread_schedule from a Scribe chat's MCP: the chat sends itself or its helper a message later (#1064). */
+  app.post("/api/thread-schedule", (req, res) => {
+    const thread = threadOf(req);
+    if (!thread || !agentHost) {
+      res.status(403).json({ error: "thread_schedule only works in Scribe chat threads." });
+      return;
+    }
+    const body = isPlainObject(req.body) ? req.body : {};
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    try {
+      res.json(
+        agentHost.scheduleOp(thread, {
+          thread: str(body.thread),
+          at: str(body.at),
+          inMinutes: typeof body.inMinutes === "number" ? body.inMinutes : undefined,
+          message: str(body.message),
+          cancel: body.cancel === true,
+        })
+      );
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   /**
    * thread_access, thread_list and thread_read from a Scribe chat's MCP: read other threads in the
    * chat's scopes. Any of them can ask the user first, so the request stays open until answered.

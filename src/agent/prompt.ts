@@ -227,7 +227,9 @@ export function threadInstructions(thread: Thread, scope: ScopeInfo): string {
     : thread.mode === "board"
       ? thread.cwd ? " When you need to read files in a folder outside the workspace, ask to make it this thread's workspace with thread_update (workspace); the change applies when your turn ends, so end the turn after the call." : ""
       : " When the work moves to a folder outside the workspace for more than a file or two, ask to move the workspace there with thread_update (workspace) instead of having each file access approved; the change applies when your turn ends, so end the turn after the call.";
-  if (rename || move) lines.push(`This thread:${rename}${move}`);
+  // Deferred tools show by name only, so say when thread_schedule is the one to load (#1064).
+  const later = thread.helperOf ? "" : " When the user wants something done later (\"after 18:30\", \"tomorrow morning\"), do what you can now, schedule the rest with thread_schedule and end your turn.";
+  if (rename || move || later) lines.push(`This thread:${rename}${move}${later}`);
   lines.push(
     "Other threads: thread_list and thread_read search and read other Scribe chat threads in this thread's workspace and page or folder (any thread for a global thread), such as earlier work on the same task and the commands it ran. thread_list with everywhere also finds threads elsewhere, showing only their titles; thread_access with thread asks to read one. The user is asked to allow it first; thread_access says why. Threads the user tags with # in a chat message are already granted read access individually, including outside those scopes. thread_worktree merges, leaves or discards a readable thread's worktree, once the user allows it in the chat."
   );

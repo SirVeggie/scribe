@@ -1038,6 +1038,17 @@ export function agentRouter(host: AgentHost): express.Router {
     })
   );
 
+  /** The schedule banner (#1064): continue: true sends the scheduled message now; otherwise it is cancelled. */
+  router.post(
+    "/threads/:id/schedule",
+    wrap((req) => {
+      const body = isPlainRecord(req.body) ? req.body : {};
+      host.interact(req.params.id);
+      host.resolveSchedule(req.params.id, body.continue === true);
+      return { ok: true };
+    })
+  );
+
   router.get(
     "/git",
     wrap(async (req) => {

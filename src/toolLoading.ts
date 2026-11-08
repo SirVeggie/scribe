@@ -26,11 +26,11 @@ export const DEFERRED_TOOLS: ReadonlySet<string> = new Set([
   "thread_list", "thread_read", "thread_access", "thread_worktree",
   "memory_list", "memory_delete", "protect", "vault_list", "vault_show", "detector_propose",
   "page_screenshot", "page_pin", "page_unpin", "page_access", "page_wait",
-  "device_list", "web_request", "widget_show", "scribe_docs",
+  "device_list", "web_request", "widget_show", "scribe_docs", "thread_schedule",
 ]);
 
 /** The deferred scheme and its version, as recorded on turns. */
-export const TOOL_LOADING = "deferred-1";
+export const TOOL_LOADING = "deferred-2";
 
 /** The scheme a provider's turns run with now; undefined: every tool is sent up front (or the provider decides itself). */
 export function toolLoadingFor(provider: string): string | undefined {

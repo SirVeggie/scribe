@@ -3689,6 +3689,7 @@
       this.renderTranscript();
       this.renderHelperDock();
       this.renderTaskDock();
+      this.renderScheduleDock();
       this.renderComposerBar();
       this.renderContext();
     }
@@ -3698,6 +3699,7 @@
       this.renderHeader();
       this.renderHelperDock();
       this.renderTaskDock();
+      this.renderScheduleDock();
       this.renderComposerBar();
       this.renderContext();
     }
@@ -5090,6 +5092,38 @@
       }
     }
 
+    /** The thread's scheduled continuation (#1064): when, its message, and Continue now / Cancel. */
+    renderScheduleDock() {
+      const box = this.scheduleDock;
+      if (!box) return;
+      const s = this.thread()?.scheduled;
+      const key = s ? JSON.stringify([this.threadId, s.at, s.message || ""]) : "";
+      if (key === this.scheduleDockKey) return;
+      this.scheduleDockKey = key;
+      box.replaceChildren();
+      box.hidden = !s;
+      if (!s) return;
+      const threadId = this.threadId;
+      const item = el("div", "ag-helper-item");
+      const row = el("div", "ag-helper-row ag-schedule-row");
+      const step = el("span", "ag-helper-step", s.message || "Goes on with the task");
+      if (s.message) step.dataset.tooltip = s.message;
+      row.append(icon("clock"), el("span", "ag-helper-name", `Continues ${scheduleTime(s.at)}`), step);
+      const btns = el("span", "ag-act-btns");
+      const answer = (go) => async () => {
+        for (const b of btns.querySelectorAll("button")) b.disabled = true;
+        try {
+          await api("POST", `/threads/${encodeURIComponent(threadId)}/schedule`, { continue: go });
+        } catch (err) {
+          notice(err.message);
+          for (const b of btns.querySelectorAll("button")) b.disabled = false;
+        }
+      };
+      btns.append(button("Continue now", "ag-btn tiny primary", answer(true)), button("Cancel", "ag-btn tiny", answer(false)));
+      item.append(row, btns);
+      box.append(item);
+    }
+
     /** A Scribe page write's head: what it did, and the page as a chip that opens it. */
     pageToolLabel(page) {
       const parts = [];
@@ -5658,6 +5692,7 @@
         this.renderComposerBar();
         if (prev && prev.cwd !== thread.cwd) this.renderHeader();
       }
+      if (prev?.scheduled?.at !== thread.scheduled?.at || prev?.scheduled?.message !== thread.scheduled?.message) this.renderScheduleDock();
       // Status can change without a turn event; keep the current-step dot orange or green to match.
       if (prev && prev.status !== thread.status) this.markLatest();
       if (thread.unread && this.visible()) api("POST", `/threads/${encodeURIComponent(thread.id)}/read`).catch(() => undefined);
@@ -5959,10 +5994,13 @@
       // Running plugin tasks this thread started.
       this.taskDock = el("div", "ag-helpers ag-tasks");
       this.taskDock.hidden = true;
+      // A continuation the agent scheduled with thread_schedule (#1064).
+      this.scheduleDock = el("div", "ag-helpers ag-schedule");
+      this.scheduleDock.hidden = true;
       this.dictationLive = el("div", "ag-dictation-live");
       this.dictationLive.hidden = true;
       this.dictationLive.setAttribute("aria-live", "polite");
-      box.append(this.slash, this.helperApprovals, this.helperDock, this.taskDock, this.forkNote, this.protectNote, this.dictationLive, this.ctxRow);
+      box.append(this.slash, this.helperApprovals, this.helperDock, this.taskDock, this.scheduleDock, this.forkNote, this.protectNote, this.dictationLive, this.ctxRow);
       if (this.floating) {
         box.append(this.inputWrap);
       } else {
@@ -10032,6 +10070,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
   function waitingAsk(t) {
     if (!t.asking) return null;
     return t.status === "waiting" || (t.asking.kind === "limit" && t.status === "idle") ? t.asking : null;
+  }
+
+  /** A scheduled time: the time today, "Tomorrow 18:30", or the date and time. */
+  function scheduleTime(ms) {
+    const d = new Date(ms);
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const day = new Date();
+    if (d.toDateString() === day.toDateString()) return `at ${time}`;
+    day.setDate(day.getDate() + 1);
+    if (d.toDateString() === day.toDateString()) return `tomorrow at ${time}`;
+    const date = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", ...(d.getFullYear() === day.getFullYear() ? {} : { year: "numeric" }) });
+    return `${date}, ${time}`;
   }
 
   /** Continue after reset / Dismiss for a usage limit card, in the transcript, a toast or the flyout. */

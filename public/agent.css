@@ -2828,6 +2828,24 @@ textarea.ag-q-input {
   background: transparent;
 }
 
+/* A scheduled continuation (#1064): when, its message, Continue now and Cancel. */
+.ag-schedule-row {
+  cursor: default;
+}
+
+.ag-schedule-row:hover {
+  background: transparent;
+}
+
+.ag-schedule-row .ag-ico {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.ag-schedule .ag-act-btns {
+  padding-right: 2px;
+}
+
 /* The floating chat's input is one rounded row: the strip sits flush on top of the text. */
 .dock-input .ag-helpers {
   padding: 0 0 3px;

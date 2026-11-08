@@ -272,7 +272,12 @@ export type Thread = {
   hooksOff?: boolean;
   /** Scribe skills picked for this thread (scribeSkills.ts ids), on top of the ones enabled for every chat. A worker's picks are copied here. */
   skills?: string[];
+  /** A message Scribe sends this thread later (thread_schedule, #1064); the chat shows it in a banner until then. */
+  scheduled?: ThreadSchedule;
 };
+
+/** setAt: when it was scheduled. by: the thread that scheduled it, when another one (a helper's caller). */
+export type ThreadSchedule = { at: number; message?: string; setAt: number; by?: string };
 
 /** at: when the user last changed it. A draft with content counts for the Recent thread lists until it is sent or emptied. */
 export type ComposerDraft = { text: string; context?: ContextChip[]; at?: number };

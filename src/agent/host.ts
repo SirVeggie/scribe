@@ -70,6 +70,7 @@ import { ClaudeAccountPool, SWITCHED_ACCOUNT_PROMPT, mergeClaudeLimits, type Acc
 import { DEFAULT_ACCOUNT } from "./claudeAccounts.js";
 import { isPlainRecord, type ApiBalance, type ApiSpend } from "./types.js";
 import { fetchDeepSeekBalance, localDay, nativeApi, todaysSpend } from "./apiSpend.js";
+import { MAX_SCHEDULE_MESSAGE, localStamp, schedulePrompt, scheduleTime } from "./schedule.js";
 import { DEFAULT_RESUME_PROMPT, PageRuns, RESUME_DELAY_MS, runView, type PageRun, type RunInput } from "./pageRuns.js";
 import { claudeOwnServers, mergedServers, readMcpFile, resolveServer, serverModes, serversForThread, threadWorkspace, writeMcpFile } from "./mcpConfig.js";
 import { McpPermissions } from "./mcpPermissions.js";
@@ -110,6 +111,7 @@ import type {
   SlashCommand,
   Thread,
   ThreadMode,
+  ThreadSchedule,
   ThreadScope,
   ThreadView,
   ThreadWorktree,
@@ -848,6 +850,7 @@ export class AgentHost {
     this.pageRunTimer = setInterval(() => {
       this.pageRuns.tick();
       this.checkLimitResumes();
+      this.checkSchedules();
     }, 30_000);
     this.pageRunTimer.unref?.();
     this.scheduleClaudeUsageRefresh();
@@ -4004,6 +4007,71 @@ export class AgentHost {
     }
     if (opts.workspace) out.workspace = await this.requestWorkspace(threadId, opts.workspace, opts);
     return out;
+  }
+
+  /**
+   * thread_schedule from the thread's MCP (#1064): the agent sends itself, or a helper it started, a
+   * message at a later time. A thread keeps one schedule; a new one replaces it.
+   */
+  scheduleOp(callerId: string, opts: { thread?: string; at?: string; inMinutes?: number; message?: string; cancel?: boolean }): { thread: string; message: string; at?: string } {
+    const caller = this.threads.get(callerId);
+    if (!caller) throw new Error("thread_schedule only works in Scribe chat threads.");
+    const targetId = opts.thread?.trim() || callerId;
+    const target = this.threads.get(targetId);
+    if (!target || (target.id !== callerId && target.helperOf !== callerId)) throw new Error("thread must be this thread or a helper you started with agent_run.");
+    const self = target.id === callerId;
+    if (opts.cancel) {
+      if (!target.scheduled) return { thread: target.id, message: "Nothing was scheduled." };
+      this.setSchedule(target.id, undefined);
+      return { thread: target.id, message: "Cancelled the scheduled continuation." };
+    }
+    const at = scheduleTime(opts);
+    const message = opts.message?.trim().slice(0, MAX_SCHEDULE_MESSAGE) || undefined;
+    const replaced = Boolean(target.scheduled);
+    this.setSchedule(target.id, { at, setAt: Date.now(), ...(message ? { message } : {}), ...(self ? {} : { by: callerId }) });
+    const stamp = localStamp(at);
+    const next = self
+      ? "Finish what you can do now and end your turn; if this turn is still running then, the message waits until it ends."
+      : "The helper gets it then, or after the turn it is running ends.";
+    return { thread: target.id, at: stamp, message: `${replaced ? "Replaced the earlier schedule. " : ""}Scheduled for ${stamp} (local time). ${next} The user sees it in the chat and can send it early or cancel it.` };
+  }
+
+  private setSchedule(threadId: string, schedule: ThreadSchedule | undefined): void {
+    const thread = this.requireThread(threadId);
+    if (schedule) thread.scheduled = schedule;
+    else delete thread.scheduled;
+    this.db.saveThread(thread);
+    this.emitThread(threadId);
+  }
+
+  /** The schedule banner's buttons: send the scheduled message now, or drop it. */
+  resolveSchedule(threadId: string, go: boolean): void {
+    const thread = this.requireThread(threadId);
+    const schedule = thread.scheduled;
+    if (!schedule) throw new Error("Nothing is scheduled in this thread.");
+    if (go) this.fireSchedule(threadId, true);
+    else this.setSchedule(threadId, undefined);
+  }
+
+  /** Send a scheduled continuation: queued behind a running turn, like any message. */
+  private fireSchedule(threadId: string, early = false): void {
+    const schedule = this.threads.get(threadId)?.scheduled;
+    if (!schedule) return;
+    this.setSchedule(threadId, undefined);
+    try {
+      this.send(threadId, { text: schedulePrompt(schedule, Date.now(), early), from: "scribe" });
+    } catch (err) {
+      this.addItem(threadId, null, { kind: "notice", level: "error", text: `Could not send the scheduled continuation: ${(err as Error).message}` });
+      if (early) throw err;
+    }
+  }
+
+  /** Send the continuations that have come due (#1064). Archived threads keep theirs until they are restored. */
+  private checkSchedules(): void {
+    const now = Date.now();
+    for (const thread of [...this.threads.values()]) {
+      if (thread.scheduled && thread.scheduled.at <= now && !thread.archived) this.fireSchedule(thread.id);
+    }
   }
 
   /**
