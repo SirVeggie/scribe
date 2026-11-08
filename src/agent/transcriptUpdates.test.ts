@@ -451,3 +451,36 @@ test("tool steps read for the user: unwrapped shell commands, Scribe tool verbs,
     await browser.close();
   }
 });
+
+test("a scheduled continuation shows above the composer with Continue now and Cancel (#1064)", async () => {
+  const { browser, page, errors } = await chatPage();
+  try {
+    const posted: unknown[] = [];
+    await page.route("**/api/agent/threads/t/schedule", async (route) => {
+      posted.push(route.request().postDataJSON());
+      await route.fulfill({ contentType: "application/json", body: "{}" });
+    });
+    const at = Date.now() + 60 * 60_000;
+    const shown = await page.evaluate(async ({ base, at }) => {
+      const w = window as any;
+      const scheduled = { at, setAt: 1, message: "Rebuild and restart the app." };
+      w.T.open({ ...base.thread, status: "idle", scheduled }, base.items.slice(0, 1), [base.turn]);
+      w.T.view.renderChrome();
+      await w.T.frame();
+      const dock = () => document.querySelector(".ag-schedule") as HTMLElement;
+      const before = { hidden: dock().hidden, text: dock().textContent };
+      (Array.from(dock().querySelectorAll("button")).find((b) => b.textContent === "Continue now") as HTMLElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      w.T.onEvent({ type: "agent_thread", thread: { ...base.thread, status: "idle" } });
+      await w.T.frame();
+      return { before, after: dock().hidden };
+    }, { base: { thread, items, turn }, at });
+    assert.equal(shown.before.hidden, false);
+    assert.match(shown.before.text!, /^Continues (at|tomorrow at) .*Rebuild and restart the app\.Continue nowCancel$/);
+    assert.deepEqual(posted, [{ continue: true }]);
+    assert.equal(shown.after, true);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});

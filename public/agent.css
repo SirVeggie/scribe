@@ -2830,6 +2830,8 @@ textarea.ag-q-input {
 
 /* A scheduled continuation (#1064): when, its message, Continue now and Cancel. */
 .ag-schedule-row {
+  display: flex;
+  align-items: center;
   cursor: default;
 }
 

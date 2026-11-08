@@ -7700,6 +7700,7 @@
   /** Scribe's own tools as a verb and what it acts on, for the step head: [verb, target]. */
   const SCRIBE_TOOL_LABELS = {
     thread_update: (i) => (typeof i.title === "string" && i.title.trim() ? ["Rename thread", i.title] : i.workspace ? ["Move workspace", i.workspace] : ["Update thread"]),
+    thread_schedule: (i) => (i.cancel ? ["Cancel schedule"] : ["Schedule continuation", typeof i.inMinutes === "number" ? `in ${i.inMinutes} min` : firstText(i, "at")]),
     thread_list: (i) => ["Find threads", firstText(i, "query", "q")],
     thread_read: (i) => ["Read thread", firstText(i, "thread", "id")],
     thread_access: (i) => ["Ask to read thread", firstText(i, "thread", "id")],
