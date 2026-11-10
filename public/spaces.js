@@ -590,6 +590,7 @@ window.createSpaces = function createSpaces(host) {
     add.innerHTML = `${ICONS.plus}<span>New space</span>`;
     add.addEventListener("click", () => void createSpace());
     grid.append(add);
+    fitNewButton();
     renderDeleted();
     const input = grid.querySelector(".space-rename");
     if (input) {
@@ -597,6 +598,16 @@ window.createSpaces = function createSpaces(host) {
       input.select();
     }
   }
+
+  /** New space alone on a row is a thin bar across the row above, not a full empty card (#1077). */
+  function fitNewButton() {
+    const add = grid.querySelector(".space-new");
+    if (!add || !grid.offsetWidth) return;
+    const columns = getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length;
+    const count = data.spaces.length;
+    add.classList.toggle("wide", columns > 0 && count > 0 && count % columns === 0);
+  }
+  new ResizeObserver(() => fitNewButton()).observe(grid);
 
   function card(space, index) {
     const item = el("div", "space-card");
@@ -667,6 +678,13 @@ window.createSpaces = function createSpaces(host) {
     }
 
     item.addEventListener("pointerdown", (event) => startDrag(event, item, space));
+    // Right-click opens the ⋯ menu at the pointer (#1077).
+    item.addEventListener("contextmenu", (event) => {
+      if (renaming === space.id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openMenu(space, more, { x: event.clientX, y: event.clientY });
+    });
     item.addEventListener("click", () => {
       void switchTo(space.id);
     });
@@ -749,7 +767,8 @@ window.createSpaces = function createSpaces(host) {
 
   /* ---------- menu ---------- */
 
-  function openMenu(space, anchor) {
+  /** The space's menu, under its ⋯ button, or at point { x, y } for a right-click. */
+  function openMenu(space, anchor, point) {
     closeMenu();
     const box = el("div", "space-menu");
     box.setAttribute("role", "menu");
@@ -789,10 +808,15 @@ window.createSpaces = function createSpaces(host) {
     }
     box.addEventListener("pointerdown", (event) => event.stopPropagation());
     root.append(box);
-    const rect = anchor.getBoundingClientRect();
     const width = box.offsetWidth;
-    box.style.left = `${Math.max(8, Math.min(rect.right - width, innerWidth - width - 8))}px`;
-    box.style.top = `${Math.min(rect.bottom + 6, innerHeight - box.offsetHeight - 8)}px`;
+    if (point) {
+      box.style.left = `${Math.max(8, Math.min(point.x, innerWidth - width - 8))}px`;
+      box.style.top = `${Math.max(8, Math.min(point.y, innerHeight - box.offsetHeight - 8))}px`;
+    } else {
+      const rect = anchor.getBoundingClientRect();
+      box.style.left = `${Math.max(8, Math.min(rect.right - width, innerWidth - width - 8))}px`;
+      box.style.top = `${Math.min(rect.bottom + 6, innerHeight - box.offsetHeight - 8)}px`;
+    }
     menu = { el: box };
   }
 

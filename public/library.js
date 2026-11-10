@@ -459,7 +459,7 @@ window.createLibrary = function createLibrary(host) {
   function openHomeFolderPicker(space) {
     model = buildModel();
     const dialog = document.createElement("dialog");
-    dialog.className = "confirm";
+    dialog.className = "confirm cleanup";
     dialog.setAttribute("aria-labelledby", "home-folder-title");
     const form = document.createElement("form");
     const title = document.createElement("h2");
@@ -477,7 +477,10 @@ window.createLibrary = function createLibrary(host) {
     save.className = "primary";
     save.textContent = "Save";
     actions.append(cancel, save);
-    form.append(title, select, actions);
+    const field = document.createElement("div");
+    field.className = "cleanup-fields";
+    field.append(select);
+    form.append(title, field, actions);
     dialog.append(form);
     document.body.append(dialog);
     window.createSelect?.(select);
