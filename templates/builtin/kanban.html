@@ -1393,6 +1393,9 @@
 
   // ---------- elements ----------
   function $(id) { return document.getElementById(id); }
+  // Whether the last press was a finger tap: pickers then open without focusing their search box, so no keyboard pops up.
+  var touchTap = false;
+  document.addEventListener("pointerdown", function (e) { touchTap = e.pointerType === "touch"; }, true);
   var boardEl = $("board"), metaEl = $("meta");
   var searchEl = $("search"), fLabel = $("fLabel"), fPriority = $("fPriority"), fAssignee = $("fAssignee"), fDue = $("fDue");
   var clearFilterBtn = $("clearFilter"), labelsBtn = $("labelsBtn"), archiveBtn = $("archiveBtn");
@@ -2040,7 +2043,7 @@
       btn.setAttribute("aria-expanded", "true");
       place();
       openSelect = api;
-      if (searchable) setTimeout(function () {
+      if (searchable && !touchTap) setTimeout(function () {
         var inp = list && list.querySelector("input");
         if (inp) {
           inp.focus();
@@ -4235,9 +4238,15 @@
     follow: function () { if (assigneeList) placeAssigneeList(); },
     contains: function (t) { return t === mAssignee || (assigneeList && assigneeList.contains(t)); }
   };
+  // A tap opens the list without the keyboard; a second tap on the focused field brings the keyboard up to type a name.
+  mAssignee.addEventListener("pointerdown", function (e) {
+    if (e.pointerType !== "touch") return;
+    mAssignee.inputMode = document.activeElement === mAssignee ? "" : "none";
+  });
   mAssignee.addEventListener("focus", function () { assigneeActive = 0; renderAssigneeList(); });
   mAssignee.addEventListener("input", function () { assigneeActive = 0; renderAssigneeList(); });
   mAssignee.addEventListener("blur", function () {
+    mAssignee.inputMode = "";
     closeAssigneeList();
     commitAssignee(mAssignee.value);
   });
@@ -4372,7 +4381,7 @@
         }
       });
       build();
-      setTimeout(function () { input.focus(); }, 0);
+      if (!touchTap) setTimeout(function () { input.focus(); }, 0);
     }, true);
     anchor.classList.add("open");
   }
