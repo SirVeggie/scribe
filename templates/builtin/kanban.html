@@ -3640,10 +3640,12 @@
   }
   function formatPrompt(text) {
     return [
-      "Reformat this Kanban card description into clean, readable Markdown.",
-      "Keep all of its content and the author's own wording: do not reword, add, drop, summarise or answer anything.",
-      "Split long runs of text into paragraphs, and use lists, short headings, bold, or inline code only where the text already has that structure (steps, options, file names, commands).",
-      "Keep existing Markdown, links, image references like ![x](#img-…), card references like #12, and [[…]] links exactly as they are.",
+      "Rewrite this Kanban card description as a clean, compact Markdown task description.",
+      "It is often dictated by voice, so it may ramble, repeat itself, break sentences in odd places, or contain filler and transcription slips.",
+      "Keep every detail, requirement, example, name, number and constraint the author gave, and keep their intent and tone; do not add new ideas, decide open questions, or answer anything.",
+      "Within that, restructure freely: reword and merge sentences, drop filler and repetition, fix obvious transcription errors, and group related points.",
+      "Make it as short as it can be while staying complete: a one-line summary first, then short sections with headings (e.g. Problem, Wanted, Details) or bullet lists where they help. A short note can stay a short paragraph.",
+      "Keep existing Markdown, links, code, file names, image references like ![x](#img-…), card references like #12, and [[…]] links exactly as they are.",
       "Reply with the formatted Markdown only: no code fence around it, no comments.",
       "",
       "Description:",
