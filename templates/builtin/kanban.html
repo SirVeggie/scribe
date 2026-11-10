@@ -591,6 +591,21 @@
   .desc-note { color: var(--muted); font-size: 12px; font-weight: 400; }
   .desc-note.error { color: var(--danger); }
   .desc-format { padding: 2px 8px; font-size: 12px; }
+  /* Voice input (#1070): a mic beside the description label and the Comment button. */
+  .dictate { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .dictate.hidden { display: none; }
+  .dictate svg { width: 14px; height: 14px; }
+  .section-label .dictate { margin-left: auto; padding: 2px 6px; }
+  .desc-tools:not(.hidden) + .dictate { margin-left: 4px; }
+  .dictate[data-state="recording"] { color: var(--danger); box-shadow: 0 0 0 calc(1px + var(--mic-level, 0) * 4px) currentColor; }
+  .dictate[data-state="transcribing"] svg { animation: dictate-pulse 1s ease-in-out infinite alternate; }
+  .dictate:disabled { cursor: default; }
+  .dictate-status:empty { display: none; }
+  @keyframes dictate-pulse { to { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .dictate[data-state="transcribing"] svg { animation: none; opacity: .5; } }
+  .dictation-live { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; max-height: 4.2em; overflow: hidden; display: flex; flex-direction: column-reverse; }
+  .dictation-live.hidden { display: none; }
+  .comment-actions { display: flex; align-items: center; gap: 6px; }
   .cover-toggle .switch {
     width: 28px;
     height: 16px;
@@ -1152,9 +1167,10 @@
       <div class="m-feed hidden" id="mFeed" aria-live="polite"></div>
       <div class="m-grid">
         <div>
-          <div class="section-label">Description <span class="desc-tools hidden" id="descTools"><span class="desc-note" id="descNote"></span><button class="ghost desc-format" id="descFormat" type="button">Format</button></span></div>
+          <div class="section-label">Description <span class="desc-tools hidden" id="descTools"><span class="desc-note" id="descNote"></span><button class="ghost desc-format" id="descFormat" type="button">Format</button></span><button class="ghost dictate hidden" id="descMic" type="button"></button></div>
           <div class="md-preview" id="mdPreview" tabindex="0" role="textbox" aria-multiline="true" aria-label="Description"></div>
           <textarea class="md-editor hidden" id="mdEditor" aria-label="Description" placeholder="Markdown. Paste an image to embed it. Ctrl+Enter saves."></textarea>
+          <div class="dictation-live hidden" id="descLive" aria-live="polite"></div>
 
           <div class="section-label">Checklist <span class="progress" id="clProgress"><i></i></span><span id="clCount"></span></div>
           <ul class="checklist" id="checklist"></ul>
@@ -1169,7 +1185,8 @@
           <div class="comments" id="comments"></div>
           <div class="inline-add" style="flex-direction:column">
             <textarea class="field comment-box" id="commentBox" placeholder="Write a comment. Paste an image to embed it. Ctrl+Enter posts."></textarea>
-            <div><button class="primary" id="commentPost" type="button">Comment</button></div>
+            <div class="dictation-live hidden" id="commentLive" aria-live="polite"></div>
+            <div class="comment-actions"><button class="primary" id="commentPost" type="button">Comment</button><button class="ghost dictate hidden" id="commentMic" type="button"></button></div>
           </div>
         </div>
         <div class="side">
@@ -3172,6 +3189,7 @@
   });
 
   function openCard(id) {
+    cancelDictation();
     flushCardEditors();
     closeMenu();
     composerCol = null;
@@ -3184,11 +3202,13 @@
     var c = card(id);
     if (c && hasUnread(c)) updateCard(id, function (x) { x.seenAt = Date.now(); return x; });
     renderModal();
+    refreshDictation();
     resizeCardEditor(commentBox);
     // Enter the dialog without highlighting an editable control before Tab is pressed.
     modal.focus({ preventScroll: true });
   }
   function closeCard() {
+    cancelDictation();
     flushCardEditors();
     if (editingDesc) saveDescription();
     if (editingTitle) saveTitle();
@@ -3255,6 +3275,7 @@
     });
 
     renderDescTools(c);
+    paintMics();
 
     region(checklistEl, [c.id, c.checklist, editingCheck], function () { buildModalChecklist(c); });
 
@@ -3944,6 +3965,147 @@
     row.appendChild(skip);
     return row;
   }
+  // ---------- Voice input (#1070) ----------
+  // The mics dictate into the description or the comment box through scribe.audio.listen, like the
+  // chat's: click to start and stop, hold Ctrl+Shift+Space in the field to talk, Esc cancels.
+  var MIC_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2M5.5 14.5h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  var DICTATION_ERRORS = { denied: "Microphone access was not allowed.", no_mic: "No microphone was found.",
+    no_source: "Choose a speech-to-text source in Scribe's Settings → Audio.", busy: "The microphone is already recording.",
+    unavailable: "Voice input is not available here.", timeout: "The microphone did not open in time." };
+  var mics = { description: $("descMic"), comment: $("commentMic") };
+  var micLive = { description: $("descLive"), comment: $("commentLive") };
+  /** { field, cardId, state, session, epoch, started, level, held, stopPending } while dictating. */
+  var dictation = null, dictationEpoch = 0, dictationTimer = null, sttReady = false;
+  Object.keys(mics).forEach(function (field) {
+    mics[field].innerHTML = MIC_ICON + '<span class="dictate-status"></span>';
+    // Keep the description editor focused, so clicking the mic does not close it.
+    mics[field].addEventListener("mousedown", function (e) { e.preventDefault(); });
+    mics[field].addEventListener("click", function () { toggleDictation(field); });
+  });
+  function audioApi() { return scribe.audio && typeof scribe.audio.listen === "function" ? scribe.audio : null; }
+  function refreshDictation() {
+    var api = audioApi();
+    if (!api || typeof api.available !== "function") return paintMics();
+    api.available().then(function (a) { sttReady = Boolean(a && a.mic && a.stt); paintMics(); }, function () {});
+  }
+  function paintMics() {
+    if (!mics) return;
+    var c = openId && card(openId);
+    Object.keys(mics).forEach(function (field) {
+      var b = mics[field], mine = dictation && dictation.field === field, state = mine ? dictation.state : "idle";
+      b.classList.toggle("hidden", !mine && Boolean(!sttReady || !c || c.archived));
+      var label = state === "recording" ? "Stop dictation (Esc cancels)" : state === "transcribing" ? "Transcribing…"
+        : state === "starting" ? "Opening microphone…" : "Dictate (Ctrl+Shift+Space)";
+      b.dataset.state = state;
+      b.setAttribute("data-tooltip", label);
+      b.setAttribute("aria-label", label);
+      b.setAttribute("aria-pressed", String(state === "recording"));
+      b.disabled = state === "starting" || state === "transcribing" || Boolean(dictation && !mine);
+      b.style.setProperty("--mic-level", mine ? dictation.level : 0);
+      b.querySelector(".dictate-status").textContent = state === "recording" ? Math.floor((Date.now() - dictation.started) / 1000) + "s" : "";
+    });
+  }
+  function showLive(field, text) {
+    var box = micLive[field];
+    box.textContent = text || "";
+    box.classList.toggle("hidden", !text);
+  }
+  function endDictation() {
+    if (dictation) showLive(dictation.field, "");
+    clearInterval(dictationTimer);
+    dictationTimer = null;
+    dictation = null;
+    paintMics();
+  }
+  function cancelDictation() {
+    if (!dictation) return;
+    dictationEpoch++;
+    var session = dictation.session;
+    endDictation();
+    if (session) session.cancel();
+  }
+  function stopDictation() {
+    if (!dictation) return;
+    if (dictation.state === "starting") { dictation.stopPending = true; return; }
+    if (dictation.state === "recording" && dictation.session) dictation.session.stop().then(finishDictation(dictationEpoch));
+  }
+  function toggleDictation(field, held) {
+    if (dictation) { if (dictation.field === field && dictation.state === "recording") stopDictation(); return; }
+    var api = audioApi();
+    if (!api || !openId) return;
+    var epoch = ++dictationEpoch;
+    dictation = { field: field, cardId: openId, state: "starting", session: null, started: Date.now(), level: 0, held: Boolean(held), stopPending: false };
+    paintMics();
+    dictationTimer = setInterval(paintMics, 250);
+    // listen needs this click or key press as its gesture, so nothing awaits before it.
+    api.listen().then(function (session) {
+      if (epoch !== dictationEpoch) { if (session && session.ok) session.cancel(); return; }
+      if (!session || !session.ok) { endDictation(); return dictationFailed(session); }
+      dictation.session = session;
+      dictation.state = "recording";
+      dictation.started = Date.now();
+      session.onlevel = function (v) { if (epoch === dictationEpoch) dictation.level = v; };
+      session.ontext = function (text) { if (epoch === dictationEpoch) showLive(field, text); };
+      session.onstate = function (state) {
+        if (epoch !== dictationEpoch) return;
+        if (state === "transcribing") { dictation.state = "transcribing"; paintMics(); }
+      };
+      paintMics();
+      if (dictation.stopPending) stopDictation();
+    }, function () { if (epoch === dictationEpoch) { endDictation(); dictationFailed({ error: "unavailable" }); } });
+  }
+  function dictationFailed(result) {
+    var error = result && result.error;
+    if (error === "cancelled" || error === "hidden" || error === "no_gesture") return;
+    if (error === "no_source") { sttReady = false; paintMics(); }
+    setHint((result && result.message) || DICTATION_ERRORS[error] || "Dictation failed" + (error ? " (" + error + ")." : "."), true);
+  }
+  function finishDictation(epoch) {
+    return function (result) {
+      if (epoch !== dictationEpoch || !dictation) return;
+      var field = dictation.field, cardId = dictation.cardId;
+      endDictation();
+      if (!result || !result.ok) return dictationFailed(result);
+      if (openId !== cardId) return;
+      insertDictation(field, str(result.text));
+    };
+  }
+  /** Puts the transcript at the caret, with a space on either side where words would run together. */
+  function insertDictation(field, transcript) {
+    var text = transcript.trim();
+    if (!text) return;
+    var editor = field === "description" ? mdEditor : commentBox;
+    if (field === "description" && !editingDesc) {
+      startEditDesc();
+      mdEditor.selectionStart = mdEditor.selectionEnd = mdEditor.value.length;
+    }
+    var start = editor.selectionStart || 0, end = editor.selectionEnd || 0;
+    var before = editor.value.slice(0, start), after = editor.value.slice(end);
+    var left = before && !/[\s([{]$/.test(before) && !/^[,.;:!?)}\]]/.test(text) ? " " : "";
+    var right = after && !/^[\s,.;:!?)}\]]/.test(after) && !/[\s([{]$/.test(text) ? " " : "";
+    editor.value = before + left + text + right + after;
+    var caret = before.length + left.length + text.length + right.length;
+    editor.focus();
+    editor.setSelectionRange(caret, caret);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  [[mdEditor, "description"], [commentBox, "comment"]].forEach(function (pair) {
+    pair[0].addEventListener("keydown", function (e) {
+      if (e.code !== "Space" || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat && !dictation && sttReady) toggleDictation(pair[1], true);
+    });
+  });
+  window.addEventListener("keyup", function (e) {
+    if (dictation && dictation.held && (e.code === "Space" || e.key === "Control" || e.key === "Shift")) { dictation.held = false; stopDictation(); }
+  }, true);
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && dictation) { e.preventDefault(); e.stopImmediatePropagation(); cancelDictation(); }
+  }, true);
+  window.addEventListener("blur", function () { if (dictation && dictation.held) cancelDictation(); });
+  refreshDictation();
+
   $("commentPost").addEventListener("click", postComment);
   commentBox.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); postComment(); }
