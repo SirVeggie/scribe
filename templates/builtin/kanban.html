@@ -335,7 +335,8 @@
     box-shadow: var(--depth);
     cursor: pointer;
     user-select: none;
-    touch-action: none;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
     border-left: 3px solid transparent;
   }
   .card:hover { box-shadow: var(--depth-hover); }

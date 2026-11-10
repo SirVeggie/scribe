@@ -1,7 +1,8 @@
 /* Shared by the shell and the page bridge. Geometry belongs to a drag, not a pointer event. */
 (() => {
   const style = document.createElement("style");
-  style.textContent = "body.pointer-shield { user-select: none; } body.pointer-shield iframe { pointer-events: none; }";
+  // No blue flash on touch taps (inherited, so pages and the shell both get it).
+  style.textContent = "html { -webkit-tap-highlight-color: transparent; } body.pointer-shield { user-select: none; } body.pointer-shield iframe { pointer-events: none; }";
   document.head.appendChild(style);
   let current = null;
   let suppress = false;
@@ -26,12 +27,57 @@
     event.stopImmediatePropagation();
   }, true);
 
+  // A touch tap whose own handlers change what lies under the finger (a dialog opens, a
+  // backdrop closes, a menu appears) must not deliver its follow-up mouse events and click
+  // to the new element. Those come after pointerup, so the change has happened by then.
+  let tap = null;
+  window.addEventListener("pointerdown", (event) => {
+    tap = event.pointerType === "touch" && event.isPrimary
+      ? { x: event.clientX, y: event.clientY, target: event.target, up: 0, swallow: null } : null;
+  }, true);
+  window.addEventListener("pointerup", (event) => {
+    if (tap && event.pointerType === "touch" && event.isPrimary) tap.up = Date.now();
+  }, true);
+  for (const type of ["mousedown", "mouseup", "click"]) {
+    window.addEventListener(type, (event) => {
+      if (!tap?.up || Date.now() - tap.up > 1000) return;
+      if (tap.swallow === null) {
+        const hit = document.elementFromPoint(tap.x, tap.y);
+        tap.swallow = Boolean(hit) && !sameTarget(tap.target, hit);
+      }
+      if (type === "click") setTimeout(() => { tap = null; }, 0);
+      if (!tap.swallow) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  }
+  function sameTarget(was, hit) {
+    if (was === hit || (was.contains?.(hit) && was.isConnected) || hit.contains?.(was)) return true;
+    // A re-render that swapped in an equivalent node keeps its click.
+    return !was.isConnected && was.tagName === hit.tagName && was.className === hit.className;
+  }
+  // Browsers scroll on a touch swipe; an armed or running touch drag keeps the finger instead.
+  window.addEventListener("touchmove", (event) => {
+    if (current?.holdsTouch() && event.cancelable) event.preventDefault();
+  }, { capture: true, passive: false });
+  window.addEventListener("contextmenu", (event) => {
+    if (current?.onContextMenu(event)) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
+
   window.scribeDrag = function scribeDrag(options) {
     const event = options.event;
     if (event.button !== 0 || current) return null;
     const target = options.target || event.currentTarget || event.target;
     const start = { x: event.clientX, y: event.clientY };
     let last = event, active = false, ended = false, frame = 0, dirty = true;
+    const threshold = options.threshold ?? 6;
+    // On touch a drag needs press-and-hold first, so a plain swipe still scrolls.
+    const touch = event.pointerType === "touch" && threshold > 0;
+    let armed = !touch, holdTimer = 0;
+    if (touch) holdTimer = setTimeout(() => {
+      armed = true;
+      try { navigator.vibrate?.(8); } catch { /* not allowed */ }
+    }, options.hold ?? 350);
     let geometry;
     const rects = new Map();
     const layouts = new Map();
@@ -59,6 +105,14 @@
       },
       cancel() { stop(last, true); },
       dispose() { cleanup(); },
+      holdsTouch() { return touch && armed && !ended; },
+      // A long press that hasn't moved yet is the touch context menu, not a drag.
+      onContextMenu() {
+        if (!touch || ended) return false;
+        if (active) return true;
+        stop(last, true);
+        return false;
+      },
     };
     current = api;
     function schedule() { frame ||= requestAnimationFrame(apply); }
@@ -78,7 +132,9 @@
       if (next.pointerId !== event.pointerId || ended) return;
       last = next;
       if (!active) {
-        if (Math.hypot(next.clientX - start.x, next.clientY - start.y) < (options.threshold ?? 6)) return;
+        if (Math.hypot(next.clientX - start.x, next.clientY - start.y) < threshold) return;
+        // Moving before the hold is a scroll: let the browser have it.
+        if (!armed) { stop(next, true); return; }
         activate();
       }
       next.preventDefault();
@@ -94,6 +150,7 @@
     function cleanup() {
       if (ended) return;
       ended = true;
+      clearTimeout(holdTimer);
       cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -101,7 +158,7 @@
       window.removeEventListener("blur", blur);
       window.removeEventListener("scroll", api.invalidate, true);
       window.removeEventListener("resize", api.invalidate);
-      target.removeEventListener("lostpointercapture", cancel);
+      target.removeEventListener("lostpointercapture", lost);
       try { if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId); } catch {}
       document.body.classList.remove("pointer-shield");
       if (current === api) current = null;
@@ -126,14 +183,16 @@
     function up(next) { stop(next, false); }
     function cancel(next) { stop(next, true); }
     function blur() { stop(last, true); }
+    // Touch starts with implicit capture on the touched child; moving it to target fires that child's loss, which bubbles here.
+    function lost(next) { if (next.target === target) cancel(next); }
     window.addEventListener("pointermove", move, { passive: false });
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
     window.addEventListener("blur", blur);
     window.addEventListener("scroll", api.invalidate, true);
     window.addEventListener("resize", api.invalidate);
-    target.addEventListener("lostpointercapture", cancel);
-    if (options.threshold === 0) { event.preventDefault(); activate(); }
+    target.addEventListener("lostpointercapture", lost);
+    if (threshold === 0) { event.preventDefault(); activate(); }
     return api;
   };
   window.scribeDrag.rect = node => current ? current.rect(node) : node.getBoundingClientRect();

@@ -668,7 +668,9 @@ html.spaces-open .chrome-edge {
 }
 
 .tabs .tab {
-  touch-action: none;
+  /* Swipes scroll the strip; pointer-drag.js starts a touch drag after a hold. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
 }
 
 .tabs.reordering .tab {
@@ -4583,7 +4585,8 @@ html.spaces-open :is(.agent-harness, .agent-full, .ag-modal) {
   cursor: pointer;
   outline: none;
   user-select: none;
-  touch-action: none;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
   opacity: 0;
   transform: translateY(10px) scale(0.98);
   transition: transform 0.22s var(--ease), box-shadow 0.15s ease, opacity 0.22s var(--ease);

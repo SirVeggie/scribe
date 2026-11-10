@@ -213,3 +213,56 @@ test("sidebar resizing flushes release coordinates and Escape restores the saved
     assert.equal(await page.locator("body").evaluate(el => el.classList.contains("pointer-shield") || el.classList.contains("resizing-side")), false);
   } finally { await browser.close(); }
 });
+
+test("touch: a swipe scrolls, a hold drags, and a tap that changes what's under the finger doesn't click it", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Touch drag test" });
+  try {
+    const context = await browser.newContext({ hasTouch: true, viewport: { width: 400, height: 400 } });
+    const page = await context.newPage();
+    await page.setContent(`<style>body{margin:0}#strip{width:300px;overflow-x:auto;white-space:nowrap}
+      .item{display:inline-block;width:120px;height:40px;touch-action:manipulation;user-select:none}
+      #under,#cover{position:absolute;left:0;top:100px;width:200px;height:60px}#cover{background:red}</style>
+      <div id="strip">${Array.from({ length: 8 }, (_, i) => `<div class="item">${i}</div>`).join("")}</div>
+      <button id="under">under</button><div id="cover"></div>`);
+    await page.addScriptTag({ content: "window.__name = (fn) => fn;" });
+    await page.addScriptTag({ content: fs.readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8") });
+    await page.evaluate(() => {
+      const w = window as any;
+      w.log = { starts: 0, drops: 0, cancels: 0, under: 0, focus: 0 };
+      document.querySelector("#strip")!.addEventListener("pointerdown", (event: any) => w.scribeDrag({ event, target: event.currentTarget,
+        onStart: () => w.log.starts++, onDrop: () => w.log.drops++, onCancel: () => w.log.cancels++ }));
+      const under = document.querySelector("#under")!;
+      under.addEventListener("click", () => w.log.under++);
+      under.addEventListener("focus", () => w.log.focus++);
+      // Like a dialog backdrop: closes on pointerdown and reveals what's behind it.
+      document.querySelector("#cover")!.addEventListener("pointerdown", (e: any) => e.currentTarget.remove());
+    });
+    const cdp = await context.newCDPSession(page);
+    const touch = (type: string, x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+    const swipe = async (holdMs: number) => {
+      await touch("touchStart", 250, 20);
+      if (holdMs) await page.waitForTimeout(holdMs);
+      for (let x = 240; x >= 100; x -= 10) await touch("touchMove", x, 20);
+      await touch("touchEnd", 100, 20);
+    };
+    const log = () => page.evaluate(() => ({ ...(window as any).log, scroll: document.querySelector("#strip")!.scrollLeft }));
+    await swipe(0);
+    const swiped = await log();
+    assert.equal(swiped.starts, 0, JSON.stringify(swiped));
+    assert.ok(swiped.scroll > 0, JSON.stringify(swiped));
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => { document.querySelector("#strip")!.scrollLeft = 0; });
+    await swipe(500);
+    const held = await log();
+    assert.equal(held.starts, 1, JSON.stringify(held));
+    assert.equal(held.scroll, 0, JSON.stringify(held));
+    // Tap on the cover: it goes away on pointerdown, but the button behind gets no click or focus.
+    await touch("touchStart", 50, 130); await touch("touchEnd", 50, 130);
+    await page.waitForTimeout(100);
+    assert.deepEqual([(await log()).under, (await log()).focus], [0, 0]);
+    // A plain tap on the button still clicks it.
+    await touch("touchStart", 50, 130); await touch("touchEnd", 50, 130);
+    await page.waitForTimeout(100);
+    assert.equal((await log()).under, 1);
+  } finally { await browser.close(); }
+});

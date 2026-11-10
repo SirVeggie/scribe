@@ -183,7 +183,8 @@
     padding: 10px;
     cursor: pointer;
     box-shadow: var(--depth);
-    touch-action: none;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
     user-select: none;
   }
   body.no-checks .item { grid-template-columns: 1fr auto; }
