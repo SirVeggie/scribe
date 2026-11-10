@@ -52,7 +52,7 @@ test("Format rewrites a card's description with a tool-less Haiku chat, and Undo
     assert.equal(s.starts[0].opts.temporary, true);
     assert.equal(s.starts[0].opts.provider, "claude");
     assert.equal(s.starts[0].opts.model, "haiku");
-    assert.match(s.starts[0].prompt, /one long block\. second thought$/);
+    assert.match(s.starts[0].prompt, /<description>\none long block\. second thought\n<\/description>$/);
     assert.deepEqual(s.deleted, ["t1"]);
     await page.getByRole("button", { name: "Undo format", exact: true }).click();
     await page.getByRole("button", { name: "Format", exact: true }).waitFor();
