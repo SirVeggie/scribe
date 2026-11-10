@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
 import { SKILL_DIR, docParts, joinParts, sectionedRead, sectionsElsewhere } from "../skillDocs.js";
-import { estimateTokens, skillFrontmatter } from "./harness.js";
-import { noPages, type Thread } from "./types.js";
+import { estimateTokens, skillFolders, skillFrontmatter } from "./harness.js";
+import { noPages, type ProviderId, type Thread, type ThreadWorktree } from "./types.js";
 
 /**
  * Scribe's own skills (#239): folders in dataDir/skills/<id> with a SKILL.md, plus a row of metadata
@@ -387,10 +387,13 @@ export class ScribeSkills {
    * picks are copied onto its threads). Threads without tools get none, and the built-in (which is
    * about pages) is left out where there are no pages.
    */
-  effective(thread: Pick<Thread, "noTools" | "scope"> & { skills?: string[] }): ScribeSkill[] {
+  effective(thread: Pick<Thread, "noTools" | "scope"> & { skills?: string[]; cwd?: string | null; provider?: ProviderId; worktree?: Pick<ThreadWorktree, "home"> | null }): ScribeSkill[] {
     if (thread.noTools) return [];
     const picks = new Set(thread.skills ?? []);
-    return this.list().filter((s) => !s.missing && (s.enabled || picks.has(s.id)) && !(s.builtin && noPages(thread.scope)));
+    const own = this.list().filter((s) => !s.missing && (s.enabled || picks.has(s.id)) && !(s.builtin && noPages(thread.scope)));
+    if (!thread.cwd || !thread.provider) return own;
+    const names = new Set(own.map((s) => s.name));
+    return [...own, ...borrowedSkills(thread.cwd, thread.provider, thread.worktree?.home).filter((s) => !names.has(s.row.name)).map((s) => this.describe(s.row, s.dir))];
   }
 
   /**
@@ -471,6 +474,59 @@ export class ScribeSkills {
   }
 }
 
+/** Skill folders (with a SKILL.md) directly inside a folder of skills. */
+function skillDirs(folder: string): Array<{ name: string; description: string; dir: string }> {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(folder, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: Array<{ name: string; description: string; dir: string }> = [];
+  for (const entry of entries) {
+    const dir = path.join(folder, entry.name);
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
+    } catch {
+      continue;
+    }
+    const meta = skillFrontmatter(text);
+    out.push({ name: meta.name ?? entry.name, description: meta.description ?? "", dir });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Workspace skills a provider does not load itself (#1076): a Claude chat in a workspace that only
+ * has .cursor/skills gets those through skill_read, and so on. When the provider's own workspace
+ * folders hold any skill, it uses those and nothing is borrowed. In a worktree, the main checkout's
+ * folders count too, since skill folders are often left out of git. The first folder wins a name.
+ */
+export function borrowedSkills(cwd: string, provider: ProviderId, home?: string | null): Array<{ row: SkillRow; dir: string }> {
+  const folders = skillFolders(cwd).filter((f) => f.scope === "workspace");
+  if (folders.some((f) => f.providers.includes(provider) && skillDirs(f.dir).length)) return [];
+  const roots = [{ root: cwd, list: folders.filter((f) => !f.providers.includes(provider)) }];
+  if (home && path.resolve(home).toLowerCase() !== path.resolve(cwd).toLowerCase()) {
+    const there = skillFolders(home).filter((f) => f.scope === "workspace");
+    // The provider's own folders first: a chat in the main checkout would have had those.
+    roots.push({ root: home, list: [...there.filter((f) => f.providers.includes(provider)), ...there.filter((f) => !f.providers.includes(provider))] });
+  }
+  const seen = new Set<string>();
+  const out: Array<{ row: SkillRow; dir: string }> = [];
+  for (const { root, list } of roots) {
+    for (const folder of list) {
+      for (const skill of skillDirs(folder.dir)) {
+        if (seen.has(skill.name)) continue;
+        seen.add(skill.name);
+        const where = path.relative(root, skill.dir).split(path.sep).join("/");
+        out.push({ row: { id: `workspace:${root === cwd ? "" : "main:"}${where}`, name: skill.name, description: skill.description, enabled: true, provenance: { kind: "found" }, revision: 1, createdAt: 0, updatedAt: 0 }, dir: skill.dir });
+      }
+    }
+  }
+  return out;
+}
+
 /** The list of a thread's skills in its instructions. Empty when it has none. */
 export function skillIndex(skills: Array<Pick<ScribeSkill, "id" | "name" | "description">>): string {
   if (!skills.length) return "";
@@ -482,7 +538,7 @@ export function skillIndex(skills: Array<Pick<ScribeSkill, "id" | "name" | "desc
     return `- ${name}: ${s.description.replace(/\s+/g, " ").trim() || "(no description)"}`;
   });
   return [
-    "Skills: Scribe gives this chat the skills below (Scribe's own, apart from any skills your provider loads). Before a task one of them covers, read it with skill_read (name) and follow it; skill_read with file reads its other files.",
+    "Skills: Scribe gives this chat the skills below (Scribe's own, and this workspace's skills from other providers' folders; your provider may load more of its own). Before a task one of them covers, read it with skill_read (name) and follow it; skill_read with file reads its other files.",
     "<skills>",
     ...lines,
     "</skills>",

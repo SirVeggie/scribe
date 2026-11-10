@@ -59,6 +59,31 @@ test("a new skill is off until enabled or picked; the built-in is on", () => {
   }
 });
 
+test("a workspace's skills in another provider's folder are borrowed unless the provider has its own (#1076)", () => {
+  const { root, skills, write, done } = sandbox();
+  try {
+    skills.setEnabled(BUILTIN_SCRIBE, false);
+    const ws = path.join(root, "ws");
+    write(path.join(ws, ".cursor", "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: Deploy it.\n---\nSteps");
+    write(path.join(ws, ".cursor", "skills", "deploy", "run.md"), "run");
+    const claude = { scope: { kind: "workspace" as const, ref: ws }, cwd: ws, provider: "claude" as const };
+    assert.deepEqual(skills.effective(claude).map((s) => [s.id, s.name, s.description]), [["workspace:.cursor/skills/deploy", "deploy", "Deploy it."]]);
+    assert.equal(skills.read(claude, "deploy", "run.md").text, "run");
+    // Cursor loads its own folder itself.
+    assert.deepEqual(skills.effective({ ...claude, provider: "cursor" }), []);
+    // With .claude/skills too, Claude uses those and borrows nothing.
+    write(path.join(ws, ".claude", "skills", "other", "SKILL.md"), "---\nname: other\n---\n");
+    assert.deepEqual(skills.effective(claude), []);
+    // In a worktree, the main checkout's folders count when the worktree has none.
+    const tree = path.join(root, "tree");
+    fs.mkdirSync(tree);
+    const names = skills.effective({ ...claude, cwd: tree, worktree: { home: ws } }).map((s) => s.id);
+    assert.deepEqual(names, ["workspace:main:.claude/skills/other", "workspace:main:.cursor/skills/deploy"]);
+  } finally {
+    done();
+  }
+});
+
 test("skill_read stays inside the thread's skills and each skill's folder", () => {
   const { root, skills, write, done } = sandbox();
   try {
