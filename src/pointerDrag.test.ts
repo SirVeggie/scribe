@@ -238,7 +238,7 @@ test("touch: a swipe scrolls, a hold drags, and a tap that changes what's under 
       document.querySelector("#cover")!.addEventListener("pointerdown", (e: any) => e.currentTarget.remove());
     });
     const cdp = await context.newCDPSession(page);
-    const touch = (type: string, x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
     const swipe = async (holdMs: number) => {
       await touch("touchStart", 250, 20);
       if (holdMs) await page.waitForTimeout(holdMs);
