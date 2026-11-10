@@ -38,10 +38,12 @@ export function updatesRouter(service: UpdateService): Router {
   router.post("/skip", guarded((req) => service.skip(req.body?.id ?? null)));
   router.post("/dismiss", guarded((req) => service.dismiss(req.body?.id ?? null)));
   // Answers once the install has started; the daemon restarts (or the installer stops it) right after.
-  router.post("/apply", guarded(async () => {
+  router.post("/apply", guarded(async (req) => {
     const view = service.view();
     if (!view.available) throw new Error("There is no update to install");
-    void service.apply().catch(() => {});
+    const discard = req.body?.discard;
+    if (discard !== undefined && !(Array.isArray(discard) && discard.every((file) => typeof file === "string"))) throw new Error("discard must be a list of files");
+    void service.apply(discard ? { discard } : {}).catch(() => {});
     return { ...service.view(), phase: service.view().phase === "idle" ? "installing" : service.view().phase };
   }));
   return router;

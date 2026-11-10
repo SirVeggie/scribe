@@ -78,12 +78,25 @@
     if (failed) status.textContent = failed;
   });
   const install = button("Update now", () => void apply());
+  // A git checkout with changed tracked files (often package-lock.json after an install): list them and
+  // offer to throw them away and update (#1072).
+  const changes = el("div", "updates-changes");
+  const changesTitle = el("p", "settings-hint", "These changes are discarded:");
+  const changesList = el("ul", "updates-commits");
+  changes.append(changesTitle, changesList);
+  const discard = button("Discard changes and update", async () => {
+    const files = view?.available?.changes;
+    if (!files?.length) return;
+    const ok = await (confirmFn?.(`Discard the uncommitted changes to ${files.length === 1 ? files[0] : `${files.length} files`} and update? This cannot be undone.`, "Discard and update") ?? Promise.resolve(false));
+    if (ok) await apply(files);
+  });
   const unskip = button("Stop skipping", async () => {
     try { render(await request("POST", "/skip", { id: null })); }
     catch (err) { status.textContent = err.message; }
   });
-  actions.append(check, install, unskip);
-  section.append(heading, modeRow, installRow, status, commits, actions);
+  actions.append(check, install, discard, unskip);
+  section.append(heading, modeRow, installRow, status, commits, changes, actions);
+  let confirmFn = null;
 
   const RELEASE_LABELS = {
     "linux-x64-headless": "Linux release (headless)",
@@ -134,6 +147,11 @@
     check.disabled = working || unknown;
     install.hidden = !view.available || !!view.available.blocked;
     install.disabled = working;
+    const changed = view.available?.blocked ? view.available.changes ?? [] : [];
+    changes.hidden = !changed.length || view.phase !== "idle";
+    changesList.replaceChildren(...changed.slice(0, 20).map((file) => el("li", null, file)), ...(changed.length > 20 ? [el("li", null, `…and ${changed.length - 20} more`)] : []));
+    discard.hidden = !changed.length;
+    discard.disabled = working;
     unskip.hidden = !view.skipped || view.available?.id !== view.skipped;
   }
 
@@ -173,8 +191,8 @@
     noticeUpdate.disabled = view.phase !== "idle";
   }
 
-  async function apply() {
-    try { render(await request("POST", "/apply")); }
+  async function apply(discardFiles) {
+    try { render(await request("POST", "/apply", discardFiles ? { discard: discardFiles } : undefined)); }
     catch (err) { window.scribeShowNotice?.(err.message); }
   }
 
@@ -192,6 +210,7 @@
   window.scribeUpdates = {
     sections: [section],
     refresh,
+    init({ confirm }) { confirmFn = confirm; },
     /** The board's socket got an update event. */
     event(msg) { render(msg.view); },
     /** The socket (re)connected. After an update restart, load the new build's UI. */

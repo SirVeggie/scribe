@@ -47,6 +47,8 @@ export type Available = {
   commits?: { sha: string; subject: string }[];
   /** Set when it cannot be installed from here (local changes, a diverged branch, no asset). */
   blocked?: string;
+  /** Git: the changed tracked files that block it, which Discard and update throws away (#1072). */
+  changes?: string[];
 };
 
 export type UpdatePhase = "idle" | "checking" | "downloading" | "installing" | "restarting";
@@ -188,7 +190,7 @@ async function git(run: Runner, root: string, args: string[], timeoutMs?: number
   return result.stdout.trim();
 }
 
-export type GitCheck = { branch: string; upstream: string; commit: string; target: string; behind: number; ahead: number; dirty: boolean; commits: { sha: string; subject: string }[] };
+export type GitCheck = { branch: string; upstream: string; commit: string; target: string; behind: number; ahead: number; dirty: boolean; changes: string[]; commits: { sha: string; subject: string }[] };
 
 /** Fetches the branch's upstream and compares. Null when the branch has no upstream. */
 export async function checkGit(run: Runner, root: string): Promise<GitCheck | null> {
@@ -197,16 +199,18 @@ export async function checkGit(run: Runner, root: string): Promise<GitCheck | nu
   if (upstreamResult.code !== 0) return null;
   const upstream = upstreamResult.stdout.trim();
   await git(run, root, ["fetch", "--quiet", "--no-tags"], 2 * 60_000);
-  const [commit, target, behind, ahead, status, log] = await Promise.all([
+  const [commit, target, behind, ahead, diff, log] = await Promise.all([
     git(run, root, ["rev-parse", "HEAD"]),
     git(run, root, ["rev-parse", "@{u}"]),
     git(run, root, ["rev-list", "--count", "HEAD..@{u}"]),
     git(run, root, ["rev-list", "--count", "@{u}..HEAD"]),
-    git(run, root, ["status", "--porcelain", "--untracked-files=no"]),
+    // Staged and unstaged changes to tracked files; untracked files never block a fast-forward.
+    git(run, root, ["diff", "--name-only", "--no-renames", "HEAD"]),
     git(run, root, ["log", "--format=%h%x09%s", "-n", "30", "HEAD..@{u}"]),
   ]);
+  const changes = diff ? diff.split("\n").filter(Boolean) : [];
   const commits = log ? log.split("\n").map((line) => { const [sha, ...rest] = line.split("\t"); return { sha, subject: rest.join("\t") }; }) : [];
-  return { branch, upstream, commit, target, behind: Number(behind), ahead: Number(ahead), dirty: status.length > 0, commits };
+  return { branch, upstream, commit, target, behind: Number(behind), ahead: Number(ahead), dirty: changes.length > 0, changes, commits };
 }
 
 /** npm's CLI beside this Node (Windows and Linux layouts), else `npm` on PATH. */
@@ -247,6 +251,11 @@ export async function applyGit(run: Runner, root: string, target: string, log: (
   }
   if (changed.some((file) => file.startsWith("desktop/"))) notes.push("The desktop app changed too: rebuild it with npm run desktop:install.");
   return notes;
+}
+
+function sameFiles(a: string[], b: string[]): boolean {
+  const set = new Set(a);
+  return a.length === b.length && b.every((file) => set.has(file));
 }
 
 function isLink(file: string): boolean {
@@ -482,13 +491,14 @@ export class UpdateService {
     const blocked = result.ahead
       ? `${result.branch} has ${result.ahead} commit${result.ahead === 1 ? "" : "s"} that ${result.upstream} does not; pull or merge it yourself`
       : result.dirty
-        ? "The checkout has uncommitted changes; commit or discard them first"
+        ? `The checkout has uncommitted changes to ${result.changes.length} file${result.changes.length === 1 ? "" : "s"}`
         : undefined;
     return {
       id: result.target.slice(0, 12),
       label: `${result.behind} new commit${result.behind === 1 ? "" : "s"} on ${result.upstream}`,
       commits: result.commits,
       ...(blocked ? { blocked } : {}),
+      ...(!result.ahead && result.dirty ? { changes: result.changes } : {}),
     };
   }
 
@@ -550,11 +560,15 @@ export class UpdateService {
     }
   }
 
-  /** Update now: the notice's Update button, Settings, or auto mode once idle. */
-  async apply(): Promise<UpdateView> {
+  /**
+   * Update now: the notice's Update button, Settings, or auto mode once idle. discard: the changed files the
+   * user agreed to throw away (Settings' Discard and update, #1072); they must still be exactly the changes.
+   */
+  async apply(options: { discard?: string[] } = {}): Promise<UpdateView> {
+    const discard = options.discard;
     if (this.phase !== "idle") throw new Error("An update check or install is already running");
     if (!this.available) throw new Error("There is no update to install");
-    if (this.available.blocked) throw new Error(this.available.blocked);
+    if (this.available.blocked && !(discard && this.available.changes)) throw new Error(this.available.blocked);
     try {
       if (this.install.kind === "git") {
         // Fetch again first, so Update takes everything on the upstream now, not only what the last check saw.
@@ -563,6 +577,13 @@ export class UpdateService {
         this.available = await this.checkGitInstall();
         this.checkedAt = this.now();
         if (!this.available) throw new Error("There is no update to install");
+        if (this.available.blocked && discard && this.available.changes) {
+          if (!sameFiles(discard, this.available.changes)) throw new Error("The changed files are no longer the ones shown; check them again before discarding");
+          this.log(`Update: discarding changes to ${this.available.changes.join(", ")}`);
+          await git(this.run, this.install.root, ["reset", "--hard", "--quiet", "HEAD"]);
+          this.available = await this.checkGitInstall();
+          if (!this.available) throw new Error("There is no update to install");
+        }
         if (this.available.blocked) throw new Error(this.available.blocked);
         if (!this.gitTarget) throw new Error("Check for updates first");
         this.phase = "installing";

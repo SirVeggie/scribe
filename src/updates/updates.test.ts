@@ -163,6 +163,42 @@ test("Update on a checkout fetches again and installs commits pushed after the c
   assert.equal(restarts, 1);
 });
 
+test("Discard and update throws away the listed local changes, and only those", async () => {
+  const dir = tmp();
+  const origin = path.join(dir, "origin.git");
+  const work = path.join(dir, "work");
+  const clone = path.join(dir, "clone");
+  execFileSync("git", ["init", "--bare", "-q", "-b", "master", origin]);
+  execFileSync("git", ["clone", "-q", origin, work]);
+  const push = (n: string) => {
+    fs.writeFileSync(path.join(work, "a.txt"), n);
+    fs.writeFileSync(path.join(work, "package-lock.json"), "{}");
+    gitIn(work, "add", ".");
+    gitIn(work, "commit", "-qm", n);
+    gitIn(work, "push", "-q", "origin", "HEAD:master");
+  };
+  push("first");
+  execFileSync("git", ["clone", "-q", origin, clone]);
+  push("second");
+  fs.writeFileSync(path.join(clone, "package-lock.json"), "{ \"changed\": true }");
+  fs.writeFileSync(path.join(clone, "notes.txt"), "untracked, kept");
+  const run: Runner = (command, args, options) => (command === "git" ? runCommand(command, args, options) : Promise.resolve({ code: 0, stdout: "", stderr: "" }));
+  let restarts = 0;
+  const { svc } = service(clone, tmp(), { run, restart: async () => { restarts++; } });
+  const view = await svc.check();
+  assert.match(view.available?.blocked ?? "", /uncommitted changes to 1 file/);
+  assert.deepEqual(view.available?.changes, ["package-lock.json"]);
+  await assert.rejects(svc.apply(), /uncommitted changes/);
+  fs.writeFileSync(path.join(clone, "a.txt"), "edited after the check");
+  await assert.rejects(svc.apply({ discard: ["package-lock.json"] }), /no longer the ones shown/);
+  assert.equal(fs.readFileSync(path.join(clone, "a.txt"), "utf8"), "edited after the check", "nothing is discarded when the list changed");
+  await svc.apply({ discard: ["a.txt", "package-lock.json"] });
+  assert.equal(gitIn(clone, "rev-parse", "HEAD"), gitIn(work, "rev-parse", "HEAD"));
+  assert.equal(fs.readFileSync(path.join(clone, "package-lock.json"), "utf8"), "{}");
+  assert.equal(fs.readFileSync(path.join(clone, "notes.txt"), "utf8"), "untracked, kept");
+  assert.equal(restarts, 1);
+});
+
 test("windowsInstallScript runs the installer silently and restarts what was running", () => {
   const withApp = windowsInstallScript("C:\\Temp\\Scribe's setup.exe", "C:\\Programs\\Scribe\\app", true);
   assert.match(withApp, /'C:\\Temp\\Scribe''s setup\.exe' -ArgumentList '\/S','\/UPDATE','\/R'/);

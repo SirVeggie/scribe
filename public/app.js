@@ -1810,6 +1810,7 @@
   });
   window.scribeMlSettings.init({ confirm: confirmDelete, view: renderRerankSetting });
   window.scribeAudioSettings.init({ confirm: confirmDelete });
+  window.scribeUpdates.init({ confirm: confirmDelete });
   window.scribePluginSettings.init({confirm:confirmDelete});
   window.scribePluginSettings.refresh();
   window.scribeDevicesSettings.init({ confirm: confirmDelete, open: (category) => openSettings(category) });
