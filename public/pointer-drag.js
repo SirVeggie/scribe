@@ -74,10 +74,12 @@
     // On touch a drag needs press-and-hold first, so a plain swipe still scrolls.
     const touch = event.pointerType === "touch" && threshold > 0;
     let armed = !touch, holdTimer = 0;
-    if (touch) holdTimer = setTimeout(() => {
+    const arm = () => {
+      clearTimeout(holdTimer);
       armed = true;
       try { navigator.vibrate?.(8); } catch { /* not allowed */ }
-    }, options.hold ?? 350);
+    };
+    if (touch) holdTimer = setTimeout(arm, options.hold ?? 350);
     let geometry;
     const rects = new Map();
     const layouts = new Map();
@@ -106,12 +108,12 @@
       cancel() { stop(last, true); },
       dispose() { cleanup(); },
       holdsTouch() { return touch && armed && !ended; },
-      // A long press that hasn't moved yet is the touch context menu, not a drag.
+      // The browser's long-press menu would fight the drag for the same hold: keep it back.
+      // Releasing the hold without moving opens the menu instead (see stop).
       onContextMenu() {
         if (!touch || ended) return false;
-        if (active) return true;
-        stop(last, true);
-        return false;
+        if (!armed) arm();
+        return true;
       },
     };
     current = api;
@@ -179,6 +181,18 @@
       }
       if (cancelled) options.onCancel?.(next, api);
       else options.onDrop?.(next, active, api);
+      if (!cancelled && touch && armed && !active) openMenu();
+    }
+    // A hold released in place is the touch context menu. Its tap must not also click.
+    function openMenu() {
+      const hit = document.elementFromPoint(start.x, start.y);
+      const node = hit && (event.target.contains?.(hit) || !event.target.isConnected) ? hit : event.target;
+      if (!node?.isConnected) return;
+      suppress = true;
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => { suppress = false; }, 700);
+      node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true,
+        clientX: start.x, clientY: start.y, screenX: event.screenX, screenY: event.screenY, button: 2, buttons: 0, view: window }));
     }
     function up(next) { stop(next, false); }
     function cancel(next) { stop(next, true); }

@@ -228,7 +228,10 @@ test("touch: a swipe scrolls, a hold drags, and a tap that changes what's under 
     await page.addScriptTag({ content: fs.readFileSync(new URL("../public/pointer-drag.js", import.meta.url), "utf8") });
     await page.evaluate(() => {
       const w = window as any;
-      w.log = { starts: 0, drops: 0, cancels: 0, under: 0, focus: 0 };
+      w.log = { starts: 0, drops: 0, cancels: 0, under: 0, focus: 0, menus: 0, clicks: 0 };
+      const strip = document.querySelector("#strip")!;
+      strip.addEventListener("contextmenu", (e: any) => { e.preventDefault(); w.log.menus++; });
+      strip.addEventListener("click", () => w.log.clicks++);
       document.querySelector("#strip")!.addEventListener("pointerdown", (event: any) => w.scribeDrag({ event, target: event.currentTarget,
         onStart: () => w.log.starts++, onDrop: () => w.log.drops++, onCancel: () => w.log.cancels++ }));
       const under = document.querySelector("#under")!;
@@ -256,6 +259,12 @@ test("touch: a swipe scrolls, a hold drags, and a tap that changes what's under 
     const held = await log();
     assert.equal(held.starts, 1, JSON.stringify(held));
     assert.equal(held.scroll, 0, JSON.stringify(held));
+    assert.equal(held.menus, 0, JSON.stringify(held));
+    // A hold released in place opens the context menu instead of dragging, with no click.
+    await touch("touchStart", 50, 20); await page.waitForTimeout(500); await touch("touchEnd", 50, 20);
+    await page.waitForTimeout(100);
+    const pressed = await log();
+    assert.deepEqual([pressed.menus, pressed.starts, pressed.clicks], [1, 1, 0], JSON.stringify(pressed));
     // Tap on the cover: it goes away on pointerdown, but the button behind gets no click or focus.
     await touch("touchStart", 50, 130); await touch("touchEnd", 50, 130);
     await page.waitForTimeout(100);

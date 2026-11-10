@@ -569,7 +569,9 @@ html.spaces-open .chrome-edge {
   flex: 0 1 auto;
   gap: 4px;
   padding: 0 6px;
-  overflow: hidden;
+  /* Scrollable (scrollbar hidden) so a finger swipe pans the strip. */
+  overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior: none;
   scrollbar-width: none;
   -ms-overflow-style: none;
