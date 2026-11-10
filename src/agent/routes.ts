@@ -76,6 +76,16 @@ function writableMcpFile(): McpFile {
   return { mcpServers: { ...file.mcpServers }, workspaces: { ...file.workspaces } };
 }
 
+/**
+ * Whether a provider login's browser is away from this computer (#909, #1069), so the CLI's localhost
+ * callback can't be reached: a paired device's UI, the web listener (a phone signed in through the web),
+ * or a Linux daemon with no display, where the CLI can't open a browser itself.
+ */
+export function loginFromAway(caller: { device?: string; web?: true }, platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (caller.device || caller.web) return true;
+  return platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY;
+}
+
 /** /api/agent/* for the board shell. The content origin gate keeps tab pages out of these. */
 export function agentRouter(host: AgentHost): express.Router {
   const router = express.Router();
@@ -229,8 +239,8 @@ export function agentRouter(host: AgentHost): express.Router {
   router.post("/cursor/login", wrap(() => host.cursorLogin()));
   // Codex's ChatGPT login (bundled `codex login`); the URL also opens in the system browser.
   // From another device's UI (#909) the browser is over there: a device code, or Claude's pasted code.
-  router.post("/codex/login", wrap((req) => host.codexLogin({ remote: Boolean(identify(req).device) })));
-  router.post("/claude/login", wrap((req) => host.claudeLogin({ remote: Boolean(identify(req).device) })));
+  router.post("/codex/login", wrap((req) => host.codexLogin({ remote: loginFromAway(identify(req)) })));
+  router.post("/claude/login", wrap((req) => host.claudeLogin({ remote: loginFromAway(identify(req)) })));
   router.post("/claude/login/code", wrap((req) => {
     if (typeof req.body?.code !== "string") throw new Error("Paste the code the sign-in page shows.");
     host.claudeLoginCode(req.body.code);

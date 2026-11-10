@@ -30,3 +30,14 @@ test("claude auth login: the printed URL once its line has ended", () => {
   assert.equal(printedLoginUrl(out.slice(0, out.indexOf("&state"))), null);
   assert.equal(printedLoginUrl("Opening browser to sign in…\n"), null);
 });
+
+test("a login is from away for a paired device, the web listener, or a Linux daemon with no display (#1069)", async () => {
+  const { loginFromAway } = await import("./routes.js");
+  const desktop = { DISPLAY: ":0" };
+  assert.equal(loginFromAway({}, "win32", {}), false);
+  assert.equal(loginFromAway({}, "linux", desktop), false);
+  assert.equal(loginFromAway({}, "linux", { WAYLAND_DISPLAY: "wayland-0" }), false);
+  assert.equal(loginFromAway({ device: "d1" }, "win32", {}), true);
+  assert.equal(loginFromAway({ web: true }, "linux", desktop), true);
+  assert.equal(loginFromAway({}, "linux", {}), true);
+});
