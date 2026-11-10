@@ -75,6 +75,24 @@ function sdk(): Promise<Sdk> {
   return sdkLoad;
 }
 
+/**
+ * Set once the SDK refused its sandbox on this machine (#1078): its helper's preflight fails where the
+ * kernel blocks unprivileged user namespaces (Ubuntu 24.04's AppArmor default, many containers). Agents
+ * then open without it, and each thread says so once, as with Scribe's own sandbox.
+ */
+let cursorSandboxRefused: string | null = null;
+
+/** The SDK's error when its sandbox helper cannot run here. */
+export function isSandboxUnsupported(err: unknown): boolean {
+  return /sandboxing is not supported in this environment/i.test(errorText(err));
+}
+
+/** The local sandbox options for a thread: on where Scribe sandboxes it, off (also over ~/.cursor/sandbox.json) once the SDK refused it. */
+export function cursorSandboxOptions(sandbox: boolean, refused: string | null = cursorSandboxRefused): { sandboxOptions?: { enabled: boolean } } {
+  if (!sandbox) return {};
+  return { sandboxOptions: { enabled: !refused } };
+}
+
 /** An agent nothing refers to may still be starting (a spare, a one-off answer) this long after it last ran. */
 const PRUNE_GRACE_MS = 60 * 60 * 1000;
 /** A thread idle this long loses its agent's checkpoints; its next turn starts a new agent with a recap. */
@@ -541,6 +559,8 @@ class CursorSession implements ProviderSession {
   private bridgedLabels = new Map<string, string>();
   private current: Run | null = null;
   private sink: RunSink | null = null;
+  /** The chat heard that Cursor's sandbox is off on this machine. */
+  private sandboxNoticeSaid = false;
   private idleTimer: NodeJS.Timeout | null = null;
   private cancelled = false;
   private lastInstructions = "";
@@ -700,7 +720,7 @@ class CursorSession implements ProviderSession {
         settingSources: t.mode === "board" ? [] : ["user", "project"],
         autoReview: cursorAutoReview(t),
         // Cursor's own sandbox for its shell and tools, on Linux short of Full access (#899).
-        ...(sandboxed(t) ? { sandboxOptions: { enabled: true } } : {}),
+        ...cursorSandboxOptions(sandboxed(t)),
         customTools,
         // Subagents get the same tool restrictions as the thread, and with the host shell no shell of their own.
         subagentInherit: hostShell ? { resourceProviderOptions: { suppressDefaultShellExecutor: true } } : {},
@@ -725,11 +745,22 @@ class CursorSession implements ProviderSession {
       this.board = null;
     }
     const { Agent } = await sdk();
-    const options = await this.options();
+    let options = await this.options();
+    // Once the SDK refuses its sandbox, open again without it rather than fail every turn (#1078).
+    const unsandboxed = async (err: unknown): Promise<boolean> => {
+      if (!isSandboxUnsupported(err) || options.local?.sandboxOptions?.enabled !== true) return false;
+      cursorSandboxRefused ??= errorText(err);
+      log(`Cursor sandbox unavailable, running without it: ${cursorSandboxRefused}`);
+      options = await this.options();
+      return true;
+    };
     let agent: SDKAgent | null = null;
     if (this.agentId) {
       try {
-        agent = await Agent.resume(this.agentId, options);
+        agent = await Agent.resume(this.agentId, options).catch(async (err) => {
+          if (await unsandboxed(err)) return Agent.resume(this.agentId!, options);
+          throw err;
+        });
         this.resumed = true;
         this.lastInstructions = "";
       } catch (err) {
@@ -739,9 +770,14 @@ class CursorSession implements ProviderSession {
       }
     }
     if (!agent) {
-      agent = await Agent.create(options).catch((err) => {
-        throw new Error(errorText(err));
-      });
+      agent = await Agent.create(options)
+        .catch(async (err) => {
+          if (await unsandboxed(err)) return Agent.create(options);
+          throw err;
+        })
+        .catch((err) => {
+          throw new Error(errorText(err));
+        });
       this.agentId = agent.agentId;
       this.resumed = false;
       this.lastInstructions = "";
@@ -835,6 +871,10 @@ class CursorSession implements ProviderSession {
         this.carry = null;
       }
       const agent = await this.ensureAgent();
+      if (cursorSandboxRefused && sandboxed(this.thread) && !this.sandboxNoticeSaid) {
+        this.sandboxNoticeSaid = true;
+        sink.notice("warn", "Sandbox not enforced: Cursor's sandbox can't run on this system (often because unprivileged user namespaces are blocked). This thread's commands run without it.");
+      }
       sink.nativeId(agent.agentId);
       this.reported = agent.agentId;
       if (this.cancelled) return this.endTurn({ status: "cancelled" });

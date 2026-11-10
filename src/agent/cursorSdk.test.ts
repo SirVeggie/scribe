@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CursorProvider, isSdkAgentId, mapModels, modelSelection, toolLists, wantsHostShell } from "./providers/cursor.js";
+import { CursorProvider, cursorSandboxOptions, isSandboxUnsupported, isSdkAgentId, mapModels, modelSelection, toolLists, wantsHostShell } from "./providers/cursor.js";
 import type { Thread } from "./types.js";
 import type { SessionContext } from "./providers/provider.js";
 
@@ -107,4 +107,13 @@ test("Cursor retains an open agent across equivalent approval levels, but closes
       } finally { session.dispose(); }
     }
   }
+});
+
+test("Cursor's sandbox turns off once the SDK refuses it on this machine (#1078)", () => {
+  assert.deepEqual(cursorSandboxOptions(false, null), {});
+  assert.deepEqual(cursorSandboxOptions(true, null), { sandboxOptions: { enabled: true } });
+  // Off explicitly, so a ~/.cursor/sandbox.json can't turn it back on.
+  assert.deepEqual(cursorSandboxOptions(true, "not supported"), { sandboxOptions: { enabled: false } });
+  assert.equal(isSandboxUnsupported(new Error("Local SDK sandboxing was requested, but sandboxing is not supported in this environment. Disable local.sandboxOptions.enabled")), true);
+  assert.equal(isSandboxUnsupported(new Error("Agent not found")), false);
 });
