@@ -5563,8 +5563,9 @@ export class AgentHost {
     const signal = AbortSignal.any([stop.signal, opts.signal]);
     const chat = this.waitPending<QuestionAnswer>(threadId, run, "question", item.id, signal);
     chat.catch(() => {});
-    // A form wired to a card (page_show replyTo) answers with scribe.reply, which logs `reply` on it.
-    const names = opts.events.includes("reply") ? opts.events : [...opts.events, "reply"];
+    // A form wired to a card (page_show replyTo) answers with scribe.reply, which logs `reply` on it;
+    // a kit <form data-reply> without replyTo logs `submitted` instead (#1079).
+    const names = [...new Set([...opts.events, "reply", "submitted"])];
     const page = waitForEvents({ idOrKey: tab.id, names, after, timeoutMs: opts.timeoutMs, viewer: "agent", abort: signal });
     const asks = this.pageAsks.get(threadId) ?? new Set<string>();
     this.pageAsks.set(threadId, asks.add(tab.id));

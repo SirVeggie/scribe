@@ -87,6 +87,30 @@ test("a form's scribe.reply answers page_ask with its data (#1063)", async () =>
   assert.equal(host.asksPage(threadId, page.id), false);
 });
 
+test("a kit form's submitted event answers page_ask even when the tab closes right after (#1079)", async () => {
+  store.upsert({ key: "ask-kit", title: "Kit form", html: "<p>form</p>" });
+  const threadId = runningThread();
+  const pending = host.askPage(threadId, { page: "ask-kit", events: ["submit"], timeoutMs: 5000, signal: new AbortController().signal });
+  await new Promise((r) => setImmediate(r));
+  store.logEvent("ask-kit", { name: "submitted", data: { form: "form0", answers: { stack: "kotlin" }, summary: "Decisions" }, by: "user" });
+  store.closeTab("ask-kit");
+  const result = await pending;
+  assert.ok("answered" in result && result.answered === true);
+  assert.deepEqual(result.events.map((e) => e.name), ["submitted"]);
+  assert.equal(pageQuestion(threadId).status, "answered");
+});
+
+test("closing a form without submitting ends page_ask as closed", async () => {
+  store.upsert({ key: "ask-close", title: "Close me", html: "<p>form</p>" });
+  const threadId = runningThread();
+  const pending = host.askPage(threadId, { page: "ask-close", events: ["submit"], timeoutMs: 5000, signal: new AbortController().signal });
+  await new Promise((r) => setImmediate(r));
+  store.closeTab("ask-close");
+  const result = await pending;
+  assert.ok("answered" in result && result.answered === false);
+  assert.equal(result.closed, true);
+});
+
 test("skipping the chat card ends page_ask with the user's note", async () => {
   store.upsert({ key: "ask-skip", title: "Skip me", html: "<p>form</p>" });
   const threadId = runningThread();
