@@ -788,7 +788,15 @@ export class AgentHost {
       changed: () => {
         if (!this.closed) this.emit({ type: "agent_limits", limits: this.liveLimits() });
       },
-      observed: (account, limits) => this.usageWindowStarts.observe(`claude:${account}`, limits),
+      observed: (account, limits) => {
+        this.usageWindowStarts.observe(`claude:${account}`, limits);
+        // Each added account's own pace, for provider_usage (#1081).
+        const pace = trackPace(this.planPace, `claude:${account}`, limits);
+        if (pace !== this.planPace) {
+          this.planPace = pace;
+          this.db.setSetting("limitPace", pace);
+        }
+      },
       offline: Boolean(this.fakes),
     });
     // An added account's reading once landed on the default meter (#987): drop it, the next read fills it in.
@@ -1046,8 +1054,16 @@ export class AgentHost {
       ]);
     }
     const now = Date.now();
-    const limits = this.liveLimits();
-    const view = usageView(limits, this.spend(), now, this.usageSnapshots.get(threadId), only);
+    let limits = this.liveLimits();
+    const claude = limits.claude;
+    if (claude?.accounts?.length) {
+      // Several accounts (#1081): each account's own pace beside its usage.
+      const accounts = claude.accounts.map((a) => a.limits ? { ...a, limits: withPace(this.planPace, a.id === DEFAULT_ACCOUNT ? "claude" : `claude:${a.id}`, a.limits, now) } : a);
+      limits = { ...limits, claude: { ...claude, accounts } };
+    }
+    const thread = this.threads.get(threadId);
+    const account = thread?.provider === "claude" ? thread.claudeAccount ?? DEFAULT_ACCOUNT : undefined;
+    const view = usageView(limits, this.spend(), now, this.usageSnapshots.get(threadId), only, account);
     this.usageSnapshots.set(threadId, { at: now, limits: { ...this.usageSnapshots.get(threadId)?.limits, ...(only ? { [only]: limits[only as ProviderId] } : limits) } });
     return view;
   }

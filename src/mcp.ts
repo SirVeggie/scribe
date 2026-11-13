@@ -2215,7 +2215,7 @@ function registerHelperTools(server: McpServer): void {
 
   server.tool(
     "provider_usage",
-    "The user's plan usage per provider (claude, codex, cursor; pi: today's pay-per-use API cost), as the usage meters show it: each window's percent used, reset time and pace. Each window also gets its change since this chat's previous call, so call it before and after a piece of work to see what it used. Usage is account-wide: other chats and apps running at the same time count too.",
+    "The user's plan usage per provider (claude, codex, cursor; pi: today's pay-per-use API cost), : each window's percent used, reset time, time left and pace. With several Claude accounts, each account separately (no combined figure), marking the next chat's account and this chat's. Each window also gets its change since this chat's previous call, so call it before and after a piece of work to see what it used. Usage is account-wide: other chats and apps running at the same time count too.",
     {
       provider: z.string().optional().describe("Only this provider: claude, codex, cursor or pi."),
       refresh: z.boolean().optional().describe("Read the providers again first, without a model message (at most once a minute each; Cursor otherwise updates only after its turns). Check at/ageSeconds."),
