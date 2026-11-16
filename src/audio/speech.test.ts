@@ -329,6 +329,43 @@ test("scribeAudio.speak sends text as it arrives to a source with its own stream
   } finally { await browser.close(); }
 });
 
+test("scribeAudio.speak plays an mp3 stream whose first chunk is too short to start on", async () => {
+  const { launchChromium } = await import("../chromium.js");
+  const browser = await launchChromium({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"], purpose: "Speech mp3 stream test" });
+  try {
+    const page = await browser.newPage();
+    // ZONOS3 through the audio gateway: the first chunk is the ID3 tag, the Info frame and two audio frames (~50 ms).
+    const mp3 = fs.readFileSync(new URL("./speech-test.mp3", import.meta.url));
+    await page.route("http://audio.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/audio/settings") return route.fulfill({ json: { speech: "source", tts: {}, output: { sounds: false, volume: 0.6, cues: {} } } });
+      return route.fulfill({ body: "<!doctype html><title>t</title>", headers: { "content-type": "text/html" } });
+    });
+    await page.routeWebSocket(/\/api\/audio\/speech-stream/, ws => {
+      ws.send(JSON.stringify({ type: "ready" }));
+      ws.onMessage(raw => {
+        if (JSON.parse(String(raw)).type !== "end") return;
+        ws.send(JSON.stringify({ type: "start", format: "mp3" }));
+        ws.send(mp3.subarray(0, 644));
+        setTimeout(() => { ws.send(mp3.subarray(644)); ws.send(JSON.stringify({ type: "done", ok: true })); }, 300);
+      });
+    });
+    await page.goto("http://audio.test/");
+    for (const name of ["audio.js", "audio-speech.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    const result = await page.evaluate(`(async () => {
+      const audio = window.scribeAudio;
+      await audio.refresh();
+      let heard = false;
+      const s = audio.speak("Hello from Scribe.", { onState: st => { if (st.state === "speaking") heard = true; } });
+      const done = await Promise.race([s.ended, new Promise(r => setTimeout(() => r({ timeout: true }), 10000))]);
+      return { mse: MediaSource.isTypeSupported("audio/mpeg"), done, heard };
+    })()`) as any;
+    assert.equal(result.mse, true, "the MediaSource path is the one under test");
+    assert.equal(result.done.timeout, undefined, "playback did not stall waiting for play()");
+    assert.equal(result.done.reason, "ended"); assert.equal(result.heard, true);
+  } finally { await browser.close(); }
+});
+
 test("model lists keep an audio server's flagged list, cut a plain OpenAI list to speech or transcription models, and are cached", async () => {
   let calls = 0;
   const lists: Record<string, AudioModels> = {

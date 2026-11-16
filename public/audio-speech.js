@@ -106,16 +106,17 @@
         const media = new MediaSource(); url = URL.createObjectURL(media); el.src = url;
         await once(media, "sourceopen");
         const buffer = media.addSourceBuffer(type), reader = res.body.getReader();
-        let started = false;
+        let started = null;
         for (;;) {
           const { done, value } = await reader.read();
           if (signal.aborted) { void reader.cancel().catch(() => {}); return { ok: true, reason: "stopped" }; }
           if (done) break;
           buffer.appendBuffer(value); await once(buffer, "updateend");
-          if (!started) { started = true; await el.play(); }
+          // Not awaited here: a first chunk too short to play (ZONOS3's is ~50 ms) holds play() until later chunks come.
+          if (!started) { started = el.play(); started.catch(() => {}); }
         }
         if (media.readyState === "open") media.endOfStream();
-        if (!started) await el.play();
+        await (started || el.play());
       } else {
         url = URL.createObjectURL(await res.blob()); el.src = url;
         if (signal.aborted) return { ok: true, reason: "stopped" };
