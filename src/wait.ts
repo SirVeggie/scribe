@@ -66,6 +66,9 @@ export function waitForEvents(opts: {
   return new Promise((resolve) => {
     let settled = false;
     let last: Tab = initial;
+    // Only a close during the wait ends it: a page already closed (a background, Library-only form)
+    // can still be opened and answered (#1082).
+    let closed = false;
 
     const finish = (result: WaitResult) => {
       if (settled) {
@@ -88,7 +91,7 @@ export function waitForEvents(opts: {
         finish(result(current, matching));
         return;
       }
-      if (db.isClosed(tabId)) {
+      if (closed && db.isClosed(tabId)) {
         finish({ ...result(current, []), closed: true });
         return;
       }
@@ -103,12 +106,18 @@ export function waitForEvents(opts: {
         check(false);
       }
     };
+    const onClosed = (id: string) => {
+      if (id === tabId) {
+        closed = true;
+        check(false);
+      }
+    };
     const onAbort = () => check(true);
     const timer = setTimeout(() => check(true), opts.timeoutMs);
 
     db.on("tab_event", onEvent);
     db.on("tab_deleted", onEvent);
-    db.on("tab_closed", onEvent);
+    db.on("tab_closed", onClosed);
     if (opts.abort) {
       if (opts.abort.aborted) {
         onAbort();
@@ -123,7 +132,7 @@ export function waitForEvents(opts: {
       clearTimeout(timer);
       db.off("tab_event", onEvent);
       db.off("tab_deleted", onEvent);
-      db.off("tab_closed", onEvent);
+      db.off("tab_closed", onClosed);
       opts.abort?.removeEventListener("abort", onAbort);
     }
   });

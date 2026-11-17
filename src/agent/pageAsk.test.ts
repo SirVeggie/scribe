@@ -111,6 +111,23 @@ test("closing a form without submitting ends page_ask as closed", async () => {
   assert.equal(result.closed, true);
 });
 
+test("page_ask on a background page with no tab waits for its submit (#1082)", async () => {
+  store.upsert({ key: "ask-bg", title: "Background", html: "<p>form</p>" });
+  store.closeTab("ask-bg");
+  const threadId = runningThread();
+  let done = false;
+  const pending = host.askPage(threadId, { page: "ask-bg", events: ["submit"], timeoutMs: 5000, signal: new AbortController().signal });
+  void pending.then(() => (done = true));
+  await new Promise((r) => setImmediate(r));
+  store.logEvent("ask-bg", { name: "ready", data: null, by: "user" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(done, false);
+  assert.equal(pageQuestion(threadId).status, "pending");
+  store.logEvent("ask-bg", { name: "submit", data: null, by: "user" });
+  const result = await pending;
+  assert.ok("answered" in result && result.answered === true);
+});
+
 test("skipping the chat card ends page_ask with the user's note", async () => {
   store.upsert({ key: "ask-skip", title: "Skip me", html: "<p>form</p>" });
   const threadId = runningThread();
