@@ -167,6 +167,14 @@ if (end?.ok && end.clips) {
 A stop or a failure gives no clips. Without clips, `clipsDropped` says why: `too_large` (over 32 MB
 of audio in the session) or `unsupported` (This browser speaks without audio to keep).
 
+To fetch audio without playing it (filling a cache ahead, many texts at once), use
+`scribe.audio.synthesize(text, { source, model, voice, speed })`. It resolves when all of it has
+arrived, `{ ok: true, clips }` with clips as above (long text in pieces of up to 4096 characters,
+without `durationMs`), or `{ ok: false, error }` with the speak errors plus `unsupported` for This
+browser and `cancelled` when the page closed. Calls can run side by side; each piece counts toward
+the rate limits like a spoken one. It needs no click once `audio.speak` is granted, and works while
+the page is in the background.
+
 To offer a choice, list what the user has set up:
 
 ```js

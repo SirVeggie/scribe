@@ -399,7 +399,10 @@ characters (`chars`, `speechCalls` in `audio-usage.json`).
   otherwise it buffers. Long text is split at sentence ends and requested piece by piece (the
   OpenAI endpoint takes 4096 characters), each piece queued behind the one before.
 - Page API: `scribe.audio.speak(text, { voice, speed })` → `{ stop(), ended }`, and
-  `scribe.audio.voices()`. Permission `audio.speak` ("Read text aloud", default ask, not risky: it
+  `scribe.audio.voices()`. For caching, `speak(…, { keep: true })` adds the played audio to `ended`
+  (`clips`, one per piece, collected as `playResponse` reads it), and `scribe.audio.synthesize(text, opts)`
+  fetches the clips over POST /speech without playing them (op `synthesize`, several at once, cancelled
+  when the page closes; `scribeAudio.synthesize` in the shell). Permission `audio.speak` ("Read text aloud", default ask, not risky: it
   sends the page's text to the speech source and costs money).
 - Engines: OpenAI-compatible `/audio/speech` first. Second, as a no-setup fallback: the browser's
   `speechSynthesis` run in the shell (free, local, robotic), chosen in Settings as the source

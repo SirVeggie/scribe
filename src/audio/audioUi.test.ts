@@ -432,6 +432,24 @@ test("a page speech with keep gets its clips as buffers, which the bridge turns 
   await h.request("speak", { text: "One." });
   assert.equal(opts[1].keep, false, "only when the page asks");
 
+  // synthesize: the clips come back as buffers in the reply; a page closing cancels it.
+  const synthOpts: any[] = [];
+  win.scribeAudio.synthesize = async (text: string, o: any) => {
+    synthOpts.push(o);
+    if (text === "Slow.") return new Promise(resolve => o.signal.addEventListener("abort", () => resolve({ ok: false, error: "cancelled" })));
+    return { ok: true, clips: [{ blob: new Blob(["two"], { type: "audio/mpeg" }), mimeType: "audio/mpeg", text }] };
+  };
+  const synth = await h.request("synthesize", { text: "Two.", source: "k", model: "m", voice: "nova", speed: 1.2 });
+  assert.equal(synth.ok, true); assert.equal(Buffer.from(synth.clips[0].buffer).toString(), "two"); assert.equal(synth.clips[0].text, "Two.");
+  assert.deepEqual([synthOpts[0].sourceId, synthOpts[0].model, synthOpts[0].voice, synthOpts[0].speed], ["k", "m", "nova", 1.2]);
+  const slow = h.request("synthesize", { text: "Slow." });
+  await new Promise(r => setTimeout(r, 20));
+  vm.runInContext("cancelPageAudio('page')", h.context);
+  assert.equal((await slow).error, "cancelled");
+  win.scribePermissions.query = async () => ({ permissions: [{ id: "audio.speak", value: "ask" }] });
+  assert.equal((await h.request("synthesize", { text: "Three." })).permission, "audio.speak", "no click and no grant");
+  assert.equal(synthOpts.length, 2);
+
   const browser = await launchChromium({ headless: true, args: [], purpose: "Speech clips bridge test" });
   try {
     const page = await browser.newPage();
@@ -439,6 +457,10 @@ test("a page speech with keep gets its clips as buffers, which the bridge turns 
     const shell = `<script>window.sent = [];
       window.addEventListener("message", e => {
         const d = e.data;
+        if (d?.type === "scribe-audio" && d.op === "synthesize") {
+          const buffer = new TextEncoder().encode("xyz").buffer;
+          return e.source.postMessage({ type: "scribe-open-result", id: d.id, reqId: d.reqId, result: { ok: true, clips: [{ buffer, mimeType: "audio/wav", text: d.text }] } }, "*", [buffer]);
+        }
         if (d?.type !== "scribe-audio" || d.op !== "speak") return;
         sent.push(d);
         e.source.postMessage({ type: "scribe-open-result", id: d.id, reqId: d.reqId, result: { ok: true, sessionId: "s1" } }, "*");
@@ -461,6 +483,11 @@ test("a page speech with keep gets its clips as buffers, which the bridge turns 
     assert.equal(got.ok, true);
     assert.equal(got.isBlob, true); assert.equal(got.text, "abc"); assert.equal(got.type, "audio/mpeg");
     assert.deepEqual(got.clip, { mimeType: "audio/mpeg", text: "Hi.", durationMs: 300, keys: ["blob", "durationMs", "mimeType", "text"] });
+    const synthesized = await frame.evaluate(`(async () => {
+      const r = await scribe.audio.synthesize("Made.");
+      return { ok: r.ok, n: r.clips.length, text: await r.clips[0].blob.text(), type: r.clips[0].blob.type, clipText: r.clips[0].text, empty: (await scribe.audio.synthesize(" ")).error };
+    })()`) as any;
+    assert.deepEqual(synthesized, { ok: true, n: 1, text: "xyz", type: "audio/wav", clipText: "Made.", empty: "invalid_audio" });
   } finally { await browser.close(); }
 });
 

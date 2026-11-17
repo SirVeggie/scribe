@@ -429,6 +429,23 @@ test("scribeAudio.speak with keep gives the audio of each piece played, and none
       return await window.scribeAudio.speak("Hi.", { keep: true, mode: "browser" }).ended;
     })()`) as any;
     assert.equal(local.reason, "ended"); assert.equal(local.clips, undefined); assert.equal(local.clipsDropped, "unsupported");
+
+    const synth = await page.evaluate(`(async () => {
+      const audio = window.scribeAudio;
+      let plays = 0; const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function () { plays++; return play.call(this); };
+      const both = await Promise.all([audio.synthesize("One sentence. Two sentences."), audio.synthesize("Another text.", { sourceId: "k", voice: "nova" })]);
+      const clips = await Promise.all(both.map(r => Promise.all(r.clips.map(c => ({ size: c.blob.size, type: c.blob.type, mimeType: c.mimeType, text: c.text })))));
+      const controller = new AbortController(); controller.abort();
+      return { ok: both.map(r => r.ok), clips, plays,
+        cancelled: await audio.synthesize("Never.", { signal: controller.signal }),
+        browser: await audio.synthesize("Hi.", { sourceId: "__browser__" }), empty: await audio.synthesize("  ") };
+    })()`) as any;
+    assert.deepEqual(synth.ok, [true, true]);
+    assert.equal(synth.plays, 0, "nothing plays");
+    assert.deepEqual(synth.clips, [[{ size: wav.length, type: "audio/wav", mimeType: "audio/wav", text: "One sentence. Two sentences." }],
+      [{ size: wav.length, type: "audio/wav", mimeType: "audio/wav", text: "Another text." }]], "a short text is one piece");
+    assert.equal(synth.cancelled.error, "cancelled"); assert.equal(synth.browser.error, "unsupported"); assert.equal(synth.empty.error, "invalid_audio");
   } finally { await browser.close(); }
 });
 

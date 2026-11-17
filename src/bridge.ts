@@ -1862,6 +1862,21 @@ ${POINTER_DRAG_JS}
 
   // ---------- audio ----------
   var audioSessions = {}, speechSessions = {};
+  /** A speech clip from the shell ({ buffer, mimeType, text, durationMs? }) as the page gets it: { blob, mimeType, text, durationMs? }. */
+  function speechClip(clip) {
+    var out = { blob: new Blob([clip.buffer], { type: clip.mimeType }), mimeType: clip.mimeType, text: clip.text };
+    if (clip.durationMs != null) out.durationMs = clip.durationMs;
+    return out;
+  }
+  /** The audio for text without playing it: { ok, clips: [{ blob, mimeType, text }] }, one clip per piece the source read. */
+  function synthesize(text, opts) {
+    opts = opts || {};
+    if (typeof text !== "string" || !text.trim()) return Promise.resolve({ ok: false, error: "invalid_audio" });
+    return askBoard({ type: "scribe-audio", op: "synthesize", text: text, source: opts.source, model: opts.model, voice: opts.voice, speed: opts.speed }, 600000).then(function (result) {
+      if (!result || !result.ok) return result || { ok: false, error: "unavailable" };
+      return { ok: true, clips: (result.clips || []).map(speechClip) };
+    });
+  }
   function speak(text, opts) {
     // speak({ stream: true, ... }): text comes later through append().
     if (text && typeof text === "object") { opts = text; text = undefined; }
@@ -1898,11 +1913,7 @@ ${POINTER_DRAG_JS}
         delete speechSessions[event.data.sessionId];
         var ended = event.data.ended;
         // keep: true: the audio played, as { blob, mimeType, text, durationMs? } per piece.
-        if (Array.isArray(ended.clips)) ended.clips = ended.clips.map(function (clip) {
-          var out = { blob: new Blob([clip.buffer], { type: clip.mimeType }), mimeType: clip.mimeType, text: clip.text };
-          if (clip.durationMs != null) out.durationMs = clip.durationMs;
-          return out;
-        });
+        if (Array.isArray(ended.clips)) ended.clips = ended.clips.map(speechClip);
         speech.finish(ended);
       }
       else if (event.data.state && typeof speech.session.onstate === "function") {
@@ -2048,6 +2059,7 @@ ${POINTER_DRAG_JS}
     },
     available: function () { return askBoard({ type: "scribe-audio", op: "available" }, 30000); },
     speak: speak,
+    synthesize: synthesize,
     sources: function () { return askBoard({ type: "scribe-audio", op: "speech-sources" }, 30000); },
     models: function (opts) { return askBoard({ type: "scribe-audio", op: "models", source: opts && opts.source }, 30000); },
     // One model's details and Markdown guide: what it supports and how to write text for it.

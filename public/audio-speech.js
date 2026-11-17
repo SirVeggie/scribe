@@ -385,6 +385,33 @@
   }
 
   /**
+   * The audio for text without playing it (a page's scribe.audio.synthesize, to cache speech): the text in pieces of at
+   * most MAX_CHARS, fetched in turn. Resolves { ok: true, clips: [{ blob, mimeType, text }] } or a failure; opts.signal
+   * cancels it. This browser's voices make no audio to give (unsupported).
+   */
+  async function synthesize(text, opts = {}) {
+    const pieces = splitSpeech(text);
+    if (!pieces.length) return failure("invalid_audio", "Give the text to read aloud.");
+    const view = window.scribeAudio.settings() || await window.scribeAudio.refresh().catch(() => null);
+    const mode = opts.sourceId ? (opts.sourceId === "__browser__" ? "browser" : "source") : view?.speech;
+    if (mode === "browser") return failure("unsupported", "This browser reads text aloud without audio to keep.");
+    if (mode !== "source") return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
+    const signal = opts.signal || new AbortController().signal, clips = [];
+    let bytes = 0;
+    for (const piece of pieces) {
+      const got = await fetchPiece(piece, opts, signal);
+      if (got.stopped || signal.aborted) return failure("cancelled", "Stopped.");
+      if (!got.ok) return got;
+      const type = (got.res.headers.get("content-type") || "audio/mpeg").split(";")[0];
+      const blob = await got.res.blob().catch(() => null);
+      if (!blob) return signal.aborted ? failure("cancelled", "Stopped.") : failure("network", "The text-to-speech audio did not arrive.");
+      if ((bytes += blob.size) > KEEP_BYTES) return failure("too_large", "The audio is over 32 MB.");
+      clips.push({ blob: blob.type === type ? blob : new Blob([blob], { type }), mimeType: type, text: piece });
+    }
+    return { ok: true, clips };
+  }
+
+  /**
    * Voices for the chosen text-to-speech source: the browser's own, or the server's list
    * (GET …/audio/voices, through the daemon). Servers without a list get the OpenAI names (listed: false).
    * opts.source: "browser", or a source to ask about: { id } for a saved one, or the editor's draft.
@@ -442,6 +469,6 @@
     } catch { return failure("network", "Cannot reach text-to-speech."); }
   }
 
-  Object.assign(window.scribeAudio, { speak, voices, speechSources: sources, models, model, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
+  Object.assign(window.scribeAudio, { speak, synthesize, voices, speechSources: sources, models, model, voiceName, splitSpeech, stopSpeech: () => current?.stop() });
   window.addEventListener("pagehide", () => current?.stop());
 })();

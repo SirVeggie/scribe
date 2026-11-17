@@ -765,7 +765,7 @@
       if (msg.value !== "allow" && ((msg.perm === "audio.microphone" && pageAudioSessions.get(msg.id)?.mode !== "stream") ||
         (msg.perm === "audio.microphoneStream" && pageAudioSessions.get(msg.id)?.mode === "stream") ||
         (msg.perm === "audio.transcribe" && pageAudioSessions.get(msg.id)?.mode === "listen"))) cancelPageAudio(msg.id, "revoked");
-      if (msg.value !== "allow" && msg.perm === "audio.speak") stopPageSpeech(msg.id);
+      if (msg.value !== "allow" && msg.perm === "audio.speak") { stopPageSpeech(msg.id); cancelPageSynth(msg.id); }
       return;
     }
     if (msg.type === "update") {
@@ -5336,8 +5336,11 @@
   /** Text a page is having read aloud (scribe.audio.speak): one per page; it goes on while the tab is in the background. */
   const pageSpeech = new Map();
   function stopPageSpeech(id) { pageSpeech.get(id)?.session.stop(); pageSpeech.delete(id); }
+  /** Audio a page is fetching without playing it (scribe.audio.synthesize): several at once, cancelled with the page. */
+  const pageSynth = new Map();
+  function cancelPageSynth(id) { for (const controller of pageSynth.get(id) || []) controller.abort(); pageSynth.delete(id); }
   function cancelPageAudio(id, reason = "stopped") {
-    if (reason !== "hidden") stopPageSpeech(id);
+    if (reason !== "hidden") { stopPageSpeech(id); cancelPageSynth(id); }
     const session = pageAudioSessions.get(id);
     if (!session) return;
     endPageAudioStream(session, reason);
@@ -5433,6 +5436,27 @@
         if (data.op === "models") return reply(await api.models({ source: sourceArg }));
         if (data.op === "model") return reply(await api.model({ source: sourceArg, model: modelArg }));
         return reply(await api.voices(sourceArg ? { source: sourceArg, model: modelArg } : {}));
+      }
+      if (data.op === "synthesize") {
+        if (!api.synthesize) return reply({ ok: false, error: "unavailable" });
+        if (typeof data.text !== "string" || !data.text.trim()) return reply({ ok: false, error: "invalid_audio" });
+        if (data.text.length > 100000) return reply({ ok: false, error: "too_large" });
+        const denied = await speakGate();
+        if (denied) return reply(denied);
+        const controller = new AbortController();
+        if (!pageSynth.has(id)) pageSynth.set(id, new Set());
+        pageSynth.get(id).add(controller);
+        try {
+          const result = await api.synthesize(data.text, { tabId: id, sourceId: sourceArg, model: modelArg, signal: controller.signal,
+            voice: typeof data.voice === "string" ? data.voice.slice(0, 200) : undefined, speed: Number.isFinite(data.speed) ? data.speed : undefined });
+          if (!result.ok) return reply(result);
+          // Buffers, as kept speech clips are; the bridge makes Blobs again.
+          const clips = await Promise.all(result.clips.map(async ({ blob, ...clip }) => ({ ...clip, buffer: await blob.arrayBuffer() })));
+          return event.source?.postMessage({ type: "scribe-open-result", id: data.id, reqId: data.reqId, result: { ok: true, clips } }, event.origin, clips.map(clip => clip.buffer));
+        } finally {
+          pageSynth.get(id)?.delete(controller);
+          if (!pageSynth.get(id)?.size) pageSynth.delete(id);
+        }
       }
       if (data.op === "speak-stop") {
         if (pageSpeech.get(id)?.id === data.sessionId) stopPageSpeech(id);
