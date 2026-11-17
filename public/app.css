@@ -1054,7 +1054,16 @@ body.resizing-side .side-pane {
   border-radius: 8px;
   cursor: pointer;
   color: var(--text);
+  /* A touch hold opens the row's menu (pointer-drag.js), not a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   transition: background var(--dur-fast) ease;
+}
+
+.side-row input {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .side-row:hover {
