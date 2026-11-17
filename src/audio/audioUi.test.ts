@@ -413,6 +413,57 @@ test("pages list speech sources, models and voices only with audio.speak, and pa
   assert.deepEqual(asked.map(([op, o]) => [op, o.source ?? o.sourceId, o.model]), [["models", "k", undefined], ["model", "k", "kokoro"], ["voices", "k", "kokoro"], ["speak", "k", "kokoro"]]);
 });
 
+test("a page speech with keep gets its clips as buffers, which the bridge turns back into Blobs", async () => {
+  const h = pageAudioHarness(), win = h.context.window;
+  win.scribePermissions.query = async () => ({ permissions: [{ id: "audio.speak", value: "allow" }] });
+  const opts: any[] = [];
+  win.scribeAudio.speak = (_text: unknown, o: any) => {
+    opts.push(o);
+    const clips = o.keep ? [{ blob: new Blob(["one"], { type: "audio/wav" }), mimeType: "audio/wav", text: "One.", durationMs: 500 }] : undefined;
+    return { stop() {}, ended: Promise.resolve({ ok: true, reason: "ended", spoken: "One.", ...(clips ? { clips } : {}) }) };
+  };
+  await h.request("speak", { text: "One.", keep: true });
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(opts[0].keep, true);
+  const ended = h.posted.find(m => m.type === "scribe-audio-event" && m.ended)?.ended;
+  assert.equal(ended.clips.length, 1);
+  assert.ok(ended.clips[0].buffer instanceof ArrayBuffer); assert.equal(ended.clips[0].blob, undefined);
+  assert.equal(Buffer.from(ended.clips[0].buffer).toString(), "one");
+  await h.request("speak", { text: "One." });
+  assert.equal(opts[1].keep, false, "only when the page asks");
+
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Speech clips bridge test" });
+  try {
+    const page = await browser.newPage();
+    // The shell side answers speak, then ends it with a kept clip as app.js posts it.
+    const shell = `<script>window.sent = [];
+      window.addEventListener("message", e => {
+        const d = e.data;
+        if (d?.type !== "scribe-audio" || d.op !== "speak") return;
+        sent.push(d);
+        e.source.postMessage({ type: "scribe-open-result", id: d.id, reqId: d.reqId, result: { ok: true, sessionId: "s1" } }, "*");
+        const buffer = new TextEncoder().encode("abc").buffer;
+        setTimeout(() => e.source.postMessage({ type: "scribe-audio-event", sessionId: "s1",
+          ended: { ok: true, reason: "ended", clips: [{ buffer, mimeType: "audio/mpeg", text: "Hi.", durationMs: 300 }] } }, "*", [buffer]), 10);
+      });</script><iframe src="/frame"></iframe>`;
+    await page.route("http://bridge.test/**", route => route.fulfill({ contentType: "text/html",
+      body: route.request().url().endsWith("/frame") ? `<script>window.__SCRIBE_BOOT__={id:'page'};</script><script>${BOARD_BRIDGE_JS}</script>` : shell }));
+    await page.goto("http://bridge.test/");
+    const frame = page.frames()[1];
+    await frame.waitForFunction(() => !!(window as any).scribe);
+    const got = await frame.evaluate(`(async () => {
+      const speech = await scribe.audio.speak("Hi.", { keep: true });
+      const end = await speech.ended;
+      const clip = end.clips?.[0];
+      return { ok: speech.ok, isBlob: clip?.blob instanceof Blob, text: clip && await clip.blob.text(), type: clip?.blob.type, clip: clip && { mimeType: clip.mimeType, text: clip.text, durationMs: clip.durationMs, keys: Object.keys(clip).sort() } };
+    })()`) as any;
+    assert.equal(await page.evaluate(() => (window as any).sent[0]?.keep), true, "the bridge forwards keep");
+    assert.equal(got.ok, true);
+    assert.equal(got.isBlob, true); assert.equal(got.text, "abc"); assert.equal(got.type, "audio/mpeg");
+    assert.deepEqual(got.clip, { mimeType: "audio/mpeg", text: "Hi.", durationMs: 300, keys: ["blob", "durationMs", "mimeType", "text"] });
+  } finally { await browser.close(); }
+});
+
 test("a streamed page speech takes appended text in order, ends on request and stops past 100 000 characters", async () => {
   const h = pageAudioHarness(), win = h.context.window;
   win.scribePermissions.query = async () => ({ permissions: [{ id: "audio.speak", value: "allow" }] });

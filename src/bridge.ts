@@ -1868,7 +1868,7 @@ ${POINTER_DRAG_JS}
     opts = opts || {};
     var stream = opts.stream === true;
     if (!stream && (typeof text !== "string" || !text.trim())) return Promise.resolve({ ok: false, error: "invalid_audio" });
-    return askBoard({ type: "scribe-audio", op: "speak", text: text, stream: stream, source: opts.source, model: opts.model, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
+    return askBoard({ type: "scribe-audio", op: "speak", text: text, stream: stream, keep: opts.keep === true, source: opts.source, model: opts.model, voice: opts.voice, speed: opts.speed }, 120000).then(function (result) {
       if (!result || !result.ok) return result || { ok: false, error: "unavailable" };
       var finish, done = false;
       var session = { ok: true, onstate: null,
@@ -1894,7 +1894,17 @@ ${POINTER_DRAG_JS}
     if (event.source !== parent || event.data?.type !== "scribe-audio-event") return;
     var speech = speechSessions[event.data.sessionId];
     if (speech) {
-      if (event.data.ended) { delete speechSessions[event.data.sessionId]; speech.finish(event.data.ended); }
+      if (event.data.ended) {
+        delete speechSessions[event.data.sessionId];
+        var ended = event.data.ended;
+        // keep: true: the audio played, as { blob, mimeType, text, durationMs? } per piece.
+        if (Array.isArray(ended.clips)) ended.clips = ended.clips.map(function (clip) {
+          var out = { blob: new Blob([clip.buffer], { type: clip.mimeType }), mimeType: clip.mimeType, text: clip.text };
+          if (clip.durationMs != null) out.durationMs = clip.durationMs;
+          return out;
+        });
+        speech.finish(ended);
+      }
       else if (event.data.state && typeof speech.session.onstate === "function") {
         try { speech.session.onstate(event.data.state, { piece: event.data.piece, pieces: event.data.pieces, text: event.data.text, spoken: event.data.spoken }); } catch (_) {}
       }

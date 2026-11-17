@@ -5461,15 +5461,18 @@
         if (frames.get(id) !== entry || entry.revision !== revision || entry.el.dataset?.audioGeneration !== generation) return reply({ ok: false, error: "cancelled" });
         stopPageSpeech(id);
         const sessionId = crypto.randomUUID(), source = event.source;
-        const session = api.speak(stream ? null : data.text, { tabId: id, sourceId: sourceArg, model: modelArg, stream,
+        const session = api.speak(stream ? null : data.text, { tabId: id, sourceId: sourceArg, model: modelArg, stream, keep: data.keep === true,
           voice: typeof data.voice === "string" ? data.voice.slice(0, 200) : undefined,
           speed: Number.isFinite(data.speed) ? data.speed : undefined,
           onState: state => source?.postMessage({ type: "scribe-audio-event", sessionId, state: state.state, piece: state.piece, pieces: state.pieces,
             text: state.text, spoken: state.spoken }, event.origin) });
         pageSpeech.set(id, { id: sessionId, session, source, chars: 0 });
-        void session.ended.then(result => {
+        void session.ended.then(async result => {
           if (pageSpeech.get(id)?.id === sessionId) pageSpeech.delete(id);
-          source?.postMessage({ type: "scribe-audio-event", sessionId, ended: result }, event.origin);
+          // Kept audio (keep: true) goes to the page as buffers, moved rather than copied; the bridge makes Blobs again.
+          if (!Array.isArray(result?.clips)) return source?.postMessage({ type: "scribe-audio-event", sessionId, ended: result }, event.origin);
+          const clips = await Promise.all(result.clips.map(async ({ blob, ...clip }) => ({ ...clip, buffer: await blob.arrayBuffer() })));
+          source?.postMessage({ type: "scribe-audio-event", sessionId, ended: { ...result, clips } }, event.origin, clips.map(clip => clip.buffer));
         });
         return reply({ ok: true, sessionId });
       }

@@ -91,12 +91,42 @@
   let current = null;
   const once = (target, name) => new Promise(resolve => target.addEventListener(name, resolve, { once: true }));
 
+  // Audio a speech keeps for its caller (opts.keep), in all; past it the clips are dropped. Matches a page asset's limit.
+  const KEEP_BYTES = 32 * 1024 * 1024;
+  /**
+   * The audio of each piece played to the end, for opts.keep: clips [{ blob, mimeType, text, durationMs? }] in
+   * piece order. A speech that stops or fails keeps none; one past KEEP_BYTES says clipsDropped: "too_large".
+   */
+  function clipKeeper() {
+    const clips = [];
+    let bytes = 0, dropped = false;
+    return {
+      /** One piece's capture: add(chunk) as its bytes arrive, done(type, text, seconds) once it played to the end. */
+      piece() {
+        const chunks = [];
+        return {
+          add(chunk) {
+            if (dropped) return;
+            if ((bytes += chunk.byteLength ?? chunk.size) > KEEP_BYTES) { dropped = true; clips.length = 0; return; }
+            chunks.push(chunk);
+          },
+          done(type, text, seconds) {
+            if (dropped) return;
+            clips.push({ blob: new Blob(chunks, { type }), mimeType: type, text, ...(Number.isFinite(seconds) ? { durationMs: Math.round(seconds * 1000) } : {}) });
+          },
+        };
+      },
+      result: () => dropped ? { clipsDropped: "too_large" } : { clips: clips.slice() },
+    };
+  }
+
   /**
    * Plays one /api/audio/speech response; with MediaSource it starts before the download ends.
    * onPlaying runs when sound actually starts, not when the response does: a streaming server
    * answers (and the gateway sends start) before it has generated any audio.
+   * capture (opts.keep): gets the response's bytes, and done() once it played to the end.
    */
-  async function playResponse(res, el, signal, onPlaying) {
+  async function playResponse(res, el, signal, onPlaying, capture, text) {
     const type = (res.headers.get("content-type") || "audio/mpeg").split(";")[0];
     let url;
     const playing = () => onPlaying?.();
@@ -111,6 +141,8 @@
           const { done, value } = await reader.read();
           if (signal.aborted) { void reader.cancel().catch(() => {}); return { ok: true, reason: "stopped" }; }
           if (done) break;
+          // appendBuffer copies the bytes, so the chunk can be kept as it is.
+          capture?.add(value);
           buffer.appendBuffer(value); await once(buffer, "updateend");
           // Not awaited here: a first chunk too short to play (ZONOS3's is ~50 ms) holds play() until later chunks come.
           if (!started) { started = el.play(); started.catch(() => {}); }
@@ -118,7 +150,9 @@
         if (media.readyState === "open") media.endOfStream();
         await (started || el.play());
       } else {
-        url = URL.createObjectURL(await res.blob()); el.src = url;
+        const blob = await res.blob();
+        capture?.add(blob);
+        url = URL.createObjectURL(blob); el.src = url;
         if (signal.aborted) return { ok: true, reason: "stopped" };
         await el.play();
       }
@@ -127,6 +161,7 @@
         el.onerror = () => resolve("error");
         signal.addEventListener("abort", () => resolve("stopped"), { once: true });
       });
+      if (reason === "ended") capture?.done(type, typeof text === "function" ? text() : text, el.duration);
       return reason === "error" ? failure("format", "Cannot play the speech audio.") : { ok: true, reason };
     } catch (err) {
       if (signal.aborted) return { ok: true, reason: "stopped" };
@@ -175,7 +210,7 @@
       // The next piece downloads while this one plays; text appended meanwhile waits for the one after.
       next = fetchNext();
       const played = await playResponse(item.got.res, el, signal,
-        () => opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text: item.text, spoken: spoken.join(" ") }));
+        () => opts.onState?.({ state: "speaking", piece: i, pieces: queue.count(), text: item.text, spoken: spoken.join(" ") }), opts.keeper?.piece(), item.text);
       if (!played.ok || played.reason === "stopped") {
         void next.then(rest => rest?.got.res?.body?.cancel().catch(() => {}));
         return heard(played, spoken, item.text);
@@ -263,7 +298,7 @@
     const text = () => sent.replace(/\s+/g, " ").trim();
     if (signal.aborted) return heard({ ok: true, reason: "stopped" }, [], text());
     if (!res) { const result = await done; return result.ok === false ? result : heard({ ok: true, reason: "ended" }, []); }
-    const played = await playResponse(res, el, signal, () => opts.onState?.({ state: "speaking", piece: 0, pieces: 1, text: text(), spoken: "" }));
+    const played = await playResponse(res, el, signal, () => opts.onState?.({ state: "speaking", piece: 0, pieces: 1, text: text(), spoken: "" }), opts.keeper?.piece(), text);
     // Only the whole text is known: a stop reports what was sent as partial.
     if (!played.ok || played.reason === "stopped") { send({ type: "cancel" }); return heard(played, [], text()); }
     const result = await done;
@@ -314,9 +349,16 @@
    * opts.stream: no text up front; session.append(text) adds text as it arrives and session.end() says
    * there is no more. A source with its own stream (/stream WebSocket) gets the text as it arrives and cuts it
    * itself; others read each piece once its sentence ends, and stopping drops what was not fetched yet.
+   * opts.keep: an ended speech also gives the audio it played, clips (see clipKeeper); This browser has none to give
+   * (clipsDropped: "unsupported").
    */
   function speak(text, opts = {}) {
     current?.stop();
+    const keeper = opts.keep ? clipKeeper() : null;
+    if (keeper) opts = { ...opts, keeper };
+    let browser = false;
+    const kept = result => !keeper || !result.ok || result.reason !== "ended" ? result
+      : { ...result, ...(browser ? { clipsDropped: "unsupported" } : keeper.result()) };
     const controller = new AbortController(), input = textInput(), queue = speechQueue();
     const session = { stop() { input.close(); queue.close(); controller.abort(); window.speechSynthesis?.cancel(); return session.ended; } };
     if (opts.stream) Object.assign(session, { append: more => input.append(more), end: () => input.close() });
@@ -329,7 +371,7 @@
       const mode = opts.mode || (opts.sourceId ? (opts.sourceId === "__browser__" ? "browser" : "source") : view?.speech);
       const settings = view?.tts || {};
       const merged = { ...opts, voice: opts.voice ?? settings.voice, speed: opts.speed ?? settings.speed };
-      if (mode === "browser") { queue.max = queue.first = BROWSER_CHARS; input.pipe(queue); return speakBrowser(queue, merged, controller.signal); }
+      if (mode === "browser") { browser = true; queue.max = queue.first = BROWSER_CHARS; input.pipe(queue); return speakBrowser(queue, merged, controller.signal); }
       if (mode !== "source") return failure("no_source", "Choose a text-to-speech source in Settings → Audio.");
       // The daemon fills in the saved voice and speed. A server with its own stream takes the text as it is.
       const stream = await openStream(opts, controller.signal);
@@ -338,7 +380,7 @@
       if (!stream.fallback) return stream;
       queue.first = FIRST_CHARS; input.pipe(queue);
       return speakSource(queue, opts, controller.signal);
-    })().catch(() => failure("engine", "Text-to-speech is unavailable.")).finally(() => { input.close(); queue.close(); if (current === session) current = null; });
+    })().then(kept).catch(() => failure("engine", "Text-to-speech is unavailable.")).finally(() => { input.close(); queue.close(); if (current === session) current = null; });
     return session;
   }
 

@@ -366,6 +366,72 @@ test("scribeAudio.speak plays an mp3 stream whose first chunk is too short to st
   } finally { await browser.close(); }
 });
 
+test("scribeAudio.speak with keep gives the audio of each piece played, and none after a stop or for This browser", async () => {
+  const { launchChromium } = await import("../chromium.js");
+  const browser = await launchChromium({ headless: true, args: ["--autoplay-policy=no-user-gesture-required"], purpose: "Speech keep test" });
+  try {
+    const page = await browser.newPage();
+    const wav = fs.readFileSync(new URL("../../public/audio-test.wav", import.meta.url));
+    const mp3 = fs.readFileSync(new URL("./speech-test.mp3", import.meta.url));
+    let native = false;
+    await page.route("http://audio.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/audio/speech") return route.fulfill({ body: wav, headers: { "content-type": "audio/wav" } });
+      if (path === "/api/audio/settings") return route.fulfill({ json: { speech: "source", tts: {}, output: { sounds: false, volume: 0.6, cues: {} } } });
+      return route.fulfill({ body: "<!doctype html><title>t</title>", headers: { "content-type": "text/html" } });
+    });
+    await page.routeWebSocket(/\/api\/audio\/speech-stream/, ws => {
+      if (!native) { ws.send(JSON.stringify({ type: "fallback" })); ws.close(); return; }
+      ws.send(JSON.stringify({ type: "ready" }));
+      ws.onMessage(raw => {
+        if (JSON.parse(String(raw)).type !== "end") return;
+        // In two chunks, through MediaSource: the clip must hold both.
+        ws.send(JSON.stringify({ type: "start", format: "mp3" }));
+        ws.send(mp3.subarray(0, 644));
+        setTimeout(() => { ws.send(mp3.subarray(644)); ws.send(JSON.stringify({ type: "done", ok: true })); }, 100);
+      });
+    });
+    await page.goto("http://audio.test/");
+    for (const name of ["audio.js", "audio-speech.js"]) await page.addScriptTag({ content: fs.readFileSync(new URL(`../../public/${name}`, import.meta.url), "utf8") });
+    const view = (end: string) => `await (async (end) => ({ ...end, clips: end.clips && await Promise.all(end.clips.map(async c =>
+      ({ ...c, blob: undefined, size: c.blob.size, isBlob: c.blob instanceof Blob, head: [...new Uint8Array(await c.blob.slice(0, 4).arrayBuffer())] }))) }))(${end})`;
+    const plain = await page.evaluate(`(async () => {
+      const audio = window.scribeAudio;
+      await audio.refresh();
+      const kept = ${view("await audio.speak('First sentence here. ' + 'Another sentence follows. '.repeat(20), { keep: true }).ended")};
+      const plainEnd = await audio.speak("No keeping.").ended;
+      const s = audio.speak("Stopped before the end.", { keep: true });
+      await new Promise(r => setTimeout(r, 30));
+      const stopped = await s.stop();
+      return { kept, plainEnd, stopped };
+    })()`) as any;
+    assert.equal(plain.kept.reason, "ended");
+    assert.equal(plain.kept.clips.length, 2, "one clip per sentence piece");
+    assert.deepEqual(plain.kept.clips.map((c: any) => c.size), [wav.length, wav.length]);
+    assert.ok(plain.kept.clips.every((c: any) => c.isBlob && c.mimeType === "audio/wav" && c.durationMs > 0));
+    assert.deepEqual(plain.kept.clips[0].head, [...wav.subarray(0, 4)]);
+    assert.equal(plain.kept.spoken, plain.kept.clips.map((c: any) => c.text).join(" "));
+    assert.equal(plain.plainEnd.clips, undefined, "only when asked");
+    assert.equal(plain.stopped.reason, "stopped"); assert.equal(plain.stopped.clips, undefined);
+
+    native = true;
+    const streamed = await page.evaluate(`(async () => {
+      const s = window.scribeAudio.speak(null, { stream: true, keep: true });
+      s.append("Hello "); s.append("there."); s.end();
+      return ${view("await s.ended")};
+    })()`) as any;
+    assert.equal(streamed.reason, "ended");
+    assert.equal(streamed.clips.length, 1, "a source's own stream is one clip");
+    assert.equal(streamed.clips[0].size, mp3.length); assert.equal(streamed.clips[0].mimeType, "audio/mpeg"); assert.equal(streamed.clips[0].text, "Hello there.");
+
+    const local = await page.evaluate(`(async () => {
+      window.speechSynthesis.speak = u => setTimeout(() => u.onend(), 10);
+      return await window.scribeAudio.speak("Hi.", { keep: true, mode: "browser" }).ended;
+    })()`) as any;
+    assert.equal(local.reason, "ended"); assert.equal(local.clips, undefined); assert.equal(local.clipsDropped, "unsupported");
+  } finally { await browser.close(); }
+});
+
 test("model lists keep an audio server's flagged list, cut a plain OpenAI list to speech or transcription models, and are cached", async () => {
   let calls = 0;
   const lists: Record<string, AudioModels> = {

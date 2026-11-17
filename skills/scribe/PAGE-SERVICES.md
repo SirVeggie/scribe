@@ -148,6 +148,25 @@ if (speech.ok) {
 A session takes up to 100 000 characters in all (`too_large` stops it). Rate limits count each
 fetched piece, or a whole streamed session once with its characters as they are sent.
 
+To keep what was read (a cache, so a page can play a clip again without asking the server), pass
+`keep: true`, whole text or streamed. A speech that ends normally then gives the audio it played,
+one clip per piece in order: one for a server with its own stream, one per sentence piece for a
+plain server. Save each with `scribe.saveAsset` and play them back in order with `scribe.audio.play`.
+
+```js
+const speech = await scribe.audio.speak(text, { voice, keep: true });
+const end = speech.ok && await speech.ended;
+if (end?.ok && end.clips) {
+  // clips: [{ blob, mimeType, text, durationMs? }]
+  const assets = await Promise.all(end.clips.map(clip => scribe.saveAsset(clip.blob)));
+  scribe.set({ cache: [...cache, { id, text, voice, clips: assets.map(a => a.id) }] });
+}
+// Later: for (const id of entry.clips) await scribe.audio.play(scribe.assetUrl(id)).ended;
+```
+
+A stop or a failure gives no clips. Without clips, `clipsDropped` says why: `too_large` (over 32 MB
+of audio in the session) or `unsupported` (This browser speaks without audio to keep).
+
 To offer a choice, list what the user has set up:
 
 ```js
