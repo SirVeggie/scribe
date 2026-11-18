@@ -192,6 +192,43 @@ test("a chat leaves an account that hit its usage limit, even while warm and wit
   assert.equal(p.resolve({ claudeAccount: "acc_1" }, Date.now() - 60_000), "acc_1", "all full: stays, it frees up first");
 });
 
+test("a signed-out default login's leftover email does not block adding that account (#1084)", async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-add-"));
+  const prevConfig = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = path.join(data, "default");
+  fs.mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "a@x" } }));
+  try {
+    for (const signedIn of [true, false]) {
+      const provider: AccountProvider = {
+        loginAccount: async (dir) => {
+          fs.writeFileSync(path.join(dir, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "a@x" } }));
+          return true;
+        },
+        accountStatus: async () => ({ loggedIn: true }), logoutAccount: async () => undefined, fetchPlanUsage: async () => null, signedIn: () => signedIn,
+      };
+      const settings: Record<string, unknown> = {};
+      const p = new ClaudeAccountPool({
+        getSetting: <T,>(key: string, fallback: T) => (key in settings ? settings[key] as T : fallback),
+        setSetting: (key, value) => { settings[key] = value; },
+        provider: () => provider, dataDir: data, defaultLimits: () => undefined, running: () => 0, changed: () => undefined, offline: true,
+      });
+      p.add();
+      await new Promise((r) => setTimeout(r, 20));
+      if (signedIn) {
+        assert.match(p.lastError ?? "", /already signed in/);
+        assert.equal(p.list().length, 1);
+      } else {
+        assert.equal(p.lastError, null);
+        assert.deepEqual(p.list().map((a) => a.email), ["a@x"], "added; the signed-out default is not listed");
+      }
+    }
+  } finally {
+    if (prevConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prevConfig;
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
 test("adding again replaces a sign-in whose browser was closed, and cancel ends it", async () => {
   const signals: AbortSignal[] = [];
   const provider: AccountProvider = {

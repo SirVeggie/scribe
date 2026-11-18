@@ -346,7 +346,9 @@ export class ClaudeAccountPool {
           return;
         }
         const profile = readAccountProfile(dir);
-        const known = [readAccountProfile(null).email, ...this.state.accounts.map((a) => a.email)].filter(Boolean);
+        // A signed-out default login keeps its email in .claude.json (#1084): it is not a sign-in to clash with.
+        const defaultEmail = provider.signedIn() !== false ? readAccountProfile(null).email : undefined;
+        const known = [defaultEmail, ...this.state.accounts.map((a) => a.email)].filter(Boolean);
         if (profile.email && known.includes(profile.email)) {
           // Only the folder goes: logging this copy out could end the other login's session too.
           this.lastError = `${profile.email} is already signed in. Sign in with another Claude account.`;
