@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "../config.js";
-import { AUDIO_CUES, type AudioSettings, type AudioDayUsage, type AudioOutput, type TtsSettings, type TtsSource } from "./types.js";
+import { normalizeModelSettings } from "./modelSettings.js";
+import { AUDIO_CUES, type AudioSettings, type AudioDayUsage, type AudioOutput, type ModelSettings, type TtsSettings, type TtsSource } from "./types.js";
 
 export function normalizeOutput(value: unknown): AudioOutput {
   const body = value as Partial<AudioOutput> | null;
@@ -17,9 +18,11 @@ export function normalizeSettings(value: unknown): AudioSettings {
   const custom = body?.stt?.custom, sendKeyword = str(body?.input?.sendKeyword, 100);
   return { sources: Array.isArray(body?.sources) ? body.sources.map(s => ({
     id: str(s.id, 100), name: str(s.name, 200), source: str(s.source, 100),
-    model: str(s.model, 200) || "whisper-1", language: str(s.language, 20),
+    // "" asks for the server's default model; sources saved before there was a choice name whisper-1.
+    model: typeof s.model === "string" ? str(s.model, 200) : "whisper-1", language: str(s.language, 20),
     ...(s.streaming === "native" || s.streaming === "window" ? { streaming: s.streaming } : {}),
     ...(s.custom ? { custom: { baseUrl: str(s.custom.baseUrl, 2000), apiKey: str(s.custom.apiKey, 4000) } } : {}),
+    ...withModelSettings(s.modelSettings),
   })) : [], defaultSource: str(body?.defaultSource, 100) || undefined,
     stt: { ...(source ? { source } : {}), model: str(body?.stt?.model, 200) || "whisper-1", ...(language ? { language } : {}),
     ...(custom ? { custom: { baseUrl: str(custom.baseUrl, 2000), apiKey: str(custom.apiKey, 4000) } } : {}) },
@@ -45,7 +48,12 @@ export function normalizeTtsSource(value: unknown): TtsSource {
   const model = str(s?.model, 200), voice = str(s?.voice, 200), speed = normalizeSpeed(s?.speed);
   return { id: str(s?.id, 100), name: str(s?.name, 200), source: str(s?.source, 100),
     ...(model ? { model } : {}), ...(voice ? { voice } : {}), ...(speed ? { speed } : {}), ...(s?.stream === true ? { stream: true } : {}),
-    ...(s?.custom ? { custom: { baseUrl: str(s.custom.baseUrl, 2000), apiKey: str(s.custom.apiKey, 4000) } } : {}) };
+    ...(s?.custom ? { custom: { baseUrl: str(s.custom.baseUrl, 2000), apiKey: str(s.custom.apiKey, 4000) } } : {}),
+    ...withModelSettings(s?.modelSettings) };
+}
+function withModelSettings(value: unknown): { modelSettings?: ModelSettings } {
+  const modelSettings = normalizeModelSettings(value);
+  return modelSettings ? { modelSettings } : {};
 }
 /**
  * Text-to-speech sources and the choice between them. The first build kept a speech model on

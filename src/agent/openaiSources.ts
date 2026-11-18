@@ -145,13 +145,17 @@ export async function fetchModelInfo(source: OpenAISource, timeoutMs = 8000): Pr
     .map((m): SourceModelInfo | null => {
       if (typeof m === "string") return m ? { id: m } : null;
       if (!isPlainRecord(m) || typeof m.id !== "string" || !m.id) return null;
+      // A model server that types its models (Memorize's /v1 also lists embedding, speech-to-text and
+      // text-to-speech models) leaves only its language models for chat.
+      if (typeof m.type === "string" && m.type && m.type !== "llm") return null;
       const contextWindow = entryContextWindow(m);
       return { id: m.id, ...(contextWindow ? { contextWindow } : {}) };
     })
     .filter((m): m is SourceModelInfo => m !== null)
     .sort((a, b) => a.id.localeCompare(b.id));
   // A llama.cpp server (its entries carry meta) serves one model; its -c beats the trained length.
-  const llamaCpp = data.length === 1 && isPlainRecord(data[0]) && isPlainRecord(data[0].meta);
+  // A context_length in the entry is already that (Memorize), and asking /props could load a model.
+  const llamaCpp = data.length === 1 && isPlainRecord(data[0]) && isPlainRecord(data[0].meta) && positive(data[0].context_length) === undefined;
   const served = llamaCpp ? await llamaCppContext(source, timeoutMs) : undefined;
   return served ? models.map((m) => ({ ...m, contextWindow: served })) : models;
 }

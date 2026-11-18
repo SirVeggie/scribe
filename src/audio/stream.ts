@@ -2,6 +2,7 @@ import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { authHeaders, type OpenAISource } from "../agent/openaiSources.js";
+import { fieldText } from "./modelSettings.js";
 import type { AudioResult } from "./types.js";
 import { shellOrigin } from "../contentOrigin.js";
 
@@ -235,9 +236,25 @@ export class WindowStream implements SttStream {
   }
 }
 
-/** The server's own stream: Moonshine's `/v1/stream` WebSocket (lines with partial and final text). */
+/**
+ * The stream URLs to try for a source at …/v1: `{base}/audio/transcriptions/stream`, which a model
+ * server like Memorize serves under any base (its combined /v1 too), then the older `{base}/stream`
+ * of a server with only speech-to-text at that base. model and the model's stream settings go in the query (#1085).
+ */
+export function sttStreamUrls(source: OpenAISource, request: { model?: string; settings?: Record<string, unknown> } = {}): string[] {
+  const base = source.baseUrl.replace(/\/+$/, "").replace(/^http/, "ws");
+  return [`${base}/audio/transcriptions/stream`, `${base}/stream`].map(href => {
+    const url = new URL(href);
+    url.searchParams.set("rate", String(STREAM_RATE));
+    if (request.model) url.searchParams.set("model", request.model);
+    for (const [name, value] of Object.entries(request.settings ?? {})) if (name !== "rate" && name !== "model") url.searchParams.set(name, fieldText(value));
+    return url.toString();
+  });
+}
+
+/** The server's own stream: Memorize's (Moonshine's) WebSocket, with lines of partial and final text. */
 export class NativeStream implements SttStream {
-  private socket: WebSocket;
+  private socket!: WebSocket;
   private queue: Buffer[] = [];
   private ready = false;
   private stopping = false;
@@ -246,15 +263,24 @@ export class NativeStream implements SttStream {
   private ended: Promise<void>;
   private end!: () => void;
 
-  constructor(source: OpenAISource, private onText: (text: string) => void, private timeoutMs = 30_000) {
+  constructor(source: OpenAISource, private onText: (text: string) => void, private timeoutMs = 30_000,
+    request: { model?: string; settings?: Record<string, unknown> } = {}) {
     this.ended = new Promise(resolve => { this.end = resolve; });
-    const url = `${source.baseUrl.replace(/\/+$/, "").replace(/^http/, "ws")}/stream?rate=${STREAM_RATE}`;
-    this.socket = new WebSocket(url, { headers: authHeaders(source), handshakeTimeout: 10_000 });
+    this.connect(source, sttStreamUrls(source, request), request.model);
+  }
+
+  private connect(source: OpenAISource, urls: string[], model?: string) {
+    this.socket = new WebSocket(urls[0], { headers: authHeaders(source), handshakeTimeout: 10_000 });
     this.socket.on("unexpected-response", (_req, res) => {
       const status = res.statusCode ?? 0;
-      this.fail(status === 401 || status === 403 ? { ok: false, error: "auth", message: `The speech-to-text server refused the stream (${status}). Check the API key.` }
+      res.resume(); this.socket.removeAllListeners(); this.socket.on("error", () => {}); this.socket.terminate();
+      // No stream at this path: the next one (a server's older /stream).
+      if (status === 404 && urls.length > 1) { this.connect(source, urls.slice(1), model); return; }
+      // A bad query parameter (a stream setting) refuses the handshake like a bad key does.
+      this.fail(status === 401 ? { ok: false, error: "auth", message: "The speech-to-text server needs a valid API key (401). Check the key in this source." }
+        : status === 403 ? { ok: false, error: "auth", message: `The speech-to-text server refused the stream (403): the API key may not use ${model ? `the model ${model}` : "this model"}, or a stream setting of the model is out of range.` }
+        : status === 503 ? { ok: false, error: "busy", message: "The model server is busy, try again shortly." }
         : { ok: false, error: "engine", message: `This source has no live stream endpoint (${status}). Set its streaming to Sliding window or Off.` });
-      res.resume(); this.socket.terminate();
     });
     this.socket.on("error", () => this.fail({ ok: false, error: "network", message: "Cannot reach the speech-to-text stream." }));
     this.socket.on("close", () => this.fail({ ok: false, error: "network", message: "The speech-to-text stream closed early." }));
@@ -336,10 +362,11 @@ export class NativeStream implements SttStream {
   }
 }
 
-export type StreamTarget = { mode: "native"; source: OpenAISource } | { mode: "window"; transcribe: (wav: Blob) => Promise<AudioResult> };
+/** native: the source's own stream with the model and its stream settings (#1085). */
+export type StreamTarget = { mode: "native"; source: OpenAISource; model?: string; settings?: Record<string, unknown> } | { mode: "window"; transcribe: (wav: Blob) => Promise<AudioResult> };
 
 /** Shell-only WebSocket that proxies a recording to the chosen stream mode; keys never reach the shell. */
-export function audioStreamServer(target: (force: boolean) => StreamTarget | AudioResult, usage: (bytes: number, ok: boolean) => void,
+export function audioStreamServer(target: (force: boolean) => StreamTarget | AudioResult | Promise<StreamTarget | AudioResult>, usage: (bytes: number, ok: boolean) => void,
   /** A page's live listen (#841) passes the same permission and rate-limit gate as its uploads, once per session (window pieces are not counted). */
   pageGate?: (tab: string) => { ok: boolean; error?: string; permission?: string }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
@@ -349,44 +376,56 @@ export function audioStreamServer(target: (force: boolean) => StreamTarget | Aud
     const preview = params.get("preview") !== "0", tab = params.get("tab");
     const gate = tab ? pageGate?.(tab) ?? { ok: false, error: "denied", permission: "audio.transcribe" } : { ok: true };
     if (!gate.ok) { send({ type: "done", ...gate }); client.close(); return; }
+    // The shell sends audio as soon as the socket opens: it waits here while the target is found.
+    const early: [RawData, boolean][] = [];
+    let gone = false;
+    const hold = (raw: RawData, binary: boolean) => { early.push([raw, binary]); };
+    const leave = () => { gone = true; };
+    client.on("message", hold); client.on("close", leave);
     // live=1: the caller asked to stream even with the source's live transcription off (#1002).
-    const chosen = target(params.get("live") === "1");
-    if ("ok" in chosen) { send({ type: "done", ...chosen }); client.close(); return; }
-    let latest = "", bytes = 0, stopped = false;
-    const onText = (text: string) => { if (text !== latest && !stopped) { latest = text; send({ type: "text", text }); } };
-    const session: SttStream = chosen.mode === "native" ? new NativeStream(chosen.source, onText) : new WindowStream(chosen.transcribe, onText, { preview });
-    // Speech events (#1001): start and end from the level, then the same end again with final once its text is settled.
-    let utterance = 0;
-    const endMs = Math.min(3000, Math.max(100, Number(params.get("pause")) || 250));
-    const detector = params.get("speech") === "1" ? new SpeechDetector(({ speaking, at }) => {
-      if (stopped) return;
-      const n = ++utterance;
-      if (speaking) { session.heard?.(); send({ type: "speech", speaking, at }); return; }
-      send({ type: "speech", speaking, at, text: latest, final: false });
-      void session.settle?.().then(text => {
-        if (n === utterance && !stopped) send({ type: "speech", speaking: false, at, text, final: true });
-      });
-    }, endMs) : null;
-    send({ type: "ready", mode: chosen.mode, rate: STREAM_RATE });
-    client.on("message", async (raw: RawData, binary: boolean) => {
-      if (stopped) return;
-      if (binary) {
-        const buf = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer);
-        if (bytes + buf.length > MAX_STREAM_BYTES || buf.length % 2) return;
-        bytes += buf.length;
-        // Copy into an aligned buffer: a Buffer's offset into its pool can be odd.
-        const pcm = new Int16Array(new Uint8Array(buf).buffer);
-        session.push(pcm); detector?.push(pcm);
-        return;
-      }
-      if (String(raw) !== "stop") return;
-      stopped = true;
-      const result = await session.finish();
-      if (chosen.mode === "native") usage(bytes, result.ok);
-      send({ type: "done", ...result });
-      client.close();
+    void Promise.resolve(target(params.get("live") === "1")).catch((): AudioResult => ({ ok: false, error: "engine", message: "Live transcription is unavailable." })).then(chosen => {
+      client.off("message", hold); client.off("close", leave);
+      if (gone) return;
+      if ("ok" in chosen) { send({ type: "done", ...chosen }); client.close(); return; }
+      let latest = "", bytes = 0, stopped = false;
+      const onText = (text: string) => { if (text !== latest && !stopped) { latest = text; send({ type: "text", text }); } };
+      const session: SttStream = chosen.mode === "native" ? new NativeStream(chosen.source, onText, undefined, { model: chosen.model, settings: chosen.settings })
+        : new WindowStream(chosen.transcribe, onText, { preview });
+      // Speech events (#1001): start and end from the level, then the same end again with final once its text is settled.
+      let utterance = 0;
+      const endMs = Math.min(3000, Math.max(100, Number(params.get("pause")) || 250));
+      const detector = params.get("speech") === "1" ? new SpeechDetector(({ speaking, at }) => {
+        if (stopped) return;
+        const n = ++utterance;
+        if (speaking) { session.heard?.(); send({ type: "speech", speaking, at }); return; }
+        send({ type: "speech", speaking, at, text: latest, final: false });
+        void session.settle?.().then(text => {
+          if (n === utterance && !stopped) send({ type: "speech", speaking: false, at, text, final: true });
+        });
+      }, endMs) : null;
+      send({ type: "ready", mode: chosen.mode, rate: STREAM_RATE });
+      const receive = async (raw: RawData, binary: boolean) => {
+        if (stopped) return;
+        if (binary) {
+          const buf = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer);
+          if (bytes + buf.length > MAX_STREAM_BYTES || buf.length % 2) return;
+          bytes += buf.length;
+          // Copy into an aligned buffer: a Buffer's offset into its pool can be odd.
+          const pcm = new Int16Array(new Uint8Array(buf).buffer);
+          session.push(pcm); detector?.push(pcm);
+          return;
+        }
+        if (String(raw) !== "stop") return;
+        stopped = true;
+        const result = await session.finish();
+        if (chosen.mode === "native") usage(bytes, result.ok);
+        send({ type: "done", ...result });
+        client.close();
+      };
+      client.on("message", receive);
+      early.splice(0).forEach(([raw, binary]) => void receive(raw, binary));
+      client.on("close", () => { if (!stopped) { stopped = true; session.cancel(); } });
     });
-    client.on("close", () => { if (!stopped) { stopped = true; session.cancel(); } });
   });
   return {
     /** Takes the upgrade when it is for the stream path. Only the board's own UI may open it. */

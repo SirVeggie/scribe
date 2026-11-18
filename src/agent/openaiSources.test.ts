@@ -42,3 +42,15 @@ test("a model list reports each server's context window", async (t) => {
   assert.deepEqual(await fetchModelInfo(source), [{ id: "qwen", contextWindow: 32768 }]);
   assert.deepEqual(urls, ["http://localhost:8080/v1/models", "http://localhost:8080/props"]);
 });
+
+test("a model server that types its models offers only its language models, and its context_length skips /props", async (t) => {
+  const source = { id: "memorize", name: "Memorize", baseUrl: "http://localhost:6366/v1", models: [] };
+  const urls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url: unknown) => {
+    urls.push(String(url));
+    return Response.json({ data: [{ id: "gemma", type: "llm", context_length: 65536, meta: {} }, { id: "siglip", type: "embed" },
+      { id: "kokoro", type: "tts" }, { id: "moonshine-medium", type: "stt" }] });
+  });
+  assert.deepEqual(await fetchModelInfo(source), [{ id: "gemma", contextWindow: 65536 }]);
+  assert.deepEqual(urls, ["http://localhost:6366/v1/models"]);
+});

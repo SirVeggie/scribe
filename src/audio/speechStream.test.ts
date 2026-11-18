@@ -10,15 +10,18 @@ import { AudioService } from "./service.js";
 import { memoryStore } from "./settings.js";
 import { SPEECH_STREAM_PATH, speechStreamServer, streamUrl } from "./speechStream.js";
 
-/** A server with the audio gateway's /tts/v1/stream socket; plain: no socket (404), like an OpenAI-compatible server. */
-async function fakeGateway(opts: { plain?: boolean; fail?: boolean } = {}) {
+/**
+ * A server with Memorize's /tts/v1/audio/speech/stream socket; legacy: only the older /tts/v1/stream;
+ * plain: no socket (404), like an OpenAI-compatible server. refuse: a setting its config refuses.
+ */
+async function fakeGateway(opts: { plain?: boolean; fail?: boolean; legacy?: boolean; refuse?: string } = {}) {
   const server = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });
   const wss = new WebSocketServer({ noServer: true });
   const seen: { url: string; auth?: string; messages: any[] }[] = [];
   let upgrades = 0;
   server.on("upgrade", (req, socket, head) => {
     upgrades++;
-    if (opts.plain || !req.url?.startsWith("/tts/v1/stream")) { socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"); return; }
+    if (opts.plain || !req.url?.startsWith(opts.legacy ? "/tts/v1/stream" : "/tts/v1/audio/speech/stream")) { socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"); return; }
     if (new URL(req.url, "http://x").searchParams.get("token") !== "gw-key") { socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return; }
     wss.handleUpgrade(req, socket, head, ws => {
       const conn = { url: req.url!, auth: req.headers.authorization, messages: [] as any[] };
@@ -28,6 +31,7 @@ async function fakeGateway(opts: { plain?: boolean; fail?: boolean } = {}) {
       ws.on("message", raw => {
         const msg = JSON.parse(String(raw));
         conn.messages.push(msg);
+        if (msg.type === "config" && opts.refuse && opts.refuse in msg) ws.send(JSON.stringify({ type: "error", message: `${opts.refuse} is out of range`, setting: opts.refuse }));
         if (msg.type === "text") text += msg.text;
         if (msg.type === "cancel") ws.send(JSON.stringify({ type: "done", turn: 1, cancelled: true }));
         if (msg.type === "end") {
@@ -44,12 +48,15 @@ async function fakeGateway(opts: { plain?: boolean; fail?: boolean } = {}) {
     close: () => { wss.close(); server.closeAllConnections(); server.close(); } };
 }
 
-async function daemon(baseUrl: string, apiKey = "gw-key", pageAudio?: PageAudio) {
+async function daemon(baseUrl: string, apiKey = "gw-key", pageAudio?: PageAudio, settings?: Record<string, unknown>) {
   const source: OpenAISource = { id: "gw", name: "Gateway", baseUrl, apiKey, models: [] };
-  const service = new AudioService({ sources: () => [source], store: memoryStore() });
-  service.saveTtsSource({ name: "Gateway", source: "gw", model: "kokoro-clean", voice: "af_heart" });
+  // The model publishes temperature for both places and seed for requests only.
+  const service = new AudioService({ sources: () => [source], store: memoryStore(),
+    listModels: async () => ({ ok: true, flagged: true, models: [{ id: "kokoro-clean", type: "tts",
+      settings: { type: "object", properties: { temperature: { type: "number" }, seed: { type: "integer", "x-in": ["request"] } } } }] }) });
+  service.saveTtsSource({ name: "Gateway", source: "gw", model: "kokoro-clean", voice: "af_heart", ...(settings ? { settingsFor: { model: "kokoro-clean", values: settings } } : {}) });
   const recorded: [number, boolean][] = [];
-  const streams = speechStreamServer({ target: o => service.speechTarget(o), record: (chars, ok) => recorded.push([chars, ok]),
+  const streams = speechStreamServer({ target: o => service.speechStreamTarget(o), record: (chars, ok) => recorded.push([chars, ok]),
     pageGate: pageAudio ? tab => pageAudio.openSpeechStream(tab) : undefined });
   const server = http.createServer();
   server.on("upgrade", (req, socket, head) => { if (!streams.handle(req, socket, head)) socket.destroy(); });
@@ -71,9 +78,27 @@ async function daemon(baseUrl: string, apiKey = "gw-key", pageAudio?: PageAudio)
   return { url, run, recorded, close: () => { streams.close(); server.closeAllConnections(); server.close(); } };
 }
 
-test("streamUrl puts the stream next to /audio/speech with the key as a token", () => {
-  assert.equal(streamUrl({ id: "a", name: "A", baseUrl: "https://audio.example.org/tts/v1/", apiKey: "k y", models: [] }), "wss://audio.example.org/tts/v1/stream?token=k+y");
-  assert.equal(streamUrl({ id: "a", name: "A", baseUrl: "http://127.0.0.1:8000/v1", models: [] }), "ws://127.0.0.1:8000/v1/stream");
+test("streamUrl puts the stream under /audio/speech with the key as a token, or at the older /stream", () => {
+  assert.equal(streamUrl({ id: "a", name: "A", baseUrl: "https://models.example.org/v1/", apiKey: "k y", models: [] }), "wss://models.example.org/v1/audio/speech/stream?token=k+y");
+  assert.equal(streamUrl({ id: "a", name: "A", baseUrl: "http://127.0.0.1:8000/v1", models: [] }, true), "ws://127.0.0.1:8000/v1/stream");
+});
+
+test("speech stream sends the model's stream settings in its config, falls back to the older path, and reports a refused setting", async () => {
+  const gw = await fakeGateway({ legacy: true });
+  const d = await daemon(gw.url, "gw-key", undefined, { temperature: 0.5, seed: 7 });
+  try {
+    const { audio } = await d.run([{ type: "text", text: "Hi" }, { type: "end" }]);
+    assert.equal(audio, "audio:Hi");
+    assert.deepEqual(gw.seen[0].messages[0], { type: "config", temperature: 0.5, model: "kokoro-clean", voice: "af_heart", speed: 1, response_format: "mp3" }, "seed is for requests only");
+    await d.run([{ type: "text", text: "Hi" }, { type: "end" }]);
+    assert.equal(gw.upgrades(), 3, "the older path is remembered");
+  } finally { d.close(); gw.close(); }
+  const strict = await fakeGateway({ refuse: "temperature" });
+  const r = await daemon(strict.url, "gw-key", undefined, { temperature: 9 });
+  try {
+    const { messages } = await r.run([{ type: "text", text: "Hi" }, { type: "end" }]);
+    assert.deepEqual(messages.at(-1), { type: "done", ok: false, error: "setting", setting: "temperature", message: "temperature is out of range" });
+  } finally { r.close(); strict.close(); }
 });
 
 test("speech stream relays text as it arrives to the gateway and its audio back", async () => {
@@ -115,7 +140,7 @@ test("a server without the socket gets fallback, and is not asked again", async 
   try {
     assert.deepEqual((await d.run([])).messages, [{ type: "fallback" }]);
     assert.deepEqual((await d.run([])).messages, [{ type: "fallback" }]);
-    assert.equal(plain.upgrades(), 1);
+    assert.equal(plain.upgrades(), 2, "the new path, then the older one");
   } finally { d.close(); plain.close(); }
 });
 

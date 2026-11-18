@@ -76,8 +76,11 @@ async function fakeMoonshine(onHeaders: (h: http.IncomingHttpHeaders) => boolean
   const server = http.createServer();
   const wss = new WebSocketServer({ noServer: true });
   let bytes = 0;
+  const urls: string[] = [];
   server.on("upgrade", (req, socket, head) => {
-    if (!onHeaders(req.headers) || !req.url?.startsWith("/v1/stream?rate=16000")) { socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
+    if (!req.url?.startsWith("/v1/audio/transcriptions/stream?rate=16000")) { socket.end("HTTP/1.1 404 Not Found\r\n\r\n"); return; }
+    if (!onHeaders(req.headers)) { socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
+    urls.push(req.url);
     wss.handleUpgrade(req, socket, head, ws => {
       ws.send(JSON.stringify({ type: "ready", sample_rate: 16000 }));
       ws.on("message", (raw, binary) => {
@@ -92,7 +95,7 @@ async function fakeMoonshine(onHeaders: (h: http.IncomingHttpHeaders) => boolean
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, bytes: () => bytes, close: () => { wss.close(); server.closeAllConnections(); server.close(); } };
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, bytes: () => bytes, urls, close: () => { wss.close(); server.closeAllConnections(); server.close(); } };
 }
 
 test("native stream speaks Moonshine's protocol with the key in a header", async () => {
@@ -100,11 +103,12 @@ test("native stream speaks Moonshine's protocol with the key in a header", async
   try {
     const source: OpenAISource = { id: "m", name: "M", baseUrl: fake.url, apiKey: "moon-key", models: [] };
     const texts: string[] = [];
-    const stream = new NativeStream(source, t => texts.push(t));
+    const stream = new NativeStream(source, t => texts.push(t), undefined, { model: "moonshine-small", settings: { lang: "en" } });
     stream.push(tone(100)); // queued until the server is ready
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.deepEqual(await stream.finish(), { ok: true, text: "Oh, hello" });
     assert.equal(fake.bytes(), 3200); assert.equal(texts[0], "hel");
+    assert.equal(fake.urls[0], "/v1/audio/transcriptions/stream?rate=16000&model=moonshine-small&lang=en");
 
     const refused = new NativeStream({ ...source, apiKey: "wrong" }, () => {});
     refused.push(tone(100));
@@ -179,8 +183,8 @@ test("listen({ live: true }) streams over a window with live transcription off, 
     engine: { async transcribe() { return { ok: true, text: `p${++calls}` }; } } });
   service.saveSource({ name: "Whisper", source: "__custom__", custom: { baseUrl: "http://127.0.0.1:9/v1" }, model: "w" });
   assert.equal(service.view().streaming, undefined);
-  assert.equal((service.streamTarget() as Extract<AudioResult, { ok: false }>).error, "engine");
-  assert.equal((service.streamTarget(true) as { mode: string }).mode, "window");
+  assert.equal((await service.streamTarget() as Extract<AudioResult, { ok: false }>).error, "engine");
+  assert.equal((await service.streamTarget(true) as { mode: string }).mode, "window");
   let gated = 0;
   const streams = audioStreamServer(force => service.streamTarget(force), () => {}, () => { gated++; return { ok: true }; });
   const server = http.createServer();

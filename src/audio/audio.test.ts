@@ -156,7 +156,7 @@ test("OpenAI adapter uploads multipart with daemon-only auth and maps response e
     text = "language English<asr_text>Scribe audio test.";
     assert.deepEqual(await openAiEngine.transcribe(request), { ok: true, text: "Scribe audio test." }, "Qwen3-ASR's language tag is dropped");
     text = "Words";
-    for (const [code, error, retryable] of [[401, "auth", false], [429, "rate_limit", true], [503, "engine", true], [400, "format", undefined]] as const) {
+    for (const [code, error, retryable] of [[401, "auth", false], [403, "auth", false], [429, "rate_limit", true], [500, "engine", true], [503, "busy", false], [400, "format", undefined]] as const) {
       status = code; const result = await openAiEngine.transcribe(request);
       assert.equal((result as any).error, error); assert.equal((result as any).retryable, retryable); assert.ok(!JSON.stringify(result).includes("secret-key"));
     }
