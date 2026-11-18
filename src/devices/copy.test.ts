@@ -10,7 +10,7 @@ import { buildExport, type BoardExportFile, type ParsedImport } from "../boardEx
 import { contentOriginGate } from "../contentOrigin.js";
 import { zip } from "../plugins/package.js";
 import type { Tab } from "../types.js";
-import { copyRouter, type CopyHost } from "./copy.js";
+import { copyRouter, type CopiedProtection, type CopyHost } from "./copy.js";
 import { PeerService } from "./peers.js";
 
 /**
@@ -29,6 +29,9 @@ type Node = {
   plugins: Map<string, { name: string; version: string; hash: string }>;
   /** Paths of the incoming requests, to see what crossed the link. */
   seen: string[];
+  /** Protected values that came with copies, and whether pages were imported before them. */
+  protectedValues: CopiedProtection[];
+  protectedLate: boolean;
 };
 const nodes: Node[] = [];
 
@@ -51,8 +54,8 @@ async function node(): Promise<Node> {
   const port = await freePort();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-copy-"));
   const peers = new PeerService({ home, port: await freePort(), hosts: ["127.0.0.1"], version: "1.0.0" });
-  const entry = { peers, port, id: peers.identity.id, home, imports: [], received: 0, plugins: new Map(), seen: [] } as unknown as Node;
-  const pages = new Map([["plan", tab("plan", '<meta name="scribe-plugins" content="demo"><p>Plan</p>', 14)], ["notes", tab("notes", "<p>Notes</p>", 3)]]);
+  const entry = { peers, port, id: peers.identity.id, home, imports: [], received: 0, plugins: new Map(), seen: [], protectedValues: [], protectedLate: false } as unknown as Node;
+  const pages = new Map([["plan", tab("plan", '<meta name="scribe-plugins" content="demo"><p>Plan</p>', 14)], ["notes", tab("notes", "<p>Notes: key s3cret-pass</p>", 3)]]);
   const host: CopyHost = {
     exportFile: (scope) => {
       const chosen = [...pages.values()].filter((t) => scope.pageIds?.includes(t.id));
@@ -71,6 +74,11 @@ async function node(): Promise<Node> {
       return { manifest, same: entry.plugins.has(manifest.id) };
     },
     received: () => { entry.received++; },
+    protectedIn: (texts) => (texts.some((text) => text.includes("s3cret-pass")) ? [{ value: "s3cret-pass", hint: "wifi", kind: "password", source: "user" }] : []),
+    protect: async (values) => {
+      if (entry.imports.length) entry.protectedLate = true;
+      entry.protectedValues.push(...values);
+    },
   };
   const app = express();
   app.use((req, _res, next) => { entry.seen.push(`${req.method} ${req.path}`); next(); });
@@ -166,6 +174,11 @@ test("a copy imports on the target as a fork that names its source, with the plu
   assert.deepEqual((await call(b, "/api/copy/plugins")).body.plugins, []);
 });
 
+test("protected values in the copied pages are protected on the target before the pages are saved", () => {
+  assert.deepEqual(b.protectedValues, [{ value: "s3cret-pass", hint: "wifi", kind: "password", source: "user" }]);
+  assert.equal(b.protectedLate, false);
+});
+
 test("copying again sends no blobs, and a plugin the target has is not sent", async () => {
   b.seen = [];
   b.plugins.set("demo", { name: "Demo", version: "1.0.0", hash: "code1" });
@@ -175,6 +188,7 @@ test("copying again sends no blobs, and a plugin the target has is not sent", as
   assert.deepEqual(reply.body.pluginsPresent, ["demo"]);
   assert.deepEqual(reply.body.plugins, []);
   assert.equal(b.seen.some((line) => line.startsWith("PUT")), false);
+  assert.equal(b.protectedValues.length, 1, "a page without protected values brings none");
 });
 
 test("only paired devices send copies, and only the board starts one", async () => {

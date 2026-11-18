@@ -31,8 +31,10 @@ export const COPY_VERSION = 1;
 export type CopySelection = { pages?: string[]; folders?: string[]; templates?: string[]; plugins?: string[] };
 
 type BundlePlugin = { id: string; name: string; version: string; hash: string };
+/** A protected value (#1045) that shows up in what is copied, so the target protects it too (#1086). */
+export type CopiedProtection = { value: string; hint: string; kind: string; source?: string; detector?: string };
 /** origin: the device the pages are from, when it isn't the sender (a copy from a mirror, #910). */
-type CopyBundle = { format: typeof COPY_FORMAT; version: number; file: BoardExportFile | null; plugins: BundlePlugin[]; origin?: { id: string } };
+type CopyBundle = { format: typeof COPY_FORMAT; version: number; file: BoardExportFile | null; plugins: BundlePlugin[]; origin?: { id: string }; protected?: CopiedProtection[] };
 
 export type CopyResult = {
   device: { id: string; name: string };
@@ -61,6 +63,10 @@ export type CopyHost = {
   previewPlugin(files: PackageFiles, detailed?: boolean): { same: boolean; manifest: { id: string; name: string; version: string } };
   /** A copy came in: tell this device's board. */
   received(event: { from: { id: string; name: string }; pages: number; templates: number; plugins: number }): void;
+  /** This device's protected values that show up in these texts (values included: they go only to a paired device). */
+  protectedIn?(texts: string[]): CopiedProtection[];
+  /** Protect values a copy brings, before its pages are saved here; throws when this device can't. */
+  protect?(values: CopiedProtection[], from: { id: string; name: string }): Promise<void>;
 };
 
 const REQUEST_MS = 120_000;
@@ -141,7 +147,16 @@ export async function sendCopy(peers: PeerService, host: CopyHost, target: strin
     sent += data.length;
   }
 
-  const bundle: CopyBundle = { format: COPY_FORMAT, version: COPY_VERSION, file, plugins, ...(origin ? { origin: { id: origin.id } } : {}) };
+  // What is protected here stays protected there; asset data is out of the file by now, so this reads only text.
+  const protectedValues = file && host.protectedIn ? host.protectedIn(stringsIn(file)) : [];
+  const bundle: CopyBundle = {
+    format: COPY_FORMAT,
+    version: COPY_VERSION,
+    file,
+    plugins,
+    ...(origin ? { origin: { id: origin.id } } : {}),
+    ...(protectedValues.length ? { protected: protectedValues } : {}),
+  };
   const result = await peerCall<Omit<CopyResult, "device" | "sent" | "skipped" | "pluginsPresent">>(peers, target, "POST", "/api/copy/incoming", bundle);
   return { ...result, device: { id: target, name }, pluginsPresent: [...present], sent, skipped };
 }
@@ -158,6 +173,16 @@ function exportSelection(host: CopyHost, selection: CopySelection): BoardExportF
     for (const template of other.templates) if (!first.templates.some((t) => t.id === template.id)) first.templates.push(template);
   }
   return first;
+}
+
+function stringsIn(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) for (const item of value) stringsIn(item, out);
+  else if (value && typeof value === "object") for (const [key, child] of Object.entries(value)) {
+    out.push(key);
+    stringsIn(child, out);
+  }
+  return out;
 }
 
 /** A JSON (or raw blob) request to a paired device's daemon over the link; its error message, or a hint to update it. */
@@ -367,6 +392,9 @@ export function copyRouter(peers: PeerService, host: CopyHost, home: string): Ro
         delete page.closedAt;
         page.pinned = false;
       }
+      // Protect first: a page saved before its values are protected would show them to agents here.
+      const values = (Array.isArray(bundle.protected) ? bundle.protected : []).filter((p) => p && typeof p.value === "string" && p.value);
+      if (values.length && host.protect) await host.protect(values, from);
       imported = host.importBoard(parsed);
     }
     for (const plugin of plugins) pending.add(plugin);

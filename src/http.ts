@@ -77,7 +77,7 @@ import { shellAssets } from "./shellAssets.js";
 import { editorBundle, prebuildEditorBundle } from "./editorBundle.js";
 import { appearanceRouter } from "./appearance.js";
 import { agentPortGate, identify, markAgentSocket, prepareSecrets, socketAllowed } from "./callers.js";
-import { Vault, setVault, setVaultUnavailable, vault } from "./vault.js";
+import { Vault, setVault, setVaultUnavailable, vault, vaultUnavailable } from "./vault.js";
 import { pageProtected, redactAgentResponses, restoreAgentBodies, vaultRouter } from "./vaultHttp.js";
 import { markWebSocket, onWebPort } from "./webRequest.js";
 import type { Duplex } from "node:stream";
@@ -473,6 +473,21 @@ export async function startHttp(): Promise<http.Server> {
     exportPlugin: (id) => pluginService.export(id, { source: true }),
     previewPlugin: (files, detailed) => pluginService.preview(files, detailed),
     received: (event) => broadcast({ type: "copy_received", ...event }),
+    protectedIn: (texts) => vault().within(texts).map(({ value, hint, kind, source, detector }) => ({ value, hint, kind, source, ...(detector ? { detector } : {}) })),
+    protect: async (values, from) => {
+      const unavailable = vaultUnavailable();
+      if (unavailable) throw new Error(`The copy has protected values, but protected data is unavailable here: ${unavailable}`);
+      for (const item of values) {
+        const source = item.source === "agent" || item.source === "detector" ? item.source : "user";
+        const input = { value: item.value, kind: item.kind, source, ...(source === "detector" && item.detector ? { detector: item.detector } : {}), createdBy: `copied from ${from.name}` } as const;
+        try {
+          await vault().add({ ...input, hint: item.hint });
+        } catch {
+          // A hint that names a value protected here: keep the value protected under its kind.
+          await vault().add(input);
+        }
+      }
+    },
   };
   app.use("/api/copy", copyRouter(peers, copyHost, dataDir()));
   // Mirrors (#910) parse their own bodies too: pages and blobs go in batches of several MB.
