@@ -181,8 +181,8 @@ To offer a choice, list what the user has set up:
 const { sources, default: chosen } = await scribe.audio.sources();
 // sources: [{ id, name, kind: "browser" | "server", model? }]; chosen: the Settings choice, or null when off
 const { models } = await scribe.audio.models({ source: id });
-// [{ id, default?, loaded?, streaming?: "sentence" | "native", aliases?, description?, features?, tags?, hasGuide? }]
-// (the extras when the server sends them); empty for This browser
+// [{ id, type?, default?, loaded?, streaming?: "sentence" | "native", aliases?, description?, features?, tags?, hasGuide?, settings? }]
+// (the extras when the server sends them; only text-to-speech models); empty for This browser
 const { model: info } = await scribe.audio.model({ source: id, model });
 // the same entry plus guide: Markdown on what the model supports and how to write text for it
 const { voices, default: voice, listed } = await scribe.audio.voices({ source: id, model });
@@ -198,8 +198,12 @@ voices can load that model, which takes several seconds; `models()` and `model()
 `model()` without a model describes the source's saved one, else the server's default. Show the
 guide to the user, or put it in an agent's prompt so the text suits the model: a model with
 `features.tags` reads `[laugh]`-style tags (`tags` lists them), while others would read them out.
+`settings` is the JSON Schema of what the model takes besides text and voice; the values the user
+chose for that model in Settings → Audio go with every request, the page's own speed above them.
 Failures: `denied`, `no_source`, `hidden`, `rate_limited` (30 requests/minute, 100,000 characters/hour
-per page), `blocked` (the browser blocked playback), `network`, `auth` or `engine`.
+per page), `blocked` (the browser blocked playback), `network`, `auth`, `busy` (the model server has
+no room now; `retryAfter` in seconds when it says), `setting` (the server refused a model setting,
+named in `setting`) or `engine`. Their `message` is written to be shown to the user.
 
 ## Asking the classifier: scribe.ml
 

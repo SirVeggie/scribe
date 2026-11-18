@@ -250,60 +250,106 @@
   const list = document.createElement("div"); list.className = "ml-sources"; section.append(list);
   const add = button("Add source", () => editStt(null)); add.setAttribute("aria-label", "Add speech-to-text source");
   const addActions = document.createElement("div"); addActions.className = "settings-actions"; addActions.append(add); section.append(addActions);
+  /** Adding or editing a source: only where it is and how to reach it, as for text-to-speech. */
   function editStt(profile) {
     const name = textInput("audio-name", profile?.name, "e.g. Whisper");
-    let loadModels = () => {};
-    const endpoint = endpointFields("audio", profile, () => loadModels());
-    // The server's model list (GET …/models) when it answers; a text box otherwise.
-    const model = textInput("audio-model", profile?.model || "whisper-1", "whisper-1");
-    const modelPick = selectInput("audio-model-pick", "Model", [], "");
-    const modelField = field("Model", model), modelPickField = field("Model", modelPick);
-    modelPickField.hidden = true;
-    const currentModel = () => (modelPickField.hidden ? model.value : modelPick.value).trim();
-    let modelSeq = 0;
-    loadModels = async () => {
-      const mine = ++modelSeq, draft = { kind: "stt", ...(profile ? { id: profile.id } : {}), ...endpoint.body() }, saved = currentModel();
-      if (draft.source === "__custom__" && !draft.custom?.baseUrl) return;
-      const result = await request("models", "POST", draft).catch(() => null);
-      if (mine !== modelSeq) return;
-      if (!result?.ok || !result.models.length) { model.value = saved; modelField.hidden = false; modelPickField.hidden = true; return; }
-      const options = result.models.map(m => [m.id, modelLabel(m)]);
-      if (saved && !options.some(([v]) => v === saved)) options.push([saved, saved + " (saved)"]);
-      setOptions(modelPick, options, saved || result.models.find(m => m.default)?.id || options[0][0]);
-      modelField.hidden = true; modelPickField.hidden = false;
-    };
-    const language = textInput("audio-language", profile?.language, "Auto");
-    const streaming = selectInput("audio-streaming", "Live transcription (experimental)",
-      [["", "Off"], ["native", "Server stream (Moonshine)"], ["window", "Sliding window"]], profile?.streaming || "");
+    const endpoint = endpointFields("audio", profile);
     const path = profile ? "sources/" + encodeURIComponent(profile.id) : "sources";
     editor({ cls: "audio-stt-editor", title: profile ? `Edit ${profile.name}` : "Add a speech-to-text source",
-      fields: [field("Name", name), ...endpoint.nodes, modelField, modelPickField, field("Language", language),
-        field("Live transcription (experimental)", streaming, "Shows text while you speak. Server stream needs a Moonshine-style /stream WebSocket; Sliding window works with any endpoint.")],
-      selects: [...endpoint.selects, modelPick, streaming],
-      save: () => request(path, profile ? "PUT" : "POST", { name: name.value, ...endpoint.body(), model: currentModel(), language: language.value, streaming: streaming.value }),
+      hint: "An OpenAI-compatible /audio/transcriptions endpoint. Choose its model and settings under Speech-to-text once it is added.",
+      fields: [field("Name", name), ...endpoint.nodes], selects: endpoint.selects,
+      save: async () => {
+        const body = { name: name.value, ...endpoint.body() };
+        // A new source starts on the server's default model when it names one, else whisper-1 (OpenAI's).
+        if (!profile) {
+          const list = await request("models", "POST", { kind: "stt", ...body }).catch(() => null);
+          const models = list?.ok ? list.models : [];
+          body.model = models.some(m => m.default) ? "" : models.some(m => m.id === "whisper-1") || !models.length ? "whisper-1" : models[0].id;
+        }
+        return request(path, profile ? "PUT" : "POST", body);
+      },
       remove: profile && (async () => {
         if (!await confirmRemove("Remove “" + profile.name + "”?", "Remove")) return false;
         return change(path, "DELETE");
       }) });
-    void loadModels();
-    bindModelHelp(document.getElementById("audio-model-pick-button"),
-      () => ({ kind: "stt", ...(profile ? { id: profile.id } : {}), ...endpoint.body(), model: modelPick.value }));
   }
   function renderSources() {
     list.replaceChildren();
     if (!view.profiles.length) { const empty = document.createElement("p"); empty.className = "settings-hint"; empty.textContent = "No speech-to-text sources yet."; list.append(empty); }
     for (const profile of view.profiles) {
       const testSource = button("Test", async () => {
-        testSource.disabled = true; status.textContent = "Testing…";
-        try { const result = await request("test", "POST", { sourceId: profile.id }); status.textContent = result.ok ? "Transcript: " + (result.text || "(empty)") : result.message || result.error; }
-        catch (err) { status.textContent = err.message; } finally { testSource.disabled = false; }
+        testSource.disabled = true; status.textContent = "Testing…"; sttForm?.clearErrors();
+        // A model that is not loaded yet can take a while to answer the first time.
+        const slow = setTimeout(() => { status.textContent = "Testing… waiting for the model to load."; }, 2500);
+        try {
+          const result = await request("test", "POST", { sourceId: profile.id });
+          status.textContent = result.ok ? "Transcript: " + (result.text || "(empty)") : result.message || result.error;
+          if (!result.ok && result.setting && profile.id === view.defaultSource) sttForm?.markError(result.setting, result.message);
+        }
+        catch (err) { status.textContent = err.message; } finally { clearTimeout(slow); testSource.disabled = false; }
       });
       list.append(sourceRow("audio-default-source", { id: profile.id, name: profile.name, checked: profile.id === view.defaultSource,
         label: "Use " + profile.name + " by default", onPick: () => change("settings", "PUT", { defaultSource: profile.id }),
-        detail: profile.model + " · " + hostOf(profile) + (profile.streaming ? " · live" : ""),
+        detail: (profile.model || "server's model") + " · " + hostOf(profile) + (profile.streaming ? " · live" : ""),
         buttons: [testSource, button("Edit", () => editStt(profile))] }));
     }
   }
+  // The default source's own settings, under the list like text-to-speech's. Rows the source cannot use stay hidden.
+  const sttModel = row("Model", "stt-model", "select");
+  bindModelHelp(document.getElementById("audio-stt-model-button") || sttModel.parentElement, () => {
+    const source = view?.defaultSource;
+    return source ? { kind: "stt", id: source, model: sttModel.value } : null;
+  });
+  const sttModelText = row("Model", "stt-model-text", "text"); sttModelText.placeholder = "whisper-1";
+  const sttLanguage = row("Language", "stt-language", "text"); sttLanguage.placeholder = "Auto"; sttLanguage.maxLength = 20;
+  const sttStreaming = row("Live transcription (experimental)", "stt-streaming", "select");
+  [["", "Off"], ["native", "Server stream"], ["window", "Sliding window"]].forEach(([v, text]) => option(sttStreaming, v, text));
+  sttStreaming.parentElement.syncSelect?.();
+  { const tip = "Shows text while you speak. Server stream needs the server's own live stream (Memorize's Moonshine models); Sliding window works with any endpoint.",
+    label = sttStreaming.closest(".setting-row").querySelector("label");
+    label.dataset.tooltip = tip; label.setAttribute("aria-description", tip); }
+  const sttFormHost = document.createElement("div"); sttFormHost.className = "audio-model-settings"; section.append(sttFormHost);
+  let sttForm = null, sttModels = [], sttSeq = 0;
+  async function renderSttSettings() {
+    const mine = ++sttSeq, profile = view.profiles.find(p => p.id === view.defaultSource);
+    for (const input of [sttModel, sttModelText, sttLanguage, sttStreaming]) lineOf(input).hidden = !profile;
+    sttFormHost.hidden = !profile;
+    if (!profile) { sttForm = null; sttFormHost.replaceChildren(); return; }
+    if (document.activeElement !== sttLanguage) sttLanguage.value = profile.language || "";
+    sttStreaming.value = profile.streaming || ""; sttStreaming.parentElement.syncSelect?.();
+    const model = profile.model || "";
+    const models = profile.id === "__legacy__" ? { ok: false } : await request("models", "POST", { kind: "stt", id: profile.id }).catch(() => ({ ok: false }));
+    if (mine !== sttSeq) return;
+    sttModels = models.ok ? models.models : [];
+    const fallback = sttModels.find(m => m.default);
+    if (sttModels.length) {
+      const options = [...(fallback ? [["", `Server default (${fallback.id})`]] : []), ...sttModels.map(m => [m.id, modelLabel(m)])];
+      if (!options.some(([v]) => v === model)) options.push([model, (model || "Server default") + " (saved)"]);
+      setOptions(sttModel, options, model);
+      showPair(sttModel, sttModelText, true);
+    } else {
+      if (document.activeElement !== sttModelText) sttModelText.value = model;
+      showPair(sttModel, sttModelText, false);
+    }
+    const info = findModel(sttModels, model);
+    const schema = info?.settings;
+    // A model that publishes its settings has its own language choice (or none, as it only knows one).
+    lineOf(sttLanguage).hidden = Boolean(schema);
+    // The Language box's value moves into the model's own language setting when the model takes it.
+    const moved = accepts(schema?.properties?.language, profile.language) ? { language: profile.language } : null;
+    sttForm = renderModelSettings(sttFormHost, schema, profile.modelSettings?.[model], (values, adopted) =>
+      saveSttSetting({ settingsFor: { model, values }, ...(adopted ? { language: "" } : {}) }), moved);
+  }
+  function saveSttSetting(changes) {
+    const id = view.defaultSource;
+    if (!id) return;
+    saving = saving.then(async () => { await request("sources/" + encodeURIComponent(id), "PUT", changes); await refresh(); })
+      .catch(err => { status.textContent = err.message; });
+  }
+  sttModel.addEventListener("change", () => saveSttSetting({ model: sttModel.value }));
+  sttModelText.addEventListener("change", () => saveSttSetting({ model: sttModelText.value.trim() }));
+  sttLanguage.addEventListener("change", () => saveSttSetting({ language: sttLanguage.value.trim() }));
+  sttStreaming.addEventListener("change", () => saveSttSetting({ streaming: sttStreaming.value }));
   const send = row("Send after dictation", "send", "switch");
   const keyword = row("Send keyword", "keyword", "text"); keyword.placeholder = "e.g. send it"; keyword.maxLength = 100;
   { const tip = "Ending dictation with this phrase and a one-second pause sends the message, without the phrase.", label = keyword.previousElementSibling;
@@ -329,7 +375,7 @@
     try {
       view = await window.scribeAudio.refresh();
       renderSources();
-      renderSpeech();
+      rendering = Promise.all([renderSttSettings(), renderSpeech()]);
       send.setAttribute("aria-checked", String(view.input.sendAfterDictation));
       if (document.activeElement !== keyword) keyword.value = view.input.sendKeyword || "";
       push.setAttribute("aria-checked", String(view.input.pushToTalk));
@@ -340,7 +386,7 @@
       await devices();
     } catch (err) { status.textContent = err.message; }
   }
-  let saving = Promise.resolve();
+  let saving = Promise.resolve(), rendering = Promise.resolve();
   function save() {
     const body = { input: { sendAfterDictation: send.getAttribute("aria-checked") === "true", pushToTalk: push.getAttribute("aria-checked") === "true",
       livePreview: livePreview.getAttribute("aria-checked") === "true", sendKeyword: keyword.value.trim() } };
@@ -433,6 +479,8 @@
   const ttsStream = row("Stream while generating", "tts-stream", "switch", speech);
   const streamLabel = document.getElementById("audio-tts-stream-label") || ttsStream.closest(".setting-row").querySelector("label");
   const lineOf = input => input.closest(".setting-row");
+  const ttsFormHost = document.createElement("div"); ttsFormHost.className = "audio-model-settings"; speech.append(ttsFormHost);
+  let ttsForm = null;
   const speechStatus = document.createElement("p"); speechStatus.className = "settings-hint"; speechStatus.setAttribute("role", "status");
   speech.append(speechStatus);
   const speedText = speed => speed && speed !== 1 ? ` · ${speed}×` : "";
@@ -441,11 +489,15 @@
   function testButton(sourceId) {
     const node = button("Test", async () => {
       if (speaking) { speaking.stop(); return; }
-      speechStatus.textContent = ""; node.textContent = "Stop";
+      speechStatus.textContent = ""; node.textContent = "Stop"; ttsForm?.clearErrors();
       speaking = window.scribeAudio.speak("This is how Scribe reads text aloud.", { sourceId });
-      const result = await speaking.ended; speaking = null; node.textContent = "Test";
-      if (!result.ok) speechStatus.textContent = result.message || result.error;
-      else void refresh();
+      // A model that is not loaded yet can take a while to answer the first time.
+      const slow = setTimeout(() => { speechStatus.textContent = "Waiting for the model to load…"; }, 2500);
+      const result = await speaking.ended; speaking = null; node.textContent = "Test"; clearTimeout(slow);
+      if (!result.ok) {
+        speechStatus.textContent = result.message || result.error;
+        if (result.setting && sourceId === view.tts?.source) ttsForm?.markError(result.setting, result.message);
+      } else { speechStatus.textContent = ""; void refresh(); }
     });
     return node;
   }
@@ -478,7 +530,7 @@
         buttons: [testButton(profile.id), button("Edit", () => editTts(profile))] })));
     const chars = view.usage?.chars || 0;
     if (!speaking) speechStatus.textContent = chars ? "Read aloud today: " + chars.toLocaleString() + " characters" : "";
-    void renderSpeechSettings();
+    return renderSpeechSettings();
   }
   /** "kokoro (default, loaded, native streaming)": native streaming is the one worth pointing out. */
   function modelLabel(m) {
@@ -497,6 +549,7 @@
     showPair(ttsModel, ttsModelText, true, Boolean(profile));
     lineOf(ttsSpeed).hidden = lineOf(speechVolume).hidden = !browser && !profile;
     lineOf(ttsStream).hidden = true;
+    if (!profile) { ttsForm = null; ttsFormHost.replaceChildren(); }
     if (!browser && !profile) { showPair(ttsVoice, ttsVoiceText, true, false); return; }
     if (document.activeElement !== ttsSpeed) ttsSpeed.value = String((browser ? tts.speed : profile.speed) ?? 1);
     if (browser) {
@@ -535,7 +588,7 @@
       speechStatus.textContent = "Cannot list voices: " + (voices?.message || "no answer.");
     }
     // Streaming shows only for a model the server says can stream; stream: true is not OpenAI's.
-    const info = ttsModels.find(m => m.id === model) || (!model && ttsModels.find(m => m.default));
+    const info = findModel(ttsModels, model);
     const streams = info?.streaming;
     lineOf(ttsStream).hidden = !streams;
     ttsStream.setAttribute("aria-checked", String(Boolean(streams && profile.stream)));
@@ -543,6 +596,217 @@
       ? "This model streams natively, which is usually the most reliable: speech starts while the server is still generating."
       : "Speech starts while the server is still generating, a sentence at a time.";
     streamLabel.setAttribute("aria-description", streamLabel.dataset.tooltip);
+    // A model that publishes its settings sets its speed there, if it has one.
+    const schema = info?.settings;
+    lineOf(ttsSpeed).hidden = Boolean(schema);
+    const moved = accepts(schema?.properties?.speed, profile.speed) ? { speed: profile.speed } : null;
+    ttsForm = renderModelSettings(ttsFormHost, schema, profile.modelSettings?.[model], (values, adopted) =>
+      saveSpeechSetting({ settingsFor: { model, values }, ...(adopted ? { speed: 1 } : {}) }), moved);
+  }
+  /** A model by id or alias; "" is the server's default. */
+  function findModel(models, id) {
+    return id ? models.find(m => m.id === id || m.aliases?.includes(id)) : models.find(m => m.default);
+  }
+  /** Whether a setting's schema takes this value: one of its choices, or a value of its type in range. */
+  function accepts(prop, value) {
+    if (!prop || typeof prop !== "object") return false;
+    const choices = Array.isArray(prop.oneOf) ? prop.oneOf.map(c => c?.const) : Array.isArray(prop.enum) ? prop.enum : null;
+    if (choices) return choices.includes(value);
+    const types = [].concat(prop.type || []);
+    if (typeof value === "string") return types.includes("string");
+    if (typeof value !== "number" || !(types.includes("number") || types.includes("integer"))) return false;
+    return !(typeof prop.minimum === "number" && value < prop.minimum) && !(typeof prop.maximum === "number" && value > prop.maximum);
+  }
+
+  /* ---------- model settings (#1085): controls built from the settings a model publishes ---------- */
+  const showAdvanced = new Set();
+  /**
+   * Draws a model's settings (a JSON Schema object whose properties are request fields) into host:
+   * ordered by x-order, grouped under x-group, x-advanced behind a toggle, x-hidden left out, each
+   * control from x-control or its type. Only values that differ from the default are kept; save gets
+   * them all. Values the model no longer lists are dropped, and moved ({ name: value }, the source's
+   * own older setting) is taken over when the model has no value of that name: save(values, true).
+   * Returns { markError, clearErrors }.
+   */
+  function renderModelSettings(host, schema, saved, save, moved) {
+    const focused = document.activeElement?.closest?.("[data-setting]")?.dataset.setting;
+    host.replaceChildren();
+    const props = schema && typeof schema === "object" && schema.properties && typeof schema.properties === "object" ? schema.properties : null;
+    host.hidden = !props;
+    const api = { markError() {}, clearErrors() {} };
+    if (!props) return api;
+    const isObject = prop => [].concat(prop.type || []).includes("object") && prop.properties && typeof prop.properties === "object";
+    // Values the model no longer lists go.
+    const values = {};
+    for (const [key, value] of Object.entries(saved || {})) {
+      const prop = props[key];
+      if (!prop) continue;
+      if (isObject(prop) && value && typeof value === "object") {
+        const inner = Object.fromEntries(Object.entries(value).filter(([k]) => prop.properties[k]));
+        if (Object.keys(inner).length) values[key] = inner;
+      } else values[key] = value;
+    }
+    const adopted = Object.entries(moved || {}).filter(([key, value]) => value !== undefined && value !== "" && values[key] === undefined);
+    for (const [key, value] of adopted) values[key] = value;
+    if (adopted.length || JSON.stringify(values) !== JSON.stringify(saved || {})) save({ ...values }, adopted.length > 0);
+    const get = path => path.reduce((at, key) => at && typeof at === "object" ? at[key] : undefined, values);
+    const set = (path, value, fallback) => {
+      const [key, inner] = path;
+      const same = value === undefined || JSON.stringify(value) === JSON.stringify(fallback);
+      if (inner === undefined) { if (same) delete values[key]; else values[key] = value; }
+      else {
+        const box = { ...(values[key] && typeof values[key] === "object" ? values[key] : {}) };
+        if (same) delete box[inner]; else box[inner] = value;
+        if (Object.keys(box).length) values[key] = box; else delete values[key];
+      }
+      save({ ...values });
+    };
+    // Flatten: a nested object's properties are settings of their own, under their own groups.
+    const entries = [];
+    for (const [key, prop] of Object.entries(props)) {
+      if (!prop || typeof prop !== "object" || prop["x-hidden"]) continue;
+      if (isObject(prop)) {
+        for (const [inner, sub] of Object.entries(prop.properties)) if (sub && typeof sub === "object" && !sub["x-hidden"])
+          entries.push({ path: [key, inner], prop: sub, group: sub["x-group"] || prop["x-group"] || prop.title || "", order: [prop["x-order"] ?? 999, sub["x-order"] ?? 999], advanced: Boolean(sub["x-advanced"] || prop["x-advanced"]) });
+      } else entries.push({ path: [key], prop, group: prop["x-group"] || "", order: [prop["x-order"] ?? 999, 0], advanced: Boolean(prop["x-advanced"]) });
+    }
+    entries.sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1]);
+    const rows = new Map();
+    const draw = (list, parent) => {
+      let group = null;
+      for (const entry of list) {
+        if (entry.group !== group) {
+          group = entry.group;
+          if (group) { const h = document.createElement("h4"); h.className = "audio-settings-group"; h.textContent = group; parent.append(h); }
+        }
+        const line = settingControl(entry, get(entry.path), (value) => set(entry.path, value, entry.prop.default));
+        rows.set(entry.path.join("."), line); parent.append(line);
+      }
+    };
+    draw(entries.filter(e => !e.advanced), host);
+    const advanced = entries.filter(e => e.advanced);
+    const key = JSON.stringify(Object.keys(props));
+    if (advanced.length) {
+      const box = document.createElement("div"); box.className = "audio-settings-advanced";
+      const toggle = button("", () => {
+        if (showAdvanced.has(key)) showAdvanced.delete(key); else showAdvanced.add(key);
+        paint();
+      }, "audio-settings-more");
+      const paint = () => {
+        const open = showAdvanced.has(key);
+        box.hidden = !open; toggle.textContent = open ? "Hide advanced settings" : `Advanced settings (${advanced.length})`;
+        toggle.setAttribute("aria-expanded", String(open));
+      };
+      host.append(toggle, box); draw(advanced, box); paint();
+      api.open = () => { showAdvanced.add(key); paint(); };
+    }
+    const errors = [];
+    api.clearErrors = () => { errors.splice(0).forEach(node => node.remove()); host.querySelectorAll(".audio-setting-error").forEach(n => n.classList.remove("audio-setting-error")); };
+    api.markError = (setting, message) => {
+      api.clearErrors();
+      const line = rows.get(setting) || rows.get(String(setting).split(".")[0]);
+      if (!line) return;
+      if (line.closest(".audio-settings-advanced")) api.open?.();
+      line.classList.add("audio-setting-error");
+      const note = document.createElement("p"); note.className = "settings-hint audio-setting-message"; note.setAttribute("role", "alert"); note.textContent = message;
+      line.after(note); errors.push(note);
+      line.querySelector("input, textarea, button")?.focus();
+    };
+    if (focused) rows.get(focused)?.querySelector("input, textarea, button")?.focus();
+    return api;
+  }
+  /** One setting's row: label (its description as the tip), the control, and Reset when it is set. */
+  function settingControl({ path, prop }, value, change) {
+    const id = "audio-ms-" + Math.random().toString(36).slice(2, 9);
+    const line = document.createElement("div"); line.className = "setting-row audio-setting"; line.dataset.setting = path.join(".");
+    const label = document.createElement("label"); label.textContent = prop.title || path[path.length - 1]; label.htmlFor = id;
+    if (prop.description) { label.dataset.tooltip = prop.description; label.setAttribute("aria-description", prop.description); }
+    const types = [].concat(prop.type || []), base = types.find(t => t !== "null") || "string";
+    const choices = Array.isArray(prop.oneOf) ? prop.oneOf.filter(c => c && "const" in c).map(c => [c.const, c.title ?? String(c.const ?? "Default")])
+      : Array.isArray(prop.enum) ? prop.enum.map(v => [v, v === null ? "Default" : String(v)]) : null;
+    const control = prop["x-control"] || (choices ? "select" : base === "boolean" ? "toggle" : base === "number" || base === "integer" ? "number" : "text");
+    const current = value !== undefined ? value : prop.default;
+    const unit = prop["x-unit"] ? " " + prop["x-unit"] : "";
+    const box = document.createElement("div"); box.className = "audio-setting-control";
+    let input;
+    const num = text => { if (text === "") return types.includes("null") ? null : undefined; const n = Number(text); return Number.isFinite(n) ? (base === "integer" ? Math.round(n) : n) : undefined; };
+    if (control === "slider" && typeof prop.minimum === "number" && typeof prop.maximum === "number") {
+      box.classList.add("orb-settings-size");
+      input = document.createElement("input"); input.type = "range"; input.className = "orb-range"; input.id = id;
+      input.min = String(prop.minimum); input.max = String(prop.maximum);
+      input.step = String(prop["x-step"] ?? (base === "integer" ? 1 : (prop.maximum - prop.minimum) / 100));
+      input.value = String(typeof current === "number" ? current : (prop.minimum + prop.maximum) / 2);
+      const out = document.createElement("output"); out.htmlFor = id;
+      const paint = () => { out.value = input.value + unit; input.style.setProperty("--fill", ((Number(input.value) - prop.minimum) / (prop.maximum - prop.minimum) * 100) + "%"); };
+      input.addEventListener("input", paint);
+      input.addEventListener("change", () => change(num(input.value)));
+      const ends = Array.isArray(prop["x-ends"]) ? prop["x-ends"] : null;
+      if (ends) {
+        const end = text => { const node = document.createElement("span"); node.className = "audio-setting-end"; node.textContent = text; return node; };
+        box.classList.add("audio-setting-ends"); box.append(end(ends[0]), input, end(ends[1]), out);
+      } else box.append(input, out);
+      paint();
+    } else if (control === "toggle" || (base === "boolean" && control !== "select" && control !== "segmented")) {
+      input = document.createElement("button"); input.type = "button"; input.id = id; input.className = "pill-toggle";
+      input.setAttribute("role", "switch"); input.setAttribute("aria-checked", String(current === true));
+      input.addEventListener("click", () => { const on = input.getAttribute("aria-checked") !== "true"; input.setAttribute("aria-checked", String(on)); change(on); });
+      box.append(input);
+    } else if ((control === "segmented" || control === "select") && (choices || base === "boolean")) {
+      const list = choices || [[true, "On"], [false, "Off"]];
+      if (control === "segmented") {
+        input = document.createElement("div"); input.className = "ag-seg small"; input.id = id; input.setAttribute("role", "radiogroup");
+        input.setAttribute("aria-label", label.textContent);
+        for (const [v, text] of list) {
+          const on = JSON.stringify(v) === JSON.stringify(current ?? null);
+          const b = button(text, () => change(v), "ag-seg-btn" + (on ? " on" : ""));
+          b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(on));
+          input.append(b);
+        }
+        box.append(input);
+      } else {
+        input = document.createElement("select"); input.id = id; input.setAttribute("aria-label", label.textContent);
+        list.forEach(([v, text]) => option(input, JSON.stringify(v), text));
+        const now = JSON.stringify(current ?? null);
+        if (!list.some(([v]) => JSON.stringify(v) === now)) option(input, now, String(current) + " (saved)");
+        input.value = now;
+        input.addEventListener("change", () => change(JSON.parse(input.value)));
+        box.append(input);
+        window.createSelect(input).classList.add("audio-control");
+        label.htmlFor = `${id}-button`;
+      }
+    } else if (control === "textarea") {
+      line.classList.add("setting-row-stacked");
+      input = document.createElement("textarea"); input.id = id; input.className = "ag-input audio-control audio-setting-text"; input.rows = 3;
+      input.value = typeof current === "string" ? current : ""; if (prop.maxLength) input.maxLength = prop.maxLength;
+      input.addEventListener("change", () => change(input.value === "" && types.includes("null") ? null : input.value));
+      box.append(input);
+    } else if (control === "number" || base === "number" || base === "integer") {
+      input = document.createElement("input"); input.type = "number"; input.id = id; input.className = "ag-input audio-control";
+      if (typeof prop.minimum === "number") input.min = String(prop.minimum);
+      if (typeof prop.maximum === "number") input.max = String(prop.maximum);
+      input.step = String(prop["x-step"] ?? (base === "integer" ? 1 : "any"));
+      input.value = typeof current === "number" ? String(current) : "";
+      if (prop.default !== undefined && prop.default !== null) input.placeholder = String(prop.default);
+      input.addEventListener("change", () => change(num(input.value)));
+      box.append(input);
+      if (unit) { const u = document.createElement("span"); u.className = "audio-setting-end"; u.textContent = unit.trim(); box.append(u); }
+    } else {
+      input = document.createElement("input"); input.type = "text"; input.id = id; input.className = "ag-input audio-control";
+      input.value = typeof current === "string" ? current : ""; if (prop.maxLength) input.maxLength = prop.maxLength;
+      if (typeof prop.default === "string" && prop.default) input.placeholder = prop.default;
+      input.addEventListener("change", () => change(input.value === "" && types.includes("null") ? null : input.value || undefined));
+      box.append(input);
+    }
+    if (input.getAttribute && !input.getAttribute("aria-label")) input.setAttribute("aria-label", label.textContent);
+    if (value !== undefined) {
+      const reset = button("↺", () => change(undefined), "audio-setting-reset");
+      reset.setAttribute("aria-label", `Reset ${label.textContent}`);
+      reset.dataset.tooltip = prop.default !== undefined ? `Reset to the default (${String(prop.default ?? "automatic")})` : "Reset to the default";
+      // Before the control, so the controls' right edges stay in line with the rows around them.
+      box.prepend(reset);
+    }
+    line.append(label, box);
+    return line;
   }
   /** Saves one setting of the chosen source, or This browser's own voice and speed. */
   function saveSpeechSetting(changes) {
@@ -566,5 +830,9 @@
   ttsSpeed.addEventListener("change", () => saveSpeechSetting({ speed: speedValue() }));
   ttsStream.addEventListener("change", () => saveSpeechSetting({ stream: ttsStream.getAttribute("aria-checked") === "true" }));
 
-  window.scribeAudioSettings = { sections: [section, speech, sounds], refresh, receiveOutput, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
+  /** Resolves once saves and the renders after them are done (tests wait on it). */
+  async function settled() {
+    for (let seen = null; seen !== saving;) { seen = saving; await saving; await rendering; }
+  }
+  window.scribeAudioSettings = { sections: [section, speech, sounds], refresh, receiveOutput, settled, init({ confirm }) { if (confirm) confirmRemove = confirm; } };
 })();

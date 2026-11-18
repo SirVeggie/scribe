@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
+import type { Page } from "playwright-core";
 import { launchChromium } from "./chromium.js";
 import { AudioService } from "./audio/service.js";
 import { memoryStore } from "./audio/settings.js";
@@ -35,9 +36,13 @@ test("background picker renders real previews, toggles choices, and disposes eff
   } finally { await browser.close(); }
 });
 
+/** Waits until the section's saves and the renders after them are done. */
+const settle = (page: Page) => page.evaluate(() => (window as any).scribeAudioSettings.settled());
+
 /** Settings → Audio in a page, its /api/audio calls answered by a real AudioService. */
 async function audioSettingsPage(browser: Awaited<ReturnType<typeof launchChromium>>, service: AudioService, extra = "") {
-  const page = await browser.newPage();
+  // Tall enough that no dropdown opens below the fold: a scroll to reach an option closes the menu.
+  const page = await browser.newPage({ viewport: { width: 1000, height: 2400 } });
   const seen = { tested: "", errors: [] as string[] };
   page.on("pageerror", err => seen.errors.push(err.message));
   await page.route("http://audio.test/**", async route => {
@@ -94,11 +99,20 @@ test("speech settings add, edit, select, test and remove multiple sources in a m
     await add.click();
     await page.locator("#audio-name").fill("Hosted");
     await page.locator("#audio-url").fill("https://speech.invalid/v1");
-    await page.locator("#audio-model").fill("speech-model");
-    await page.locator("#audio-model").press("Enter");
+    assert.equal(await modal.locator("#audio-model, #audio-language").count(), 0, "the editor only holds where the source is");
+    await page.locator("#audio-url").press("Enter");
     await page.getByRole("radio", { name: "Use Hosted by default" }).check();
     await page.waitForFunction(() => document.querySelectorAll(".audio-settings:first-of-type .ml-source").length === 2);
     const hosted = service.view().profiles.find(s => s.name === "Hosted")!.id;
+    assert.equal(service.view().profiles.find(s => s.name === "Hosted")!.model, "whisper-1", "a server without a model list gets OpenAI's model");
+    // The default source's model and language are under the list; without a model list the model is a text box.
+    await page.waitForFunction(() => !document.querySelector("#audio-stt-model-text")!.closest(".setting-row")!.hasAttribute("hidden"));
+    await page.locator("#audio-stt-model-text").fill("speech-model");
+    await page.locator("#audio-stt-model-text").blur();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).profiles.some((p: any) => p.name === "Hosted" && p.model === "speech-model"));
+    await page.locator("#audio-stt-language").fill("fi");
+    await page.locator("#audio-stt-language").blur();
+    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).profiles.some((p: any) => p.name === "Hosted" && p.language === "fi"));
     const hostedRow = page.locator(".ml-source").filter({ hasText: "Hosted" });
     await hostedRow.getByRole("button", { name: "Test", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "Transcript: Words" }).waitFor();
@@ -117,11 +131,12 @@ test("speech settings add, edit, select, test and remove multiple sources in a m
     service.saveSource({ name: "Linked", source: linked.id, model: "speech-model" });
     assert.ok(!JSON.stringify(service.view()).includes("model-secret"));
     await page.evaluate(() => (window as any).scribeAudioSettings.refresh());
-    await page.locator(".ml-source").filter({ hasText: "Linked" }).getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("radio", { name: "Use Linked by default" }).check();
     // The linked source lists its models; the saved one is chosen.
-    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#audio-model-pick")?.value === "speech-model"
-      && !document.querySelector("#audio-model-pick")!.closest(".ag-field")!.hasAttribute("hidden"));
-    assert.deepEqual(await page.locator("#audio-model-pick option").allTextContents(), ["moonshine-medium (default)", "speech-model"]);
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("#audio-stt-model")?.value === "speech-model"
+      && !document.querySelector("#audio-stt-model")!.closest(".setting-row")!.hasAttribute("hidden"));
+    assert.deepEqual(await page.locator("#audio-stt-model option").allTextContents(), ["Server default (moonshine-medium)", "moonshine-medium (default)", "speech-model"]);
+    await page.locator(".ml-source").filter({ hasText: "Linked" }).getByRole("button", { name: "Edit", exact: true }).click();
     assert.equal(await page.locator("#audio-url").inputValue(), linked.baseUrl);
     assert.equal(await page.locator("#audio-url").isEditable(), false);
     assert.equal(await page.locator("#audio-key").isVisible(), false);
@@ -222,7 +237,7 @@ test("text-to-speech: own source list, then model, voice, speed and streaming fo
     await page.getByRole("option", { name: "Kate (en-GB)", exact: true }).click();
     await page.locator("#audio-tts-speed").fill("1.5");
     await page.locator("#audio-tts-speed").blur();
-    await page.waitForFunction(async () => (await (await fetch("/api/audio/settings")).json()).tts.speed === 1.5);
+    await settle(page);
     assert.deepEqual(service.view().tts, { source: "__browser__", voice: "Kate", speed: 1.5 });
     assert.equal(service.view().ttsSources[0].voice, "bm_george", "the source keeps its own voice");
 
@@ -239,6 +254,54 @@ test("text-to-speech: own source list, then model, voice, speed and streaming fo
     await modal.getByRole("button", { name: "Remove", exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll(".audio-settings:nth-of-type(2) .ml-source").length === 2);
     assert.equal(service.view().ttsSources.length, 0);
+    assert.deepEqual(seen.errors, []);
+  } finally { await browser.close(); }
+});
+
+test("model settings: controls from the settings a model publishes, saved per source and model", async () => {
+  const browser = await launchChromium({ headless: true, args: [], purpose: "Model settings test" });
+  try {
+    const linked = { id: "linked", name: "Memorize", baseUrl: "https://models.invalid/v1", models: [] };
+    const settings = { type: "object", properties: {
+      speed: { type: "number", title: "Speed", default: 1, minimum: 0.5, maximum: 2, "x-control": "slider", "x-step": 0.1, "x-unit": "×", "x-order": 1 },
+      language: { type: "string", title: "Language", default: "en", "x-control": "select", "x-order": 2, oneOf: [{ const: "en", title: "English" }, { const: "fi", title: "Finnish" }] },
+      steering: { type: "object", title: "Steering", "x-order": 3, properties: {
+        happy: { type: "number", title: "Happy", default: 0, minimum: -3, maximum: 3, "x-control": "slider", "x-group": "Mood", description: "Safe range ±2." } } },
+      seed: { type: ["integer", "null"], title: "Seed", "x-advanced": true, "x-order": 4 },
+      controls: { type: "object", "x-hidden": true } } };
+    const service = new AudioService({ sources: () => [linked], store: memoryStore(),
+      listModels: async () => ({ ok: true, flagged: true, models: [{ id: "zonos", type: "tts", default: true, settings }, { id: "llm", type: "llm" }] }),
+      tts: { speak: async () => ({ ok: false, error: "engine", message: "unused" }), voices: async () => ({ ok: true, voices: [{ id: "a" }], listed: true }) } });
+    service.saveTtsSource({ name: "Speech", source: "linked", model: "zonos", speed: 1.5, settingsFor: { model: "zonos", values: { gone: 1 } } });
+    const { page, seen } = await audioSettingsPage(browser, service,
+      `window.scribeAudio.speak = () => ({ stop() {}, ended: Promise.resolve({ ok: false, error: "setting", setting: "steering.happy", message: "Happy must be between -3 and 3, not 9" }) });`);
+    const tts = page.locator(".audio-settings").nth(1);
+    const saved = () => service.view().ttsSources[0];
+    // The old speed moves into the model's own; a value the model no longer lists goes; the plain Speed box hides.
+    await tts.locator(".audio-setting").filter({ hasText: "Happy" }).waitFor();
+    await page.waitForFunction(() => document.querySelector("#audio-tts-speed")!.closest(".setting-row")!.hasAttribute("hidden"));
+    assert.deepEqual(await page.locator("#audio-tts-model option").allTextContents(), ["Server default (zonos)", "zonos (default)"], "only text-to-speech models");
+    await settle(page);
+    assert.equal(await page.locator(".audio-setting[data-setting='speed'] output").textContent(), "1.5 ×");
+    assert.deepEqual(saved().modelSettings, { zonos: { speed: 1.5 } }); assert.equal(saved().speed, undefined);
+    assert.equal(await tts.locator(".audio-settings-group").first().textContent(), "Mood");
+    assert.equal(await tts.locator(".audio-setting").filter({ hasText: "Seed" }).isVisible(), false, "advanced settings wait behind their toggle");
+
+    await tts.getByRole("button", { name: "Language", exact: true }).click();
+    await page.getByRole("option", { name: "Finnish", exact: true }).click();
+    await settle(page);
+    await tts.getByRole("button", { name: "Advanced settings (1)" }).click();
+    await tts.getByRole("spinbutton", { name: "Seed" }).fill("7");
+    await tts.getByRole("spinbutton", { name: "Seed" }).blur();
+    await settle(page);
+    await tts.getByRole("button", { name: "Reset Speed" }).click();
+    await settle(page);
+    assert.deepEqual(saved().modelSettings, { zonos: { language: "fi", seed: 7 } });
+
+    // A refused setting is marked next to its control with the server's sentence.
+    await tts.locator(".ml-source").filter({ hasText: "Speech" }).getByRole("button", { name: "Test", exact: true }).click();
+    await tts.locator(".audio-setting.audio-setting-error").filter({ hasText: "Happy" }).waitFor();
+    assert.equal(await tts.getByRole("alert").textContent(), "Happy must be between -3 and 3, not 9");
     assert.deepEqual(seen.errors, []);
   } finally { await browser.close(); }
 });

@@ -46,3 +46,23 @@ html.popout:not(.desktop).page-audio-recording .chrome { display: flex !importan
 .audio-model-help > p { margin: 4px 0 0; }
 .audio-model-help .audio-model-features { color: var(--muted); }
 .audio-model-help .audio-model-guide { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+/* Model settings (#1085): rows built from the settings a model publishes, grouped and with an Advanced part. */
+.audio-model-settings[hidden], .audio-settings-advanced[hidden], .audio-model-settings .setting-row[hidden] { display: none; }
+.audio-settings-group { margin: 12px 2px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.audio-setting-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.audio-setting-control.orb-settings-size { justify-content: flex-end; }
+.audio-setting-control.audio-setting-ends { width: 320px; max-width: 72%; }
+.audio-setting-control .orb-range { min-width: 80px; }
+.audio-setting-control output { min-width: 42px; }
+.audio-setting-end { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.setting-row-stacked > .audio-setting-control { width: 100%; }
+.audio-setting-text { flex: 1; width: 100%; min-height: 64px; resize: vertical; }
+.audio-setting-reset {
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; flex: none;
+  background: transparent; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.audio-setting-reset:hover, .audio-setting-reset:focus-visible { color: var(--text); background: var(--hover, rgba(255, 255, 255, 0.08)); }
+.audio-settings-more { margin: 8px 2px 2px; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--accent); font-size: 12.5px; cursor: pointer; }
+.audio-setting.audio-setting-error > label { color: var(--danger, #ef7373); }
+.audio-setting.audio-setting-error .ag-input, .audio-setting.audio-setting-error .orb-range { outline: 1px solid var(--danger, #ef7373); outline-offset: 2px; border-radius: 4px; }
+.audio-setting-message { margin: 0 2px 6px; color: var(--danger, #ef7373); }
