@@ -1,21 +1,33 @@
 // Builds the release desktop app and copies the exe into a folder, replacing a running copy.
 // Usage: npm run desktop:install -- <target folder>
+// Linux: the folder is optional (default ~/.local/share/scribe-desktop); it also adds a menu entry and icons.
+// npm run desktop:install -- --uninstall removes them again (Linux).
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installRelease } from "./install-release.mjs";
 import { requireToolchain, tauriCli } from "./cargo-env.mjs";
+import * as linux from "./install-linux.mjs";
 
-const EXE = "scribe.exe";
-const PREVIOUS_EXES = ["agent-board-desktop.exe", "board.exe"];
+const isWindows = process.platform === "win32";
+const isLinux = process.platform === "linux";
+const EXE = isWindows ? "scribe.exe" : "scribe";
+const PREVIOUS_EXES = isWindows ? ["agent-board-desktop.exe", "board.exe"] : ["agent-board-desktop", "board"];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const target = process.argv[2];
+const args = process.argv.slice(2);
+if (isLinux && args.includes("--uninstall")) {
+  linux.uninstall(args.find((arg) => arg !== "--uninstall"));
+  process.exit(0);
+}
+const target = args[0] ?? (isLinux ? linux.defaultFolder() : undefined);
 if (!target) {
   console.error("Usage: npm run desktop:install -- <target folder>");
   process.exit(1);
 }
+if (isLinux) linux.checkFolder(path.resolve(target));
 const installed = path.join(path.resolve(target), EXE);
 
 const env = requireToolchain(root);
@@ -49,9 +61,15 @@ for (const name of PREVIOUS_EXES) {
   }
 }
 console.log(`Copied to ${installed}`);
+if (isLinux) linux.integrate(root, installed);
 
 function processNames() {
   return [EXE, ...PREVIOUS_EXES];
+}
+
+// The cargo target folder holds `npm run desktop` debug copies: leave those running (Linux).
+function ownApps() {
+  return linux.runningApps(processNames()).filter((app) => !linux.isInside(app.exe, metadata.target_directory));
 }
 
 function isImageRunning(name) {
@@ -60,11 +78,13 @@ function isImageRunning(name) {
 }
 
 function isRunning() {
+  if (isLinux) return ownApps().length > 0;
   return processNames().some(isImageRunning);
 }
 
 // Capture the actual paths, including an older executable name or another install folder.
 function runningApps() {
+  if (isLinux) return [...new Set(ownApps().map((app) => app.exe))];
   const names = processNames().map((name) => `'${path.parse(name).name}'`).join(",");
   const script = `$ErrorActionPreference = 'Stop'; $apps = @(Get-Process -Name ${names} -ErrorAction SilentlyContinue); $paths = @($apps | ForEach-Object { if (!$_.Path) { throw 'Cannot read the running desktop executable path' }; $_.Path } | Select-Object -Unique); ConvertTo-Json -InputObject $paths -Compress`;
   return JSON.parse(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true }));
@@ -72,7 +92,7 @@ function runningApps() {
 
 // Launching also points agents at this copy (it rewrites desktop.json on start).
 async function restartApp(executable, recovering) {
-  if (recovering && runningApps().some((app) => app.toLowerCase() === executable.toLowerCase())) return;
+  if (recovering && runningApps().some((app) => isWindows ? app.toLowerCase() === executable.toLowerCase() : app === executable)) return;
   await new Promise((resolve, reject) => {
     const child = spawn(executable, [], { detached: true, stdio: "ignore" });
     child.once("error", reject);
@@ -84,6 +104,13 @@ async function restartApp(executable, recovering) {
 /** Ask the window to close first so it saves its layout; force it only if that does not work. */
 function stopApp() {
   console.log("Closing the desktop app");
+  if (isLinux) {
+    linux.signal(ownApps(), "SIGTERM");
+    if (waitForExit(5000)) return;
+    linux.signal(ownApps(), "SIGKILL");
+    if (!waitForExit(5000)) throw new Error("The desktop app is still running; close it and try again");
+    return;
+  }
   for (const name of processNames().filter(isImageRunning)) {
     spawnSync("taskkill", ["/IM", name], { stdio: "ignore" });
   }
