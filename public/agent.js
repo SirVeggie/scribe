@@ -11681,6 +11681,7 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         // Started from another device (#1087): this daemon's browser isn't the user's, so the page opens here and its code goes back.
         const say = data.url
           ? "Open the sign-in page, sign in with the account you're adding, then paste the code it shows. If that browser is signed in to another Claude account, log out there first."
+          : data.remote ? "Waiting for Claude Code's sign-in link…"
           : "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first.";
         hint.append(el("p", "ag-modal-hint", say));
         if (data.url) hint.append(button("Open page", "ag-btn small", () => window.open(data.url, "_blank", "noopener")));

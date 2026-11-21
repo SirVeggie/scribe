@@ -287,7 +287,7 @@ export class ClaudeProvider implements AgentProvider {
     let gotUrl: (url: string | null) => void = () => {};
     const printed = new Promise<string | null>((resolve) => (gotUrl = resolve));
     const login: Promise<void> = this.runLogin(undefined, abort.signal, options.remote ? { onChild: (child) => (this.loginChild = child), onUrl: gotUrl } : undefined)
-      .then(() => undefined)
+      .then(() => undefined, () => undefined)
       .finally(() => {
         gotUrl(null);
         if (this.login !== login) return;
@@ -341,24 +341,39 @@ export class ClaudeProvider implements AgentProvider {
     child.stderr?.on("data", take);
     const timer = setTimeout(() => stopChild(child), LOGIN_TIMEOUT_MS);
     timer.unref?.();
+    // From away there is nothing to wait for without the link (#1087): stop, and say what Claude Code printed.
+    let noUrl = false;
+    const urlTimer = paste ? setTimeout(() => {
+      if (urlSent) return;
+      noUrl = true;
+      stopChild(child);
+    }, LOGIN_URL_WAIT_MS) : null;
+    urlTimer?.unref?.();
     const stop = () => stopChild(child);
     signal?.addEventListener("abort", stop, { once: true });
-    return new Promise<boolean>((resolve) => {
+    return new Promise<boolean>((resolve, reject) => {
       child.once("error", (err) => {
         log(`Claude login failed: ${err.message}`);
-        resolve(false);
+        if (paste) reject(err);
+        else resolve(false);
       });
       child.once("exit", (code) => {
+        const tail = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" ");
         if (code === 0) {
           log("Claude login done");
         } else {
-          const tail = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" ");
-          log(`Claude login failed (exit ${code ?? "null"})${tail ? `: ${tail}` : ""}`);
+          log(`Claude login failed (exit ${code ?? "null"})${noUrl ? " without a sign-in link" : ""}${tail ? `: ${tail}` : ""}`);
+        }
+        // From away, an end before the link is the only news the user gets of what went wrong.
+        if (paste && !urlSent && !signal?.aborted && code !== 0) {
+          reject(new Error(`Claude Code did not give a sign-in link${tail ? `: ${tail}` : "."}`));
+          return;
         }
         resolve(code === 0 && !signal?.aborted);
       });
     }).finally(() => {
       clearTimeout(timer);
+      if (urlTimer) clearTimeout(urlTimer);
       signal?.removeEventListener("abort", stop);
     });
   }

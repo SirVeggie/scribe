@@ -69,6 +69,7 @@ export class ClaudeAccountPool {
   private addAbort: AbortController | null = null;
   /** A sign-in started from another device's UI (#1087): the page to open there, and where its code goes. */
   addUrl: string | null = null;
+  addRemote = false;
   private addCode: ((code: string) => void) | null = null;
   /** What went wrong with the last sign-in, for the accounts popup. */
   lastError: string | null = null;
@@ -339,6 +340,7 @@ export class ClaudeAccountPool {
     const dir = path.join(accountsRoot(this.deps.dataDir), id);
     prepareProfile(dir);
     this.adding = id;
+    this.addRemote = Boolean(options.remote);
     this.lastError = null;
     this.deps.changed();
     const provider = this.deps.provider();
@@ -384,6 +386,7 @@ export class ClaudeAccountPool {
         this.addAbort = null;
         this.addUrl = null;
         this.addCode = null;
+        this.addRemote = false;
         this.deps.changed();
       });
   }
@@ -402,6 +405,7 @@ export class ClaudeAccountPool {
     this.adding = null;
     this.addUrl = null;
     this.addCode = null;
+    this.addRemote = false;
     this.lastError = null;
     this.deps.changed();
   }

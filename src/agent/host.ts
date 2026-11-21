@@ -1605,9 +1605,9 @@ export class AgentHost {
   }
 
   /** Claude's accounts for the settings popup (#452): each with its plan and usage, and which one new chats use. */
-  claudeAccounts(): { accounts: AccountView[]; use: string; adding: boolean; url?: string; error: string | null } {
-    const url = this.claudePool.addUrl;
-    return { accounts: this.claudePool.list(), use: this.claudePool.use, adding: Boolean(this.claudePool.adding), ...(url ? { url } : {}), error: this.claudePool.lastError };
+  claudeAccounts(): { accounts: AccountView[]; use: string; adding: boolean; remote?: true; url?: string; error: string | null } {
+    const { addUrl: url, addRemote: remote } = this.claudePool;
+    return { accounts: this.claudePool.list(), use: this.claudePool.use, adding: Boolean(this.claudePool.adding), ...(remote ? { remote } : {}), ...(url ? { url } : {}), error: this.claudePool.lastError };
   }
 
   /**
