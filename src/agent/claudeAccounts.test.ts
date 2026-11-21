@@ -268,3 +268,42 @@ test("adding again replaces a sign-in whose browser was closed, and cancel ends 
     fs.rmSync(data, { recursive: true, force: true });
   }
 });
+
+test("a sign-in from another device shows the page's URL and takes its code (#1087)", async () => {
+  const codes: string[] = [];
+  let finish: (ok: boolean) => void = () => {};
+  const provider: AccountProvider = {
+    loginAccount: (_dir, signal, onUrl) => new Promise((resolve) => {
+      finish = resolve;
+      signal!.addEventListener("abort", () => resolve(false));
+      onUrl?.("https://claude.ai/oauth/authorize?x=1", (code) => codes.push(code));
+    }),
+    accountStatus: async () => null, logoutAccount: async () => undefined, fetchPlanUsage: async () => null, signedIn: () => true,
+  };
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-add-"));
+  const prevConfig = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = path.join(data, "default");
+  try {
+    const settings: Record<string, unknown> = {};
+    const p = new ClaudeAccountPool({
+      getSetting: <T,>(key: string, fallback: T) => (key in settings ? settings[key] as T : fallback),
+      setSetting: (key, value) => { settings[key] = value; },
+      provider: () => provider, dataDir: data, defaultLimits: () => undefined, running: () => 0, changed: () => undefined, offline: true,
+    });
+    assert.throws(() => p.pasteCode("abc"), /No Claude sign-in is waiting/);
+    p.add({ remote: true });
+    assert.equal(p.addUrl, "https://claude.ai/oauth/authorize?x=1");
+    p.pasteCode("abc");
+    assert.deepEqual(codes, ["abc"]);
+    finish(false);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(p.addUrl, null, "the URL goes once the sign-in ends");
+    assert.throws(() => p.pasteCode("abc"), /No Claude sign-in is waiting/);
+    p.add();
+    assert.equal(p.addUrl, null, "a sign-in on this machine has no URL to show");
+    p.cancelAdd();
+  } finally {
+    if (prevConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prevConfig;
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});

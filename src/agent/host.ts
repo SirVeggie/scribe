@@ -1605,14 +1605,22 @@ export class AgentHost {
   }
 
   /** Claude's accounts for the settings popup (#452): each with its plan and usage, and which one new chats use. */
-  claudeAccounts(): { accounts: AccountView[]; use: string; adding: boolean; error: string | null } {
-    return { accounts: this.claudePool.list(), use: this.claudePool.use, adding: Boolean(this.claudePool.adding), error: this.claudePool.lastError };
+  claudeAccounts(): { accounts: AccountView[]; use: string; adding: boolean; url?: string; error: string | null } {
+    const url = this.claudePool.addUrl;
+    return { accounts: this.claudePool.list(), use: this.claudePool.use, adding: Boolean(this.claudePool.adding), ...(url ? { url } : {}), error: this.claudePool.lastError };
   }
 
-  /** Sign another Claude account in, in its own config folder; the browser opens for it. */
-  addClaudeAccount(): void {
+  /**
+   * Sign another Claude account in, in its own config folder; the browser opens for it. remote: from
+   * another device's UI (#1087): the sign-in page's URL shows there, and its code comes back through claudeAccountCode.
+   */
+  addClaudeAccount(options: { remote?: boolean } = {}): void {
     this.checkLoggingOut("claude");
-    this.claudePool.add();
+    this.claudePool.add(options);
+  }
+
+  claudeAccountCode(code: string): void {
+    this.claudePool.pasteCode(code);
   }
 
   /** Stop a Claude account sign-in still waiting for the browser. */

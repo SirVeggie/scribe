@@ -178,6 +178,14 @@ function authDetail(auth: ClaudeAuth): string {
     auth.apiKeySource && auth.apiKeySource !== "none" ? `API key: ${auth.apiKeySource}` : undefined, auth.email].filter(Boolean).join(" · ");
 }
 
+/** The code a sign-in page shows, to a `claude auth login` waiting for it on stdin. */
+function writeLoginCode(child: ChildProcess | null, code: string): void {
+  const value = code.trim();
+  if (!child?.stdin || child.exitCode !== null) throw new Error("No Claude login is waiting for a code. Start it again.");
+  if (!value || /[\r\n]/.test(value) || value.length > 2000) throw new Error("Paste the code the sign-in page shows.");
+  child.stdin.write(`${value}\n`);
+}
+
 function stopChild(child: ChildProcess): void {
   if (!child.pid || child.exitCode != null) return;
   try {
@@ -297,16 +305,18 @@ export class ClaudeProvider implements AgentProvider {
 
   /** The code the sign-in page shows, for a login started from another device (#909). */
   pasteLoginCode(code: string): void {
-    const child = this.loginChild;
-    const value = code.trim();
-    if (!child?.stdin || child.exitCode !== null) throw new Error("No Claude login is waiting for a code. Start it again.");
-    if (!value || /[\r\n]/.test(value) || value.length > 2000) throw new Error("Paste the code the sign-in page shows.");
-    child.stdin.write(`${value}\n`);
+    writeLoginCode(this.loginChild, code);
   }
 
-  /** Sign an added account's config folder in (#452). Resolves whether the sign-in went through. */
-  loginAccount(dir: string, signal?: AbortSignal): Promise<boolean> {
-    return this.runLogin(dir, signal);
+  /**
+   * Sign an added account's config folder in (#452). Resolves whether the sign-in went through.
+   * onUrl: started from another device's UI (#1087), as startLogin's remote: the printed URL, and
+   * where the code the page shows goes.
+   */
+  loginAccount(dir: string, signal?: AbortSignal, onUrl?: (url: string, sendCode: (code: string) => void) => void): Promise<boolean> {
+    if (!onUrl) return this.runLogin(dir, signal);
+    let child: ChildProcess | null = null;
+    return this.runLogin(dir, signal, { onChild: (c) => (child = c), onUrl: (url) => onUrl(url, (code) => writeLoginCode(child, code)) });
   }
 
   /** signal: stop the sign-in (the user closed the browser and starts again, or cancels). */

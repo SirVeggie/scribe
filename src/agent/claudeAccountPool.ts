@@ -12,7 +12,7 @@ import { isPlainRecord, type PlanLimits, type Thread } from "./types.js";
 
 /** What the pool needs from Claude's provider: logins and usage reads per config folder. */
 export type AccountProvider = {
-  loginAccount(dir: string, signal?: AbortSignal): Promise<boolean>;
+  loginAccount(dir: string, signal?: AbortSignal, onUrl?: (url: string, sendCode: (code: string) => void) => void): Promise<boolean>;
   accountStatus(dir: string): Promise<{ loggedIn: boolean } | null>;
   logoutAccount(id: string, dir: string): Promise<void>;
   fetchPlanUsage(dir?: string): Promise<unknown | null>;
@@ -67,6 +67,9 @@ export class ClaudeAccountPool {
   /** An account being signed in: its id until the browser sign-in ends. */
   adding: string | null = null;
   private addAbort: AbortController | null = null;
+  /** A sign-in started from another device's UI (#1087): the page to open there, and where its code goes. */
+  addUrl: string | null = null;
+  private addCode: ((code: string) => void) | null = null;
   /** What went wrong with the last sign-in, for the accounts popup. */
   lastError: string | null = null;
 
@@ -325,8 +328,10 @@ export class ClaudeAccountPool {
   /**
    * Start the browser sign-in for another account. It joins the list once signed in. Closing the
    * browser does not end Claude Code's sign-in, so adding again replaces one still waiting.
+   * remote: started from another device's UI (#1087), whose browser can't reach this machine's
+   * callback: the sign-in page's URL shows there (addUrl) and its code comes back through pasteCode.
    */
-  add(): void {
+  add(options: { remote?: boolean } = {}): void {
     this.cancelAdd();
     const abort = new AbortController();
     this.addAbort = abort;
@@ -337,7 +342,13 @@ export class ClaudeAccountPool {
     this.lastError = null;
     this.deps.changed();
     const provider = this.deps.provider();
-    void provider.loginAccount(dir, abort.signal)
+    const onUrl = options.remote ? (url: string, sendCode: (code: string) => void) => {
+      if (this.adding !== id) return;
+      this.addUrl = url;
+      this.addCode = sendCode;
+      this.deps.changed();
+    } : undefined;
+    void provider.loginAccount(dir, abort.signal, onUrl)
       .then(async (ok) => {
         const status = ok && !abort.signal.aborted ? await provider.accountStatus(dir) : null;
         if (!status?.loggedIn) {
@@ -371,8 +382,16 @@ export class ClaudeAccountPool {
         if (this.adding !== id) return;
         this.adding = null;
         this.addAbort = null;
+        this.addUrl = null;
+        this.addCode = null;
         this.deps.changed();
       });
+  }
+
+  /** The code the sign-in page shows, for a sign-in started from another device (#1087). */
+  pasteCode(code: string): void {
+    if (!this.addCode) throw new Error("No Claude sign-in is waiting for a code. Start it again.");
+    this.addCode(code);
   }
 
   /** Stop a sign-in still waiting for the browser. */
@@ -381,6 +400,8 @@ export class ClaudeAccountPool {
     this.addAbort.abort();
     this.addAbort = null;
     this.adding = null;
+    this.addUrl = null;
+    this.addCode = null;
     this.lastError = null;
     this.deps.changed();
   }

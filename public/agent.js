@@ -11578,6 +11578,27 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
     add.prepend(icon("plus"));
     actions.append(add, el("span", "ag-grow"), button("Close", "ag-btn small", () => close()));
     panel.append(el("h2", "ag-modal-title", "Claude accounts"), body, actions);
+    // One field across the 3-second re-renders, so a code being typed or pasted stays.
+    const codeField = el("input", "ag-input");
+    codeField.placeholder = "Paste the code from the sign-in page";
+    codeField.setAttribute("aria-label", "Claude sign-in code");
+    const sendCode = button("Submit", "ag-btn small", async () => {
+      if (!codeField.value.trim()) return;
+      sendCode.disabled = true;
+      try {
+        render(await api("POST", "/claude/accounts/code", { code: codeField.value.trim() }));
+        notice("Code sent. Finishing the sign-in…");
+      } catch (err) {
+        notice(err.message);
+      } finally {
+        sendCode.disabled = false;
+      }
+    });
+    codeField.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") sendCode.click();
+    });
+    const codeRow = el("div", "setting-row");
+    codeRow.append(codeField, sendCode);
     const meter = (w, short) => {
       const row = el("div", `ag-meter lvl-${usageLevel(w?.utilization || 0)}`);
       row.append(el("span", "ag-meter-label", short), w ? quotaBar(w) : el("div", "ag-meter-bar"), el("span", "ag-meter-pct", w ? quotaPercent("claude", w.utilization) : "–"));
@@ -11652,11 +11673,18 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
         row.append(head, meter(windows.find((w) => w.id === "seven_day"), "Weekly"), meter(windows.find((w) => w.id === "five_hour"), "5-hour"));
         list.append(row);
       }
+      const typing = codeField.contains(document.activeElement);
       body.replaceChildren(useRow, ...(own && data.accounts.length > 1 ? [cliRow] : []), list);
+      if (!data.url) codeField.value = "";
       if (data.adding) {
         const hint = el("div", "ag-accounts-adding");
-        hint.append(el("p", "ag-modal-hint", "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first."),
-          button("Cancel", "ag-btn small", async () => {
+        // Started from another device (#1087): this daemon's browser isn't the user's, so the page opens here and its code goes back.
+        const say = data.url
+          ? "Open the sign-in page, sign in with the account you're adding, then paste the code it shows. If that browser is signed in to another Claude account, log out there first."
+          : "Finish the sign-in in your browser with the account you're adding. If the browser is signed in to another Claude account, log out there first.";
+        hint.append(el("p", "ag-modal-hint", say));
+        if (data.url) hint.append(button("Open page", "ag-btn small", () => window.open(data.url, "_blank", "noopener")));
+        hint.append(button("Cancel", "ag-btn small", async () => {
             try {
               render(await api("POST", "/claude/accounts/cancel"));
             } catch (err) {
@@ -11664,6 +11692,10 @@ gl_FragColor=vec4(min(o.rgb,vec3(1.)),min(o.a,1.));}`;
             }
           }));
         body.append(hint);
+        if (data.url) {
+          body.append(codeRow);
+          if (typing) codeField.focus();
+        }
       }
       else if (data.error) body.append(el("p", "ag-modal-hint ag-accounts-error", data.error));
       clearTimeout(timer);

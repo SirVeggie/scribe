@@ -247,8 +247,13 @@ export function agentRouter(host: AgentHost): express.Router {
   }));
   // Several Claude accounts (#452): list, add (browser sign-in), log out, and which one chats use.
   router.get("/claude/accounts", wrap(() => host.claudeAccounts()));
-  router.post("/claude/accounts", wrap(() => {
-    host.addClaudeAccount();
+  router.post("/claude/accounts", wrap((req) => {
+    host.addClaudeAccount({ remote: loginFromAway(identify(req)) });
+    return host.claudeAccounts();
+  }));
+  router.post("/claude/accounts/code", wrap((req) => {
+    if (typeof req.body?.code !== "string") throw new Error("Paste the code the sign-in page shows.");
+    host.claudeAccountCode(req.body.code);
     return host.claudeAccounts();
   }));
   router.post("/claude/accounts/cancel", wrap(() => {
