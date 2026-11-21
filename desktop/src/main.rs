@@ -15,6 +15,8 @@ mod embeds;
 mod keys;
 mod layout;
 mod startup;
+#[cfg(target_os = "linux")]
+mod top_nav;
 mod tray;
 
 use std::sync::Mutex;
@@ -32,6 +34,10 @@ const CHILD_SIZE: (f64, f64) = (960.0, 720.0);
 /// Setting them replaces wry's defaults, which are kept here; autoplay lets notification sounds
 /// and page sounds play without a click first (#564).
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+/// Run in every window's board. Only WebView2 lets embeds.rs drop framing headers from embedded sites; elsewhere
+/// the board checks sites first, as in a browser (public/views.js). WebKitGTK and WKWebView also can't say
+/// which frame a navigation comes from, so embeds.rs's hold on component frames is Windows-only too.
+const INIT_SCRIPT: &str = if cfg!(windows) { "" } else { "window.__SCRIBE_NO_FRAMING__ = true;" };
 
 /// Why the daemon last failed to start, for the offline page.
 #[derive(Default)]
@@ -194,9 +200,11 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>, or
     let mut url: Url = format!("{base}/").parse()?;
     url.query_pairs_mut().append_pair("popout", id);
     let board_origin = url.origin();
+    let allowed = move |url: &Url| url.origin() == board_origin || board::is_board_origin(url);
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title(title)
         .additional_browser_args(BROWSER_ARGS)
+        .initialization_script(INIT_SCRIPT)
         .zoom_hotkeys_enabled(true)
         .disable_drag_drop_handler()
         .on_download(downloads::handle)
@@ -207,17 +215,23 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>, or
             board::open_external(url.as_str());
             NewWindowResponse::Deny
         })
-        .on_navigation(move |url| {
-            if url.origin() == board_origin || board::is_board_origin(url) {
-                return true;
+        .on_navigation({
+            let allowed = allowed.clone();
+            move |url| {
+                // WebKitGTK asks about every frame here; top_nav guards the window's own document.
+                if cfg!(target_os = "linux") || allowed(url) {
+                    return true;
+                }
+                board::open_external(url.as_str());
+                false
             }
-            board::open_external(url.as_str());
-            false
         });
     if let Some((x, y)) = at {
         builder = builder.position(x, y);
     }
     let window = builder.build()?;
+    #[cfg(target_os = "linux")]
+    top_nav::install(&window, allowed);
     // Stripped after the build for the same reason as the main window's.
     window.set_decorations(false)?;
     #[cfg(windows)]
@@ -333,6 +347,7 @@ fn main() {
             let board_url: Url = format!("{base}/").parse()?;
             let board_origin = board_url.origin();
             let offline_origin = offline_url().origin();
+            let allowed = move |url: &Url| url.origin() == board_origin || url.origin() == offline_origin || board::is_board_origin(url);
             let mut url = if daemon_up { board_url } else { offline_url() };
             if let Some(tab) = board::tab_from_args(&args) {
                 url.set_fragment(Some(&tab));
@@ -340,6 +355,7 @@ fn main() {
             let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
                 .title("Scribe")
                 .additional_browser_args(BROWSER_ARGS)
+                .initialization_script(INIT_SCRIPT)
                 .zoom_hotkeys_enabled(true)
                 // Let the board's HTML drop handlers receive files on Windows.
                 .disable_drag_drop_handler()
@@ -352,14 +368,20 @@ fn main() {
                     board::open_external(url.as_str());
                     NewWindowResponse::Deny
                 })
-                .on_navigation(move |url| {
-                    if url.origin() == board_origin || url.origin() == offline_origin || board::is_board_origin(url) {
-                        return true;
+                .on_navigation({
+                    let allowed = allowed.clone();
+                    move |url| {
+                        // WebKitGTK asks about every frame here; top_nav guards the window's own document.
+                        if cfg!(target_os = "linux") || allowed(url) {
+                            return true;
+                        }
+                        board::open_external(url.as_str());
+                        false
                     }
-                    board::open_external(url.as_str());
-                    false
                 })
                 .build()?;
+            #[cfg(target_os = "linux")]
+            top_nav::install(&window, allowed);
             // Created with decorations and stripped here: a window built undecorated comes out a
             // caption-height taller than asked, and that extra height leaks into the saved layout.
             window.set_decorations(false)?;

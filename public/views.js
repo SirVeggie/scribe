@@ -54,8 +54,12 @@ window.createViews = function createViews(host) {
   const openedFrom = new Map();
   /** href → reason, for sites that refuse to be framed. */
   const blocked = new Map();
-  /** The desktop app drops framing headers from embedded sites (desktop/src/embeds.rs), so nothing is refused there. */
-  const framingAllowed = Boolean(window.__TAURI__);
+  /**
+   * The Windows desktop app drops framing headers from embedded sites (desktop/src/embeds.rs), so nothing is
+   * refused there. The Linux and macOS webviews can't rewrite responses; that app sets __SCRIBE_NO_FRAMING__
+   * and sites are checked as in a browser.
+   */
+  const framingAllowed = Boolean(window.__TAURI__) && !window.__SCRIBE_NO_FRAMING__;
   const checking = new Set();
   /** @type {null | { frameId: string, anchor: string }} */
   let pendingAnchor = null;

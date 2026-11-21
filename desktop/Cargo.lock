@@ -2896,6 +2896,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "webkit2gtk",
  "webview2-com",
  "windows",
  "windows-core",
