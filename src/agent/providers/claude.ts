@@ -74,6 +74,9 @@ const PAGES_READ_TOOLS = ["Read", "Grep", "Glob"];
 
 const EFFORT_LABELS: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
+/** Claude Code could not find the session to resume (its transcript is gone). */
+class SessionLostError extends Error {}
+
 /** Push-based async iterable feeding user messages into a streaming query. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
   private items: SDKUserMessage[] = [];
@@ -848,6 +851,8 @@ class ClaudeSession implements ProviderSession {
   private sessionId: string | null;
   private commandList: SlashCommand[] = [];
   private stderrTail = "";
+  /** The error a result of the current process reported, for a process that ends while starting. */
+  private resultError = "";
   private instructions = "";
   /** Streamed tool_use blocks by content index for the current message. */
   private streamTools = new Map<number, string>();
@@ -1164,7 +1169,7 @@ class ClaudeSession implements ProviderSession {
     if (this.query && this.live?.key === this.restartKey(this.thread)) {
       const existing = this.query;
       await this.queryReady;
-      if (this.query !== existing) throw new Error("Claude query closed during initialization");
+      if (this.query !== existing) throw this.startFailure();
       return existing;
     }
     this.close();
@@ -1174,6 +1179,8 @@ class ClaudeSession implements ProviderSession {
     // Another account's readings must not carry over into this one's.
     if (this.queryAccount !== this.thread.claudeAccount) this.queryLimits = claudePlanSnapshot(null, {});
     this.queryAccount = this.thread.claudeAccount;
+    this.stderrTail = "";
+    this.resultError = "";
     const options = { ...this.buildOptions(), abortController: this.abortController };
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;
@@ -1190,14 +1197,24 @@ class ClaudeSession implements ProviderSession {
       this.ctx.claudeLimits?.(this.thread.id, this.queryLimits, this.queryAccount);
     })();
     await this.queryReady;
-    if (this.query !== q) throw new Error("Claude query closed during initialization");
+    if (this.query !== q) throw this.startFailure();
     return q;
+  }
+
+  /** Why the process ended while starting, from what it reported; a session it could not resume is a SessionLostError. */
+  private startFailure(): Error {
+    const detail = (this.resultError || this.stderrTail.slice(-600)).trim();
+    if (/No conversation found with session ID/i.test(detail)) return new SessionLostError(detail);
+    return new Error(detail ? `Claude Code stopped while starting: ${detail}` : "Claude Code stopped while starting");
   }
 
   private async readLoop(q: Query): Promise<void> {
     try {
       for await (const msg of q) {
         if (this.query !== q) break;
+        if (msg.type === "result" && msg.is_error) {
+          this.resultError = "errors" in msg && Array.isArray(msg.errors) && msg.errors.length ? msg.errors.join("\n") : "result" in msg ? String(msg.result ?? "") : msg.subtype;
+        }
         this.onMessage(msg);
       }
       if (this.query === q) {
@@ -1356,7 +1373,7 @@ class ClaudeSession implements ProviderSession {
       } as SDKUserMessage);
       return await done;
     } catch (err) {
-      return { status: "error", error: (err as Error).message };
+      return { status: "error", error: (err as Error).message, ...(err instanceof SessionLostError ? { sessionLost: true as const } : {}) };
     } finally {
       this.sink = null;
       this.armIdle();

@@ -123,6 +123,8 @@ export type TurnResult = {
   error?: string;
   /** A steered message the turn ended without taking in; the provider runs it as its own turn next, which the host adopts. */
   next?: string;
+  /** The session to resume is gone (Claude Code: "No conversation found"); the host starts a new one with a recap. */
+  sessionLost?: true;
 };
 
 /** A message for a turn that is already running. */

@@ -5221,7 +5221,18 @@ export class AgentHost {
           run.memoryOwner = { provider: "pi", ...(model ? { source: model.provider } : {}) };
         }
         // Stop can also arrive while the model is looked up.
-        if (!run.cancelled) {
+        // A session the provider finds gone when it resumes (a deleted transcript) starts over once with a recap.
+        const heldBefore = this.requireThread(threadId).heldNote;
+        for (let attempt = 0; attempt < 2 && !run.cancelled; attempt++) {
+          if (attempt) {
+            if (!result.sessionLost || !thread.nativeId) break;
+            this.sessions.get(threadId)?.dispose();
+            this.sessions.delete(threadId);
+            // The failed attempt never sent its prompt: its notes go with the new one.
+            const { heldNote: _sent, ...base } = this.requireThread(threadId);
+            thread = this.startOverWithRecap(heldBefore === undefined ? base : { ...base, heldNote: heldBefore }, turn.id);
+            this.addItem(threadId, turn.id, { kind: "notice", level: "info", text: "This chat's earlier session could not be found, so this turn starts a new one with a recap of the conversation." });
+          }
           this.assignClaudeAccount(thread);
           const live = this.sessionThread(thread);
           const session = this.session(thread);
