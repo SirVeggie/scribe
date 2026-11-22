@@ -30,6 +30,8 @@ windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
 gtk = "0.18"
+# The StatusNotifierItem tray, which tells a left click (open) from a right click (menu); AppIndicator can't.
+tray-icon = { version = "0.25", features = ["ksni"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
