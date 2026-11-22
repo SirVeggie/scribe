@@ -302,7 +302,11 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         return;
     }
     if matches!(event, WindowEvent::Destroyed) {
-        // The main window is gone for good (not hidden in the tray): its pages' windows go with it.
+        // Let go in the tray: its pages' windows stay, and the window is built again from there.
+        if crate::tray::take_unloading() {
+            return;
+        }
+        // The main window is gone for good: its pages' windows go with it.
         for (label, child) in window.webview_windows() {
             if label.starts_with(CHILD_PREFIX) {
                 let _ = child.close();
@@ -329,7 +333,7 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
             if state(&webview).close_to_tray() {
                 api.prevent_close();
                 let _ = webview.hide();
-                crate::tray::hidden(&webview);
+                crate::tray::hidden(webview.app_handle());
                 push_state(&webview);
             }
         }

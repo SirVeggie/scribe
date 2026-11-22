@@ -33,7 +33,7 @@ const CHILD_SIZE: (f64, f64) = (960.0, 720.0);
 /// WebView2 arguments for every window. They share one data folder, so the arguments must match.
 /// Setting them replaces wry's defaults, which are kept here; autoplay lets notification sounds
 /// and page sounds play without a click first (#564).
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+pub(crate) const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
 /// Run in every window's board. Only WebView2 lets embeds.rs drop framing headers from embedded sites; elsewhere
 /// the board checks sites first, as in a browser (public/views.js). WebKitGTK and WKWebView also can't say
 /// which frame a navigation comes from, so embeds.rs's hold on component frames is Windows-only too.
@@ -325,7 +325,7 @@ fn build_main(app: &AppHandle, tab: Option<&str>) -> tauri::Result<WebviewWindow
     Ok(window)
 }
 
-/// Bring the main window forward, building it again if it is gone.
+/// Bring the main window forward, building it again if it was let go in the tray.
 pub(crate) fn show_main(app: &AppHandle, tab: Option<&str>) {
     let window = match app.get_webview_window(MAIN) {
         Some(window) => window,
@@ -344,7 +344,7 @@ pub(crate) fn show_main(app: &AppHandle, tab: Option<&str>) {
 fn focus(window: &WebviewWindow) {
     let _ = window.unminimize();
     let _ = window.show();
-    tray::shown(window);
+    tray::shown(window.app_handle());
     let _ = window.set_focus();
     layout::push_state(window);
 }
@@ -421,16 +421,24 @@ fn main() {
             tray::set_enabled(app.handle(), close_to_tray);
             startup::refresh();
 
-            let window = build_main(app.handle(), board::tab_from_args(&args).as_deref())?;
-            // Started with the OS and kept in the tray: stay there until opened.
+            // Started with the OS and kept in the tray: no board window until it is opened.
             let autostart = args.iter().any(|arg| arg == startup::ARG);
             if autostart && close_to_tray {
-                tray::hidden(&window);
+                tray::start_sounds(app.handle());
             } else {
+                let window = build_main(app.handle(), board::tab_from_args(&args).as_deref())?;
                 focus(&window);
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Scribe");
+        .build(tauri::generate_context!())
+        .expect("error while running Scribe")
+        .run(|app, event| {
+            // The main window was let go in the tray (tray::hidden): the app lives on there.
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+                if tray::holds_app(app) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
