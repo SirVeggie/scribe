@@ -52,7 +52,7 @@
 .orb-settings-preview { margin: 0; background: var(--dock-surface, var(--panel)); }
 .orb-preview-text { color: var(--muted); align-self: center; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orb-settings-busy { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--muted); }
-.orb-settings-busy > span { cursor: pointer; user-select: none; }
+.orb-settings-busy > span { cursor: pointer; -webkit-user-select: none; user-select: none; }
 
 .orb-settings-form { padding: 6px 20px 8px; }
 .orb-settings-section { padding: 12px 0; }

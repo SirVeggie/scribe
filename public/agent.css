@@ -970,6 +970,7 @@ html.tight-small .agent-pane {
   padding: 0 4px 0 11px;
   border-bottom: 1px solid var(--border);
   background: rgba(var(--lift-rgb), 0.04);
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -6222,6 +6223,7 @@ span.ag-usage {
   opacity: 0.6;
   text-align: right;
   padding-right: 8px;
+  -webkit-user-select: none;
   user-select: none;
   font-size: 11px;
 }
@@ -6981,7 +6983,7 @@ span.ag-usage {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.ag-secret-value.blurred { filter: blur(4px); user-select: none; }
+.ag-secret-value.blurred { filter: blur(4px); -webkit-user-select: none; user-select: none; }
 /* Inline kit components use the same card chrome as questions and settings. */
 .ag-component-body { position: relative; }
 .ag-component-body iframe { display: block; width: 100%; border: 0; background: var(--bg); }

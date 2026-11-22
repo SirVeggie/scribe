@@ -2,7 +2,7 @@
 (() => {
   const style = document.createElement("style");
   // No blue flash on touch taps (inherited, so pages and the shell both get it).
-  style.textContent = "html { -webkit-tap-highlight-color: transparent; } body.pointer-shield { user-select: none; } body.pointer-shield iframe { pointer-events: none; }";
+  style.textContent = "html { -webkit-tap-highlight-color: transparent; } body.pointer-shield { -webkit-user-select: none; user-select: none; } body.pointer-shield iframe { pointer-events: none; }";
   document.head.appendChild(style);
   let current = null;
   let suppress = false;
@@ -60,6 +60,11 @@
   window.addEventListener("touchmove", (event) => {
     if (current?.holdsTouch() && event.cancelable) event.preventDefault();
   }, { capture: true, passive: false });
+  // A mouse drag must not select the text it starts on. WebKitGTK (the Linux app) ignores unprefixed
+  // user-select, so a tab's title was selected as it moved.
+  document.addEventListener("selectstart", (event) => {
+    if (current && !current.touch) event.preventDefault();
+  }, true);
   window.addEventListener("contextmenu", (event) => {
     if (current?.onContextMenu(event)) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);
@@ -85,6 +90,7 @@
     const layouts = new Map();
     const api = {
       start,
+      touch,
       rect(node) {
         if (!rects.has(node)) rects.set(node, node.getBoundingClientRect());
         return rects.get(node);
