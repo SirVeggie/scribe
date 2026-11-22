@@ -108,10 +108,15 @@ export function prepareProfile(dir: string, base = defaultConfigDir()): void {
   for (const name of SHARED_DIRS) {
     const from = path.join(base, name);
     const to = path.join(dir, name);
-    if (exists(to)) continue;
     if (!fs.existsSync(from)) {
       if (!ALWAYS_SHARED.has(name)) continue;
       fs.mkdirSync(from, { recursive: true });
+    }
+    if (exists(to)) {
+      // A link that no longer reaches the default folder (an account folder copied from Windows points
+      // at /Users/...) leaves Claude Code saving no transcripts, so every resume fails. Link it again.
+      if (!linksElsewhere(to, from)) continue;
+      fs.unlinkSync(to);
     }
     try {
       fs.symlinkSync(from, to, "junction");
@@ -132,6 +137,16 @@ export function prepareProfile(dir: string, base = defaultConfigDir()): void {
     } catch {
       /* no such file in the default account */
     }
+  }
+}
+
+/** A link at p that is dangling or reaches somewhere other than target; a real folder there is the account's own. */
+function linksElsewhere(p: string, target: string): boolean {
+  try {
+    if (!fs.lstatSync(p).isSymbolicLink()) return false;
+    return fs.realpathSync(p) !== fs.realpathSync(target);
+  } catch {
+    return true;
   }
 }
 

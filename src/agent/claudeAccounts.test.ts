@@ -135,6 +135,25 @@ test("an added account's folder links the shared folders and copies settings; re
   }
 });
 
+test("an account folder whose links lead nowhere (copied from another machine) is linked to the default folder again", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-acc-relink-"));
+  try {
+    const base = path.join(root, "base");
+    fs.mkdirSync(path.join(base, "projects"), { recursive: true });
+    const dir = path.join(root, "acc");
+    fs.mkdirSync(dir);
+    fs.symlinkSync(path.join(root, "Users", "x", ".claude", "projects"), path.join(dir, "projects"), "junction");
+    fs.mkdirSync(path.join(dir, "file-history"));
+    fs.writeFileSync(path.join(dir, "file-history", "own"), "kept");
+    prepareProfile(dir, base);
+    fs.writeFileSync(path.join(dir, "projects", "t.jsonl"), "x");
+    assert.ok(fs.existsSync(path.join(base, "projects", "t.jsonl")), "transcripts land in the default folder");
+    assert.equal(fs.readFileSync(path.join(dir, "file-history", "own"), "utf8"), "kept", "a real folder is left alone");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function pool(settings: Record<string, unknown> = {}, running: Record<string, number> = {}) {
   const provider: AccountProvider = {
     loginAccount: async () => false, accountStatus: async () => null, logoutAccount: async () => undefined,
