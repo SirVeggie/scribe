@@ -11,7 +11,7 @@ mod downloads;
 mod drops;
 #[cfg(windows)]
 mod embeds;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod keys;
 mod layout;
 mod startup;
@@ -103,18 +103,18 @@ pub(crate) struct KeyBinding {
 
 #[tauri::command]
 fn key_map(bindings: Vec<KeyBinding>) {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     keys::set_key_map(bindings);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = bindings;
 }
 
 /// The shell reports whether focus is in an embedded site, which gets the board's shortcuts natively.
 #[tauri::command]
 fn key_focus(window: WebviewWindow, embed: bool) {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     keys::set_embed_focus(window.label(), embed);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = (window, embed);
 }
 
@@ -231,7 +231,10 @@ fn open_child(app: &AppHandle, id: &str, title: &str, at: Option<(f64, f64)>, or
     }
     let window = builder.build()?;
     #[cfg(target_os = "linux")]
-    top_nav::install(&window, allowed);
+    {
+        top_nav::install(&window, allowed);
+        keys::install(&window);
+    }
     // Stripped after the build for the same reason as the main window's.
     window.set_decorations(false)?;
     #[cfg(windows)]
@@ -381,7 +384,10 @@ fn main() {
                 })
                 .build()?;
             #[cfg(target_os = "linux")]
-            top_nav::install(&window, allowed);
+            {
+                top_nav::install(&window, allowed);
+                keys::install(&window);
+            }
             // Created with decorations and stripped here: a window built undecorated comes out a
             // caption-height taller than asked, and that extra height leaks into the saved layout.
             window.set_decorations(false)?;

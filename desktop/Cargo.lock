@@ -2890,6 +2890,7 @@ name = "scribe-desktop"
 version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
+ "gtk",
  "rfd",
  "serde",
  "serde_json",
