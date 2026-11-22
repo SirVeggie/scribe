@@ -268,7 +268,7 @@ fn offline_url() -> Url {
     format!("{origin}/index.html").parse().expect("valid offline page URL")
 }
 
-/// The board's own window. Built at launch, and again when it was let go in the tray.
+/// The board's own window.
 fn build_main(app: &AppHandle, tab: Option<&str>) -> tauri::Result<WebviewWindow> {
     let base = board::base_url();
     let board_url: Url = format!("{base}/").parse().expect("valid board URL");
@@ -325,7 +325,7 @@ fn build_main(app: &AppHandle, tab: Option<&str>) -> tauri::Result<WebviewWindow
     Ok(window)
 }
 
-/// Bring the main window forward, building it again if it was let go in the tray.
+/// Bring the main window forward, building it again if it is gone.
 pub(crate) fn show_main(app: &AppHandle, tab: Option<&str>) {
     let window = match app.get_webview_window(MAIN) {
         Some(window) => window,
@@ -342,9 +342,9 @@ pub(crate) fn show_main(app: &AppHandle, tab: Option<&str>) {
 
 /// Show the window, from the taskbar, the tray, or nowhere yet.
 fn focus(window: &WebviewWindow) {
-    tray::shown();
     let _ = window.unminimize();
     let _ = window.show();
+    tray::shown(window);
     let _ = window.set_focus();
     layout::push_state(window);
 }
@@ -421,22 +421,16 @@ fn main() {
             tray::set_enabled(app.handle(), close_to_tray);
             startup::refresh();
 
-            // Started with the OS and kept in the tray: no window until it is opened.
+            let window = build_main(app.handle(), board::tab_from_args(&args).as_deref())?;
+            // Started with the OS and kept in the tray: stay there until opened.
             let autostart = args.iter().any(|arg| arg == startup::ARG);
-            if !(autostart && close_to_tray) {
-                let window = build_main(app.handle(), board::tab_from_args(&args).as_deref())?;
+            if autostart && close_to_tray {
+                tray::hidden(&window);
+            } else {
                 focus(&window);
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("error while running Scribe")
-        .run(|app, event| {
-            // The main window was let go in the tray (tray::hidden): the app lives on there.
-            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
-                if tray::holds_app(app) {
-                    api.prevent_exit();
-                }
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running Scribe");
 }
