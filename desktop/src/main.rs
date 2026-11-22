@@ -160,9 +160,7 @@ async fn child_window(
             Ok(())
         }
         "focus-main" => {
-            if let Some(window) = app.get_webview_window(MAIN) {
-                focus(&window);
-            }
+            show_main(&app, None);
             Ok(())
         }
         _ => Err(format!("Unknown child window action: {action}")),
@@ -270,8 +268,81 @@ fn offline_url() -> Url {
     format!("{origin}/index.html").parse().expect("valid offline page URL")
 }
 
+/// The board's own window. Built at launch, and again when it was let go in the tray.
+fn build_main(app: &AppHandle, tab: Option<&str>) -> tauri::Result<WebviewWindow> {
+    let base = board::base_url();
+    let board_url: Url = format!("{base}/").parse().expect("valid board URL");
+    let board_origin = board_url.origin();
+    let offline_origin = offline_url().origin();
+    let allowed = move |url: &Url| url.origin() == board_origin || url.origin() == offline_origin || board::is_board_origin(url);
+    let mut url = if board::is_running() { board_url } else { offline_url() };
+    if let Some(tab) = tab {
+        url.set_fragment(Some(tab));
+    }
+    let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
+        .title("Scribe")
+        .additional_browser_args(BROWSER_ARGS)
+        .initialization_script(INIT_SCRIPT)
+        .zoom_hotkeys_enabled(true)
+        // Let the board's HTML drop handlers receive files on Windows.
+        .disable_drag_drop_handler()
+        .on_download(downloads::handle)
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(320.0, 240.0)
+        .decorations(true)
+        .visible(false)
+        .on_new_window(|url, _| {
+            board::open_external(url.as_str());
+            NewWindowResponse::Deny
+        })
+        .on_navigation({
+            let allowed = allowed.clone();
+            move |url| {
+                // WebKitGTK asks about every frame here; top_nav guards the window's own document.
+                if cfg!(target_os = "linux") || allowed(url) {
+                    return true;
+                }
+                board::open_external(url.as_str());
+                false
+            }
+        })
+        .build()?;
+    #[cfg(target_os = "linux")]
+    {
+        top_nav::install(&window, allowed);
+        keys::install(&window);
+    }
+    // Created with decorations and stripped here: a window built undecorated comes out a
+    // caption-height taller than asked, and that extra height leaks into the saved layout.
+    window.set_decorations(false)?;
+    layout::apply_initial(&window);
+    #[cfg(windows)]
+    {
+        keys::install(&window);
+        embeds::install(&window, board::port());
+        drops::install(&window);
+    }
+    Ok(window)
+}
+
+/// Bring the main window forward, building it again if it was let go in the tray.
+pub(crate) fn show_main(app: &AppHandle, tab: Option<&str>) {
+    let window = match app.get_webview_window(MAIN) {
+        Some(window) => window,
+        None => match build_main(app, tab) {
+            Ok(window) => window,
+            Err(err) => {
+                eprintln!("Could not open the Scribe window: {err}");
+                return;
+            }
+        },
+    };
+    focus(&window);
+}
+
 /// Show the window, from the taskbar, the tray, or nowhere yet.
 fn focus(window: &WebviewWindow) {
+    tray::shown();
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
@@ -294,11 +365,15 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(window) = app.get_webview_window(MAIN) {
-                focus(&window);
-                if let Some(tab) = board::tab_from_args(&argv) {
-                    select_tab(&window, &tab);
+            let tab = board::tab_from_args(&argv);
+            match app.get_webview_window(MAIN) {
+                Some(window) => {
+                    focus(&window);
+                    if let Some(tab) = tab {
+                        select_tab(&window, &tab);
+                    }
                 }
+                None => show_main(app, tab.as_deref()),
             }
         }))
         .invoke_handler(tauri::generate_handler![
@@ -315,7 +390,6 @@ fn main() {
             #[cfg(windows)]
             audio_sessions::start();
             let daemon_error = board::ensure_daemon().err();
-            let daemon_up = daemon_error.is_none();
             app.manage(DaemonError(Mutex::new(daemon_error)));
             let open_from_agents = board::read_registration().is_none_or(|registration| registration.open_from_agents);
             board::write_registration(open_from_agents);
@@ -347,64 +421,22 @@ fn main() {
             tray::set_enabled(app.handle(), close_to_tray);
             startup::refresh();
 
-            let board_url: Url = format!("{base}/").parse()?;
-            let board_origin = board_url.origin();
-            let offline_origin = offline_url().origin();
-            let allowed = move |url: &Url| url.origin() == board_origin || url.origin() == offline_origin || board::is_board_origin(url);
-            let mut url = if daemon_up { board_url } else { offline_url() };
-            if let Some(tab) = board::tab_from_args(&args) {
-                url.set_fragment(Some(&tab));
-            }
-            let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
-                .title("Scribe")
-                .additional_browser_args(BROWSER_ARGS)
-                .initialization_script(INIT_SCRIPT)
-                .zoom_hotkeys_enabled(true)
-                // Let the board's HTML drop handlers receive files on Windows.
-                .disable_drag_drop_handler()
-                .on_download(downloads::handle)
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(320.0, 240.0)
-                .decorations(true)
-                .visible(false)
-                .on_new_window(|url, _| {
-                    board::open_external(url.as_str());
-                    NewWindowResponse::Deny
-                })
-                .on_navigation({
-                    let allowed = allowed.clone();
-                    move |url| {
-                        // WebKitGTK asks about every frame here; top_nav guards the window's own document.
-                        if cfg!(target_os = "linux") || allowed(url) {
-                            return true;
-                        }
-                        board::open_external(url.as_str());
-                        false
-                    }
-                })
-                .build()?;
-            #[cfg(target_os = "linux")]
-            {
-                top_nav::install(&window, allowed);
-                keys::install(&window);
-            }
-            // Created with decorations and stripped here: a window built undecorated comes out a
-            // caption-height taller than asked, and that extra height leaks into the saved layout.
-            window.set_decorations(false)?;
-            layout::apply_initial(&window);
-            #[cfg(windows)]
-            {
-                keys::install(&window);
-                embeds::install(&window, board::port());
-                drops::install(&window);
-            }
-            // Started with the OS and kept in the tray: stay there until opened.
+            // Started with the OS and kept in the tray: no window until it is opened.
             let autostart = args.iter().any(|arg| arg == startup::ARG);
             if !(autostart && close_to_tray) {
+                let window = build_main(app.handle(), board::tab_from_args(&args).as_deref())?;
                 focus(&window);
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Scribe");
+        .build(tauri::generate_context!())
+        .expect("error while running Scribe")
+        .run(|app, event| {
+            // The main window was let go in the tray (tray::hidden): the app lives on there.
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+                if tray::holds_app(app) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
