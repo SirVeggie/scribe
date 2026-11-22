@@ -16,6 +16,8 @@ const TRAY: &str = "tray";
 const SOUNDS: &str = "tray-sounds";
 /// How long a main window closed to the tray stays loaded, so reopening it soon after is instant.
 const UNLOAD_AFTER: Duration = Duration::from_secs(15);
+/// How long after the board window closes its leftover web processes are ended.
+const SETTLE: Duration = Duration::from_secs(3);
 /// Bumped whenever the main window is shown or hidden, so a pending unload sees it is stale.
 static VISIBILITY: AtomicU64 = AtomicU64::new(0);
 /// Set while the main window is destroyed for the tray, so its page windows stay open.
@@ -48,9 +50,72 @@ pub fn hidden<R: Runtime>(app: &AppHandle<R>) {
                 UNLOADING.store(false, Ordering::SeqCst);
                 return;
             }
-            start_sounds(&handle);
+            let app = handle.clone();
+            std::thread::spawn(move || {
+                // Give WebKit a moment to close the board's pages first.
+                std::thread::sleep(SETTLE);
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if VISIBILITY.load(Ordering::SeqCst) != generation || handle.get_webview_window(crate::MAIN).is_some() {
+                        return;
+                    }
+                    // Page windows still use their processes; with none open, every one left over is spare.
+                    #[cfg(target_os = "linux")]
+                    if handle.webview_windows().is_empty() {
+                        end_spare_web_processes();
+                    }
+                    start_sounds(&handle);
+                });
+            });
         });
     });
+}
+
+/// WebKitGTK keeps a closed board's web processes for reuse (its process cache, a prewarmed one), and
+/// with them their video memory, for up to half an hour. End the ones under this process.
+#[cfg(target_os = "linux")]
+fn end_spare_web_processes() {
+    let mut parents = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        // stat: "pid (comm) state ppid ...", and comm may hold spaces or parentheses.
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        let Some(close) = stat.rfind(')') else {
+            continue;
+        };
+        let comm = stat.get(stat.find('(').map_or(0, |open| open + 1)..close).unwrap_or("").to_string();
+        let Some(ppid) = stat[close + 1..].split_whitespace().nth(1).and_then(|ppid| ppid.parse::<u32>().ok()) else {
+            continue;
+        };
+        parents.insert(pid, (ppid, comm));
+    }
+    let me = std::process::id();
+    // The web processes may sit under WebKit's bubblewrap sandbox, so look at every descendant.
+    let descends = |mut pid: u32| {
+        while let Some((ppid, _)) = parents.get(&pid) {
+            if *ppid == me {
+                return true;
+            }
+            if *ppid <= 1 {
+                return false;
+            }
+            pid = *ppid;
+        }
+        false
+    };
+    for (pid, (_, comm)) in &parents {
+        // comm is cut to 15 characters: "WebKitWebProces".
+        if comm.starts_with("WebKitWebProces") && descends(*pid) {
+            let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        }
+    }
 }
 
 /// The main window is on screen again (or built again): the stand-in goes.
