@@ -185,6 +185,7 @@
     box-shadow: var(--depth);
     touch-action: manipulation;
     -webkit-touch-callout: none;
+    -webkit-user-select: none;
     user-select: none;
   }
   body.no-checks .item { grid-template-columns: 1fr auto; }
@@ -213,6 +214,7 @@
     pointer-events: none;
   }
   body.dragging-item {
+    -webkit-user-select: none;
     user-select: none;
     cursor: grabbing;
   }
