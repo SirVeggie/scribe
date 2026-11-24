@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, CDPSession, Frame, Locator, Page } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Frame, Locator, Page, Request } from "playwright-core";
 import { BROWSER_ACTIONS, type BrowserAction } from "./browserActions.js";
 import { launchChromium } from "./chromium.js";
 import { PORT, gatewayHost } from "./config.js";
@@ -17,7 +17,36 @@ import { store } from "./store.js";
  * SCRIBE_AGENT_BROWSER_HEADED=1 shows it as a desktop window instead (debugging).
  */
 
-const LAUNCH_ARGS = ["--mute-audio", "--no-first-run", "--no-default-browser-check"];
+/**
+ * Playwright's own --disable-features list (its chromiumSwitches.ts). Chromium keeps only the last
+ * --disable-features switch, so adding a feature means repeating Playwright's; browser.test.ts
+ * checks this copy against the installed playwright-core.
+ */
+export const PLAYWRIGHT_DISABLED_FEATURES = [
+  "AvoidUnnecessaryBeforeUnloadCheckSync",
+  "DestroyProfileOnBrowserClose",
+  "DialMediaRouteProvider",
+  "GlobalMediaControls",
+  "HttpsUpgrades",
+  "LensOverlay",
+  "MediaRouter",
+  "PaintHolding",
+  "ThirdPartyStoragePartitioning",
+  "BlockOriginHeaderModificationOnRedirect",
+  "Translate",
+  "AutoDeElevate",
+  "OptimizationHints",
+  "msForceBrowserSignIn",
+  "msEdgeUpdateLaunchServicesPreferredVersion",
+];
+/** Newer Chrome and Edge deny unload handlers by default; older web apps still navigate with them. */
+const UNLOAD_FEATURES = ["DeprecateUnload", "DeprecateUnloadByAllowList"];
+const LAUNCH_ARGS = [
+  "--mute-audio",
+  "--no-first-run",
+  "--no-default-browser-check",
+  `--disable-features=${[...PLAYWRIGHT_DISABLED_FEATURES, ...UNLOAD_FEATURES].join(",")}`,
+];
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 const MIN_VIEWPORT = 320;
 const MAX_VIEWPORT = 2560;
@@ -123,6 +152,8 @@ type Watcher = {
 };
 
 let browser: Browser | null = null;
+/** The browser's user agent without "HeadlessChrome", which sniffing apps take for an unknown Safari. */
+let userAgent: string | undefined;
 let launching: Promise<Browser> | null = null;
 const sessions = new Map<string, Session>();
 const opening = new Map<string, Promise<Session>>();
@@ -293,90 +324,103 @@ export async function browserAct(
   const tab = pickTab(session, input.tab);
   const { page } = tab;
   const frame = await frameOf(page, input.frame);
-  const locate = (target: Target) => locateIn(page, frame, target);
+  const located = hasTarget(input) ? await locateIn(page, frame, input) : null;
+  const target = (): Locator => {
+    if (!located) throw new Error("Provide ref (from browser_snapshot), selector, or text");
+    return located.locator;
+  };
+  const tabsBefore = new Set(session.tabs.keys());
   const mark = tab.console.at(-1)?.seq ?? 0;
   const value = input.value;
   const text = Array.isArray(value) ? value.join("") : value ?? "";
-  switch (input.action) {
-    case "click":
-      await locate(input).click({ timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "dblclick":
-      await locate(input).dblclick({ timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "hover":
-      await locate(input).hover({ timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "fill":
-      await locate(input).fill(text, { timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "type":
-      if (hasTarget(input)) {
-        await locate(input).pressSequentially(text, { timeout: ACTION_TIMEOUT_MS });
-      } else {
-        await page.keyboard.type(text);
-      }
-      break;
-    case "press": {
-      const keys = input.keys || text;
-      if (!keys) {
-        throw new Error("press needs keys, e.g. Enter or Control+A");
-      }
-      if (hasTarget(input)) {
-        await locate(input).press(keys, { timeout: ACTION_TIMEOUT_MS });
-      } else {
-        await page.keyboard.press(keys);
-      }
-      break;
-    }
-    case "select":
-      await locate(input).selectOption(Array.isArray(value) ? value : text, { timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "check":
-      await locate(input).check({ timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "uncheck":
-      await locate(input).uncheck({ timeout: ACTION_TIMEOUT_MS });
-      break;
-    case "scroll":
-      if (hasTarget(input) && input.dx === undefined && input.dy === undefined) {
-        await locate(input).scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS });
-      } else {
+  try {
+    switch (input.action) {
+      case "click":
+        await target().click({ timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "dblclick":
+        await target().dblclick({ timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "hover":
+        await target().hover({ timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "fill":
+        await target().fill(text, { timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "type":
         if (hasTarget(input)) {
-          await locate(input).hover({ timeout: ACTION_TIMEOUT_MS });
+          await target().pressSequentially(text, { timeout: ACTION_TIMEOUT_MS });
+        } else {
+          await page.keyboard.type(text);
         }
-        await page.mouse.wheel(input.dx ?? 0, input.dy ?? 600);
+        break;
+      case "press": {
+        const keys = input.keys || text;
+        if (!keys) {
+          throw new Error("press needs keys, e.g. Enter or Control+A");
+        }
+        if (hasTarget(input)) {
+          await target().press(keys, { timeout: ACTION_TIMEOUT_MS });
+        } else {
+          await page.keyboard.press(keys);
+        }
+        break;
       }
-      break;
-    case "drag":
-      if (!input.to || !hasTarget(input.to)) {
-        throw new Error("drag needs to: { ref | selector | text }");
-      }
-      await locate(input).dragTo(locate(input.to), {
-        timeout: ACTION_TIMEOUT_MS,
-        steps: clamp(input.steps ?? DEFAULT_DRAG_STEPS, 1, MAX_DRAG_STEPS),
-      });
-      break;
-    case "back":
-      await page.goBack({ timeout: NAV_TIMEOUT_MS });
-      break;
-    case "forward":
-      await page.goForward({ timeout: NAV_TIMEOUT_MS });
-      break;
-    case "reload":
-      await page.reload({ timeout: NAV_TIMEOUT_MS });
-      break;
-    default:
-      throw new Error(`unknown action: ${String(input.action)}. Use one of ${BROWSER_ACTIONS.join(", ")}`);
+      case "select":
+        await target().selectOption(Array.isArray(value) ? value : text, { timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "check":
+        await target().check({ timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "uncheck":
+        await target().uncheck({ timeout: ACTION_TIMEOUT_MS });
+        break;
+      case "scroll":
+        if (hasTarget(input) && input.dx === undefined && input.dy === undefined) {
+          await target().scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS });
+        } else {
+          if (hasTarget(input)) {
+            await target().hover({ timeout: ACTION_TIMEOUT_MS });
+          }
+          await page.mouse.wheel(input.dx ?? 0, input.dy ?? 600);
+        }
+        break;
+      case "drag":
+        if (!input.to || !hasTarget(input.to)) {
+          throw new Error("drag needs to: { ref | selector | text }");
+        }
+        await target().dragTo((await locateIn(page, located?.frame ?? frame, input.to)).locator, {
+          timeout: ACTION_TIMEOUT_MS,
+          steps: clamp(input.steps ?? DEFAULT_DRAG_STEPS, 1, MAX_DRAG_STEPS),
+        });
+        break;
+      case "back":
+        await page.goBack({ timeout: NAV_TIMEOUT_MS });
+        break;
+      case "forward":
+        await page.goForward({ timeout: NAV_TIMEOUT_MS });
+        break;
+      case "reload":
+        await page.reload({ timeout: NAV_TIMEOUT_MS });
+        break;
+      default:
+        throw new Error(`unknown action: ${String(input.action)}. Use one of ${BROWSER_ACTIONS.join(", ")}`);
+    }
+  } catch (err) {
+    throw located ? withSearchedFrames(err as Error, page, located, input) : err;
   }
   await settle(page);
+  const opened = [...session.tabs.values()].filter((row) => !tabsBefore.has(row.id)).map(openedTab);
+  const scope = located?.found ? located.frame : frame;
   return {
     tab: tab.id,
     action: input.action,
     url: page.url(),
     title: await page.title().catch(() => ""),
+    ...(located?.found ? { frame: located.found } : {}),
+    ...(opened.length ? { opened } : {}),
     ...errorsSince(tab, mark),
-    ...(input.snapshot === false ? {} : await snapshotOf(frame ?? page, undefined, DEFAULT_SNAPSHOT_CHARS)),
+    ...(input.snapshot === false ? {} : await snapshotOf(scope ?? page, undefined, DEFAULT_SNAPSHOT_CHARS)),
   };
 }
 
@@ -389,7 +433,7 @@ export async function browserScreenshot(
   const { page } = tab;
   const frame = await frameOf(page, input.frame);
   // With a frame and no target, the iframe's own box.
-  const target = hasTarget(input) ? locateIn(page, frame, input) : await frame?.frameElement();
+  const target = hasTarget(input) ? (await locateIn(page, frame, input)).locator : await frame?.frameElement();
   const { buffer, mimeType } = await pngOrJpeg((type) =>
     target
       ? target.screenshot({ ...shotOptions(type), timeout: ACTION_TIMEOUT_MS })
@@ -926,7 +970,7 @@ async function ensureSession(threadId: string): Promise<Session> {
 
 async function createSession(threadId: string): Promise<Session> {
   const opened = await ensureBrowser();
-  const context = await opened.newContext({ viewport: DEFAULT_VIEWPORT, serviceWorkers: "block" });
+  const context = await opened.newContext({ viewport: DEFAULT_VIEWPORT, serviceWorkers: "block", userAgent });
   context.setDefaultTimeout(ACTION_TIMEOUT_MS);
   context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
   const session: Session = { threadId, context, tabs: new Map(), nextTab: 1, seq: 0, idle: null, control: "free", controlSince: Date.now(), agentAt: 0, userActivity: [], userOrigins: new Set(), handoff: null, fit: false, viewport: { ...DEFAULT_VIEWPORT } };
@@ -934,7 +978,7 @@ async function createSession(threadId: string): Promise<Session> {
   // may reach the board's file-opening routes (blockedBoardRequest).
   await context.route("**/*", (route) => {
     const request = route.request();
-    const top = request.isNavigationRequest() && !request.frame().parentFrame();
+    const top = request.isNavigationRequest() && topNavigation(request);
     const userNavigation = top && session.control === "user" && /^https?:/.test(request.url());
     if (userNavigation) session.userOrigins.add(new URL(request.url()).origin);
     if (blockedBoardRequest(request.url()) || (top && !userNavigation && !allowedBrowserUrl(request.url(), session.userOrigins))) {
@@ -1057,22 +1101,65 @@ function hasTarget(target: Target): boolean {
   return Boolean(target.ref || target.selector || target.text);
 }
 
+type Located = { locator: Locator; frame: Frame | null; found?: string };
+
 /**
  * An element by ref, selector, or text. Refs come from the whole tab's snapshot (frames included,
  * e.g. f1e2), so they resolve on the page; selector and text look inside frame when one is given.
+ * Without a frame, a selector or text the top page doesn't have yet is looked for in its frames,
+ * nested ones too, so an app built of iframes needs no frame option (found names the frame).
  */
-function locateIn(page: Page, frame: Frame | null, target: Target): Locator {
+async function locateIn(page: Page, frame: Frame | null, target: Target): Promise<Located> {
   if (target.ref) {
-    return page.locator(`aria-ref=${target.ref.replace(/^ref=/, "")}`);
+    return { locator: page.locator(`aria-ref=${target.ref.replace(/^ref=/, "")}`), frame: null };
   }
-  const root = frame ?? page;
-  if (target.selector) {
-    return root.locator(target.selector).first();
+  const inRoot = (root: Page | Frame): Locator => {
+    if (target.selector) return root.locator(target.selector).first();
+    if (target.text) return root.getByText(target.text).first();
+    throw new Error("Provide ref (from browser_snapshot), selector, or text");
+  };
+  const locator = inRoot(frame ?? page);
+  if (frame || (await locator.count().catch(() => 0))) {
+    return { locator, frame };
   }
-  if (target.text) {
-    return root.getByText(target.text).first();
+  for (const child of page.frames()) {
+    if (child === page.mainFrame()) continue;
+    const inChild = inRoot(child);
+    if (await inChild.count().catch(() => 0)) {
+      return { locator: inChild, frame: child, found: child.url() };
+    }
   }
-  throw new Error("Provide ref (from browser_snapshot), selector, or text");
+  return { locator, frame: null };
+}
+
+/** A failed selector or text action says where it looked and which frames the tab has. */
+function withSearchedFrames(err: Error, page: Page, located: Located, target: Target): Error {
+  if (target.ref || !/timeout/i.test(err.message)) return err;
+  const looked = located.frame ? `frame ${frameLabel(located.frame)}` : "the top page and all its frames";
+  const frames = page.frames().filter((frame) => frame !== page.mainFrame()).map(frameLabel);
+  const listed = frames.length ? `frames on this tab: ${frames.slice(0, 10).join("; ")}` : "this tab has no frames";
+  err.message = `${err.message.split("\n")[0]} (looked in ${looked}; ${listed})`;
+  return err;
+}
+
+function frameLabel(frame: Frame): string {
+  const name = frame.name();
+  return name ? `${name} (${frame.url()})` : frame.url();
+}
+
+/** A popup's first navigation comes before its frame exists, and request.frame() throws for it. */
+function topNavigation(request: Request): boolean {
+  try {
+    return !request.frame().parentFrame();
+  } catch {
+    return true;
+  }
+}
+
+/** A tab the action opened (window.open, target=_blank), with why its page didn't load. */
+function openedTab(tab: BrowserTab) {
+  const failure = tab.network.find((row) => row.type === "document")?.failure;
+  return { tab: tab.id, url: tab.page.url(), ...(failure ? { failure } : {}) };
 }
 
 /** The frame a browser tool's frame option names, or null for the top page. */
@@ -1083,7 +1170,9 @@ async function frameOf(page: Page, which: string | undefined): Promise<Frame | n
 /**
  * A frame inside the tab, so browser_eval reaches a Scribe page shown in the shell (its iframe is
  * on the content origin, out of reach of the shell's own scripts). which is a Scribe page key or
- * id (the frame that loads its /view/<id>, the visible one first), or a CSS selector of an iframe.
+ * id (the frame that loads its /view/<id>, the visible one first), or a CSS selector of an iframe:
+ * on the top page or, failing that, in any frame of it. "outer >> inner" names an iframe inside
+ * another one.
  */
 async function findFrame(page: Page, which: string): Promise<Frame> {
   const scribeTab = store.get(which);
@@ -1111,25 +1200,89 @@ async function findFrame(page: Page, which: string): Promise<Frame> {
     }
     throw new Error(`no frame shows ${scribeTab.key} in this browser tab; open it in the Scribe shell first`);
   }
-  // No auto-wait: a selector that matches nothing fails now, not after the action timeout.
-  const element = await page.$(which).catch(() => null);
-  const frame = await element?.contentFrame();
-  if (!frame) {
-    throw new Error(`frame not found: ${which} is not a Scribe page key or id, nor an iframe on this tab`);
+  let frame = page.mainFrame();
+  for (const selector of which.split(/\s*>>\s*/)) {
+    const inner = (await iframeIn(frame, selector)) ?? (await iframeIn(descendants(frame), selector));
+    if (!inner) {
+      const frames = page.frames().filter((row) => row !== page.mainFrame()).map(frameLabel);
+      throw new Error(
+        `frame not found: ${which} is not a Scribe page key or id, nor an iframe on this tab` +
+          (frames.length ? ` (frames: ${frames.slice(0, 10).join("; ")})` : "")
+      );
+    }
+    frame = inner;
   }
   return frame;
+}
+
+/** The iframe a selector matches in one of frames. No auto-wait: a miss fails now, not after the action timeout. */
+async function iframeIn(frames: Frame | Frame[], selector: string): Promise<Frame | null> {
+  for (const frame of Array.isArray(frames) ? frames : [frames]) {
+    const element = await frame.$(selector).catch(() => null);
+    const inner = await element?.contentFrame().catch(() => null);
+    if (inner) return inner;
+  }
+  return null;
+}
+
+function descendants(frame: Frame): Frame[] {
+  return frame.childFrames().flatMap((child) => [child, ...descendants(child)]);
 }
 
 async function snapshotOf(page: Page | Frame, selector: string | undefined, maxChars: number) {
   try {
     const root = selector ? page.locator(selector).first() : "ariaSnapshot" in page ? page : page.locator(":root");
-    const text = await root.ariaSnapshot({ mode: "ai", timeout: ACTION_TIMEOUT_MS });
+    const { text, collapsed } = collapseLayoutTables(await root.ariaSnapshot({ mode: "ai", timeout: ACTION_TIMEOUT_MS }));
+    const note = collapsed ? { collapsed: `${collapsed} empty or single-child layout table nodes left out` } : {};
     return text.length > maxChars
-      ? { snapshot: text.slice(0, maxChars), truncated: `snapshot cut at ${maxChars} of ${text.length} chars; pass selector or maxChars` }
-      : { snapshot: text };
+      ? { snapshot: text.slice(0, maxChars), truncated: `snapshot cut at ${maxChars} of ${text.length} chars; pass selector or maxChars`, ...note }
+      : { snapshot: text, ...note };
   } catch (err) {
     return { snapshotError: (err as Error).message.split("\n")[0] };
   }
+}
+
+type SnapshotNode = { line: string; children: SnapshotNode[] };
+const LAYOUT_NODE = /^- (table|rowgroup|row|cell|gridcell)(?: \[ref=[^\]]+\])?:?$/;
+const HEADER_NODE = /^- (columnheader|rowheader)\b/;
+const TABLE_NODE = /^- table\b/;
+
+/**
+ * Tables used for page layout (no header cells) make snapshots mostly empty cell and row lines:
+ * leaves out their nameless table, rowgroup, row and cell nodes that hold nothing, and puts the
+ * content of one that holds a single node in its place. Data tables keep every cell.
+ */
+export function collapseLayoutTables(text: string): { text: string; collapsed: number } {
+  const root: SnapshotNode = { line: "", children: [] };
+  const stack: Array<{ indent: number; node: SnapshotNode }> = [{ indent: -1, node: root }];
+  for (const raw of text.split("\n")) {
+    const indent = raw.length - raw.trimStart().length;
+    while (stack.length > 1 && stack.at(-1)!.indent >= indent) stack.pop();
+    const node: SnapshotNode = { line: raw.trimStart(), children: [] };
+    stack.at(-1)!.node.children.push(node);
+    stack.push({ indent, node });
+  }
+  let collapsed = 0;
+  const hasHeader = (node: SnapshotNode): boolean =>
+    node.children.some((child) => HEADER_NODE.test(child.line) || (!TABLE_NODE.test(child.line) && hasHeader(child)));
+  const collapse = (nodes: SnapshotNode[], layout: boolean): SnapshotNode[] =>
+    nodes.flatMap((node) => {
+      const role = LAYOUT_NODE.exec(node.line)?.[1];
+      const inLayout = TABLE_NODE.test(node.line) ? !hasHeader(node) : layout;
+      const children = collapse(node.children, inLayout);
+      if (!role || !inLayout || children.length > 1) return [{ line: node.line, children }];
+      collapsed++;
+      return children;
+    });
+  const lines: string[] = [];
+  const render = (nodes: SnapshotNode[], depth: number) => {
+    for (const node of nodes) {
+      lines.push("  ".repeat(depth) + node.line);
+      render(node.children, depth + 1);
+    }
+  };
+  render(collapse(root.children, false), 0);
+  return collapsed ? { text: lines.join("\n"), collapsed } : { text, collapsed };
 }
 
 /** Console errors and page errors since a console seq, so a broken click shows up in its own result. */
@@ -1171,7 +1324,8 @@ async function ensureBrowser(): Promise<Browser> {
   }
   if (!launching) {
     launching = launchChromium({ headless: process.env.SCRIBE_AGENT_BROWSER_HEADED !== "1", args: LAUNCH_ARGS, purpose: "Agent" })
-      .then((opened) => {
+      .then(async (opened) => {
+        userAgent = await headfulUserAgent(opened);
         browser = opened;
         opened.on("disconnected", () => {
           if (browser === opened) {
@@ -1191,6 +1345,17 @@ async function ensureBrowser(): Promise<Browser> {
       });
   }
   return launching;
+}
+
+async function headfulUserAgent(opened: Browser): Promise<string | undefined> {
+  try {
+    const cdp = await opened.newBrowserCDPSession();
+    const { userAgent: agent } = await cdp.send("Browser.getVersion");
+    await cdp.detach().catch(() => undefined);
+    return agent.replace("HeadlessChrome/", "Chrome/");
+  } catch {
+    return undefined;
+  }
 }
 
 /** Batches a thread's browser changes into one view for listeners, and moves its watchers along. */

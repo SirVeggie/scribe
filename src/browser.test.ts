@@ -13,6 +13,8 @@ store.load();
 const framed = store.upsert({ key: "framed", title: "Framed", html: "<p>framed</p>" }).tab;
 
 const {
+  PLAYWRIGHT_DISABLED_FEATURES,
+  collapseLayoutTables,
   allowedBrowserUrl,
   blockedBoardRequest,
   browserAct,
@@ -168,6 +170,24 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  if (req.url === "/app") {
+    // A legacy app: a shell, its page iframe, and a list iframe inside that.
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<!DOCTYPE html><title>App</title><iframe id="page" src="/app/page"></iframe>`);
+    return;
+  }
+  if (req.url === "/app/page") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(
+      `<!DOCTYPE html><title>Page</title><button id="pop" onclick="window.open('/view/x')">Pop</button><iframe id="list_iframe" src="/app/list"></iframe>`
+    );
+    return;
+  }
+  if (req.url === "/app/list") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<!DOCTYPE html><title>List</title><button onclick="this.textContent = 'Picked'">SampleId</button>`);
+    return;
+  }
   if (req.url === "/drag") {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(DRAG_FIXTURE);
@@ -257,8 +277,8 @@ test("browser_act, snapshot, and screenshot reach a page frame", async (t) => {
     return;
   }
   await browserOpen("thr_frame_act", { url: `${base}/shell`, snapshot: false });
-  // Without frame, text only looks in the shell.
-  await assert.rejects(browserAct("thr_frame_act", { action: "click", text: "Press me", snapshot: false }), /Timeout/);
+  // Text that no frame has times out, saying where it looked.
+  await assert.rejects(browserAct("thr_frame_act", { action: "click", text: "Nowhere", snapshot: false }), /looked in the top page and all its frames; frames on this tab: .*\/view\//);
   const clicked = await browserAct("thr_frame_act", { action: "click", text: "Press me", frame: "scribe:framed" });
   assert.ok("snapshot" in clicked);
   assert.match(clicked.snapshot as string, /button "Pressed"/);
@@ -277,6 +297,71 @@ test("browser_act, snapshot, and screenshot reach a page frame", async (t) => {
   const shot = await browserScreenshot("thr_frame_act", { frame: "scribe:framed" });
   assert.ok(shot.bytes > 0);
   await closeThreadBrowser("thr_frame_act");
+});
+
+test("nested app frames: text and selectors found without frame, iframe chains, popups, a plain user agent", async (t) => {
+  if (!launched) {
+    t.skip("no Chromium browser installed");
+    return;
+  }
+  await browserOpen("thr_nested", { url: `${base}/app`, snapshot: false });
+  const clicked = await browserAct("thr_nested", { action: "click", text: "SampleId" });
+  assert.match(clicked.frame ?? "", /\/list$/);
+  assert.match(clicked.snapshot as string, /button "Picked"/);
+  assert.equal((await browserEval("thr_nested", { script: "document.title", frame: "#list_iframe" })).result, '"List"');
+  assert.equal((await browserEval("thr_nested", { script: "document.title", frame: "#page >> #list_iframe" })).result, '"List"');
+  await assert.rejects(browserEval("thr_nested", { script: "1", frame: "#page >> #nope" }), /frame not found.*frames: /);
+  const agent = (await browserEval("thr_nested", { script: "navigator.userAgent" })).result as string;
+  assert.doesNotMatch(agent, /Headless/);
+  assert.match(agent, /Chrome\/\d+/);
+  assert.equal((await browserEval("thr_nested", { script: "document.featurePolicy.allowsFeature('unload')", frame: "#list_iframe" })).result, "true");
+  const popped = await browserAct("thr_nested", { action: "click", selector: "#pop", snapshot: false });
+  assert.equal(popped.opened?.length, 1);
+  assert.match(popped.opened?.[0].url ?? "", /\/view\//);
+  await closeThreadBrowser("thr_nested");
+});
+
+test("layout tables collapse in snapshots, data tables keep their cells", () => {
+  const snapshot = [
+    "- generic [active] [ref=e1]:",
+    "  - table [ref=e2]:",
+    "    - rowgroup [ref=e3]:",
+    "      - row [ref=e4]:",
+    "        - cell [ref=e5]",
+    "        - cell [ref=e6]:",
+    '          - link "Medical validation" [ref=e7]:',
+    '            - /url: "#"',
+    "      - row [ref=e8]:",
+    "        - cell [ref=e9]",
+    "  - table [ref=e10]:",
+    "    - rowgroup [ref=e11]:",
+    "      - row [ref=e12]:",
+    '        - columnheader "Id" [ref=e13]',
+    '        - columnheader "Name" [ref=e14]',
+    "      - row [ref=e15]:",
+    '        - cell "1" [ref=e16]',
+    "        - cell [ref=e17]",
+  ].join("\n");
+  const { text, collapsed } = collapseLayoutTables(snapshot);
+  assert.equal(collapsed, 7);
+  assert.equal(
+    text,
+    [
+      "- generic [active] [ref=e1]:",
+      '  - link "Medical validation" [ref=e7]:',
+      '    - /url: "#"',
+      ...snapshot.split("\n").slice(10),
+    ].join("\n")
+  );
+  assert.deepEqual(collapseLayoutTables("- button \"Go\" [ref=e1]"), { text: '- button "Go" [ref=e1]', collapsed: 0 });
+});
+
+test("the agent browser repeats Playwright's own --disable-features list", () => {
+  const bundle = fs.readFileSync(path.join("node_modules", "playwright-core", "lib", "coreBundle.js"), "utf8");
+  const list = /disabledFeatures = \[([\s\S]*?)\]\.filter/.exec(bundle)?.[1];
+  assert.ok(list, "playwright-core no longer has a disabledFeatures list where browser.ts expects it");
+  const names = [...list.replace(/\/\/.*$/gm, "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(PLAYWRIGHT_DISABLED_FEATURES, names);
 });
 
 test("links off loopback are blocked, and threads get their own browser", async (t) => {

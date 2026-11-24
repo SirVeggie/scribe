@@ -2312,7 +2312,7 @@ const targetShape = {
   text: z.string().optional().describe("Visible text (first match)."),
 };
 const frameShape = {
-  frame: z.string().optional().describe("Work inside a frame: a Scribe page key or id (its frame in the Scribe shell), or an iframe's CSS selector."),
+  frame: z.string().optional().describe("Work inside a frame: a Scribe page key or id (its frame in the Scribe shell), or an iframe's CSS selector (found in nested frames too; outer >> inner for a chain). Without it, a selector or text the top page lacks is looked for in its frames."),
 };
 const tabShape = {
   tab: z.string().optional().describe("Tab id from browser_open or browser_tabs. Default: the current tab."),
@@ -2388,7 +2388,7 @@ function registerBrowserTools(server: McpServer): void {
 
   server.tool(
     "browser_act",
-    "Act on the page in your browser, on an element by ref from the latest snapshot (preferred), selector or text. fill replaces an input's value, type sends keys one by one, select takes option values or labels, scroll goes into view or by dx/dy, drag drops onto to. Returns the new snapshot and console errors the action caused.",
+    "Act on the page in your browser, on an element by ref from the latest snapshot (preferred), selector or text. fill replaces an input's value, type sends keys one by one, select takes option values or labels, scroll goes into view or by dx/dy, drag drops onto to. Returns the new snapshot, console errors the action caused, and tabs it opened (popups).",
     {
       action: z.enum(BROWSER_ACTIONS).describe("What to do."),
       ...targetShape,
@@ -2470,7 +2470,7 @@ function registerBrowserTools(server: McpServer): void {
       frame: z
         .string()
         .optional()
-        .describe("Run in a frame instead of the top page: a Scribe page key or id (the frame showing it, e.g. scribe:sprint-notes) or a CSS selector of an iframe."),
+        .describe("Run in a frame instead of the top page: a Scribe page key or id (the frame showing it, e.g. scribe:sprint-notes) or a CSS selector of an iframe (found in nested frames too; outer >> inner for a chain)."),
     },
     async (args) => browserCall("eval", args)
   );
