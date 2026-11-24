@@ -48,7 +48,9 @@ import {
   closeAgentBrowser,
   onBrowserChange,
   browserAgentResult,
-  browserControl,
+  browserTake,
+  browserHandback,
+  browserOwner,
   browserHandoffResult,
 } from "./browser.js";
 import { waitForEvents } from "./wait.js";
@@ -1423,14 +1425,18 @@ export async function startHttp(): Promise<http.Server> {
     res.on("close", gone);
     try {
       if (body.action === "take") {
-        await browserControl(thread, "agent");
+        await browserTake(thread);
         res.json({ control: "agent", userActivity: [], ...browserAgentResult(thread) });
+      } else if (body.action === "handback") {
+        res.json(browserHandback(thread, body));
+      } else if (browserOwner(thread) !== thread) {
+        throw new Error('A lent browser goes back to the agent that started you: use action "handback", and say in your summary what the user should do.');
       } else if (body.action === "handoff") {
         if (typeof body.message !== "string" || !body.message.trim()) throw new Error("handoff requires message");
         await agentHost.handoffBrowser(thread, body.message, abort.signal);
         const result = await browserHandoffResult(thread);
         if (!res.writableEnded) res.json(result);
-      } else throw new Error("action must be take or handoff");
+      } else throw new Error("action must be take, handoff or handback");
     } catch (err) {
       if (!res.writableEnded) res.status(browserHttpStatus((err as Error).message)).json({ error: (err as Error).message });
     } finally { res.off("close", gone); }
@@ -2043,6 +2049,7 @@ export async function startHttp(): Promise<http.Server> {
           thread: str(body.thread, 60),
           background: body.background === true,
           stop: body.stop === true,
+          browser: body.browser === true,
           signal: abort.signal,
         });
       }

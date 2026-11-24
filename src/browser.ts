@@ -89,6 +89,8 @@ export type BrowserView = {
   fit: boolean;
   key?: string;
   threadId: string;
+  /** The helper driving it, when the thread lent it with agent_run. */
+  driver?: string;
   tabs: Array<{ tab: string; url: string; title: string; current: boolean }>;
 };
 
@@ -127,6 +129,13 @@ const opening = new Map<string, Promise<Session>>();
 const changeListeners = new Set<(view: BrowserView | null, threadId: string) => void>();
 const pendingChanges = new Map<string, ReturnType<typeof setTimeout>>();
 const watchers = new Set<Watcher>();
+/** Browsers lent to helpers with agent_run's browser (#1090): helper thread → the thread whose browser it drives. */
+const lent = new Map<string, { owner: string; label: string }>();
+/** The helper driving an owner's browser now; none: the owner drives it. One driver at a time. */
+const drivers = new Map<string, { thread: string; label: string }>();
+/** What a helper said when it gave the browser back, for its owner's agent_run report. */
+export type BrowserHandback = { reason: "done" | "unsure" | "blocked" | "turn_ended" | "taken"; summary?: string; at: number };
+const handbacks = new Map<string, BrowserHandback>();
 
 /**
  * Hosts the agent browser may load as a page: loopback only (dev servers and Scribe itself).
@@ -223,12 +232,11 @@ export async function browserOpen(
   input: { url?: string; key?: string; tab?: string; newTab?: boolean; snapshot?: boolean }
 ) {
   const url = resolveBrowserUrl(input);
-  const session = await ensureSession(threadId);
-  agentOperation(session, true);
+  const session = await agentSession(threadId, true, true);
   if (!allowedBrowserUrl(url, session.userOrigins)) throw new Error(blockedMessage(url));
   const tab = input.newTab || !session.tabs.size ? await newTab(session) : pickTab(session, input.tab);
   session.current = tab.id;
-  changed(threadId);
+  changed(session.threadId);
   await tab.page.bringToFront().catch(() => undefined);
   let navError: string | undefined;
   try {
@@ -253,8 +261,7 @@ export async function browserSnapshot(
   threadId: string,
   input: { tab?: string; selector?: string; maxChars?: number; frame?: string }
 ) {
-  const session = await requireSession(threadId);
-  agentOperation(session, false);
+  const session = await agentSession(threadId, false);
   const tab = pickTab(session, input.tab);
   const maxChars = clamp(input.maxChars ?? DEFAULT_SNAPSHOT_CHARS, 1_000, MAX_SNAPSHOT_CHARS);
   const frame = await frameOf(tab.page, input.frame);
@@ -282,8 +289,7 @@ export async function browserAct(
     frame?: string;
   }
 ) {
-  const session = await requireSession(threadId);
-  agentOperation(session, true);
+  const session = await agentSession(threadId, true);
   const tab = pickTab(session, input.tab);
   const { page } = tab;
   const frame = await frameOf(page, input.frame);
@@ -378,8 +384,7 @@ export async function browserScreenshot(
   threadId: string,
   input: Target & { tab?: string; fullPage?: boolean; frame?: string }
 ) {
-  const session = await requireSession(threadId);
-  agentOperation(session, false);
+  const session = await agentSession(threadId, false);
   const tab = pickTab(session, input.tab);
   const { page } = tab;
   const frame = await frameOf(page, input.frame);
@@ -400,8 +405,7 @@ export async function browserScreenshot(
 }
 
 export async function browserEval(threadId: string, input: { tab?: string; script: string; frame?: string }) {
-  const session = await requireSession(threadId);
-  agentOperation(session, true);
+  const session = await agentSession(threadId, true);
   const tab = pickTab(session, input.tab);
   if (!input.script?.trim()) {
     throw new Error("Provide script");
@@ -434,8 +438,7 @@ export async function browserConsole(
   threadId: string,
   input: { tab?: string; level?: string; pattern?: string; since?: number; limit?: number; clear?: boolean }
 ) {
-  const session = await requireSession(threadId);
-  agentOperation(session, false);
+  const session = await agentSession(threadId, false);
   const tab = pickTab(session, input.tab);
   const pattern = input.pattern ? new RegExp(input.pattern, "i") : null;
   const levels = levelFilter(input.level);
@@ -454,8 +457,7 @@ export async function browserNetwork(
   threadId: string,
   input: { tab?: string; urlPattern?: string; failedOnly?: boolean; since?: number; limit?: number; clear?: boolean }
 ) {
-  const session = await requireSession(threadId);
-  agentOperation(session, false);
+  const session = await agentSession(threadId, false);
   const tab = pickTab(session, input.tab);
   const pattern = input.urlPattern ? new RegExp(input.urlPattern, "i") : null;
   const rows = tab.network.filter(
@@ -475,8 +477,7 @@ export async function browserViewport(
   threadId: string,
   input: { tab?: string; width?: number; height?: number; colorScheme?: "light" | "dark" | "no-preference" }
 ) {
-  const session = await requireSession(threadId);
-  agentOperation(session, true);
+  const session = await agentSession(threadId, true);
   const tab = pickTab(session, input.tab);
   const current = tab.page.viewportSize() ?? DEFAULT_VIEWPORT;
   const size = {
@@ -484,7 +485,7 @@ export async function browserViewport(
     height: clamp(input.height ?? current.height, MIN_VIEWPORT, MAX_VIEWPORT),
   };
   session.viewport = size;
-  changed(threadId);
+  changed(session.threadId);
   await tab.page.setViewportSize(size);
   if (input.colorScheme) {
     await tab.page.emulateMedia({ colorScheme: input.colorScheme });
@@ -493,8 +494,11 @@ export async function browserViewport(
 }
 
 export async function browserTabs(threadId: string, input: { close?: string; select?: string; closeAll?: boolean }) {
-  const active = sessions.get(threadId);
-  if (active) agentOperation(active, Boolean(input.close || input.select || input.closeAll));
+  if (lent.has(threadId) && input.closeAll) throw new Error('This browser is lent to you by the agent that started you. Give it back with browser_control action "handback" instead of closing it.');
+  const owner = browserOwner(threadId);
+  const active = sessions.get(owner);
+  if (active) { driverRule(owner, threadId, Boolean(input.close || input.select || input.closeAll)); agentOperation(active, Boolean(input.close || input.select || input.closeAll)); }
+  threadId = owner;
   if (input.closeAll) {
     const metadata = browserAgentResult(threadId);
     await closeThreadBrowser(threadId);
@@ -534,6 +538,16 @@ export async function browserTabs(threadId: string, input: { close?: string; sel
 
 /** Closes a thread's context and its window. The browser goes with the last one. */
 export async function closeThreadBrowser(threadId: string): Promise<void> {
+  // A helper's lent browser stays its owner's; an owner's going ends what it lent.
+  const share = lent.get(threadId);
+  if (share) {
+    lent.delete(threadId);
+    handbacks.delete(threadId);
+    if (drivers.get(share.owner)?.thread === threadId) { drivers.delete(share.owner); changed(share.owner); }
+    return;
+  }
+  for (const [helper, share] of lent) if (share.owner === threadId) { lent.delete(helper); handbacks.delete(helper); }
+  drivers.delete(threadId);
   const session = sessions.get(threadId);
   if (!session) {
     return;
@@ -584,7 +598,7 @@ export async function browserView(threadId: string): Promise<BrowserView | null>
       current: tab.id === session.current,
     }))
   );
-  return { threadId, tabs, control: session.control, controlSince: session.controlSince, agentAt: session.agentAt, handoff: session.handoff, viewport: session.viewport, fit: session.fit, ...(store.browserPage(threadId) ? { key: store.browserPage(threadId)!.key } : {}) };
+  return { threadId, tabs, ...(drivers.get(threadId) ? { driver: drivers.get(threadId)!.label } : {}), control: session.control, controlSince: session.controlSince, agentAt: session.agentAt, handoff: session.handoff, viewport: session.viewport, fit: session.fit, ...(store.browserPage(threadId) ? { key: store.browserPage(threadId)!.key } : {}) };
 }
 
 export async function browserViews(): Promise<BrowserView[]> {
@@ -697,13 +711,92 @@ function agentOperation(session: Session, mutating: boolean): void {
   session.agentAt = Date.now();
   changed(session.threadId);
 }
+/** The thread whose browser this thread drives: its own, or the one lent to it. */
+export function browserOwner(threadId: string): string {
+  return lent.get(threadId)?.owner ?? threadId;
+}
+/** One driver at a time on a lent browser; reading is open to both, for oversight. */
+function driverRule(owner: string, threadId: string, mutating: boolean): void {
+  if (!mutating) return;
+  const driver = drivers.get(owner);
+  if (threadId === owner) {
+    if (driver) throw new Error(`Your helper (${driver.label}) is driving this browser. Read-only tools (browser_snapshot, browser_screenshot, browser_console, browser_network) still work. To act, call browser_control with action "take", or wait for its agent_run report.`);
+  } else if (driver?.thread !== threadId) {
+    throw new Error("control_taken: the agent that lent you this browser has it now. Stop using it and end your turn with what you found so far.");
+  }
+}
+/** An agent tool's session: the thread's own browser, or the one lent to it, under the driver rule. */
+async function agentSession(threadId: string, mutating: boolean, open = false): Promise<Session> {
+  const owner = browserOwner(threadId);
+  if (owner !== threadId && !open && !sessions.has(owner)) throw new Error("The browser lent to you has no tab open: call browser_open first");
+  const session = open ? await ensureSession(owner) : await requireSession(owner);
+  driverRule(owner, threadId, mutating);
+  agentOperation(session, mutating);
+  return session;
+}
+/**
+ * Lend a thread's browser to its helper (agent_run browser): the helper drives the same tabs, with
+ * their cookies and the sites the user opened, until it hands it back, its turn ends, or the owner takes it.
+ */
+export function lendBrowser(owner: string, helper: string, label: string): void {
+  if (lent.has(owner)) throw new Error("A helper cannot lend on a browser it was lent.");
+  const driving = drivers.get(owner);
+  if (driving && driving.thread !== helper) throw new Error(`Your browser is lent to ${driving.label} now. Take it back (browser_control take) or wait for that helper first.`);
+  lent.set(helper, { owner, label });
+  drivers.set(owner, { thread: helper, label });
+  handbacks.delete(helper);
+  changed(owner);
+}
+function endDriving(helper: string, handback: BrowserHandback): boolean {
+  const share = lent.get(helper);
+  if (!share || drivers.get(share.owner)?.thread !== helper) return false;
+  drivers.delete(share.owner);
+  handbacks.set(helper, handback);
+  const session = sessions.get(share.owner);
+  if (session) releaseAgentControl(session);
+  changed(share.owner);
+  return true;
+}
+/** browser_control handback: the helper gives the lent browser back to the agent that started it. */
+export function browserHandback(helper: string, input: { reason?: string; summary?: string }) {
+  if (!lent.has(helper)) throw new Error("handback is for a browser lent to you with agent_run; this thread drives its own.");
+  const reason = input.reason === "unsure" || input.reason === "blocked" ? input.reason : "done";
+  const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, 4000) : "";
+  if (!endDriving(helper, { reason, ...(summary ? { summary } : {}), at: Date.now() })) throw new Error("control_taken: you are not driving this browser any more.");
+  return { control: "owner", note: "The browser is back with the agent that started you. End your turn now; your final reply is its report, so say what you did and what you found." };
+}
+/** browser_control take: the owner takes its lent browser back (and the user's control); a driving helper takes the user's. */
+export async function browserTake(threadId: string): Promise<string> {
+  const owner = browserOwner(threadId);
+  if (owner !== threadId && drivers.get(owner)?.thread !== threadId) throw new Error("control_taken: the agent that lent you this browser has it now.");
+  for (const [helper, share] of lent) if (share.owner === owner && helper !== threadId) endDriving(helper, { reason: "taken", at: Date.now() });
+  await browserControl(owner, "agent");
+  return owner;
+}
+/** The lent browser's state for its owner's agent_run report: how it came back, where it is, and a small screenshot. */
+export async function browserCheckpoint(helper: string): Promise<Record<string, unknown> | undefined> {
+  const share = lent.get(helper);
+  if (!share) return undefined;
+  const handback = handbacks.get(helper);
+  const driving = drivers.get(share.owner)?.thread === helper;
+  const session = sessions.get(share.owner);
+  const tab = session?.current ? session.tabs.get(session.current) : undefined;
+  let screenshot: string | undefined;
+  if (tab) screenshot = await tab.page.screenshot({ type: "jpeg", quality: 55, timeout: 5_000 }).then(b => b.toString("base64")).catch(() => undefined);
+  return {
+    control: driving ? "helper" : "you",
+    ...(handback ? { handback: { reason: handback.reason, ...(handback.summary ? { summary: handback.summary } : {}) } } : {}),
+    ...(tab ? { tab: tab.id, url: tab.page.url(), title: await tab.page.title().catch(() => "") } : {}),
+    ...(screenshot ? { screenshot } : {}),
+  };
+}
 function userOperation(session: Session): void {
   userControlRule(session);
   changed(session.threadId);
 }
 /** Added to every MCP result, consuming only activity delivered to the agent. */
 export function browserAgentResult(threadId: string): { userActivity?: string[]; control?: BrowserControl } {
-  const session = sessions.get(threadId);
+  const session = sessions.get(browserOwner(threadId));
   if (!session) return {};
   const result = { ...(session.userActivity.length ? { userActivity: activitySummary(session.userActivity) } : {}), ...(session.reportedControl !== session.control ? { control: session.control } : {}) };
   session.userActivity.length = 0;
@@ -711,6 +804,7 @@ export function browserAgentResult(threadId: string): { userActivity?: string[];
   return result;
 }
 export function browserTurnEnded(threadId: string): void {
+  if (lent.has(threadId)) { endDriving(threadId, { reason: "turn_ended", at: Date.now() }); return; }
   const session = sessions.get(threadId);
   if (session) { releaseAgentControl(session); changed(threadId); }
 }

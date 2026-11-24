@@ -492,7 +492,7 @@
     box.hidden = !view || state === "free";
     status.className = "status " + state;
     if (state === "agent") {
-      $("statusText").textContent = "Agent is driving";
+      $("statusText").textContent = view.driver ? view.driver + " is driving" : "Agent is driving";
       btn.textContent = "Take control";
       btn.className = "btn";
     } else if (state === "user") {

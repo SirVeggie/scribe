@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_PORT, PORT, dataDir } from "../config.js";
-import { browserControl, browserActivity, browserTurnEnded, browserUserMessage, closeThreadBrowser } from "../browser.js";
+import { browserControl, browserActivity, browserTurnEnded, browserUserMessage, closeThreadBrowser, lendBrowser, browserCheckpoint } from "../browser.js";
 import { log } from "../log.js";
 import { vault } from "../vault.js";
 import { toolLoadingFor } from "../toolLoading.js";
@@ -329,6 +329,10 @@ function workspaceNote(cwd: string): string {
 /** The note for a helper: it works on another agent's brief, so what it still needs goes into its report, not to the user. */
 const HELPER_RESUME_NOTE =
   "Scribe restarted while you were working, and your last turn was cut off. Anything you were waiting on in it (an approval, a background command) is gone. Check where you left off (files, git status, the pages you were working on) and go on from there to finish the brief you were given. You work for another agent, which gets your final reply as your report: do not ask the user about the task. If you cannot finish without an answer, say what you need in that reply.";
+
+/** Added to a brief sent with agent_run browser (#1090): the helper drives its parent's browser. */
+const HELPER_BROWSER_NOTE =
+  "(Scribe: the agent that started you lent you its browser. Your browser_* tools act on its tabs, with its cookies and logins. Only one of you drives at a time: if a tool says control_taken, it took the browser back, so stop using it and report. When you are done, unsure or blocked, call browser_control with action \"handback\", a reason and a short summary, then end your turn.)";
 
 /** The earlier conversation a new session (after a rewind or a move) gets ahead of its first message. */
 function recapBlock(thread: Thread): string {
@@ -4821,14 +4825,16 @@ export class AgentHost {
    */
   async runHelper(
     threadId: string,
-    opts: { title?: string; task: string; provider?: string; model?: string; effort?: string; mode?: string; thread?: string; background?: boolean; stop?: boolean; signal?: AbortSignal }
+    opts: { title?: string; task: string; provider?: string; model?: string; effort?: string; mode?: string; thread?: string; background?: boolean; stop?: boolean; browser?: boolean; signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
     const parent = this.helperParent(threadId);
+    if (opts.browser && !opts.task.trim()) throw new Error("browser lends your browser with a task: pass both.");
     const task = opts.task.trim();
     if (opts.signal?.aborted) throw new Error("cancelled");
     if (opts.stop && (!opts.thread || task)) throw new Error("Stopping a helper requires thread and no task.");
     if (!task && !opts.thread) throw new Error("task is required: a brief the helper can work from on its own.");
     let helper: Thread;
+    let driver: string;
     if (opts.thread) {
       const existing = this.threads.get(opts.thread);
       if (!existing || existing.helperOf !== threadId) throw new Error(`No helper ${opts.thread} of this thread. Leave thread out to start a new one.`);
@@ -4837,6 +4843,7 @@ export class AgentHost {
       if (existing.archived) throw new Error("That helper thread is archived. Leave thread out to start a new one.");
       if (task && this.threads.get(threadId)?.tainted && !this.modelTrusted(existing.provider, existing.model)) await this.approveTaintedHelper(parent, existing.title.replace(/^Helper: /, ""), opts.signal);
       helper = existing;
+      driver = existing.model ?? existing.provider;
     } else {
       const title = opts.title?.replace(/\s+/g, " ").trim();
       if (!title) throw new Error("title is required for a new helper: a short name describing its task.");
@@ -4887,10 +4894,15 @@ export class AgentHost {
       this.db.saveThread(draft);
       this.emit({ type: "agent_thread", thread: this.view(draft) });
       helper = draft;
+      driver = model?.label ?? status.label;
     }
     if (opts.signal?.aborted) throw new Error("cancelled");
     this.linkHelperCall(threadId, helper.id, task);
-    return this.helperTurn(helper, task, opts);
+    if (!opts.browser) return this.helperTurn(helper, task, opts);
+    lendBrowser(threadId, helper.id, driver);
+    return this.helperTurn(helper, `${task}
+
+${HELPER_BROWSER_NOTE}`, opts);
   }
 
   /** Send a helper its brief (or follow-up), and return its report: at once in the background, else when its turn ends. */
@@ -4949,12 +4961,14 @@ export class AgentHost {
       title: item.title.slice(0, 300),
       status: item.status,
     })) : [];
+    const browser = await browserCheckpoint(helper.id);
     return {
       thread: helper.id,
       provider: latest.provider,
       model: turn.model,
       status: turn.status,
       usage: this.threadUsage(helper.id),
+      ...(browser ? { browser } : {}),
       ...(turn.error ? { error: turn.error } : {}),
       ...(incomplete ? { partialReply: true, recentTools } : {}),
       reply: reply || (turn.status === "done" ? "(The helper ended its turn without a final message. Check its changes yourself.)" : ""),

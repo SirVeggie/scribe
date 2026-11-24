@@ -17,6 +17,10 @@ const {
   blockedBoardRequest,
   browserAct,
   browserControl,
+  browserTake,
+  browserHandback,
+  browserCheckpoint,
+  lendBrowser,
   browserAgentResult,
   browserTurnEnded,
   browserUserMessage,
@@ -477,4 +481,37 @@ test("browser view operations enforce ownership and report user activity once", 
   await browserFit("thr_control", { fit: false });
   assert.deepEqual((await browserViews()).find(v => v.threadId === "thr_control")?.viewport, { width: 1280, height: 800 });
   await closeThreadBrowser("thr_control");
+});
+
+test("a lent browser has one driver: the helper acts, the owner reads and takes it back (#1090)", async () => {
+  await browserOpen("thr_owner", { url: base, snapshot: false });
+  lendBrowser("thr_owner", "thr_helper", "Haiku");
+  assert.equal((await browserViews()).find(v => v.threadId === "thr_owner")?.driver, "Haiku");
+  // The helper drives the owner's tab; the owner can only read meanwhile.
+  await browserAct("thr_helper", { action: "click", text: "Add one", snapshot: false });
+  assert.equal((await browserEval("thr_helper", { script: "document.getElementById('count').textContent" })).result, '"1"');
+  await browserSnapshot("thr_owner", {});
+  await assert.rejects(browserAct("thr_owner", { action: "click", text: "Add one" }), /Your helper \(Haiku\) is driving/);
+  await assert.rejects(browserTabs("thr_helper", { closeAll: true }), /handback/);
+  // Taken back: the helper's next act says so, and the report knows why.
+  await browserTake("thr_owner");
+  await assert.rejects(browserAct("thr_helper", { action: "click", text: "Add one" }), /control_taken/);
+  assert.equal((await browserCheckpoint("thr_helper"))?.handback && ((await browserCheckpoint("thr_helper"))!.handback as { reason: string }).reason, "taken");
+  await browserAct("thr_owner", { action: "click", text: "Add one", snapshot: false });
+  // Lent again, then handed back with a summary and a screenshot for the owner.
+  lendBrowser("thr_owner", "thr_helper", "Haiku");
+  const back = browserHandback("thr_helper", { reason: "unsure", summary: "Clicked twice" });
+  assert.equal(back.control, "owner");
+  const checkpoint = await browserCheckpoint("thr_helper");
+  assert.deepEqual(checkpoint?.handback, { reason: "unsure", summary: "Clicked twice" });
+  assert.equal(checkpoint?.control, "you");
+  assert.ok(typeof checkpoint?.screenshot === "string" && checkpoint.screenshot.length > 100);
+  assert.throws(() => browserHandback("thr_helper", {}), /control_taken/);
+  assert.equal((await browserViews()).find(v => v.threadId === "thr_owner")?.driver, undefined);
+  // A helper's turn ending gives it back too; the owner's going ends the lending.
+  lendBrowser("thr_owner", "thr_helper", "Haiku");
+  browserTurnEnded("thr_helper");
+  assert.equal(((await browserCheckpoint("thr_helper"))!.handback as { reason: string }).reason, "turn_ended");
+  await closeThreadBrowser("thr_owner");
+  assert.equal(await browserCheckpoint("thr_helper"), undefined);
 });

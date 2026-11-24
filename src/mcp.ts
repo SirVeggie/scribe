@@ -2269,8 +2269,9 @@ function registerHelperTools(server: McpServer): void {
       stop: z.boolean().optional().describe("With thread and no task: stop that helper."),
       device: z.string().optional().describe("Run it on a paired device (device_list), with that device's models (agent_models with device). Pass it again with thread. Never above auto; the user approves each folder there once."),
       cwd: z.string().optional().describe("With device, for a new helper: a folder that device already has chats in. It works there directly, not in a worktree."),
+      browser: z.boolean().optional().describe("With task: lend the helper your Scribe browser (tabs, cookies, logins) to drive, e.g. many cheap UI steps. You keep read-only browser tools and can take it back with browser_control take; it comes back when the helper hands it back or its turn ends. The report adds the browser's state and a screenshot."),
     },
-    async ({ title, task, provider, model, effort, access, thread, background, stop, device, cwd }, extra) => {
+    async ({ title, task, provider, model, effort, access, thread, background, stop, device, cwd, browser }, extra) => {
       const progressToken = extra._meta?.progressToken;
       const startedAt = Date.now();
       const heartbeat =
@@ -2283,10 +2284,17 @@ function registerHelperTools(server: McpServer): void {
                 .catch(() => {});
             }, WAIT_HEARTBEAT_MS);
       try {
-        const call = () => api("POST", "/api/helper/run", { title, task, provider, model, effort, access, thread, stop, background: background ?? true, ...(device ? { cwd } : {}) }, { signal: extra.signal });
+        if (browser && device) return errorResult("browser lends this device's Scribe browser; it cannot go with a helper on another device.");
+        const call = () => api("POST", "/api/helper/run", { title, task, provider, model, effort, access, thread, stop, background: background ?? true, ...(device ? { cwd } : { browser }) }, { signal: extra.signal });
         const { status, data } = await (device ? onDevice(device, call) : call());
         if (status >= 400) {
           return errorResult((data as ApiError).error || `HTTP ${status}`);
+        }
+        // The lent browser's last screenshot goes as an image, not base64 in the report.
+        const shot = (data as { browser?: { screenshot?: string } }).browser?.screenshot;
+        if (shot) {
+          delete (data as { browser: { screenshot?: string } }).browser.screenshot;
+          return { content: [...jsonResult(data).content, { type: "image" as const, data: shot, mimeType: "image/jpeg" }] };
         }
         return jsonResult(data);
       } catch (err) {
@@ -2330,10 +2338,12 @@ async function browserCall(op: string, body: Record<string, unknown>): Promise<T
 function registerBrowserTools(server: McpServer): void {
   server.tool(
     "browser_control",
-    "Share your browser with the user. handoff: give it to the user with a message (e.g. log in, set something up) and wait until they hand it back; returns what they did and a snapshot. take: take it back while the user is driving, without asking.",
+    "Share your browser with the user. handoff: give it to the user with a message (e.g. log in, set something up) and wait until they hand it back; returns what they did and a snapshot. take: take it back while the user is driving, or from a helper you lent it to, without asking. handback: a helper gives a browser lent to it back to the agent that started it.",
     {
-      action: z.enum(["take", "handoff"]),
+      action: z.enum(["take", "handoff", "handback"]),
       message: z.string().optional().describe("For handoff: what you need the user to do."),
+      reason: z.enum(["done", "unsure", "blocked"]).optional().describe("For handback."),
+      summary: z.string().optional().describe("For handback: what you did and where the page is now."),
     },
     async (args, extra) => {
       const progressToken = extra._meta?.progressToken;
