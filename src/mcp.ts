@@ -6,6 +6,7 @@ import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/proto
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { parseAssetInputs } from "./assets.js";
+import { applyEdits, type HtmlEdit } from "./htmlEdit.js";
 import { writeCheckout } from "./pageCheckout.js";
 import type { FileInfo, FileText } from "./filePages.js";
 import type { PdfText } from "./pdfText.js";
@@ -1370,12 +1371,29 @@ export async function startMcp(): Promise<void> {
 
   pageTool(
     "template_upsert",
-    "Create or update a reusable Scribe template; only when the user asked for that. Updating one re-renders every page made from it. Built-ins are read-only: upsert under a new key, or update the user's copy by its localId. Read scribe_docs \"templates\" first.",
+    "Create or update a reusable Scribe template; only when the user asked for that. Updating one re-renders every page made from it; on an update, omitted fields keep their saved values. Change the HTML with edits (as in page_patch) for small changes, or htmlPath (e.g. a template_get toFile checkout you edited), instead of resending it inline. Built-ins are read-only: upsert under a new key, or update the user's copy by its localId. Read scribe_docs \"templates\" first.",
     {
+      id: z.string().optional().describe("Template id (e.g. a built-in's localId) to update."),
       key: z.string().optional().describe("Stable template identity; reuse it to update."),
-      title: z.string().describe("Name in the Templates sidebar."),
+      title: z.string().optional().describe("Name in the Templates sidebar. Required for a new template."),
       description: z.string().optional().describe("Blurb under the name."),
-      html: z.string().describe("Template HTML; {{fieldKey}} inserts a form value (escaped), scripts read scribe.template.values."),
+      html: z.string().optional().describe("Template HTML; {{fieldKey}} inserts a form value (escaped), scripts read scribe.template.values. A new template needs html or htmlPath."),
+      htmlPath: z.string().min(1).optional().describe("Local HTML file to use as the template HTML instead of html."),
+      edits: z
+        .array(
+          z.object({
+            oldString: z.string().min(1).optional().describe("Exact snippet of the saved HTML; must match once unless replaceAll."),
+            newString: z.string().describe("Replacement or inserted text; empty deletes."),
+            replaceAll: z.boolean().optional(),
+            startLine: z.number().int().optional().describe("Instead of oldString: first line to replace (1-based), with endLine."),
+            endLine: z.number().int().optional(),
+            afterLine: z.number().int().optional().describe("Instead of oldString: insert after this line (0 = top)."),
+            append: z.boolean().optional().describe("Instead of oldString: insert before </body> (or at the end)."),
+          })
+        )
+        .min(1)
+        .optional()
+        .describe("Edits to an existing template's saved HTML, in order and all or none, as in page_patch. Instead of html or htmlPath."),
       fields: z
         .array(
           z.object({
@@ -1427,15 +1445,23 @@ export async function startMcp(): Promise<void> {
       pin: z.boolean().optional().describe("Pages open pinned (default true); false for note-like templates. Omit to keep."),
       syncedWithBuiltin: z.boolean().optional().describe("True when this upsert merges the built-in's latest changes into its copy."),
     },
-    async ({ key, title, html, fields, description, titleTemplate, initialState, stateVersion, guide, agentActions, pin, syncedWithBuiltin }) => {
+    async ({ id, key, title, html, htmlPath, edits, fields, description, titleTemplate, initialState, stateVersion, guide, agentActions, pin, syncedWithBuiltin }) => {
+      let saved: SavedTemplate | undefined;
+      const which = id || key;
+      if (which) {
+        const found = await api("GET", `/api/templates/${encodeURIComponent(which)}`);
+        const template = found.status < 400 ? (found.data as { template: SavedTemplate }).template : undefined;
+        // A built-in is never updated in place, so its values don't carry into the template this makes.
+        if (template && !template.id.startsWith("builtin:")) saved = template;
+      }
+      const body = templateUpsertBody({ title, html, htmlPath, edits: edits as HtmlEdit[] | undefined, fields, description, titleTemplate, initialState }, saved);
+      if ("error" in body) {
+        return errorResult(body.error);
+      }
       const { status, data } = await api("POST", "/api/templates", {
+        id,
         key,
-        title,
-        html,
-        fields,
-        description,
-        titleTemplate,
-        initialState,
+        ...body,
         stateVersion,
         guide,
         agentActions,
@@ -1445,7 +1471,10 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      return jsonResult(data);
+      // The agent sent the HTML; echoing it back only fills its context.
+      const result = data as { created: boolean; template: Record<string, unknown> };
+      const { html: _html, ...meta } = result.template;
+      return jsonResult({ ...result, template: meta });
     }
   );
 
@@ -1469,9 +1498,10 @@ export async function startMcp(): Promise<void> {
     {
       id: z.string().optional().describe("Template id, e.g. tpl_ab12cd34 or builtin:todo-list."),
       key: z.string().optional().describe("Template key."),
+      toFile: z.boolean().optional().describe("Write the HTML to a temp file instead of returning it, to edit there and save with template_upsert htmlPath."),
     },
     { readOnlyHint: true },
-    async ({ id, key }) => {
+    async ({ id, key, toFile }) => {
       const which = id || key;
       if (!which) {
         return errorResult("Provide id or key");
@@ -1480,7 +1510,18 @@ export async function startMcp(): Promise<void> {
       if (status >= 400) {
         return errorResult((data as ApiError).error || `HTTP ${status}`);
       }
-      return jsonResult(data);
+      if (!toFile) {
+        return jsonResult(data);
+      }
+      const { html, ...meta } = (data as { template: SavedTemplate & { key: string } }).template;
+      let file: string;
+      try {
+        file = writeCheckout({ key: `template-${meta.key}`, html }, process.env.SCRIBE_THREAD);
+      } catch (err) {
+        return errorResult(`Could not write checkout: ${(err as Error).message}`);
+      }
+      const target = meta.id.startsWith("builtin:") ? "a new key (built-ins are read-only)" : `key "${meta.key}"`;
+      return jsonResult({ template: meta, path: file, note: `Checked out. Edit the file, then template_upsert with ${target} and htmlPath.` });
     }
   );
 
@@ -2580,6 +2621,71 @@ export function resolveShowHtml(html: string | undefined, htmlPath: string | und
     return { html };
   }
   return { error: "Provide html or htmlPath" };
+}
+
+type SavedTemplate = {
+  id: string;
+  title: string;
+  description?: string;
+  html: string;
+  fields?: unknown[];
+  titleTemplate?: string;
+  initialState?: Record<string, unknown>;
+};
+
+export type TemplateUpsertInput = {
+  title?: string;
+  html?: string;
+  htmlPath?: string;
+  edits?: HtmlEdit[];
+  fields?: unknown[];
+  description?: string;
+  titleTemplate?: string;
+  initialState?: Record<string, unknown>;
+};
+
+type TemplateUpsertBody = Omit<TemplateUpsertInput, "htmlPath" | "edits"> & { title: string; html: string };
+
+/**
+ * The template_upsert body: HTML from html, htmlPath or edits to the saved HTML, and on an update
+ * the saved values for whatever the agent left out, so a change need not resend the whole template.
+ */
+export function templateUpsertBody(input: TemplateUpsertInput, saved: Omit<SavedTemplate, "id"> | undefined): TemplateUpsertBody | { error: string } {
+  const sources = [input.html !== undefined, Boolean(input.htmlPath), Boolean(input.edits?.length)].filter(Boolean).length;
+  if (sources > 1) {
+    return { error: "Pass only one of html, htmlPath and edits" };
+  }
+  let html: string;
+  if (input.edits?.length) {
+    if (!saved) return { error: "edits change an existing template: pass its key or id" };
+    try {
+      html = applyEdits(saved.html, input.edits).html;
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  } else if (input.htmlPath) {
+    const file = readHtmlPath(input.htmlPath);
+    if ("error" in file) return file;
+    html = file.html;
+  } else if (input.html !== undefined) {
+    html = input.html;
+  } else if (saved) {
+    html = saved.html;
+  } else {
+    return { error: "Provide html or htmlPath for a new template" };
+  }
+  const title = input.title ?? saved?.title;
+  if (!title) {
+    return { error: "Provide title for a new template" };
+  }
+  return {
+    title,
+    html,
+    description: input.description ?? saved?.description,
+    fields: input.fields ?? saved?.fields,
+    titleTemplate: input.titleTemplate ?? saved?.titleTemplate,
+    initialState: input.initialState ?? saved?.initialState,
+  };
 }
 
 function jsonResult(value: unknown) {

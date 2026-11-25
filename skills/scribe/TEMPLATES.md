@@ -8,9 +8,9 @@ A template is reusable page HTML plus a form. The user opens instances from the 
 
 | Tool | Purpose |
 | --- | --- |
-| `template_upsert` | Create or replace a template (`key`, `title`, `html`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`, `agentActions`, `pin`) |
+| `template_upsert` | Create or update a template (`key` or `id`, `title`, `html` / `htmlPath` / `edits`, `fields`, optional `description`, `titleTemplate`, `initialState`, `stateVersion`, `guide`, `agentActions`, `pin`) |
 | `template_list` | Names and field schemas (no HTML) |
-| `template_get` | Full HTML and fields |
+| `template_get` | Full HTML and fields; `toFile: true` writes the HTML to a temp file instead |
 | `template_delete` | Remove the template. Existing pages stay, keep last HTML, and become ordinary pages |
 | `template_open` | Open an instance with `values`. Prefer letting the user do this in the UI |
 
@@ -39,7 +39,10 @@ Do not pin the template itself. The user opens pages from the sidebar.
 
 ## Updating a template
 
-`template_upsert` with the same `key` replaces HTML and fields, then re-renders every linked page.
+`template_upsert` with the same `key` (or `id`) updates the template, then re-renders every linked page. Fields you leave out keep their saved values, so send only what changes. Don't resend a large template's HTML inline:
+
+- Small change: `edits`, the same `oldString` / line edits as `page_patch`, applied to the saved HTML.
+- Larger rework: `template_get` with `toFile: true`, edit the file, then `template_upsert` with `htmlPath`.
 
 If the **page data shape** changed (new required `scribe.state` keys, different list format):
 

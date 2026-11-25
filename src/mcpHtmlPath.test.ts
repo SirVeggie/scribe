@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { readHtmlPath, resolveShowHtml } from "./mcp.js";
+import { readHtmlPath, resolveShowHtml, templateUpsertBody } from "./mcp.js";
 
 function withTempHtml(name: string, body: string, fn: (file: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scribe-htmlpath-"));
@@ -37,4 +37,25 @@ test("resolveShowHtml takes html or htmlPath, not both or neither", () => {
     assert.deepEqual(resolveShowHtml(undefined, file), { html: "<p>from file</p>" });
     assert.deepEqual(resolveShowHtml("<p>a</p>", file), { error: "Pass either html or htmlPath, not both" });
   });
+});
+
+test("templateUpsertBody keeps saved values the update leaves out", () => {
+  const saved = { title: "Board", description: "d", html: "<p>old</p>\n<i>x</i>", fields: [{ key: "a" }], titleTemplate: "{{a}}" };
+  assert.deepEqual(templateUpsertBody({ edits: [{ oldString: "old", newString: "new" }] }, saved), {
+    ...saved,
+    html: "<p>new</p>\n<i>x</i>",
+    initialState: undefined,
+  });
+  assert.deepEqual(templateUpsertBody({ title: "B2", fields: [] }, saved), { ...saved, title: "B2", fields: [], initialState: undefined });
+  withTempHtml("tpl.html", "<p>file</p>", (file) => {
+    assert.equal((templateUpsertBody({ htmlPath: file }, saved) as { html: string }).html, "<p>file</p>");
+    assert.deepEqual(templateUpsertBody({ html: "<p>a</p>", htmlPath: file }, saved), { error: "Pass only one of html, htmlPath and edits" });
+  });
+  assert.match((templateUpsertBody({ edits: [{ oldString: "nope", newString: "" }] }, saved) as { error: string }).error, /not found/);
+});
+
+test("templateUpsertBody needs html and title for a new template", () => {
+  assert.deepEqual(templateUpsertBody({ title: "T" }, undefined), { error: "Provide html or htmlPath for a new template" });
+  assert.deepEqual(templateUpsertBody({ html: "<p/>" }, undefined), { error: "Provide title for a new template" });
+  assert.deepEqual(templateUpsertBody({ edits: [{ append: true, newString: "x" }] }, undefined), { error: "edits change an existing template: pass its key or id" });
 });
