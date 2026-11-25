@@ -251,6 +251,7 @@ test("a thread opens a page, acts on refs, and reads console and network", async
   assert.ok(shot.bytes > 0);
 
   const part = await browserSnapshot("thr_a", { selector: "h1" });
+  assert.ok("snapshot" in part);
   assert.match(part.snapshot as string, /Counter/);
 });
 
@@ -286,6 +287,7 @@ test("browser_act, snapshot, and screenshot reach a page frame", async (t) => {
 
   const inner = await browserSnapshot("thr_frame_act", { frame: "#page" });
   assert.match(inner.frame ?? "", /\/view\//);
+  assert.ok("snapshot" in inner);
   const ref = /button "Pressed".*\[ref=(f\d+e\d+)\]/.exec(inner.snapshot as string)?.[1];
   assert.ok(ref, inner.snapshot as string);
   // A frame ref works from the top page too.
@@ -306,6 +308,7 @@ test("nested app frames: text and selectors found without frame, iframe chains, 
   }
   await browserOpen("thr_nested", { url: `${base}/app`, snapshot: false });
   const clicked = await browserAct("thr_nested", { action: "click", text: "SampleId" });
+  assert.ok("snapshot" in clicked);
   assert.match(clicked.frame ?? "", /\/list$/);
   assert.match(clicked.snapshot as string, /button "Picked"/);
   assert.equal((await browserEval("thr_nested", { script: "document.title", frame: "#list_iframe" })).result, '"List"');
